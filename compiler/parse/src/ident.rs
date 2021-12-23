@@ -1,8 +1,9 @@
 use crate::parser::Progress::{self, *};
-use crate::parser::{BadInputError, Col, EExpr, ParseResult, Parser, Row};
+use crate::parser::{BadInputError, EExpr, ParseResult, Parser};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_region::all::Position;
 
 /// The parser accepts all of these in any position where any one of them could
 /// appear. This way, canonicalization can give more helpful error messages like
@@ -67,7 +68,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
                 Err((NoProgress, (), state))
             } else {
                 let width = ident.len();
-                match state.advance_without_indenting_ee(width, |_, _| ()) {
+                match state.advance_without_indenting_ee(width, |_| ()) {
                     Ok(state) => Ok((MadeProgress, ident, state)),
                     Err(bad) => Err(bad),
                 }
@@ -79,12 +80,12 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
     move |arena, state: State<'a>| {
         if state.bytes().starts_with(b"@") {
-            match chomp_private_tag(state.bytes(), state.line, state.column) {
-                Err(BadIdent::Start(_, _)) => Err((NoProgress, (), state)),
+            match chomp_private_tag(state.bytes(), state.pos) {
+                Err(BadIdent::Start(_)) => Err((NoProgress, (), state)),
                 Err(_) => Err((MadeProgress, (), state)),
                 Ok(ident) => {
                     let width = ident.len();
-                    match state.advance_without_indenting_ee(width, |_, _| ()) {
+                    match state.advance_without_indenting_ee(width, |_| ()) {
                         Ok(state) => Ok((MadeProgress, ident, state)),
                         Err(bad) => Err(bad),
                     }
@@ -106,7 +107,7 @@ pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             let width = ident.len();
-            match state.advance_without_indenting_ee(width, |_, _| ()) {
+            match state.advance_without_indenting_ee(width, |_| ()) {
                 Ok(state) => Ok((MadeProgress, ident, state)),
                 Err(bad) => Err(bad),
             }
@@ -122,7 +123,7 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
                 Err((MadeProgress, (), state))
             } else {
                 let width = ident.len();
-                match state.advance_without_indenting_ee(width, |_, _| ()) {
+                match state.advance_without_indenting_ee(width, |_| ()) {
                     Ok(state) => Ok((MadeProgress, ident, state)),
                     Err(bad) => Err(bad),
                 }
@@ -133,8 +134,8 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 
 macro_rules! advance_state {
     ($state:expr, $n:expr) => {
-        $state.advance_without_indenting_ee($n, |r, c| {
-            BadIdent::Space(crate::parser::BadInputError::LineTooLong, r, c)
+        $state.advance_without_indenting_ee($n, |pos| {
+            BadIdent::Space(crate::parser::BadInputError::LineTooLong, pos)
         })
     };
 }
@@ -149,11 +150,7 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
                     if let Some(first) = parts.first() {
                         for keyword in crate::keyword::KEYWORDS.iter() {
                             if first == keyword {
-                                return Err((
-                                    NoProgress,
-                                    EExpr::Start(initial.line, initial.column),
-                                    initial,
-                                ));
+                                return Err((NoProgress, EExpr::Start(initial.pos), initial));
                             }
                         }
                     }
@@ -162,12 +159,10 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
 
             Ok((progress, ident, state))
         }
-        Err((NoProgress, _, state)) => {
-            Err((NoProgress, EExpr::Start(state.line, state.column), state))
-        }
+        Err((NoProgress, _, state)) => Err((NoProgress, EExpr::Start(state.pos), state)),
         Err((MadeProgress, fail, state)) => match fail {
-            BadIdent::Start(r, c) => Err((NoProgress, EExpr::Start(r, c), state)),
-            BadIdent::Space(e, r, c) => Err((NoProgress, EExpr::Space(e, r, c), state)),
+            BadIdent::Start(pos) => Err((NoProgress, EExpr::Start(pos), state)),
+            BadIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos), state)),
             _ => malformed_identifier(initial.bytes(), fail, state),
         },
     }
@@ -182,8 +177,8 @@ fn malformed_identifier<'a>(
     let delta = initial_bytes.len() - state.bytes().len();
     let parsed_str = unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
-    state = state.advance_without_indenting_ee(chomped, |r, c| {
-        EExpr::Space(crate::parser::BadInputError::LineTooLong, r, c)
+    state = state.advance_without_indenting_ee(chomped, |pos| {
+        EExpr::Space(crate::parser::BadInputError::LineTooLong, pos)
     })?;
 
     Ok((MadeProgress, Ident::Malformed(parsed_str, problem), state))
@@ -209,16 +204,16 @@ pub fn chomp_malformed(bytes: &[u8]) -> usize {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadIdent {
-    Start(Row, Col),
-    Space(BadInputError, Row, Col),
+    Start(Position),
+    Space(BadInputError, Position),
 
-    Underscore(Row, Col),
-    QualifiedTag(Row, Col),
-    WeirdAccessor(Row, Col),
-    WeirdDotAccess(Row, Col),
-    WeirdDotQualified(Row, Col),
-    StrayDot(Row, Col),
-    BadPrivateTag(Row, Col),
+    Underscore(Position),
+    QualifiedTag(Position),
+    WeirdAccessor(Position),
+    WeirdDotAccess(Position),
+    WeirdDotQualified(Position),
+    StrayDot(Position),
+    BadPrivateTag(Position),
 }
 
 fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
@@ -265,7 +260,7 @@ where
 }
 
 /// a `.foo` accessor function
-fn chomp_accessor(buffer: &[u8], row: Row, col: Col) -> Result<&str, BadIdent> {
+fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     // assumes the leading `.` has been chomped already
     use encode_unicode::CharExt;
 
@@ -274,20 +269,23 @@ fn chomp_accessor(buffer: &[u8], row: Row, col: Col) -> Result<&str, BadIdent> {
             let chomped = name.len();
 
             if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-                Err(BadIdent::WeirdAccessor(row, col))
+                Err(BadIdent::WeirdAccessor(pos))
             } else {
                 Ok(name)
             }
         }
         Err(_) => {
             // we've already made progress with the initial `.`
-            Err(BadIdent::StrayDot(row, col + 1))
+            Err(BadIdent::StrayDot(Position {
+                line: pos.line,
+                column: pos.column + 1,
+            }))
         }
     }
 }
 
 /// a `@Token` private tag
-fn chomp_private_tag(buffer: &[u8], row: Row, col: Col) -> Result<&str, BadIdent> {
+fn chomp_private_tag(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     // assumes the leading `@` has NOT been chomped already
     debug_assert_eq!(buffer.get(0), Some(&b'@'));
     use encode_unicode::CharExt;
@@ -297,21 +295,23 @@ fn chomp_private_tag(buffer: &[u8], row: Row, col: Col) -> Result<&str, BadIdent
             let width = 1 + name.len();
 
             if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[width..]) {
-                Err(BadIdent::BadPrivateTag(row, col + width as u16))
+                Err(BadIdent::BadPrivateTag(pos.bump_column(width as u16)))
             } else {
                 let value = unsafe { std::str::from_utf8_unchecked(&buffer[..width]) };
                 Ok(value)
             }
         }
-        Err(_) => Err(BadIdent::BadPrivateTag(row, col + 1)),
+        Err(_) => Err(BadIdent::BadPrivateTag(Position {
+            line: pos.line,
+            column: pos.column + 1,
+        })),
     }
 }
 
 fn chomp_identifier_chain<'a>(
     arena: &'a Bump,
     buffer: &'a [u8],
-    row: Row,
-    col: Col,
+    pos: Position,
 ) -> Result<(u16, Ident<'a>), (u16, BadIdent)> {
     use encode_unicode::CharExt;
 
@@ -320,7 +320,7 @@ fn chomp_identifier_chain<'a>(
 
     match char::from_utf8_slice_start(&buffer[chomped..]) {
         Ok((ch, width)) => match ch {
-            '.' => match chomp_accessor(&buffer[1..], row, col) {
+            '.' => match chomp_accessor(&buffer[1..], pos) {
                 Ok(accessor) => {
                     let bytes_parsed = 1 + accessor.len();
 
@@ -328,7 +328,7 @@ fn chomp_identifier_chain<'a>(
                 }
                 Err(fail) => return Err((1, fail)),
             },
-            '@' => match chomp_private_tag(buffer, row, col) {
+            '@' => match chomp_private_tag(buffer, pos) {
                 Ok(tagname) => {
                     let bytes_parsed = tagname.len();
 
@@ -342,10 +342,10 @@ fn chomp_identifier_chain<'a>(
                 first_is_uppercase = c.is_uppercase();
             }
             _ => {
-                return Err((0, BadIdent::Start(row, col)));
+                return Err((0, BadIdent::Start(pos)));
             }
         },
-        Err(_) => return Err((0, BadIdent::Start(row, col))),
+        Err(_) => return Err((0, BadIdent::Start(pos))),
     }
 
     while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
@@ -391,15 +391,15 @@ fn chomp_identifier_chain<'a>(
             }
             Err(0) if !module_name.is_empty() => Err((
                 chomped as u16,
-                BadIdent::QualifiedTag(row, chomped as u16 + col),
+                BadIdent::QualifiedTag(pos.bump_column(chomped as u16)),
             )),
             Err(1) if parts.is_empty() => Err((
                 chomped as u16 + 1,
-                BadIdent::WeirdDotQualified(row, chomped as u16 + col + 1),
+                BadIdent::WeirdDotQualified(pos.bump_column(chomped as u16 + 1)),
             )),
             Err(width) => Err((
                 chomped as u16 + width,
-                BadIdent::WeirdDotAccess(row, chomped as u16 + col + width),
+                BadIdent::WeirdDotAccess(pos.bump_column(chomped as u16 + width)),
             )),
         }
     } else if let Ok(('_', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
@@ -408,7 +408,7 @@ fn chomp_identifier_chain<'a>(
         // to give good error messages for this case
         Err((
             chomped as u16 + 1,
-            BadIdent::Underscore(row, col + chomped as u16 + 1),
+            BadIdent::Underscore(pos.bump_column(chomped as u16 + 1)),
         ))
     } else if first_is_uppercase {
         // just one segment, starting with an uppercase letter; that's a global tag
@@ -452,7 +452,7 @@ pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
     move |_, state: State<'a>| match chomp_concrete_type(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok((module_name, type_name, width)) => {
-            match state.advance_without_indenting_ee(width, |_, _| ()) {
+            match state.advance_without_indenting_ee(width, |_| ()) {
                 Ok(state) => Ok((MadeProgress, (module_name, type_name), state)),
                 Err(bad) => Err(bad),
             }
@@ -528,7 +528,7 @@ fn parse_ident_help<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, Ident<'a>, BadIdent> {
-    match chomp_identifier_chain(arena, state.bytes(), state.line, state.column) {
+    match chomp_identifier_chain(arena, state.bytes(), state.pos) {
         Ok((width, ident)) => {
             state = advance_state!(state, width as usize)?;
             Ok((MadeProgress, ident, state))

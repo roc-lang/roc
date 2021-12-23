@@ -1,7 +1,7 @@
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Position, Region};
 use Progress::*;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -63,151 +63,151 @@ pub enum SyntaxError<'a> {
     Expr(EExpr<'a>),
     Header(EHeader<'a>),
     Space(BadInputError),
-    NotEndOfFile(Row, Col),
+    NotEndOfFile(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EHeader<'a> {
-    Provides(EProvides<'a>, Row, Col),
-    Exposes(EExposes, Row, Col),
-    Imports(EImports, Row, Col),
-    Requires(ERequires<'a>, Row, Col),
-    Packages(EPackages<'a>, Row, Col),
-    Effects(EEffects<'a>, Row, Col),
+    Provides(EProvides<'a>, Position),
+    Exposes(EExposes, Position),
+    Imports(EImports, Position),
+    Requires(ERequires<'a>, Position),
+    Packages(EPackages<'a>, Position),
+    Effects(EEffects<'a>, Position),
 
-    Space(BadInputError, Row, Col),
-    Start(Row, Col),
-    ModuleName(Row, Col),
-    AppName(EString<'a>, Row, Col),
-    PlatformName(EPackageName, Row, Col),
-    IndentStart(Row, Col),
+    Space(BadInputError, Position),
+    Start(Position),
+    ModuleName(Position),
+    AppName(EString<'a>, Position),
+    PlatformName(EPackageName, Position),
+    IndentStart(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EProvides<'a> {
-    Provides(Row, Col),
-    Open(Row, Col),
-    To(Row, Col),
-    IndentProvides(Row, Col),
-    IndentTo(Row, Col),
-    IndentListStart(Row, Col),
-    IndentListEnd(Row, Col),
-    IndentPackage(Row, Col),
-    ListStart(Row, Col),
-    ListEnd(Row, Col),
-    Identifier(Row, Col),
-    Package(EPackageOrPath<'a>, Row, Col),
-    Space(BadInputError, Row, Col),
+    Provides(Position),
+    Open(Position),
+    To(Position),
+    IndentProvides(Position),
+    IndentTo(Position),
+    IndentListStart(Position),
+    IndentListEnd(Position),
+    IndentPackage(Position),
+    ListStart(Position),
+    ListEnd(Position),
+    Identifier(Position),
+    Package(EPackageOrPath<'a>, Position),
+    Space(BadInputError, Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EExposes {
-    Exposes(Row, Col),
-    Open(Row, Col),
-    IndentExposes(Row, Col),
-    IndentListStart(Row, Col),
-    IndentListEnd(Row, Col),
-    ListStart(Row, Col),
-    ListEnd(Row, Col),
-    Identifier(Row, Col),
-    Space(BadInputError, Row, Col),
+    Exposes(Position),
+    Open(Position),
+    IndentExposes(Position),
+    IndentListStart(Position),
+    IndentListEnd(Position),
+    ListStart(Position),
+    ListEnd(Position),
+    Identifier(Position),
+    Space(BadInputError, Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ERequires<'a> {
-    Requires(Row, Col),
-    Open(Row, Col),
-    IndentRequires(Row, Col),
-    IndentListStart(Row, Col),
-    IndentListEnd(Row, Col),
-    ListStart(Row, Col),
-    ListEnd(Row, Col),
-    TypedIdent(ETypedIdent<'a>, Row, Col),
-    Rigid(Row, Col),
-    Space(BadInputError, Row, Col),
+    Requires(Position),
+    Open(Position),
+    IndentRequires(Position),
+    IndentListStart(Position),
+    IndentListEnd(Position),
+    ListStart(Position),
+    ListEnd(Position),
+    TypedIdent(ETypedIdent<'a>, Position),
+    Rigid(Position),
+    Space(BadInputError, Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypedIdent<'a> {
-    Space(BadInputError, Row, Col),
-    HasType(Row, Col),
-    IndentHasType(Row, Col),
-    Name(Row, Col),
-    Type(EType<'a>, Row, Col),
-    IndentType(Row, Col),
-    Identifier(Row, Col),
+    Space(BadInputError, Position),
+    HasType(Position),
+    IndentHasType(Position),
+    Name(Position),
+    Type(EType<'a>, Position),
+    IndentType(Position),
+    Identifier(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPackages<'a> {
-    Open(Row, Col),
-    Space(BadInputError, Row, Col),
-    Packages(Row, Col),
-    IndentPackages(Row, Col),
-    ListStart(Row, Col),
-    ListEnd(Row, Col),
-    IndentListStart(Row, Col),
-    IndentListEnd(Row, Col),
-    PackageEntry(EPackageEntry<'a>, Row, Col),
+    Open(Position),
+    Space(BadInputError, Position),
+    Packages(Position),
+    IndentPackages(Position),
+    ListStart(Position),
+    ListEnd(Position),
+    IndentListStart(Position),
+    IndentListEnd(Position),
+    PackageEntry(EPackageEntry<'a>, Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EPackageName {
-    MissingSlash(Row, Col),
-    Account(Row, Col),
-    Pkg(Row, Col),
+    MissingSlash(Position),
+    Account(Position),
+    Pkg(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPackageOrPath<'a> {
-    BadPath(EString<'a>, Row, Col),
-    BadPackage(EPackageName, Row, Col),
+    BadPath(EString<'a>, Position),
+    BadPackage(EPackageName, Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPackageEntry<'a> {
-    BadPackageOrPath(EPackageOrPath<'a>, Row, Col),
-    Shorthand(Row, Col),
-    Colon(Row, Col),
-    IndentPackageOrPath(Row, Col),
-    Space(BadInputError, Row, Col),
+    BadPackageOrPath(EPackageOrPath<'a>, Position),
+    Shorthand(Position),
+    Colon(Position),
+    IndentPackageOrPath(Position),
+    Space(BadInputError, Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EEffects<'a> {
-    Space(BadInputError, Row, Col),
-    Effects(Row, Col),
-    Open(Row, Col),
-    IndentEffects(Row, Col),
-    ListStart(Row, Col),
-    ListEnd(Row, Col),
-    IndentListStart(Row, Col),
-    IndentListEnd(Row, Col),
-    TypedIdent(ETypedIdent<'a>, Row, Col),
-    ShorthandDot(Row, Col),
-    Shorthand(Row, Col),
-    TypeName(Row, Col),
+    Space(BadInputError, Position),
+    Effects(Position),
+    Open(Position),
+    IndentEffects(Position),
+    ListStart(Position),
+    ListEnd(Position),
+    IndentListStart(Position),
+    IndentListEnd(Position),
+    TypedIdent(ETypedIdent<'a>, Position),
+    ShorthandDot(Position),
+    Shorthand(Position),
+    TypeName(Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EImports {
-    Open(Row, Col),
-    Imports(Row, Col),
-    IndentImports(Row, Col),
-    IndentListStart(Row, Col),
-    IndentListEnd(Row, Col),
-    ListStart(Row, Col),
-    ListEnd(Row, Col),
-    Identifier(Row, Col),
-    ExposingDot(Row, Col),
-    ShorthandDot(Row, Col),
-    Shorthand(Row, Col),
-    ModuleName(Row, Col),
-    Space(BadInputError, Row, Col),
-    IndentSetStart(Row, Col),
-    IndentSetEnd(Row, Col),
-    SetStart(Row, Col),
-    SetEnd(Row, Col),
+    Open(Position),
+    Imports(Position),
+    IndentImports(Position),
+    IndentListStart(Position),
+    IndentListEnd(Position),
+    ListStart(Position),
+    ListEnd(Position),
+    Identifier(Position),
+    ExposingDot(Position),
+    ShorthandDot(Position),
+    Shorthand(Position),
+    ModuleName(Position),
+    Space(BadInputError, Position),
+    IndentSetStart(Position),
+    IndentSetEnd(Position),
+    SetStart(Position),
+    SetEnd(Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,15 +221,11 @@ pub enum BadInputError {
     BadUtf8,
 }
 
-pub fn bad_input_to_syntax_error<'a>(
-    bad_input: BadInputError,
-    row: Row,
-    _col: Col,
-) -> SyntaxError<'a> {
+pub fn bad_input_to_syntax_error<'a>(bad_input: BadInputError, pos: Position) -> SyntaxError<'a> {
     use crate::parser::BadInputError::*;
     match bad_input {
         HasTab => SyntaxError::NotYetImplemented("call error on tabs".to_string()),
-        LineTooLong => SyntaxError::LineTooLong(row),
+        LineTooLong => SyntaxError::LineTooLong(pos.line),
         TooManyLines => SyntaxError::TooManyLines,
         BadUtf8 => SyntaxError::BadUtf8,
     }
@@ -243,8 +239,7 @@ impl<'a> SyntaxError<'a> {
         bytes: &'a [u8],
     ) -> ParseProblem<'a, SyntaxError<'a>> {
         ParseProblem {
-            line: 0,
-            column: 0,
+            pos: Position::default(),
             problem: self,
             filename,
             bytes,
@@ -253,55 +248,52 @@ impl<'a> SyntaxError<'a> {
     }
 }
 
-pub type Row = u32;
-pub type Col = u16;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EExpr<'a> {
-    Start(Row, Col),
-    End(Row, Col),
-    BadExprEnd(Row, Col),
-    Space(BadInputError, Row, Col),
+    Start(Position),
+    End(Position),
+    BadExprEnd(Position),
+    Space(BadInputError, Position),
 
-    Dot(Row, Col),
-    Access(Row, Col),
-    UnaryNot(Row, Col),
-    UnaryNegate(Row, Col),
-    BadOperator(&'a str, Row, Col),
+    Dot(Position),
+    Access(Position),
+    UnaryNot(Position),
+    UnaryNegate(Position),
+    BadOperator(&'a str, Position),
 
-    DefMissingFinalExpr(Row, Col),
-    DefMissingFinalExpr2(&'a EExpr<'a>, Row, Col),
-    Type(EType<'a>, Row, Col),
-    Pattern(&'a EPattern<'a>, Row, Col),
-    IndentDefBody(Row, Col),
-    IndentEquals(Row, Col),
-    IndentAnnotation(Row, Col),
-    Equals(Row, Col),
-    Colon(Row, Col),
-    DoubleColon(Row, Col),
-    Ident(Row, Col),
-    ElmStyleFunction(Region, Row, Col),
-    MalformedPattern(Row, Col),
-    QualifiedTag(Row, Col),
-    BackpassComma(Row, Col),
-    BackpassArrow(Row, Col),
+    DefMissingFinalExpr(Position),
+    DefMissingFinalExpr2(&'a EExpr<'a>, Position),
+    Type(EType<'a>, Position),
+    Pattern(&'a EPattern<'a>, Position),
+    IndentDefBody(Position),
+    IndentEquals(Position),
+    IndentAnnotation(Position),
+    Equals(Position),
+    Colon(Position),
+    DoubleColon(Position),
+    Ident(Position),
+    ElmStyleFunction(Region, Position),
+    MalformedPattern(Position),
+    QualifiedTag(Position),
+    BackpassComma(Position),
+    BackpassArrow(Position),
 
-    When(EWhen<'a>, Row, Col),
-    If(EIf<'a>, Row, Col),
+    When(EWhen<'a>, Position),
+    If(EIf<'a>, Position),
 
-    Expect(EExpect<'a>, Row, Col),
+    Expect(EExpect<'a>, Position),
 
-    Lambda(ELambda<'a>, Row, Col),
-    Underscore(Row, Col),
+    Lambda(ELambda<'a>, Position),
+    Underscore(Position),
 
-    InParens(EInParens<'a>, Row, Col),
-    Record(ERecord<'a>, Row, Col),
-    Str(EString<'a>, Row, Col),
-    Number(ENumber, Row, Col),
-    List(EList<'a>, Row, Col),
+    InParens(EInParens<'a>, Position),
+    Record(ERecord<'a>, Position),
+    Str(EString<'a>, Position),
+    Number(ENumber, Position),
+    List(EList<'a>, Position),
 
-    IndentStart(Row, Col),
-    IndentEnd(Row, Col),
+    IndentStart(Position),
+    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,265 +304,264 @@ pub enum ENumber {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EString<'a> {
-    Open(Row, Col),
+    Open(Position),
 
-    CodePtOpen(Row, Col),
-    CodePtEnd(Row, Col),
+    CodePtOpen(Position),
+    CodePtEnd(Position),
 
-    Space(BadInputError, Row, Col),
-    EndlessSingle(Row, Col),
-    EndlessMulti(Row, Col),
-    UnknownEscape(Row, Col),
-    Format(&'a EExpr<'a>, Row, Col),
-    FormatEnd(Row, Col),
+    Space(BadInputError, Position),
+    EndlessSingle(Position),
+    EndlessMulti(Position),
+    UnknownEscape(Position),
+    Format(&'a EExpr<'a>, Position),
+    FormatEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ERecord<'a> {
-    End(Row, Col),
-    Open(Row, Col),
+    End(Position),
+    Open(Position),
 
-    Updateable(Row, Col),
-    Field(Row, Col),
-    Colon(Row, Col),
-    QuestionMark(Row, Col),
-    Bar(Row, Col),
-    Ampersand(Row, Col),
+    Updateable(Position),
+    Field(Position),
+    Colon(Position),
+    QuestionMark(Position),
+    Bar(Position),
+    Ampersand(Position),
 
     // TODO remove
-    Expr(&'a EExpr<'a>, Row, Col),
+    Expr(&'a EExpr<'a>, Position),
 
-    Space(BadInputError, Row, Col),
+    Space(BadInputError, Position),
 
-    IndentOpen(Row, Col),
-    IndentColon(Row, Col),
-    IndentBar(Row, Col),
-    IndentAmpersand(Row, Col),
-    IndentEnd(Row, Col),
+    IndentOpen(Position),
+    IndentColon(Position),
+    IndentBar(Position),
+    IndentAmpersand(Position),
+    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EInParens<'a> {
-    End(Row, Col),
-    Open(Row, Col),
+    End(Position),
+    Open(Position),
     ///
-    Expr(&'a EExpr<'a>, Row, Col),
+    Expr(&'a EExpr<'a>, Position),
 
     ///
-    Space(BadInputError, Row, Col),
+    Space(BadInputError, Position),
     ///
-    IndentOpen(Row, Col),
-    IndentEnd(Row, Col),
+    IndentOpen(Position),
+    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ELambda<'a> {
-    Space(BadInputError, Row, Col),
-    Start(Row, Col),
-    Arrow(Row, Col),
-    Comma(Row, Col),
-    Arg(Row, Col),
+    Space(BadInputError, Position),
+    Start(Position),
+    Arrow(Position),
+    Comma(Position),
+    Arg(Position),
     // TODO make EEXpr
-    Pattern(EPattern<'a>, Row, Col),
-    Body(&'a EExpr<'a>, Row, Col),
-    IndentArrow(Row, Col),
-    IndentBody(Row, Col),
-    IndentArg(Row, Col),
+    Pattern(EPattern<'a>, Position),
+    Body(&'a EExpr<'a>, Position),
+    IndentArrow(Position),
+    IndentBody(Position),
+    IndentArg(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EList<'a> {
-    Open(Row, Col),
-    End(Row, Col),
-    Space(BadInputError, Row, Col),
+    Open(Position),
+    End(Position),
+    Space(BadInputError, Position),
 
-    Expr(&'a EExpr<'a>, Row, Col),
+    Expr(&'a EExpr<'a>, Position),
 
-    IndentOpen(Row, Col),
-    IndentEnd(Row, Col),
+    IndentOpen(Position),
+    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EWhen<'a> {
-    Space(BadInputError, Row, Col),
-    When(Row, Col),
-    Is(Row, Col),
-    Pattern(EPattern<'a>, Row, Col),
-    Arrow(Row, Col),
-    Bar(Row, Col),
+    Space(BadInputError, Position),
+    When(Position),
+    Is(Position),
+    Pattern(EPattern<'a>, Position),
+    Arrow(Position),
+    Bar(Position),
 
-    IfToken(Row, Col),
-    IfGuard(&'a EExpr<'a>, Row, Col),
+    IfToken(Position),
+    IfGuard(&'a EExpr<'a>, Position),
 
-    Condition(&'a EExpr<'a>, Row, Col),
-    Branch(&'a EExpr<'a>, Row, Col),
+    Condition(&'a EExpr<'a>, Position),
+    Branch(&'a EExpr<'a>, Position),
 
-    IndentIs(Row, Col),
-    IndentCondition(Row, Col),
-    IndentPattern(Row, Col),
-    IndentArrow(Row, Col),
-    IndentBranch(Row, Col),
-    IndentIfGuard(Row, Col),
-    PatternAlignment(u16, Row, Col),
+    IndentIs(Position),
+    IndentCondition(Position),
+    IndentPattern(Position),
+    IndentArrow(Position),
+    IndentBranch(Position),
+    IndentIfGuard(Position),
+    PatternAlignment(u16, Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EIf<'a> {
-    Space(BadInputError, Row, Col),
-    If(Row, Col),
-    Then(Row, Col),
-    Else(Row, Col),
+    Space(BadInputError, Position),
+    If(Position),
+    Then(Position),
+    Else(Position),
     // TODO make EEXpr
-    Condition(&'a EExpr<'a>, Row, Col),
-    ThenBranch(&'a EExpr<'a>, Row, Col),
-    ElseBranch(&'a EExpr<'a>, Row, Col),
+    Condition(&'a EExpr<'a>, Position),
+    ThenBranch(&'a EExpr<'a>, Position),
+    ElseBranch(&'a EExpr<'a>, Position),
 
-    IndentCondition(Row, Col),
-    IndentIf(Row, Col),
-    IndentThenToken(Row, Col),
-    IndentElseToken(Row, Col),
-    IndentThenBranch(Row, Col),
-    IndentElseBranch(Row, Col),
+    IndentCondition(Position),
+    IndentIf(Position),
+    IndentThenToken(Position),
+    IndentElseToken(Position),
+    IndentThenBranch(Position),
+    IndentElseBranch(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EExpect<'a> {
-    Space(BadInputError, Row, Col),
-    Expect(Row, Col),
-    Condition(&'a EExpr<'a>, Row, Col),
-    Continuation(&'a EExpr<'a>, Row, Col),
-    IndentCondition(Row, Col),
+    Space(BadInputError, Position),
+    Expect(Position),
+    Condition(&'a EExpr<'a>, Position),
+    Continuation(&'a EExpr<'a>, Position),
+    IndentCondition(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPattern<'a> {
-    Record(PRecord<'a>, Row, Col),
-    Underscore(Row, Col),
+    Record(PRecord<'a>, Position),
+    Underscore(Position),
 
-    Start(Row, Col),
-    End(Row, Col),
-    Space(BadInputError, Row, Col),
+    Start(Position),
+    End(Position),
+    Space(BadInputError, Position),
 
-    PInParens(PInParens<'a>, Row, Col),
-    NumLiteral(ENumber, Row, Col),
+    PInParens(PInParens<'a>, Position),
+    NumLiteral(ENumber, Position),
 
-    IndentStart(Row, Col),
-    IndentEnd(Row, Col),
-    AsIndentStart(Row, Col),
+    IndentStart(Position),
+    IndentEnd(Position),
+    AsIndentStart(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PRecord<'a> {
-    End(Row, Col),
-    Open(Row, Col),
+    End(Position),
+    Open(Position),
 
-    Field(Row, Col),
-    Colon(Row, Col),
-    Optional(Row, Col),
+    Field(Position),
+    Colon(Position),
+    Optional(Position),
 
-    Pattern(&'a EPattern<'a>, Row, Col),
-    Expr(&'a EExpr<'a>, Row, Col),
+    Pattern(&'a EPattern<'a>, Position),
+    Expr(&'a EExpr<'a>, Position),
 
-    Space(BadInputError, Row, Col),
+    Space(BadInputError, Position),
 
-    IndentOpen(Row, Col),
-    IndentColon(Row, Col),
-    IndentOptional(Row, Col),
-    IndentEnd(Row, Col),
+    IndentOpen(Position),
+    IndentColon(Position),
+    IndentOptional(Position),
+    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PInParens<'a> {
-    End(Row, Col),
-    Open(Row, Col),
-    Pattern(&'a EPattern<'a>, Row, Col),
+    End(Position),
+    Open(Position),
+    Pattern(&'a EPattern<'a>, Position),
 
-    Space(BadInputError, Row, Col),
-    IndentOpen(Row, Col),
-    IndentEnd(Row, Col),
+    Space(BadInputError, Position),
+    IndentOpen(Position),
+    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EType<'a> {
-    TRecord(ETypeRecord<'a>, Row, Col),
-    TTagUnion(ETypeTagUnion<'a>, Row, Col),
-    TInParens(ETypeInParens<'a>, Row, Col),
-    TApply(ETypeApply, Row, Col),
-    TBadTypeVariable(Row, Col),
-    TWildcard(Row, Col),
-    TInferred(Row, Col),
+    TRecord(ETypeRecord<'a>, Position),
+    TTagUnion(ETypeTagUnion<'a>, Position),
+    TInParens(ETypeInParens<'a>, Position),
+    TApply(ETypeApply, Position),
+    TBadTypeVariable(Position),
+    TWildcard(Position),
+    TInferred(Position),
     ///
-    TStart(Row, Col),
-    TEnd(Row, Col),
-    TSpace(BadInputError, Row, Col),
-    TFunctionArgument(Row, Col),
+    TStart(Position),
+    TEnd(Position),
+    TSpace(BadInputError, Position),
+    TFunctionArgument(Position),
     ///
-    TIndentStart(Row, Col),
-    TIndentEnd(Row, Col),
-    TAsIndentStart(Row, Col),
+    TIndentStart(Position),
+    TIndentEnd(Position),
+    TAsIndentStart(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeRecord<'a> {
-    End(Row, Col),
-    Open(Row, Col),
+    End(Position),
+    Open(Position),
 
-    Field(Row, Col),
-    Colon(Row, Col),
-    Optional(Row, Col),
-    Type(&'a EType<'a>, Row, Col),
+    Field(Position),
+    Colon(Position),
+    Optional(Position),
+    Type(&'a EType<'a>, Position),
 
-    Space(BadInputError, Row, Col),
+    Space(BadInputError, Position),
 
-    IndentOpen(Row, Col),
-    IndentColon(Row, Col),
-    IndentOptional(Row, Col),
-    IndentEnd(Row, Col),
+    IndentOpen(Position),
+    IndentColon(Position),
+    IndentOptional(Position),
+    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeTagUnion<'a> {
-    End(Row, Col),
-    Open(Row, Col),
+    End(Position),
+    Open(Position),
 
-    Type(&'a EType<'a>, Row, Col),
+    Type(&'a EType<'a>, Position),
 
-    Space(BadInputError, Row, Col),
+    Space(BadInputError, Position),
 
-    IndentOpen(Row, Col),
-    IndentEnd(Row, Col),
+    IndentOpen(Position),
+    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeInParens<'a> {
-    End(Row, Col),
-    Open(Row, Col),
+    End(Position),
+    Open(Position),
     ///
-    Type(&'a EType<'a>, Row, Col),
+    Type(&'a EType<'a>, Position),
 
     ///
-    Space(BadInputError, Row, Col),
+    Space(BadInputError, Position),
     ///
-    IndentOpen(Row, Col),
-    IndentEnd(Row, Col),
+    IndentOpen(Position),
+    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeApply {
     ///
-    StartNotUppercase(Row, Col),
-    End(Row, Col),
-    Space(BadInputError, Row, Col),
+    StartNotUppercase(Position),
+    End(Position),
+    Space(BadInputError, Position),
     ///
-    DoubleDot(Row, Col),
-    TrailingDot(Row, Col),
-    StartIsNumber(Row, Col),
+    DoubleDot(Position),
+    TrailingDot(Position),
+    StartIsNumber(Position),
 }
 
 #[derive(Debug)]
 pub struct ParseProblem<'a, T> {
-    pub line: u32,
-    pub column: u16,
+    pub pos: Position,
     pub problem: T,
     pub filename: std::path::PathBuf,
     pub bytes: &'a [u8],
@@ -723,30 +714,30 @@ where
 
 pub fn keyword_e<'a, ToError, E>(keyword: &'static str, if_error: ToError) -> impl Parser<'a, (), E>
 where
-    ToError: Fn(Row, Col) -> E,
+    ToError: Fn(Position) -> E,
     E: 'a,
 {
     move |_, mut state: State<'a>| {
         let width = keyword.len();
 
         if !state.bytes().starts_with(keyword.as_bytes()) {
-            return Err((NoProgress, if_error(state.line, state.column), state));
+            return Err((NoProgress, if_error(state.pos), state));
         }
 
         // the next character should not be an identifier character
         // to prevent treating `whence` or `iffy` as keywords
         match state.bytes().get(width) {
             Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' => {
-                state.column += width as u16;
+                state.pos.column += width as u16;
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
             None => {
-                state.column += width as u16;
+                state.pos.column += width as u16;
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
-            Some(_) => Err((NoProgress, if_error(state.line, state.column), state)),
+            Some(_) => Err((NoProgress, if_error(state.pos), state)),
         }
     }
 }
@@ -944,7 +935,7 @@ pub fn sep_by1_e<'a, P, V, D, Val, Error>(
 where
     D: Parser<'a, (), Error>,
     P: Parser<'a, Val, Error>,
-    V: Fn(Row, Col) -> Error,
+    V: Fn(Position) -> Error,
     Error: 'a,
 {
     move |arena, state: State<'a>| {
@@ -971,11 +962,7 @@ where
                                     return Err((MadeProgress, fail, state));
                                 }
                                 Err((NoProgress, _fail, state)) => {
-                                    return Err((
-                                        NoProgress,
-                                        to_element_error(state.line, state.column),
-                                        state,
-                                    ));
+                                    return Err((NoProgress, to_element_error(state.pos), state));
                                 }
                             }
                         }
@@ -999,11 +986,9 @@ where
             }
 
             Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
-            Err((NoProgress, _fail, state)) => Err((
-                NoProgress,
-                to_element_error(state.line, state.column),
-                state,
-            )),
+            Err((NoProgress, _fail, state)) => {
+                Err((NoProgress, to_element_error(state.pos), state))
+            }
         }
     }
 }
@@ -1050,23 +1035,16 @@ where
 macro_rules! loc {
     ($parser:expr) => {
         move |arena, state: $crate::state::State<'a>| {
-            use roc_region::all::{Located, Region};
+            use roc_region::all::{Loc, Region};
 
-            let start_col = state.column;
-            let start_line = state.line;
+            let start = state.pos;
 
             match $parser.parse(arena, state) {
                 Ok((progress, value, state)) => {
-                    let end_col = state.column;
-                    let end_line = state.line;
-                    let region = Region {
-                        start_line,
-                        end_line,
-                        start_col,
-                        end_col,
-                    };
+                    let end = state.pos;
+                    let region = Region::new(start, end);
 
-                    Ok((progress, Located { region, value }, state))
+                    Ok((progress, Loc { region, value }, state))
                 }
                 Err(err) => Err(err),
             }
@@ -1265,7 +1243,7 @@ macro_rules! one_of_with_error {
             match $p1.parse(arena, state) {
                 valid @ Ok(_) => valid,
                 Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state )),
-                Err((NoProgress, _, state)) => Err((MadeProgress, $toerror(state.line, state.column), state)),
+                Err((NoProgress, _, state)) => Err((MadeProgress, $toerror(state.pos), state)),
             }
         }
     };
@@ -1277,32 +1255,32 @@ macro_rules! one_of_with_error {
 
 pub fn specialize<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
 where
-    F: Fn(X, Row, Col) -> Y,
+    F: Fn(X, Position) -> Y,
     P: Parser<'a, T, X>,
     Y: 'a,
 {
     move |a, s| match parser.parse(a, s) {
         Ok(t) => Ok(t),
-        Err((p, error, s)) => Err((p, map_error(error, s.line, s.column), s)),
+        Err((p, error, s)) => Err((p, map_error(error, s.pos), s)),
     }
 }
 
 pub fn specialize_ref<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
 where
-    F: Fn(&'a X, Row, Col) -> Y,
+    F: Fn(&'a X, Position) -> Y,
     P: Parser<'a, T, X>,
     Y: 'a,
     X: 'a,
 {
     move |a, s| match parser.parse(a, s) {
         Ok(t) => Ok(t),
-        Err((p, error, s)) => Err((p, map_error(a.alloc(error), s.line, s.column), s)),
+        Err((p, error, s)) => Err((p, map_error(a.alloc(error), s.pos), s)),
     }
 }
 
 pub fn word1<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
-    ToError: Fn(Row, Col) -> E,
+    ToError: Fn(Position) -> E,
     E: 'a,
 {
     debug_assert_ne!(word, b'\n');
@@ -1310,16 +1288,16 @@ where
     move |_arena: &'a Bump, state: State<'a>| match state.bytes().get(0) {
         Some(x) if *x == word => {
             let mut state = state.advance(1);
-            state.column += 1;
+            state.pos.column += 1;
             Ok((MadeProgress, (), state))
         }
-        _ => Err((NoProgress, to_error(state.line, state.column), state)),
+        _ => Err((NoProgress, to_error(state.pos), state)),
     }
 }
 
 pub fn word2<'a, ToError, E>(word_1: u8, word_2: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
-    ToError: Fn(Row, Col) -> E,
+    ToError: Fn(Position) -> E,
     E: 'a,
 {
     debug_assert_ne!(word_1, b'\n');
@@ -1330,23 +1308,23 @@ where
     move |_arena: &'a Bump, state: State<'a>| {
         if state.bytes().starts_with(&needle) {
             let mut state = state.advance(2);
-            state.column += 2;
+            state.pos.column += 2;
             Ok((MadeProgress, (), state))
         } else {
-            Err((NoProgress, to_error(state.line, state.column), state))
+            Err((NoProgress, to_error(state.pos), state))
         }
     }
 }
 
 pub fn check_indent<'a, TE, E>(min_indent: u16, to_problem: TE) -> impl Parser<'a, (), E>
 where
-    TE: Fn(Row, Col) -> E,
+    TE: Fn(Position) -> E,
     E: 'a,
 {
     move |_arena, state: State<'a>| {
-        dbg!(state.indent_col, min_indent);
-        if state.indent_col < min_indent {
-            Err((NoProgress, to_problem(state.line, state.column), state))
+        dbg!(state.indent_column, min_indent);
+        if state.indent_column < min_indent {
+            Err((NoProgress, to_problem(state.pos), state))
         } else {
             Ok((NoProgress, (), state))
         }
@@ -1471,11 +1449,9 @@ macro_rules! one_or_more {
                         }
                     }
                 }
-                Err((progress, _, new_state)) => Err((
-                    progress,
-                    $to_error(new_state.line, new_state.column),
-                    new_state,
-                )),
+                Err((progress, _, new_state)) => {
+                    Err((progress, $to_error(new_state.pos), new_state))
+                }
             }
         }
     };
@@ -1534,7 +1510,7 @@ where
 
 /// For some reason, some usages won't compile unless they use this instead of the macro version
 #[inline(always)]
-pub fn loc<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Located<Val>, Error>
+pub fn loc<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Loc<Val>, Error>
 where
     P: Parser<'a, Val, Error>,
     Error: 'a,

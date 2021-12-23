@@ -14,7 +14,7 @@ use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
@@ -158,8 +158,8 @@ impl<'a> PartialProc<'a> {
         env: &mut Env<'a, '_>,
         layout_cache: &mut LayoutCache<'a>,
         annotation: Variable,
-        loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
-        loc_body: Located<roc_can::expr::Expr>,
+        loc_args: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)>,
+        loc_body: Loc<roc_can::expr::Expr>,
         captured_symbols: CapturedSymbols<'a>,
         is_self_recursive: bool,
         ret_var: Variable,
@@ -726,8 +726,8 @@ impl<'a> Procs<'a> {
         env: &mut Env<'a, '_>,
         symbol: Symbol,
         annotation: Variable,
-        loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
-        loc_body: Located<roc_can::expr::Expr>,
+        loc_args: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)>,
+        loc_body: Loc<roc_can::expr::Expr>,
         captured_symbols: CapturedSymbols<'a>,
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
@@ -1785,17 +1785,10 @@ impl<'a> Stmt<'a> {
 fn patterns_to_when<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
-    patterns: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
+    patterns: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)>,
     body_var: Variable,
-    body: Located<roc_can::expr::Expr>,
-) -> Result<
-    (
-        Vec<'a, Variable>,
-        Vec<'a, Symbol>,
-        Located<roc_can::expr::Expr>,
-    ),
-    Located<RuntimeError>,
-> {
+    body: Loc<roc_can::expr::Expr>,
+) -> Result<(Vec<'a, Variable>, Vec<'a, Symbol>, Loc<roc_can::expr::Expr>), Loc<RuntimeError>> {
     let mut arg_vars = Vec::with_capacity_in(patterns.len(), env.arena);
     let mut symbols = Vec::with_capacity_in(patterns.len(), env.arena);
     let mut body = Ok(body);
@@ -1816,8 +1809,8 @@ fn patterns_to_when<'a>(
                         let def = roc_can::def::Def {
                             annotation: None,
                             expr_var: variable,
-                            loc_expr: Located::at(pattern.region, expr),
-                            loc_pattern: Located::at(
+                            loc_expr: Loc::at(pattern.region, expr),
+                            loc_pattern: Loc::at(
                                 pattern.region,
                                 roc_can::pattern::Pattern::Identifier(symbol),
                             ),
@@ -1828,7 +1821,7 @@ fn patterns_to_when<'a>(
                             Box::new(old_body),
                             variable,
                         );
-                        let new_body = Located {
+                        let new_body = Loc {
                             region: pattern.region,
                             value: new_expr,
                         };
@@ -1844,7 +1837,7 @@ fn patterns_to_when<'a>(
                 // If it was already an Err, leave it at that Err, so the first
                 // RuntimeError we encountered remains the first.
                 body = body.and({
-                    Err(Located {
+                    Err(Loc {
                         region: pattern.region,
                         value: runtime_error,
                     })
@@ -1857,7 +1850,7 @@ fn patterns_to_when<'a>(
         match crate::exhaustive::check(
             pattern.region,
             &[(
-                Located::at(pattern.region, mono_pattern),
+                Loc::at(pattern.region, mono_pattern),
                 crate::exhaustive::Guard::NoGuard,
             )],
             context,
@@ -1885,7 +1878,7 @@ fn patterns_to_when<'a>(
                 // If it was already an Err, leave it at that Err, so the first
                 // RuntimeError we encountered remains the first.
                 body = body.and({
-                    Err(Located {
+                    Err(Loc {
                         region: pattern.region,
                         value,
                     })
@@ -1915,10 +1908,10 @@ fn patterns_to_when<'a>(
 fn pattern_to_when<'a>(
     env: &mut Env<'a, '_>,
     pattern_var: Variable,
-    pattern: Located<roc_can::pattern::Pattern>,
+    pattern: Loc<roc_can::pattern::Pattern>,
     body_var: Variable,
-    body: Located<roc_can::expr::Expr>,
-) -> (Symbol, Located<roc_can::expr::Expr>) {
+    body: Loc<roc_can::expr::Expr>,
+) -> (Symbol, Loc<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
     use roc_can::expr::WhenBranch;
     use roc_can::pattern::Pattern::*;
@@ -1934,20 +1927,20 @@ fn pattern_to_when<'a>(
                 original_region: *region,
                 shadow: loc_ident.clone(),
             };
-            (env.unique_symbol(), Located::at_zero(RuntimeError(error)))
+            (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
         }
 
         UnsupportedPattern(region) => {
             // create the runtime error here, instead of delegating to When.
             // UnsupportedPattern should then never occur in When
             let error = roc_problem::can::RuntimeError::UnsupportedPattern(*region);
-            (env.unique_symbol(), Located::at_zero(RuntimeError(error)))
+            (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
         }
 
         MalformedPattern(problem, region) => {
             // create the runtime error here, instead of delegating to When.
             let error = roc_problem::can::RuntimeError::MalformedPattern(*problem, *region);
-            (env.unique_symbol(), Located::at_zero(RuntimeError(error)))
+            (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
         }
 
         AppliedTag { .. } | RecordDestructure { .. } => {
@@ -1957,7 +1950,7 @@ fn pattern_to_when<'a>(
                 cond_var: pattern_var,
                 expr_var: body_var,
                 region: Region::zero(),
-                loc_cond: Box::new(Located::at_zero(Var(symbol))),
+                loc_cond: Box::new(Loc::at_zero(Var(symbol))),
                 branches: vec![WhenBranch {
                     patterns: vec![pattern],
                     value: body,
@@ -1965,7 +1958,7 @@ fn pattern_to_when<'a>(
                 }],
             };
 
-            (symbol, Located::at_zero(wrapped_body))
+            (symbol, Loc::at_zero(wrapped_body))
         }
 
         IntLiteral(_, _, _) | NumLiteral(_, _, _) | FloatLiteral(_, _, _) | StrLiteral(_) => {
@@ -3172,7 +3165,7 @@ pub fn with_hole<'a>(
                 match crate::exhaustive::check(
                     def.loc_pattern.region,
                     &[(
-                        Located::at(def.loc_pattern.region, mono_pattern.clone()),
+                        Loc::at(def.loc_pattern.region, mono_pattern.clone()),
                         crate::exhaustive::Guard::NoGuard,
                     )],
                     context,
@@ -3777,15 +3770,15 @@ pub fn with_hole<'a>(
                 record_var,
                 ext_var,
                 field_var,
-                loc_expr: Box::new(Located::at_zero(roc_can::expr::Expr::Var(record_symbol))),
+                loc_expr: Box::new(Loc::at_zero(roc_can::expr::Expr::Var(record_symbol))),
                 field,
             };
 
-            let loc_body = Located::at_zero(body);
+            let loc_body = Loc::at_zero(body);
 
             let arguments = vec![(
                 record_var,
-                Located::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
+                Loc::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
             )];
 
             match procs.insert_anonymous(
@@ -4173,7 +4166,7 @@ pub fn with_hole<'a>(
             let iter = args
                 .into_iter()
                 .rev()
-                .map(|(a, b)| (a, Located::at_zero(b)))
+                .map(|(a, b)| (a, Loc::at_zero(b)))
                 .zip(arg_symbols.iter().rev());
             assign_to_symbols(env, procs, layout_cache, iter, result)
         }
@@ -4272,7 +4265,7 @@ pub fn with_hole<'a>(
                         procs,
                         layout_cache,
                         args[LIST_INDEX].0,
-                        Located::at_zero(args[LIST_INDEX].1.clone()),
+                        Loc::at_zero(args[LIST_INDEX].1.clone()),
                         arg_symbols[LIST_INDEX],
                         stmt,
                     );
@@ -4282,7 +4275,7 @@ pub fn with_hole<'a>(
                         procs,
                         layout_cache,
                         args[DEFAULT_INDEX].0,
-                        Located::at_zero(args[DEFAULT_INDEX].1.clone()),
+                        Loc::at_zero(args[DEFAULT_INDEX].1.clone()),
                         arg_symbols[DEFAULT_INDEX],
                         stmt,
                     );
@@ -4292,7 +4285,7 @@ pub fn with_hole<'a>(
                         procs,
                         layout_cache,
                         args[CLOSURE_INDEX].0,
-                        Located::at_zero(args[CLOSURE_INDEX].1.clone()),
+                        Loc::at_zero(args[CLOSURE_INDEX].1.clone()),
                         arg_symbols[CLOSURE_INDEX],
                         stmt,
                     )
@@ -4406,7 +4399,7 @@ pub fn with_hole<'a>(
                     let iter = args
                         .into_iter()
                         .rev()
-                        .map(|(a, b)| (a, Located::at_zero(b)))
+                        .map(|(a, b)| (a, Loc::at_zero(b)))
                         .zip(arg_symbols.iter().rev());
                     assign_to_symbols(env, procs, layout_cache, iter, result)
                 }
@@ -4521,7 +4514,7 @@ fn convert_tag_union<'a>(
     tag_name: TagName,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
-    args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    args: std::vec::Vec<(Variable, Loc<roc_can::expr::Expr>)>,
     arena: &'a Bump,
 ) -> Stmt<'a> {
     use crate::layout::UnionVariant::*;
@@ -4777,15 +4770,15 @@ fn tag_union_to_function<'a>(
 
         let arg_symbol = env.unique_symbol();
 
-        let loc_pattern = Located::at_zero(roc_can::pattern::Pattern::Identifier(arg_symbol));
+        let loc_pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(arg_symbol));
 
-        let loc_expr = Located::at_zero(roc_can::expr::Expr::Var(arg_symbol));
+        let loc_expr = Loc::at_zero(roc_can::expr::Expr::Var(arg_symbol));
 
         loc_pattern_args.push((arg_var, loc_pattern));
         loc_expr_args.push((arg_var, loc_expr));
     }
 
-    let loc_body = Located::at_zero(roc_can::expr::Expr::Tag {
+    let loc_body = Loc::at_zero(roc_can::expr::Expr::Tag {
         variant_var: return_variable,
         name: tag_name,
         arguments: loc_expr_args,
@@ -4833,13 +4826,13 @@ fn sorted_field_symbols<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
-    mut args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    mut args: std::vec::Vec<(Variable, Loc<roc_can::expr::Expr>)>,
 ) -> Vec<
     'a,
     (
         u32,
         Symbol,
-        ((Variable, Located<roc_can::expr::Expr>), &'a Symbol),
+        ((Variable, Loc<roc_can::expr::Expr>), &'a Symbol),
     ),
 > {
     let mut field_symbols_temp = Vec::with_capacity_in(args.len(), env.arena);
@@ -5200,7 +5193,7 @@ pub fn from_can<'a>(
 
                         let new_outer = LetNonRec(
                             nested_def,
-                            Box::new(Located::at_zero(new_inner)),
+                            Box::new(Loc::at_zero(new_inner)),
                             nested_annotation,
                         );
 
@@ -5241,7 +5234,7 @@ pub fn from_can<'a>(
 
                         let new_outer = LetRec(
                             nested_defs,
-                            Box::new(Located::at_zero(new_inner)),
+                            Box::new(Loc::at_zero(new_inner)),
                             nested_annotation,
                         );
 
@@ -5294,7 +5287,7 @@ pub fn from_can<'a>(
                 match crate::exhaustive::check(
                     def.loc_pattern.region,
                     &[(
-                        Located::at(def.loc_pattern.region, mono_pattern.clone()),
+                        Loc::at(def.loc_pattern.region, mono_pattern.clone()),
                         crate::exhaustive::Guard::NoGuard,
                     )],
                     context,
@@ -5354,7 +5347,7 @@ fn to_opt_branches<'a>(
     layout_cache: &mut LayoutCache<'a>,
 ) -> std::vec::Vec<(
     Pattern<'a>,
-    Option<Located<roc_can::expr::Expr>>,
+    Option<Loc<roc_can::expr::Expr>>,
     roc_can::expr::Expr,
 )> {
     debug_assert!(!branches.is_empty());
@@ -5373,7 +5366,7 @@ fn to_opt_branches<'a>(
             match from_can_pattern(env, layout_cache, &loc_pattern.value) {
                 Ok((mono_pattern, assignments)) => {
                     loc_branches.push((
-                        Located::at(loc_pattern.region, mono_pattern.clone()),
+                        Loc::at(loc_pattern.region, mono_pattern.clone()),
                         exhaustive_guard.clone(),
                     ));
 
@@ -5383,8 +5376,8 @@ fn to_opt_branches<'a>(
                         let def = roc_can::def::Def {
                             annotation: None,
                             expr_var: variable,
-                            loc_expr: Located::at(region, expr),
-                            loc_pattern: Located::at(
+                            loc_expr: Loc::at(region, expr),
+                            loc_pattern: Loc::at(
                                 region,
                                 roc_can::pattern::Pattern::Identifier(symbol),
                             ),
@@ -5395,7 +5388,7 @@ fn to_opt_branches<'a>(
                             Box::new(loc_expr),
                             variable,
                         );
-                        loc_expr = Located::at(region, new_expr);
+                        loc_expr = Loc::at(region, new_expr);
                     }
 
                     // TODO remove clone?
@@ -5403,7 +5396,7 @@ fn to_opt_branches<'a>(
                 }
                 Err(runtime_error) => {
                     loc_branches.push((
-                        Located::at(loc_pattern.region, Pattern::Underscore),
+                        Loc::at(loc_pattern.region, Pattern::Underscore),
                         exhaustive_guard.clone(),
                     ));
 
@@ -6527,7 +6520,7 @@ fn assign_to_symbol<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     arg_var: Variable,
-    loc_arg: Located<roc_can::expr::Expr>,
+    loc_arg: Loc<roc_can::expr::Expr>,
     symbol: Symbol,
     result: Stmt<'a>,
 ) -> Stmt<'a> {
@@ -6569,7 +6562,7 @@ fn assign_to_symbols<'a, I>(
     mut result: Stmt<'a>,
 ) -> Stmt<'a>
 where
-    I: Iterator<Item = ((Variable, Located<roc_can::expr::Expr>), &'a Symbol)>,
+    I: Iterator<Item = ((Variable, Loc<roc_can::expr::Expr>), &'a Symbol)>,
 {
     for ((arg_var, loc_arg), symbol) in iter {
         result = assign_to_symbol(env, procs, layout_cache, arg_var, loc_arg, *symbol, result);
@@ -6617,7 +6610,7 @@ fn evaluate_arguments_then_runtime_error<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     msg: String,
-    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    loc_args: std::vec::Vec<(Variable, Loc<roc_can::expr::Expr>)>,
 ) -> Stmt<'a> {
     let arena = env.arena;
 
@@ -6643,7 +6636,7 @@ fn call_by_name<'a>(
     procs: &mut Procs<'a>,
     fn_var: Variable,
     proc_name: Symbol,
-    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    loc_args: std::vec::Vec<(Variable, Loc<roc_can::expr::Expr>)>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
@@ -6772,7 +6765,7 @@ fn call_by_name_help<'a>(
     procs: &mut Procs<'a>,
     fn_var: Variable,
     proc_name: Symbol,
-    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    loc_args: std::vec::Vec<(Variable, Loc<roc_can::expr::Expr>)>,
     lambda_set: LambdaSet<'a>,
     argument_layouts: &'a [Layout<'a>],
     ret_layout: &'a Layout<'a>,
@@ -7134,7 +7127,7 @@ fn call_specialized_proc<'a>(
     lambda_set: LambdaSet<'a>,
     layout: RawFunctionLayout<'a>,
     field_symbols: &'a [Symbol],
-    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    loc_args: std::vec::Vec<(Variable, Loc<roc_can::expr::Expr>)>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,

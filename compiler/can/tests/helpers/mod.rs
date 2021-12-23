@@ -9,7 +9,7 @@ use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_problem::can::Problem;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use std::hash::Hash;
 
@@ -23,7 +23,7 @@ pub fn can_expr(expr_str: &str) -> CanExprOut {
 }
 
 pub struct CanExprOut {
-    pub loc_expr: Located<Expr>,
+    pub loc_expr: Loc<Expr>,
     pub output: Output,
     pub problems: Vec<Problem>,
     pub home: ModuleId,

@@ -29,7 +29,7 @@ use roc_parse::header::{
 };
 use roc_parse::module::module_defs;
 use roc_parse::parser::{ParseProblem, Parser, SyntaxError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_types::solved_types::Solved;
@@ -777,7 +777,7 @@ struct ParsedModule<'a> {
     imported_modules: MutMap<ModuleId, Region>,
     exposed_ident_ids: IdentIds,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    parsed_defs: &'a [Located<roc_parse::ast::Def<'a>>],
+    parsed_defs: &'a [Loc<roc_parse::ast::Def<'a>>],
 }
 
 /// A message sent out _from_ a worker thread,
@@ -2544,7 +2544,7 @@ fn parse_header<'a>(
             };
 
             let info = HeaderInfo {
-                loc_name: Located {
+                loc_name: Loc {
                     region: header.name.region,
                     value: ModuleNameEnum::Interface(header.name.value),
                 },
@@ -2578,7 +2578,7 @@ fn parse_header<'a>(
             let packages = unspace(arena, header.packages.items);
 
             let info = HeaderInfo {
-                loc_name: Located {
+                loc_name: Loc {
                     region: header.name.region,
                     value: ModuleNameEnum::App(header.name.value),
                 },
@@ -2603,7 +2603,7 @@ fn parse_header<'a>(
             match header.to.value {
                 To::ExistingPackage(existing_package) => {
                     let opt_base_package = packages.iter().find_map(|loc_package_entry| {
-                        let Located { value, .. } = loc_package_entry;
+                        let Loc { value, .. } = loc_package_entry;
 
                         if value.shorthand == existing_package {
                             Some(value)
@@ -2615,7 +2615,7 @@ fn parse_header<'a>(
                     if let Some(PackageEntry {
                         shorthand,
                         package_or_path:
-                            Located {
+                            Loc {
                                 value: package_or_path,
                                 ..
                             },
@@ -2753,14 +2753,14 @@ enum ModuleNameEnum<'a> {
 
 #[derive(Debug)]
 struct HeaderInfo<'a> {
-    loc_name: Located<ModuleNameEnum<'a>>,
+    loc_name: Loc<ModuleNameEnum<'a>>,
     filename: PathBuf,
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     header_src: &'a str,
-    packages: &'a [Located<PackageEntry<'a>>],
-    exposes: &'a [Located<ExposedName<'a>>],
-    imports: &'a [Located<ImportsEntry<'a>>],
+    packages: &'a [Loc<PackageEntry<'a>>],
+    exposes: &'a [Loc<ExposedName<'a>>],
+    imports: &'a [Loc<ImportsEntry<'a>>],
     to_platform: Option<To<'a>>,
 }
 
@@ -2970,10 +2970,10 @@ struct PlatformHeaderInfo<'a> {
     shorthand: &'a str,
     header_src: &'a str,
     app_module_id: ModuleId,
-    packages: &'a [Located<PackageEntry<'a>>],
-    provides: &'a [Located<ExposedName<'a>>],
-    requires: &'a [Located<TypedIdent<'a>>],
-    imports: &'a [Located<ImportsEntry<'a>>],
+    packages: &'a [Loc<PackageEntry<'a>>],
+    provides: &'a [Loc<ExposedName<'a>>],
+    requires: &'a [Loc<TypedIdent<'a>>],
+    imports: &'a [Loc<ImportsEntry<'a>>],
 }
 
 // TODO refactor so more logic is shared with `send_header`
@@ -3311,11 +3311,11 @@ fn run_solve<'a>(
     }
 }
 
-fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Located<Spaced<'a, T>>]) -> &'a [Located<T>] {
+fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [Loc<T>] {
     bumpalo::collections::Vec::from_iter_in(
         items
             .iter()
-            .map(|item| Located::at(item.region, item.value.extract_spaces().item)),
+            .map(|item| Loc::at(item.region, item.value.extract_spaces().item)),
         arena,
     )
     .into_bump_slice()
@@ -3342,7 +3342,7 @@ fn fabricate_pkg_config_module<'a>(
         app_module_id,
         packages: &[],
         provides: unspace(arena, header.provides.items),
-        requires: &*arena.alloc([Located::at(
+        requires: &*arena.alloc([Loc::at(
             header.requires.signature.region,
             header.requires.signature.extract_spaces().item,
         )]),
@@ -3492,7 +3492,7 @@ fn fabricate_effects_module<'a>(
         scope.add_alias(
             effect_symbol,
             Region::zero(),
-            vec![Located::at_zero(("a".into(), a_var))],
+            vec![Loc::at_zero(("a".into(), a_var))],
             actual,
         );
 
@@ -3612,8 +3612,8 @@ fn fabricate_effects_module<'a>(
 
 fn unpack_exposes_entries<'a>(
     arena: &'a Bump,
-    entries: &'a [Located<Spaced<'a, TypedIdent<'a>>>],
-) -> bumpalo::collections::Vec<'a, (Located<&'a str>, Located<TypeAnnotation<'a>>)> {
+    entries: &'a [Loc<Spaced<'a, TypedIdent<'a>>>],
+) -> bumpalo::collections::Vec<'a, (Loc<&'a str>, Loc<TypeAnnotation<'a>>)> {
     use bumpalo::collections::Vec;
 
     let iter = entries.iter().map(|entry| {

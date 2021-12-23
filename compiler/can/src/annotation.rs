@@ -4,7 +4,7 @@ use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, LambdaSet, Problem, RecordField, Type};
 
@@ -311,14 +311,14 @@ fn can_annotation_help(
 
                             if let Some(var) = introduced_variables.var_by_name(&var_name) {
                                 vars.push((var_name.clone(), Type::Variable(*var)));
-                                lowercase_vars.push(Located::at(loc_var.region, (var_name, *var)));
+                                lowercase_vars.push(Loc::at(loc_var.region, (var_name, *var)));
                             } else {
                                 let var = var_store.fresh();
 
                                 introduced_variables.insert_named(var_name.clone(), var);
                                 vars.push((var_name.clone(), Type::Variable(var)));
 
-                                lowercase_vars.push(Located::at(loc_var.region, (var_name, var)));
+                                lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
                             }
                         }
                         _ => {
@@ -530,7 +530,7 @@ where
 #[allow(clippy::too_many_arguments)]
 fn can_assigned_fields<'a>(
     env: &mut Env,
-    fields: &&[Located<AssignedField<'a, TypeAnnotation<'a>>>],
+    fields: &&[Loc<AssignedField<'a, TypeAnnotation<'a>>>],
     region: Region,
     scope: &mut Scope,
     var_store: &mut VarStore,
@@ -640,7 +640,7 @@ fn can_assigned_fields<'a>(
 #[allow(clippy::too_many_arguments)]
 fn can_tags<'a>(
     env: &mut Env,
-    tags: &'a [Located<Tag<'a>>],
+    tags: &'a [Loc<Tag<'a>>],
     region: Region,
     scope: &mut Scope,
     var_store: &mut VarStore,

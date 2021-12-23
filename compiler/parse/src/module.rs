@@ -8,38 +8,31 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, specialize, word1, word2, Col, EEffects, EExposes, EHeader, EImports, EPackages,
-    EProvides, ERequires, ETypedIdent, Parser, Row, SyntaxError,
+    backtrackable, specialize, word1, word2, EEffects, EExposes, EHeader, EImports, EPackages,
+    EProvides, ERequires, ETypedIdent, Parser, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
-use roc_region::all::Located;
+use roc_region::all::{Loc, Position};
 
 fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     |_arena, state: State<'a>| {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {
-            Err((
-                NoProgress,
-                SyntaxError::NotEndOfFile(state.line, state.column),
-                state,
-            ))
+            Err((NoProgress, SyntaxError::NotEndOfFile(state.pos), state))
         }
     }
 }
 
 #[inline(always)]
-pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxError<'a>> {
+pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, SyntaxError<'a>> {
     // force that we parse until the end of the input
     let min_indent = 0;
     skip_second!(
-        specialize(
-            |e, _, _| SyntaxError::Expr(e),
-            crate::expr::defs(min_indent),
-        ),
+        specialize(|e, _| SyntaxError::Expr(e), crate::expr::defs(min_indent),),
         end_of_file()
     )
 }
@@ -175,7 +168,7 @@ fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
     |_, mut state: State<'a>| match chomp_module_name(state.bytes()) {
         Ok(name) => {
             let width = name.len();
-            state.column += width as u16;
+            state.pos.column += width as u16;
             state = state.advance(width);
 
             Ok((MadeProgress, ModuleName::new(name), state))
@@ -221,7 +214,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
         #[allow(clippy::type_complexity)]
         let opt_imports: Option<(
             (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-            Collection<'a, Located<Spaced<'a, ImportsEntry<'a>>>>,
+            Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
         )> = opt_imports;
 
         let ((before_imports, after_imports), imports) =
@@ -304,8 +297,8 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
 
 #[derive(Debug)]
 struct ProvidesTo<'a> {
-    entries: Collection<'a, Located<Spaced<'a, ExposedName<'a>>>>,
-    to: Located<To<'a>>,
+    entries: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    to: Loc<To<'a>>,
 
     before_provides_keyword: &'a [CommentOrNewline<'a>],
     after_provides_keyword: &'a [CommentOrNewline<'a>],
@@ -316,7 +309,7 @@ struct ProvidesTo<'a> {
 fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, EProvides<'a>> {
     one_of![
         specialize(
-            |_, r, c| EProvides::Identifier(r, c),
+            |_, pos| EProvides::Identifier(pos),
             map!(lowercase_ident(), To::ExistingPackage)
         ),
         specialize(EProvides::Package, map!(package_or_path(), To::NewPackage))
@@ -363,7 +356,7 @@ fn provides_without_to<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Collection<'a, Located<Spaced<'a, ExposedName<'a>>>>,
+        Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
     ),
     EProvides<'a>,
 > {
@@ -393,14 +386,14 @@ fn provides_without_to<'a>() -> impl Parser<
 
 fn exposes_entry<'a, F, E>(
     to_expectation: F,
-) -> impl Parser<'a, Located<Spaced<'a, ExposedName<'a>>>, E>
+) -> impl Parser<'a, Loc<Spaced<'a, ExposedName<'a>>>, E>
 where
-    F: Fn(crate::parser::Row, crate::parser::Col) -> E,
+    F: Fn(Position) -> E,
     F: Copy,
     E: 'a,
 {
     loc!(map!(
-        specialize(|_, r, c| to_expectation(r, c), unqualified_ident()),
+        specialize(|_, pos| to_expectation(pos), unqualified_ident()),
         |n| Spaced::Item(ExposedName::new(n))
     ))
 }
@@ -445,10 +438,10 @@ fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a
 #[inline(always)]
 fn requires_rigids<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Collection<'a, Located<Spaced<'a, PlatformRigid<'a>>>>, ERequires<'a>> {
+) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, PlatformRigid<'a>>>>, ERequires<'a>> {
     collection_trailing_sep_e!(
         word1(b'{', ERequires::ListStart),
-        specialize(|_, r, c| ERequires::Rigid(r, c), loc!(requires_rigid())),
+        specialize(|_, pos| ERequires::Rigid(pos), loc!(requires_rigid())),
         word1(b',', ERequires::ListEnd),
         word1(b'}', ERequires::ListEnd),
         min_indent,
@@ -464,15 +457,14 @@ fn requires_rigid<'a>() -> impl Parser<'a, Spaced<'a, PlatformRigid<'a>>, ()> {
     map!(
         and!(
             lowercase_ident(),
-            skip_first!(word2(b'=', b'>', |_, _| ()), uppercase_ident())
+            skip_first!(word2(b'=', b'>', |_| ()), uppercase_ident())
         ),
         |(rigid, alias)| Spaced::Item(PlatformRigid { rigid, alias })
     )
 }
 
 #[inline(always)]
-fn requires_typed_ident<'a>() -> impl Parser<'a, Located<Spaced<'a, TypedIdent<'a>>>, ERequires<'a>>
-{
+fn requires_typed_ident<'a>() -> impl Parser<'a, Loc<Spaced<'a, TypedIdent<'a>>>, ERequires<'a>> {
     skip_first!(
         word1(b'{', ERequires::ListStart),
         skip_second!(
@@ -493,7 +485,7 @@ fn exposes_values<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Collection<'a, Located<Spaced<'a, ExposedName<'a>>>>,
+        Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
     ),
     EExposes,
 > {
@@ -525,10 +517,10 @@ fn exposes_values<'a>() -> impl Parser<
 fn spaces_around_keyword<'a, E>(
     min_indent: u16,
     keyword: &'static str,
-    expectation: fn(Row, Col) -> E,
-    space_problem: fn(crate::parser::BadInputError, Row, Col) -> E,
-    indent_problem1: fn(Row, Col) -> E,
-    indent_problem2: fn(Row, Col) -> E,
+    expectation: fn(Position) -> E,
+    space_problem: fn(crate::parser::BadInputError, Position) -> E,
+    indent_problem1: fn(Position) -> E,
+    indent_problem2: fn(Position) -> E,
 ) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]), E>
 where
     E: 'a,
@@ -547,7 +539,7 @@ fn exposes_modules<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Collection<'a, Located<Spaced<'a, ModuleName<'a>>>>,
+        Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>,
     ),
     EExposes,
 > {
@@ -578,21 +570,21 @@ fn exposes_modules<'a>() -> impl Parser<
 
 fn exposes_module<'a, F, E>(
     to_expectation: F,
-) -> impl Parser<'a, Located<Spaced<'a, ModuleName<'a>>>, E>
+) -> impl Parser<'a, Loc<Spaced<'a, ModuleName<'a>>>, E>
 where
-    F: Fn(crate::parser::Row, crate::parser::Col) -> E,
+    F: Fn(Position) -> E,
     F: Copy,
     E: 'a,
 {
     loc!(map!(
-        specialize(|_, r, c| to_expectation(r, c), module_name()),
+        specialize(|_, pos| to_expectation(pos), module_name()),
         Spaced::Item
     ))
 }
 
 #[derive(Debug)]
 struct Packages<'a> {
-    entries: Collection<'a, Located<Spaced<'a, PackageEntry<'a>>>>,
+    entries: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
     before_packages_keyword: &'a [CommentOrNewline<'a>],
     after_packages_keyword: &'a [CommentOrNewline<'a>],
 }
@@ -641,7 +633,7 @@ fn imports<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Collection<'a, Located<Spaced<'a, ImportsEntry<'a>>>>,
+        Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     ),
     EImports,
 > {
@@ -688,14 +680,14 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
 
         // e.g. `fx.`
         let (_, type_shortname, state) = skip_second!(
-            specialize(|_, r, c| EEffects::Shorthand(r, c), lowercase_ident()),
+            specialize(|_, pos| EEffects::Shorthand(pos), lowercase_ident()),
             word1(b'.', EEffects::ShorthandDot)
         )
         .parse(arena, state)?;
 
         // the type name, e.g. Effects
         let (_, (type_name, spaces_after_type_name), state) = and!(
-            specialize(|_, r, c| EEffects::TypeName(r, c), uppercase_ident()),
+            specialize(|_, pos| EEffects::TypeName(pos), uppercase_ident()),
             space0_e(min_indent, EEffects::Space, EEffects::IndentListStart)
         )
         .parse(arena, state)?;
@@ -738,7 +730,7 @@ fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<
         and!(
             and!(
                 loc!(specialize(
-                    |_, r, c| ETypedIdent::Identifier(r, c),
+                    |_, pos| ETypedIdent::Identifier(pos),
                     lowercase_ident()
                 )),
                 space0_e(min_indent, ETypedIdent::Space, ETypedIdent::IndentHasType)
@@ -767,16 +759,16 @@ fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<
 }
 
 fn shortname<'a>() -> impl Parser<'a, &'a str, EImports> {
-    specialize(|_, r, c| EImports::Shorthand(r, c), lowercase_ident())
+    specialize(|_, pos| EImports::Shorthand(pos), lowercase_ident())
 }
 
 fn module_name_help<'a, F, E>(to_expectation: F) -> impl Parser<'a, ModuleName<'a>, E>
 where
-    F: Fn(crate::parser::Row, crate::parser::Col) -> E,
+    F: Fn(Position) -> E,
     E: 'a,
     F: 'a,
 {
-    specialize(move |_, r, c| to_expectation(r, c), module_name())
+    specialize(move |_, pos| to_expectation(pos), module_name())
 }
 
 #[inline(always)]
@@ -785,7 +777,7 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
 
     type Temp<'a> = (
         (Option<&'a str>, ModuleName<'a>),
-        Option<Collection<'a, Located<Spaced<'a, ExposedName<'a>>>>>,
+        Option<Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
     );
 
     map_with_arena!(

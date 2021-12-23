@@ -226,7 +226,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
 
         let (_, opt_shorthand, state) = maybe!(and!(
             skip_second!(
-                specialize(|_, r, c| EPackageEntry::Shorthand(r, c), lowercase_ident()),
+                specialize(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
                 word1(b':', EPackageEntry::Colon)
             ),
             space0_e(
@@ -291,7 +291,7 @@ where
         if chomped == 0 {
             Ok((NoProgress, (), state))
         } else {
-            state.column += chomped as u16;
+            state.pos.column += chomped as u16;
             state = state.advance(chomped);
 
             Ok((MadeProgress, (), state))
@@ -316,11 +316,7 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
     // They must be ASCII.
 
     |_, mut state: State<'a>| match chomp_package_part(state.bytes()) {
-        Err(progress) => Err((
-            progress,
-            EPackageName::Account(state.line, state.column),
-            state,
-        )),
+        Err(progress) => Err((progress, EPackageName::Account(state.pos), state)),
         Ok(account) => {
             let mut chomped = account.len();
             if let Ok(('/', width)) = char::from_utf8_slice_start(&state.bytes()[chomped..]) {
@@ -328,13 +324,13 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
                 match chomp_package_part(&state.bytes()[chomped..]) {
                     Err(progress) => Err((
                         progress,
-                        EPackageName::Pkg(state.line, state.column + chomped as u16),
+                        EPackageName::Pkg(state.pos.bump_column(chomped as u16)),
                         state,
                     )),
                     Ok(pkg) => {
                         chomped += pkg.len();
 
-                        state.column += chomped as u16;
+                        state.pos.column += chomped as u16;
                         state = state.advance(chomped);
 
                         let value = PackageName { account, pkg };
@@ -344,7 +340,7 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
             } else {
                 Err((
                     MadeProgress,
-                    EPackageName::MissingSlash(state.line, state.column + chomped as u16),
+                    EPackageName::MissingSlash(state.pos.bump_column(chomped as u16)),
                     state,
                 ))
             }

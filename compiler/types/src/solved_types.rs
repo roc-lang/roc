@@ -3,7 +3,7 @@ use crate::types::{Problem, RecordField, Type};
 use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
@@ -399,7 +399,7 @@ impl SolvedType {
 #[derive(Clone, Debug)]
 pub struct BuiltinAlias {
     pub region: Region,
-    pub vars: Vec<Located<Lowercase>>,
+    pub vars: Vec<Loc<Lowercase>>,
     pub typ: SolvedType,
 }
 

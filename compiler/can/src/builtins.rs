@@ -7,7 +7,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 
 macro_rules! macro_magic {
@@ -362,8 +362,8 @@ fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: None,
         expr_var: int_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -377,8 +377,8 @@ fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: None,
         expr_var: int_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -1246,8 +1246,8 @@ fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: Some(annotation),
         expr_var: int_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -3306,8 +3306,8 @@ fn dict_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: None,
         expr_var: dict_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -3388,8 +3388,8 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let def = Def {
         annotation: None,
         expr_var: temp_record_var,
-        loc_expr: Located::at_zero(def_body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(temp_record)),
+        loc_expr: Loc::at_zero(def_body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(temp_record)),
         pattern_vars: Default::default(),
     };
 
@@ -3481,8 +3481,8 @@ fn set_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: None,
         expr_var: set_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -4627,8 +4627,8 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 #[inline(always)]
-fn no_region<T>(value: T) -> Located<T> {
-    Located {
+fn no_region<T>(value: T) -> Loc<T> {
+    Loc {
         region: Region::zero(),
         value,
     }
@@ -4643,7 +4643,7 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
         arguments: args
             .into_iter()
             .map(|expr| (var_store.fresh(), no_region(expr)))
-            .collect::<Vec<(Variable, Located<Expr>)>>(),
+            .collect::<Vec<(Variable, Loc<Expr>)>>(),
     }
 }
 
@@ -4670,11 +4670,11 @@ fn defn(
     let expr = defn_help(fn_name, args, var_store, body, ret_var);
 
     Def {
-        loc_pattern: Located {
+        loc_pattern: Loc {
             region: Region::zero(),
             value: Pattern::Identifier(fn_name),
         },
-        loc_expr: Located {
+        loc_expr: Loc {
             region: Region::zero(),
             value: expr,
         },

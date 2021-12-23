@@ -7,13 +7,13 @@ use roc_can::pattern::{DestructType, RecordDestruct};
 use roc_collections::all::{Index, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{Category, PReason, PatternCategory, Reason, RecordField, Type};
 
 #[derive(Default)]
 pub struct PatternState {
-    pub headers: SendMap<Symbol, Located<Type>>,
+    pub headers: SendMap<Symbol, Loc<Type>>,
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
 }
@@ -27,8 +27,8 @@ pub struct PatternState {
 /// definition has an annotation, we instead now add `x => Int`.
 pub fn headers_from_annotation(
     pattern: &Pattern,
-    annotation: &Located<Type>,
-) -> Option<SendMap<Symbol, Located<Type>>> {
+    annotation: &Loc<Type>,
+) -> Option<SendMap<Symbol, Loc<Type>>> {
     let mut headers = SendMap::default();
     // Check that the annotation structurally agrees with the pattern, preventing e.g. `{ x, y } : Int`
     // in such incorrect cases we don't put the full annotation in headers, just a variable, and let
@@ -44,8 +44,8 @@ pub fn headers_from_annotation(
 
 fn headers_from_annotation_help(
     pattern: &Pattern,
-    annotation: &Located<Type>,
-    headers: &mut SendMap<Symbol, Located<Type>>,
+    annotation: &Loc<Type>,
+    headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> bool {
     match pattern {
         Identifier(symbol) => {
@@ -76,7 +76,7 @@ fn headers_from_annotation_help(
                     if let Some(field_type) = fields.get(&destruct.label) {
                         headers.insert(
                             destruct.symbol,
-                            Located::at(annotation.region, field_type.clone().into_inner()),
+                            Loc::at(annotation.region, field_type.clone().into_inner()),
                         );
                     } else {
                         return false;
@@ -105,7 +105,7 @@ fn headers_from_annotation_help(
                         .all(|(arg_pattern, arg_type)| {
                             headers_from_annotation_help(
                                 &arg_pattern.1.value,
-                                &Located::at(annotation.region, arg_type.clone()),
+                                &Loc::at(annotation.region, arg_type.clone()),
                                 headers,
                             )
                         })
@@ -136,7 +136,7 @@ pub fn constrain_pattern(
         Identifier(symbol) => {
             state.headers.insert(
                 *symbol,
-                Located {
+                Loc {
                     region,
                     value: expected.get_type(),
                 },
@@ -192,7 +192,7 @@ pub fn constrain_pattern(
 
             let mut field_types: SendMap<Lowercase, RecordField<Type>> = SendMap::default();
 
-            for Located {
+            for Loc {
                 value:
                     RecordDestruct {
                         var,
@@ -209,7 +209,7 @@ pub fn constrain_pattern(
                 if !state.headers.contains_key(symbol) {
                     state
                         .headers
-                        .insert(*symbol, Located::at(region, pat_type.clone()));
+                        .insert(*symbol, Loc::at(region, pat_type.clone()));
                 }
 
                 let field_type = match typ {

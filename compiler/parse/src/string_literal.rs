@@ -17,33 +17,24 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
                 buf.push(byte as char);
             } else if buf.is_empty() {
                 // We didn't find any hex digits!
-                return Err((
-                    NoProgress,
-                    EString::CodePtEnd(state.line, state.column),
-                    state,
-                ));
+                return Err((NoProgress, EString::CodePtEnd(state.pos), state));
             } else {
-                let state = state.advance_without_indenting_ee(buf.len(), |r, c| {
-                    EString::Space(BadInputError::LineTooLong, r, c)
+                let state = state.advance_without_indenting_ee(buf.len(), |pos| {
+                    EString::Space(BadInputError::LineTooLong, pos)
                 })?;
 
                 return Ok((MadeProgress, buf.into_bump_str(), state));
             }
         }
 
-        Err((
-            NoProgress,
-            EString::CodePtEnd(state.line, state.column),
-            state,
-        ))
+        Err((NoProgress, EString::CodePtEnd(state.pos), state))
     }
 }
 
 macro_rules! advance_state {
     ($state:expr, $n:expr) => {
-        $state.advance_without_indenting_ee($n, |r, c| {
-            EString::Space(BadInputError::LineTooLong, r, c)
-        })
+        $state
+            .advance_without_indenting_ee($n, |pos| EString::Space(BadInputError::LineTooLong, pos))
     };
 }
 
@@ -65,7 +56,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
             bytes = state.bytes()[1..].iter();
             state = advance_state!(state, 1)?;
         } else {
-            return Err((NoProgress, EString::Open(state.line, state.column), state));
+            return Err((NoProgress, EString::Open(state.pos), state));
         }
 
         // At the parsing stage we keep the entire raw string, because the formatter
@@ -109,7 +100,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                         Err(_) => {
                             return Err((
                                 MadeProgress,
-                                EString::Space(BadInputError::BadUtf8, state.line, state.column),
+                                EString::Space(BadInputError::BadUtf8, state.pos),
                                 state,
                             ));
                         }
@@ -201,11 +192,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                         // all remaining chars. This will mask all other errors, but
                         // it should make it easiest to debug; the file will be a giant
                         // error starting from where the open quote appeared.
-                        return Err((
-                            MadeProgress,
-                            EString::EndlessSingle(state.line, state.column),
-                            state,
-                        ));
+                        return Err((MadeProgress, EString::EndlessSingle(state.pos), state));
                     }
                 }
                 b'\\' => {
@@ -294,11 +281,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // Invalid escape! A backslash must be followed
                             // by either an open paren or else one of the
                             // escapable characters (\n, \t, \", \\, etc)
-                            return Err((
-                                MadeProgress,
-                                EString::UnknownEscape(state.line, state.column),
-                                state,
-                            ));
+                            return Err((MadeProgress, EString::UnknownEscape(state.pos), state));
                         }
                     }
                 }
@@ -312,9 +295,9 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
         Err((
             MadeProgress,
             if is_multiline {
-                EString::EndlessMulti(state.line, state.column)
+                EString::EndlessMulti(state.pos)
             } else {
-                EString::EndlessSingle(state.line, state.column)
+                EString::EndlessSingle(state.pos)
             },
             state,
         ))

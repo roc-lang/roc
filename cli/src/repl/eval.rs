@@ -9,7 +9,7 @@ use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant};
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 
 struct Env<'a, 'env> {
@@ -267,7 +267,7 @@ fn jit_to_ast_help<'a>(
 
                                             let tag_expr = tag_name_to_expr(env, tag_name);
                                             let loc_tag_expr =
-                                                &*env.arena.alloc(Located::at_zero(tag_expr));
+                                                &*env.arena.alloc(Loc::at_zero(tag_expr));
 
                                             let variables = &tags_map[tag_name];
 
@@ -300,7 +300,7 @@ fn jit_to_ast_help<'a>(
 
                                             let tag_expr = tag_name_to_expr(env, tag_name);
                                             let loc_tag_expr =
-                                                &*env.arena.alloc(Located::at_zero(tag_expr));
+                                                &*env.arena.alloc(Loc::at_zero(tag_expr));
 
                                             let variables = &tags_map[tag_name];
 
@@ -493,7 +493,7 @@ fn list_to_ast<'a>(
     for index in 0..len {
         let offset_bytes = index * elem_size;
         let elem_ptr = unsafe { ptr.add(offset_bytes) };
-        let loc_expr = &*arena.alloc(Located {
+        let loc_expr = &*arena.alloc(Loc {
             value: ptr_to_ast(env, elem_ptr, elem_layout, elem_content),
             region: Region::zero(),
         });
@@ -516,7 +516,7 @@ fn single_tag_union_to_ast<'a>(
     let arena = env.arena;
     let tag_expr = tag_name_to_expr(env, tag_name);
 
-    let loc_tag_expr = &*arena.alloc(Located::at_zero(tag_expr));
+    let loc_tag_expr = &*arena.alloc(Loc::at_zero(tag_expr));
 
     let output = if field_layouts.len() == payload_vars.len() {
         let it = payload_vars.iter().copied().zip(field_layouts);
@@ -536,7 +536,7 @@ fn sequence_of_expr<'a, I>(
     env: &Env<'a, '_>,
     ptr: *const u8,
     sequence: I,
-) -> Vec<'a, &'a Located<Expr<'a>>>
+) -> Vec<'a, &'a Loc<Expr<'a>>>
 where
     I: Iterator<Item = (Variable, &'a Layout<'a>)>,
     I: ExactSizeIterator<Item = (Variable, &'a Layout<'a>)>,
@@ -551,7 +551,7 @@ where
     for (var, layout) in sequence {
         let content = subs.get_content_without_compacting(var);
         let expr = ptr_to_ast(env, field_ptr, layout, content);
-        let loc_expr = Located::at_zero(expr);
+        let loc_expr = Loc::at_zero(expr);
 
         output.push(&*arena.alloc(loc_expr));
 
@@ -583,16 +583,16 @@ fn struct_to_ast<'a>(
 
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
 
-        let loc_expr = &*arena.alloc(Located {
+        let loc_expr = &*arena.alloc(Loc {
             value: ptr_to_ast(env, ptr, &Layout::Struct(field_layouts), inner_content),
             region: Region::zero(),
         });
 
-        let field_name = Located {
+        let field_name = Loc {
             value: &*arena.alloc_str(label.as_str()),
             region: Region::zero(),
         };
-        let loc_field = Located {
+        let loc_field = Loc {
             value: AssignedField::RequiredValue(field_name, &[], loc_expr),
             region: Region::zero(),
         };
@@ -610,16 +610,16 @@ fn struct_to_ast<'a>(
             let var = field.into_inner();
 
             let content = subs.get_content_without_compacting(var);
-            let loc_expr = &*arena.alloc(Located {
+            let loc_expr = &*arena.alloc(Loc {
                 value: ptr_to_ast(env, field_ptr, field_layout, content),
                 region: Region::zero(),
             });
 
-            let field_name = Located {
+            let field_name = Loc {
                 value: &*arena.alloc_str(label.as_str()),
                 region: Region::zero(),
             };
-            let loc_field = Located {
+            let loc_field = Loc {
                 value: AssignedField::RequiredValue(field_name, &[], loc_expr),
                 region: Region::zero(),
             };
@@ -683,7 +683,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                         .next()
                         .unwrap();
 
-                    let loc_label = Located {
+                    let loc_label = Loc {
                         value: &*arena.alloc_str(label.as_str()),
                         region: Region::zero(),
                     };
@@ -694,7 +694,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                         // so we need to do this recursively on the field type.
                         let field_var = *field.as_inner();
                         let field_content = env.subs.get_content_without_compacting(field_var);
-                        let loc_expr = Located {
+                        let loc_expr = Loc {
                             value: bool_to_ast(env, value, field_content),
                             region: Region::zero(),
                         };
@@ -702,7 +702,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                         AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr))
                     };
 
-                    let loc_assigned_field = Located {
+                    let loc_assigned_field = Loc {
                         value: assigned_field,
                         region: Region::zero(),
                     };
@@ -720,7 +720,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                             Expr::GlobalTag(arena.alloc_str(tag_name))
                         };
 
-                        &*arena.alloc(Located {
+                        &*arena.alloc(Loc {
                             value: tag_expr,
                             region: Region::zero(),
                         })
@@ -734,7 +734,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                         let var = *payload_vars.iter().next().unwrap();
                         let content = env.subs.get_content_without_compacting(var);
 
-                        let loc_payload = &*arena.alloc(Located {
+                        let loc_payload = &*arena.alloc(Loc {
                             value: bool_to_ast(env, value, content),
                             region: Region::zero(),
                         });
@@ -795,7 +795,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                         .next()
                         .unwrap();
 
-                    let loc_label = Located {
+                    let loc_label = Loc {
                         value: &*arena.alloc_str(label.as_str()),
                         region: Region::zero(),
                     };
@@ -806,7 +806,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                         // so we need to do this recursively on the field type.
                         let field_var = *field.as_inner();
                         let field_content = env.subs.get_content_without_compacting(field_var);
-                        let loc_expr = Located {
+                        let loc_expr = Loc {
                             value: byte_to_ast(env, value, field_content),
                             region: Region::zero(),
                         };
@@ -814,7 +814,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                         AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr))
                     };
 
-                    let loc_assigned_field = Located {
+                    let loc_assigned_field = Loc {
                         value: assigned_field,
                         region: Region::zero(),
                     };
@@ -832,7 +832,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                             Expr::GlobalTag(arena.alloc_str(tag_name))
                         };
 
-                        &*arena.alloc(Located {
+                        &*arena.alloc(Loc {
                             value: tag_expr,
                             region: Region::zero(),
                         })
@@ -846,7 +846,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                         let var = *payload_vars.iter().next().unwrap();
                         let content = env.subs.get_content_without_compacting(var);
 
-                        let loc_payload = &*arena.alloc(Located {
+                        let loc_payload = &*arena.alloc(Loc {
                             value: byte_to_ast(env, value, content),
                             region: Region::zero(),
                         });
@@ -872,7 +872,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                         UnionVariant::ByteUnion(tagnames) => {
                             let tag_name = &tagnames[value as usize];
                             let tag_expr = tag_name_to_expr(env, tag_name);
-                            let loc_tag_expr = Located::at_zero(tag_expr);
+                            let loc_tag_expr = Loc::at_zero(tag_expr);
                             Expr::Apply(env.arena.alloc(loc_tag_expr), &[], CalledVia::Space)
                         }
                         _ => unreachable!("invalid union variant for a Byte!"),
@@ -915,7 +915,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                         .next()
                         .unwrap();
 
-                    let loc_label = Located {
+                    let loc_label = Loc {
                         value: &*arena.alloc_str(label.as_str()),
                         region: Region::zero(),
                     };
@@ -926,14 +926,14 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                         // so we need to do this recursively on the field type.
                         let field_var = *field.as_inner();
                         let field_content = env.subs.get_content_without_compacting(field_var);
-                        let loc_expr = Located {
+                        let loc_expr = Loc {
                             value: num_to_ast(env, num_expr, field_content),
                             region: Region::zero(),
                         };
 
                         AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr))
                     };
-                    let loc_assigned_field = Located {
+                    let loc_assigned_field = Loc {
                         value: assigned_field,
                         region: Region::zero(),
                     };
@@ -960,7 +960,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                             Expr::GlobalTag(arena.alloc_str(tag_name))
                         };
 
-                        &*arena.alloc(Located {
+                        &*arena.alloc(Loc {
                             value: tag_expr,
                             region: Region::zero(),
                         })
@@ -974,7 +974,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                         let var = *payload_vars.iter().next().unwrap();
                         let content = env.subs.get_content_without_compacting(var);
 
-                        let loc_payload = &*arena.alloc(Located {
+                        let loc_payload = &*arena.alloc(Loc {
                             value: num_to_ast(env, num_expr, content),
                             region: Region::zero(),
                         });

@@ -11,7 +11,7 @@ use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 
 use crate::lang::core::def::def::canonicalize_defs;
@@ -44,7 +44,7 @@ pub struct ModuleOutput {
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
     arena: &Bump,
-    loc_defs: &'a [Located<ast::Def<'a>>],
+    loc_defs: &'a [Loc<ast::Def<'a>>],
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
@@ -80,7 +80,7 @@ pub fn canonicalize_module_defs<'a>(
         bumpalo::collections::Vec::with_capacity_in(loc_defs.len() + num_deps, arena);
 
     for loc_def in loc_defs.iter() {
-        desugared.push(&*arena.alloc(Located {
+        desugared.push(&*arena.alloc(Loc {
             value: desugar_def(arena, &loc_def.value),
             region: loc_def.region,
         }));
