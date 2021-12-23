@@ -1705,7 +1705,7 @@ mod when {
         move |arena, state: State<'a>| {
             parser::keyword_e(keyword::WHEN, EWhen::When)
                 .parse(arena, state)
-                .map(|(progress, (), state)| (progress, state.indent_col, state))
+                .map(|(progress, (), state)| (progress, state.indent_column, state))
         }
     }
 
@@ -1714,7 +1714,7 @@ mod when {
         options: ExprParseOptions,
     ) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>, EWhen<'a>> {
         move |arena, state: State<'a>| {
-            let when_indent = state.indent_col;
+            let when_indent = state.indent_column;
 
             let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
 
@@ -1725,7 +1725,7 @@ mod when {
                 branch_alternatives(min_indent, options, None).parse(arena, state)?;
             let original_indent = pattern_indent_level;
 
-            state.indent_col = pattern_indent_level;
+            state.indent_column = pattern_indent_level;
 
             // Parse the first "->" and the expression after it.
             let (_, loc_first_expr, mut state) =
@@ -1742,11 +1742,11 @@ mod when {
                 and!(
                     then(
                         branch_alternatives(min_indent, options, Some(pattern_indent_level)),
-                        move |_arena, state, _, ((indent_col, loc_patterns), loc_guard)| {
-                            if pattern_indent_level == indent_col {
+                        move |_arena, state, _, ((indent_column, loc_patterns), loc_guard)| {
+                            if pattern_indent_level == indent_column {
                                 Ok((MadeProgress, (loc_patterns, loc_guard), state))
                             } else {
-                                let indent = pattern_indent_level - indent_col;
+                                let indent = pattern_indent_level - indent_column;
                                 Err((
                                     MadeProgress,
                                     EWhen::PatternAlignment(indent, state.pos),
@@ -1786,7 +1786,7 @@ mod when {
             }
 
             let mut state = state;
-            state.indent_col = when_indent;
+            state.indent_column = when_indent;
 
             Ok((MadeProgress, branches, state))
         }
@@ -1895,9 +1895,9 @@ mod when {
                         _ => {
                             let pattern_indent =
                                 min_indent.max(pattern_indent_level.unwrap_or(min_indent));
-                            // the region is not reliable for the indent col in the case of
+                            // the region is not reliable for the indent column in the case of
                             // parentheses around patterns
-                            let pattern_indent_col = state.pos.column;
+                            let pattern_indent_column = state.pos.column;
 
                             let parser = sep_by1(
                                 word1(b'|', EWhen::Bar),
@@ -1923,7 +1923,7 @@ mod when {
                                         }
                                     }
 
-                                    Ok((MadeProgress, (pattern_indent_col, loc_patterns), state))
+                                    Ok((MadeProgress, (pattern_indent_column, loc_patterns), state))
                                 }
                             }
                         }
@@ -2111,11 +2111,11 @@ where
     E: 'a,
 {
     move |arena, state: State<'a>| {
-        let indent_col = state.indent_col;
+        let indent_column = state.indent_column;
 
         let (progress, _, state) = parser.parse(arena, state)?;
 
-        Ok((progress, indent_col, state))
+        Ok((progress, indent_column, state))
     }
 }
 

@@ -1331,8 +1331,8 @@ where
     E: 'a,
 {
     move |_arena, state: State<'a>| {
-        dbg!(state.indent_col, min_indent);
-        if state.indent_col < min_indent {
+        dbg!(state.indent_column, min_indent);
+        if state.indent_column < min_indent {
             Err((NoProgress, to_problem(state.pos), state))
         } else {
             Ok((NoProgress, (), state))

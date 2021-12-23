@@ -15,7 +15,7 @@ pub struct State<'a> {
 
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)
-    pub indent_col: u16,
+    pub indent_column: u16,
 }
 
 impl<'a> State<'a> {
@@ -23,7 +23,7 @@ impl<'a> State<'a> {
         State {
             bytes,
             pos: Position::default(),
-            indent_col: 0,
+            indent_column: 0,
         }
     }
 
@@ -91,7 +91,7 @@ impl<'a> State<'a> {
     }
 
     /// Returns a Region corresponding to the current state, but
-    /// with the end_col advanced by the given amount. This is
+    /// with the the end column advanced by the given amount. This is
     /// useful when parsing something "manually" (using input.chars())
     /// and thus wanting a Region while not having access to loc().
     pub fn len_region(&self, length: u16) -> Region {
@@ -128,7 +128,7 @@ impl<'a> fmt::Debug for State<'a> {
         }
 
         write!(f, "\n\t(line, col): ({}, {}),", self.pos.line, self.pos.column)?;
-        write!(f, "\n\tindent_col: {}", self.indent_col)?;
+        write!(f, "\n\tindent_column: {}", self.indent_column)?;
         write!(f, "\n}}")
     }
 }

@@ -222,7 +222,7 @@ where
                 } else if state.pos.line != pos.line {
                     // we parsed at least one newline
 
-                    state.indent_col = pos.column;
+                    state.indent_column = pos.column;
 
                     if pos.column >= min_indent {
                         state.pos = pos;

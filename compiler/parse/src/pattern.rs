@@ -342,7 +342,7 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>
 
     move |arena, state: State<'a>| {
         // You must have a field name, e.g. "email"
-        // using the initial row/col is important for error reporting
+        // using the initial pos is important for error reporting
         let pos = state.pos;
         let (progress, loc_label, state) = loc!(specialize(
             move |_, _| PRecord::Field(pos),
