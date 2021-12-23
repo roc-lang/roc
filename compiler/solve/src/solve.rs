@@ -350,7 +350,8 @@ fn solve(
 
             state
         }
-        Pattern(region, category, typ, expectation, presence) => {
+        Pattern(region, category, typ, expectation)
+        | Present(typ, PresenceConstraint::Pattern(region, category, expectation)) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
             let expected = type_to_var(
                 subs,
@@ -360,7 +361,9 @@ fn solve(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected, *presence) {
+            let presence_con = matches!(constraint, Present(_, _));
+
+            match unify(subs, actual, expected, presence_con) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -683,6 +686,9 @@ fn solve(
                             state
                         }
                     }
+                }
+                PresenceConstraint::Pattern(_, _, _) => {
+                    unreachable!("Handled in a previous branch")
                 }
             }
         }

@@ -13,6 +13,7 @@ use roc_types::{subs::Variable, types::VariableDetail};
 pub enum PresenceConstraint {
     IncludesTag(TagName, Vec<Type>),
     IsOpen,
+    Pattern(Region, PatternCategory, PExpected<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,13 +21,7 @@ pub enum Constraint {
     Eq(Type, Expected<Type>, Category, Region),
     Store(Type, Variable, &'static str, u32),
     Lookup(Symbol, Expected<Type>, Region),
-    Pattern(
-        Region,
-        PatternCategory,
-        Type,
-        PExpected<Type>,
-        bool, /* Treat the pattern as a presence constraint */
-    ),
+    Pattern(Region, PatternCategory, Type, PExpected<Type>),
     True, // Used for things that always unify, e.g. blanks and runtime errors
     SaveTheEnvironment,
     Let(Box<LetConstraint>),
@@ -83,7 +78,7 @@ impl Constraint {
             Constraint::Eq(_, _, _, _) => false,
             Constraint::Store(_, _, _, _) => false,
             Constraint::Lookup(_, _, _) => false,
-            Constraint::Pattern(_, _, _, _, _) => false,
+            Constraint::Pattern(_, _, _, _) => false,
             Constraint::True => false,
             Constraint::SaveTheEnvironment => true,
             Constraint::Let(boxed) => {
@@ -142,7 +137,7 @@ fn validate_help(constraint: &Constraint, declared: &Declared, accum: &mut Varia
             subtract(declared, &typ.variables_detail(), accum);
             subtract(declared, &expected.get_type_ref().variables_detail(), accum);
         }
-        Constraint::Pattern(_, _, typ, expected, _) => {
+        Constraint::Pattern(_, _, typ, expected) => {
             subtract(declared, &typ.variables_detail(), accum);
             subtract(declared, &expected.get_type_ref().variables_detail(), accum);
         }
@@ -170,6 +165,10 @@ fn validate_help(constraint: &Constraint, declared: &Declared, accum: &mut Varia
                     }
                 }
                 PresenceConstraint::IsOpen => {}
+                PresenceConstraint::Pattern(_, _, expected) => {
+                    subtract(declared, &typ.variables_detail(), accum);
+                    subtract(declared, &expected.get_type_ref().variables_detail(), accum);
+                }
             }
         }
     }

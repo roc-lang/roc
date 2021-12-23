@@ -118,6 +118,23 @@ fn headers_from_annotation_help(
     }
 }
 
+fn make_pattern_constraint(
+    region: Region,
+    category: PatternCategory,
+    actual: Type,
+    expected: PExpected<Type>,
+    presence_con: bool,
+) -> Constraint {
+    if presence_con {
+        Constraint::Present(
+            actual,
+            PresenceConstraint::Pattern(region, category, expected),
+        )
+    } else {
+        Constraint::Pattern(region, category, actual, expected)
+    }
+}
+
 /// This accepts PatternState (rather than returning it) so that the caller can
 /// initialize the Vecs in PatternState using with_capacity
 /// based on its knowledge of their lengths.
@@ -170,7 +187,6 @@ pub fn constrain_pattern(
                 PatternCategory::Num,
                 builtins::num_num(Type::Variable(*var)),
                 expected,
-                false,
             ));
         }
 
@@ -180,7 +196,6 @@ pub fn constrain_pattern(
                 PatternCategory::Int,
                 builtins::num_int(Type::Variable(*precision_var)),
                 expected,
-                false,
             ));
         }
 
@@ -190,7 +205,6 @@ pub fn constrain_pattern(
                 PatternCategory::Float,
                 builtins::num_float(Type::Variable(*precision_var)),
                 expected,
-                false,
             ));
         }
 
@@ -200,7 +214,6 @@ pub fn constrain_pattern(
                 PatternCategory::Str,
                 builtins::str_type(),
                 expected,
-                false,
             ));
         }
 
@@ -237,7 +250,7 @@ pub fn constrain_pattern(
 
                 let field_type = match typ {
                     DestructType::Guard(guard_var, loc_guard) => {
-                        state.constraints.push(Constraint::Pattern(
+                        state.constraints.push(make_pattern_constraint(
                             region,
                             PatternCategory::PatternGuard,
                             Type::Variable(*guard_var),
@@ -262,7 +275,7 @@ pub fn constrain_pattern(
                         RecordField::Demanded(pat_type)
                     }
                     DestructType::Optional(expr_var, loc_expr) => {
-                        state.constraints.push(Constraint::Pattern(
+                        state.constraints.push(make_pattern_constraint(
                             region,
                             PatternCategory::PatternDefault,
                             Type::Variable(*expr_var),
@@ -308,7 +321,7 @@ pub fn constrain_pattern(
                 region,
             );
 
-            let record_con = Constraint::Pattern(
+            let record_con = make_pattern_constraint(
                 region,
                 PatternCategory::Record,
                 Type::Variable(*whole_var),
@@ -367,7 +380,7 @@ pub fn constrain_pattern(
                 )
             };
 
-            let tag_con = Constraint::Pattern(
+            let tag_con = make_pattern_constraint(
                 region,
                 PatternCategory::Ctor(tag_name.clone()),
                 Type::Variable(*whole_var),
