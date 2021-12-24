@@ -80,7 +80,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
     move |arena, state: State<'a>| {
         if state.bytes().starts_with(b"@") {
-            match chomp_private_tag(state.bytes(), state.xyzlcol) {
+            match chomp_private_tag(state.bytes(), state.pos()) {
                 Err(BadIdent::Start(_)) => Err((NoProgress, (), state)),
                 Err(_) => Err((MadeProgress, (), state)),
                 Ok(ident) => {
@@ -150,7 +150,7 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
                     if let Some(first) = parts.first() {
                         for keyword in crate::keyword::KEYWORDS.iter() {
                             if first == keyword {
-                                return Err((NoProgress, EExpr::Start(initial.xyzlcol), initial));
+                                return Err((NoProgress, EExpr::Start(initial.pos()), initial));
                             }
                         }
                     }
@@ -159,7 +159,7 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
 
             Ok((progress, ident, state))
         }
-        Err((NoProgress, _, state)) => Err((NoProgress, EExpr::Start(state.xyzlcol), state)),
+        Err((NoProgress, _, state)) => Err((NoProgress, EExpr::Start(state.pos()), state)),
         Err((MadeProgress, fail, state)) => match fail {
             BadIdent::Start(pos) => Err((NoProgress, EExpr::Start(pos), state)),
             BadIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos), state)),
@@ -528,7 +528,7 @@ fn parse_ident_help<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, Ident<'a>, BadIdent> {
-    match chomp_identifier_chain(arena, state.bytes(), state.xyzlcol) {
+    match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
         Ok((width, ident)) => {
             state = advance_state!(state, width as usize)?;
             Ok((MadeProgress, ident, state))

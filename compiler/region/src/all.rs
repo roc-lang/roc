@@ -163,10 +163,28 @@ impl Position {
         Position { line, column }
     }
 
+    #[must_use]
     pub fn bump_column(self, count: u16) -> Self {
         Self {
             line: self.line,
             column: self.column + count,
+        }
+    }
+
+    #[must_use]
+    pub fn bump_invisible(self, _count: u16) -> Self {
+        // This WILL affect the byte offset once we switch to that
+        Self {
+            line: self.line,
+            column: self.column,
+        }
+    }
+
+    #[must_use]
+    pub fn bump_newline(self) -> Self {
+        Self {
+            line: self.line + 1,
+            column: 0,
         }
     }
 }
@@ -175,6 +193,12 @@ impl Debug for Position {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.line, self.column)
     }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
+pub struct LineColumn {
+    pub line: u32,
+    pub column: u16,
 }
 
 #[derive(Clone, Eq, Copy, PartialEq, PartialOrd, Ord, Hash)]

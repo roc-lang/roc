@@ -723,7 +723,7 @@ where
         let width = keyword.len();
 
         if !state.bytes().starts_with(keyword.as_bytes()) {
-            return Err((NoProgress, if_error(state.xyzlcol), state));
+            return Err((NoProgress, if_error(state.pos()), state));
         }
 
         // the next character should not be an identifier character
@@ -739,7 +739,7 @@ where
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
-            Some(_) => Err((NoProgress, if_error(state.xyzlcol), state)),
+            Some(_) => Err((NoProgress, if_error(state.pos()), state)),
         }
     }
 }
@@ -964,7 +964,7 @@ where
                                     return Err((MadeProgress, fail, state));
                                 }
                                 Err((NoProgress, _fail, state)) => {
-                                    return Err((NoProgress, to_element_error(state.xyzlcol), state));
+                                    return Err((NoProgress, to_element_error(state.pos()), state));
                                 }
                             }
                         }
@@ -989,7 +989,7 @@ where
 
             Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
             Err((NoProgress, _fail, state)) => {
-                Err((NoProgress, to_element_error(state.xyzlcol), state))
+                Err((NoProgress, to_element_error(state.pos()), state))
             }
         }
     }
@@ -1039,11 +1039,11 @@ macro_rules! loc {
         move |arena, state: $crate::state::State<'a>| {
             use roc_region::all::{Loc, Region};
 
-            let start = state.xyzlcol;
+            let start = state.pos();
 
             match $parser.parse(arena, state) {
                 Ok((progress, value, state)) => {
-                    let end = state.xyzlcol;
+                    let end = state.pos();
                     let region = Region::new(start, end);
 
                     Ok((progress, Loc { region, value }, state))
@@ -1245,7 +1245,7 @@ macro_rules! one_of_with_error {
             match $p1.parse(arena, state) {
                 valid @ Ok(_) => valid,
                 Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state )),
-                Err((NoProgress, _, state)) => Err((MadeProgress, $toerror(state.xyzlcol), state)),
+                Err((NoProgress, _, state)) => Err((MadeProgress, $toerror(state.pos()), state)),
             }
         }
     };
@@ -1263,7 +1263,7 @@ where
 {
     move |a, s| match parser.parse(a, s) {
         Ok(t) => Ok(t),
-        Err((p, error, s)) => Err((p, map_error(error, s.xyzlcol), s)),
+        Err((p, error, s)) => Err((p, map_error(error, s.pos()), s)),
     }
 }
 
@@ -1276,7 +1276,7 @@ where
 {
     move |a, s| match parser.parse(a, s) {
         Ok(t) => Ok(t),
-        Err((p, error, s)) => Err((p, map_error(a.alloc(error), s.xyzlcol), s)),
+        Err((p, error, s)) => Err((p, map_error(a.alloc(error), s.pos()), s)),
     }
 }
 
@@ -1293,7 +1293,7 @@ where
             state.xyzlcol.column += 1;
             Ok((MadeProgress, (), state))
         }
-        _ => Err((NoProgress, to_error(state.xyzlcol), state)),
+        _ => Err((NoProgress, to_error(state.pos()), state)),
     }
 }
 
@@ -1313,7 +1313,7 @@ where
             state.xyzlcol.column += 2;
             Ok((MadeProgress, (), state))
         } else {
-            Err((NoProgress, to_error(state.xyzlcol), state))
+            Err((NoProgress, to_error(state.pos()), state))
         }
     }
 }
@@ -1326,7 +1326,7 @@ where
     move |_arena, state: State<'a>| {
         dbg!(state.indent_column, min_indent);
         if state.indent_column < min_indent {
-            Err((NoProgress, to_problem(state.xyzlcol), state))
+            Err((NoProgress, to_problem(state.pos()), state))
         } else {
             Ok((NoProgress, (), state))
         }

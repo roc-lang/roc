@@ -4,6 +4,7 @@ use crate::parser::{self, and, backtrackable, BadInputError, Parser, Progress::*
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_region::all::LineColumn;
 use roc_region::all::Loc;
 use roc_region::all::Position;
 
@@ -163,7 +164,7 @@ where
         if state.xyzlcol.column >= min_indent {
             Ok((NoProgress, (), state))
         } else {
-            Err((NoProgress, indent_problem(state.xyzlcol), state))
+            Err((NoProgress, indent_problem(state.pos()), state))
         }
     }
 }
@@ -193,11 +194,11 @@ where
     move |arena, mut state: State<'a>| {
         let comments_and_newlines = Vec::new_in(arena);
 
-        match eat_spaces(state.bytes(), state.xyzlcol, comments_and_newlines) {
-            HasTab(pos) => {
+        match eat_spaces(state.bytes(), state.xyzlcol, state.pos(), comments_and_newlines) {
+            HasTab(xyzlcol, pos) => {
                 // there was a tab character
                 let mut state = state;
-                state.xyzlcol = pos;
+                state.xyzlcol = xyzlcol;
                 // TODO: it _seems_ like if we're changing the line/column, we should also be
                 // advancing the state by the corresponding number of bytes.
                 // Not doing this is likely a bug!
@@ -209,7 +210,7 @@ where
                 ))
             }
             Good {
-                pos,
+                xyzcol: pos,
                 bytes,
                 comments_and_newlines,
             } => {
@@ -226,7 +227,7 @@ where
 
                         Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
                     } else {
-                        Err((MadeProgress, indent_problem(state.xyzlcol), state))
+                        Err((MadeProgress, indent_problem(state.pos()), state))
                     }
                 } else {
                     state.xyzlcol.column = pos.column;
@@ -241,15 +242,16 @@ where
 
 enum SpaceState<'a> {
     Good {
-        pos: Position,
+        xyzcol: LineColumn,
         bytes: &'a [u8],
         comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
     },
-    HasTab(Position),
+    HasTab(LineColumn, Position),
 }
 
 fn eat_spaces<'a>(
     mut bytes: &'a [u8],
+    mut xyzlcol: LineColumn,
     mut pos: Position,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
@@ -258,31 +260,35 @@ fn eat_spaces<'a>(
     for c in bytes {
         match c {
             b' ' => {
+                pos = pos.bump_column(1);
                 bytes = &bytes[1..];
-                pos.column += 1;
+                xyzlcol.column += 1;
             }
             b'\n' => {
                 bytes = &bytes[1..];
-                pos.line += 1;
-                pos.column = 0;
+                pos = pos.bump_newline();
+                xyzlcol.line += 1;
+                xyzlcol.column = 0;
                 comments_and_newlines.push(CommentOrNewline::Newline);
             }
             b'\r' => {
                 bytes = &bytes[1..];
+                pos = pos.bump_invisible(1);
             }
             b'\t' => {
-                return HasTab(pos);
+                return HasTab(xyzlcol, pos);
             }
             b'#' => {
-                pos.column += 1;
-                return eat_line_comment(&bytes[1..], pos, comments_and_newlines);
+                xyzlcol.column += 1;
+                pos = pos.bump_column(1);
+                return eat_line_comment(&bytes[1..], xyzlcol, pos, comments_and_newlines);
             }
             _ => break,
         }
     }
 
     Good {
-        pos,
+        xyzcol: xyzlcol,
         bytes,
         comments_and_newlines,
     }
@@ -290,6 +296,7 @@ fn eat_spaces<'a>(
 
 fn eat_line_comment<'a>(
     mut bytes: &'a [u8],
+    mut xyzlcol: LineColumn,
     mut pos: Position,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
@@ -299,26 +306,30 @@ fn eat_line_comment<'a>(
         match bytes.get(1) {
             Some(b' ') => {
                 bytes = &bytes[2..];
-                pos.column += 2;
+                xyzlcol.column += 2;
+                pos = pos.bump_column(2);
 
                 true
             }
             Some(b'\n') => {
                 // consume the second # and the \n
                 bytes = &bytes[2..];
+                pos = pos.bump_column(1);
+                pos = pos.bump_newline();
 
                 comments_and_newlines.push(CommentOrNewline::DocComment(""));
-                pos.line += 1;
-                pos.column = 0;
-                return eat_spaces(bytes, pos, comments_and_newlines);
+                xyzlcol.line += 1;
+                xyzlcol.column = 0;
+                return eat_spaces(bytes, xyzlcol, pos, comments_and_newlines);
             }
             None => {
                 // consume the second #
-                pos.column += 1;
+                xyzlcol.column += 1;
                 bytes = &bytes[1..];
+                // pos = pos.bump_column(1);
 
                 return Good {
-                    pos,
+                    xyzcol: xyzlcol,
                     bytes,
                     comments_and_newlines,
                 };
@@ -331,13 +342,13 @@ fn eat_line_comment<'a>(
     };
 
     let initial = bytes;
-    let initial_column = pos.column;
+    let initial_column = xyzlcol.column;
 
     for c in bytes {
         match c {
-            b'\t' => return HasTab(pos),
+            b'\t' => return HasTab(xyzlcol, pos),
             b'\n' => {
-                let delta = (pos.column - initial_column) as usize;
+                let delta = (xyzlcol.column - initial_column) as usize;
                 let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
 
                 if is_doc_comment {
@@ -345,19 +356,21 @@ fn eat_line_comment<'a>(
                 } else {
                     comments_and_newlines.push(CommentOrNewline::LineComment(comment));
                 }
-                pos.line += 1;
-                pos.column = 0;
-                return eat_spaces(&bytes[1..], pos, comments_and_newlines);
+                pos = pos.bump_newline();
+                xyzlcol.line += 1;
+                xyzlcol.column = 0;
+                return eat_spaces(&bytes[1..], xyzlcol, pos, comments_and_newlines);
             }
             _ => {
                 bytes = &bytes[1..];
-                pos.column += 1;
+                pos = pos.bump_column(1);
+                xyzlcol.column += 1;
             }
         }
     }
 
     // We made it to the end of the bytes. This means there's a comment without a trailing newline.
-    let delta = (pos.column - initial_column) as usize;
+    let delta = (xyzlcol.column - initial_column) as usize;
     let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
 
     if is_doc_comment {
@@ -367,7 +380,7 @@ fn eat_line_comment<'a>(
     }
 
     Good {
-        pos,
+        xyzcol: xyzlcol,
         bytes,
         comments_and_newlines,
     }

@@ -21,7 +21,7 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {
-            Err((NoProgress, SyntaxError::NotEndOfFile(state.xyzlcol), state))
+            Err((NoProgress, SyntaxError::NotEndOfFile(state.pos()), state))
         }
     }
 }

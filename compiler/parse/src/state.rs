@@ -1,7 +1,7 @@
 use crate::parser::Progress::*;
 use crate::parser::{BadInputError, Progress};
 use bumpalo::Bump;
-use roc_region::all::{Position, Region};
+use roc_region::all::{Position, Region, LineColumn};
 use std::fmt;
 
 /// A position in a source file.
@@ -11,7 +11,7 @@ pub struct State<'a> {
     bytes: &'a [u8],
 
     /// Current position within the input (line/column)
-    pub xyzlcol: Position,
+    pub xyzlcol: LineColumn,
 
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)
@@ -22,7 +22,7 @@ impl<'a> State<'a> {
     pub fn new(bytes: &'a [u8]) -> State<'a> {
         State {
             bytes,
-            xyzlcol: Position::default(),
+            xyzlcol: LineColumn::default(),
             indent_column: 0,
         }
     }
@@ -40,7 +40,10 @@ impl<'a> State<'a> {
 
     /// Returns the current position
     pub const fn pos(&self) -> Position {
-        self.xyzlcol
+        Position {
+            line: self.xyzlcol.line,
+            column: self.xyzlcol.column,
+        }
     }
 
     /// Returns whether the parser has reached the end of the input
@@ -75,7 +78,7 @@ impl<'a> State<'a> {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
                     bytes: &self.bytes[quantity..],
-                    xyzlcol: Position {
+                    xyzlcol: LineColumn {
                         line: self.xyzlcol.line,
                         column: column_usize as u16,
                     },
@@ -83,7 +86,7 @@ impl<'a> State<'a> {
                     ..self
                 })
             }
-            _ => Err((NoProgress, to_error(self.xyzlcol), self)),
+            _ => Err((NoProgress, to_error(self.pos()), self)),
         }
     }
 
@@ -93,7 +96,7 @@ impl<'a> State<'a> {
     /// and thus wanting a Region while not having access to loc().
     pub fn len_region(&self, length: u16) -> Region {
         Region::new(
-            self.xyzlcol,
+            self.pos(),
             Position {
                 line: self.xyzlcol.line,
                 column: self
