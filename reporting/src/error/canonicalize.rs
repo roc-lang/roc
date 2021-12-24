@@ -2,7 +2,7 @@ use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
-use roc_region::all::{Loc, Region, LineInfo, LineColumn};
+use roc_region::all::{Loc, Region, LineInfo, LineColumn, LineColumnRegion};
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
@@ -496,11 +496,11 @@ fn to_bad_ident_expr_report<'b>(
     match bad_ident {
         Start(_) | Space(_, _) => unreachable!("these are handled in the parser"),
         WeirdDotAccess(pos) | StrayDot(pos) => {
-            let region = Region::from_pos(pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack(vec![
                 alloc.reflow(r"I trying to parse a record field access here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat(vec![
                     alloc.reflow("So I expect to see a lowercase letter next, like "),
                     alloc.parser_suggestion(".name"),
@@ -527,11 +527,11 @@ fn to_bad_ident_expr_report<'b>(
         ]),
 
         WeirdDotQualified(pos) => {
-            let region = Region::from_pos(pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse a qualified name here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat(vec![
                     alloc.reflow("I was expecting to see an identifier next, like "),
                     alloc.parser_suggestion("height"),
@@ -542,11 +542,11 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
         QualifiedTag(pos) => {
-            let region = Region::from_pos(pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse a qualified name here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat(vec![
                     alloc.reflow(r"This looks like a qualified tag name to me, "),
                     alloc.reflow(r"but tags cannot be qualified! "),
@@ -632,11 +632,11 @@ fn to_bad_ident_pattern_report<'b>(
     match bad_ident {
         Start(_) | Space(_, _) => unreachable!("these are handled in the parser"),
         WeirdDotAccess(pos) | StrayDot(pos) => {
-            let region = Region::from_pos(pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack(vec![
                 alloc.reflow(r"I trying to parse a record field accessor here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat(vec![
                     alloc.reflow("Something like "),
                     alloc.parser_suggestion(".name"),
@@ -663,11 +663,11 @@ fn to_bad_ident_pattern_report<'b>(
         ]),
 
         WeirdDotQualified(pos) => {
-            let region = Region::from_pos(pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse a qualified name here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat(vec![
                     alloc.reflow("I was expecting to see an identifier next, like "),
                     alloc.parser_suggestion("height"),
@@ -678,11 +678,11 @@ fn to_bad_ident_pattern_report<'b>(
             ])
         }
         QualifiedTag(pos) => {
-            let region = Region::from_pos(pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse a qualified name here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat(vec![
                     alloc.reflow(r"This looks like a qualified tag name to me, "),
                     alloc.reflow(r"but tags cannot be qualified! "),

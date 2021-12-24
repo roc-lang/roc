@@ -2,58 +2,37 @@ use std::fmt::{self, Debug};
 
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 pub struct Region {
-    start_line: u32,
-    end_line: u32,
-    start_col: u16,
-    end_col: u16,
+    start: Position,
+    end: Position,
 }
 
 impl Region {
     pub const fn zero() -> Self {
         Region {
-            start_line: 0,
-            end_line: 0,
-            start_col: 0,
-            end_col: 0,
+            start: Position::zero(),
+            end: Position::zero(),
         }
     }
 
     pub const fn new(start: Position, end: Position) -> Self {
         Self {
-            start_line: start.line,
-            end_line: end.line,
-            start_col: start.column,
-            end_col: end.column,
+            start,
+            end,
         }
     }
 
     pub fn contains(&self, other: &Self) -> bool {
-        use std::cmp::Ordering::*;
-        match self.start_line.cmp(&other.start_line) {
-            Greater => false,
-            Equal => match self.end_line.cmp(&other.end_line) {
-                Less => false,
-                Equal => self.start_col <= other.start_col && self.end_col >= other.end_col,
-                Greater => self.start_col >= other.start_col,
-            },
-            Less => match self.end_line.cmp(&other.end_line) {
-                Less => false,
-                Equal => self.end_col >= other.end_col,
-                Greater => true,
-            },
-        }
+        self.start <= other.start && self.end >= other.end
     }
 
     pub fn is_empty(&self) -> bool {
-        self.end_line == self.start_line && self.start_col == self.end_col
+        self.start == self.end
     }
 
     pub fn span_across(start: &Region, end: &Region) -> Self {
         Region {
-            start_line: start.start_line,
-            end_line: end.end_line,
-            start_col: start.start_col,
-            end_col: end.end_col,
+            start: start.start,
+            end: end.end,
         }
     }
 
@@ -76,56 +55,23 @@ impl Region {
         }
     }
 
-    pub fn lines_between(&self, other: &Region) -> u32 {
-        if self.end_line <= other.start_line {
-            other.start_line - self.end_line
-        } else if self.start_line >= other.end_line {
-            self.start_line - other.end_line
-        } else {
-            // intersection
-            0
-        }
-    }
-
     pub const fn from_pos(pos: Position) -> Self {
         Region {
-            start_col: pos.column,
-            start_line: pos.line,
-            end_col: pos.column + 1,
-            end_line: pos.line,
-        }
-    }
-
-    pub const fn from_rows_cols(
-        start_line: u32,
-        start_col: u16,
-        end_line: u32,
-        end_col: u16,
-    ) -> Self {
-        Region {
-            start_line,
-            end_line,
-            start_col,
-            end_col,
+            start: pos,
+            end: pos.bump_column(1),
         }
     }
 
     pub const fn start(&self) -> Position {
-        Position {
-            line: self.start_line,
-            column: self.start_col,
-        }
+        self.start
     }
 
     pub const fn end(&self) -> Position {
-        Position {
-            line: self.end_line,
-            column: self.end_col,
-        }
+        self.end
     }
 
     pub const fn between(start: Position, end: Position) -> Self {
-        Self::from_rows_cols(start.line, start.column, end.line, end.column)
+        Self::new(start, end)
     }
 }
 
@@ -137,7 +83,7 @@ fn region_size() {
 
 impl fmt::Debug for Region {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self.start_line == 0 && self.start_col == 0 && self.end_line == 0 && self.end_col == 0 {
+        if self.start == Position::zero() && self.end == Position::zero() {
             // In tests, it's super common to set all Located values to 0.
             // Also in tests, we don't want to bother printing the locations
             // because it makes failed assertions much harder to read.
@@ -145,8 +91,8 @@ impl fmt::Debug for Region {
         } else {
             write!(
                 f,
-                "|L {}-{}, C {}-{}|",
-                self.start_line, self.end_line, self.start_col, self.end_col,
+                "@{}-{}",
+                self.start.offset, self.end.offset,
             )
         }
     }
@@ -154,17 +100,18 @@ impl fmt::Debug for Region {
 
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 pub struct Position {
+    pub offset: u32,
     line: u32,
     column: u16,
 }
 
 impl Position {
     pub const fn zero() -> Position {
-        Position { line: 0, column: 0 }
+        Position { offset: 0, line: 0, column: 0 }
     }
     
-    pub const fn new(line: u32, column: u16) -> Position {
-        Position { line, column }
+    pub const fn new(offset: u32, line: u32, column: u16) -> Position {
+        Position { offset, line, column }
     }
 
     #[must_use]
@@ -172,15 +119,16 @@ impl Position {
         Self {
             line: self.line,
             column: self.column + count,
+            offset: self.offset + count as u32,
         }
     }
 
     #[must_use]
-    pub fn bump_invisible(self, _count: u16) -> Self {
-        // This WILL affect the byte offset once we switch to that
+    pub fn bump_invisible(self, count: u16) -> Self {
         Self {
             line: self.line,
             column: self.column,
+            offset: self.offset + count as u32,
         }
     }
 
@@ -189,12 +137,14 @@ impl Position {
         Self {
             line: self.line + 1,
             column: 0,
+            offset: self.offset + 1,
         }
     }
 
     #[must_use]
     pub const fn sub(self, count: u16) -> Self {
         Self {
+            offset: self.offset - count as u32,
             line: self.line,
             column: self.column - count,
         }
@@ -203,7 +153,7 @@ impl Position {
 
 impl Debug for Position {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.line, self.column)
+        write!(f, "@{}", self.offset)
     }
 }
 
@@ -325,6 +275,23 @@ impl LineColumnRegion {
     }
 }
 
+impl fmt::Debug for LineColumnRegion {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.start.line == 0 && self.start.column == 0 && self.end.line == 0 && self.end.column == 0 {
+            // In tests, it's super common to set all Located values to 0.
+            // Also in tests, we don't want to bother printing the locations
+            // because it makes failed assertions much harder to read.
+            write!(f, "…")
+        } else {
+            write!(
+                f,
+                "|L {}-{}, C {}-{}|",
+                self.start.line, self.end.line, self.start.column, self.end.column,
+            )
+        }
+    }
+}
+
 #[derive(Clone, Eq, Copy, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Loc<T> {
     pub region: Region,
@@ -373,10 +340,8 @@ where
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let region = self.region;
 
-        if region.start_line == 0
-            && region.start_col == 0
-            && region.end_line == 0
-            && region.end_col == 0
+        if region.start == Position::zero()
+            && region.end == Position::zero()
         {
             // In tests, it's super common to set all Located values to 0.
             // Also in tests, we don't want to bother printing the locations
@@ -415,18 +380,23 @@ impl LineInfo {
     }
 
     pub fn convert_pos(&self, pos: Position) -> LineColumn {
-        // TODO
-        LineColumn {
-            line: pos.line,
-            column: pos.column,
-        }
+        let res = self.convert_offset(pos.offset);
+        // let expected = LineColumn { line: pos.line, column: pos.column };
+        // assert_eq!(expected, res);
+        res
     }
 
     pub fn convert_region(&self, region: Region) -> LineColumnRegion {
-        LineColumnRegion {
+        let res = LineColumnRegion {
             start: self.convert_pos(region.start()),
             end: self.convert_pos(region.end()),
-        }
+        };
+        let expected = LineColumnRegion::new(
+            LineColumn { line: region.start.line, column: region.start.column },
+            LineColumn { line: region.end.line, column: region.end.column },
+        );
+        assert_eq!(expected, res);
+        res
     }
 }
 

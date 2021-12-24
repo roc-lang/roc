@@ -366,7 +366,7 @@ mod test_parse {
         assert_segments(r#""Hi, \u(123)!""#, |arena| {
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Unicode(Loc::new(Position::new(0, 8), Position::new(0, 11), "123")),
+                Unicode(Loc::new(Position::new(0, 0, 0), Position::new(0, 0, 0), "123")),
                 Plaintext("!")
             ]
         });
@@ -376,7 +376,7 @@ mod test_parse {
     fn unicode_escape_in_front() {
         assert_segments(r#""\u(1234) is a unicode char""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Loc::new(Position::new(0, 4), Position::new(0, 8), "1234")),
+                Unicode(Loc::new(Position::new(0, 0, 0), Position::new(0, 0, 0), "1234")),
                 Plaintext(" is a unicode char")
             ]
         });
@@ -387,7 +387,7 @@ mod test_parse {
         assert_segments(r#""this is unicode: \u(1)""#, |arena| {
             bumpalo::vec![in arena;
                 Plaintext("this is unicode: "),
-                Unicode(Loc::new(Position::new(0, 21), Position::new(0, 22), "1"))
+                Unicode(Loc::new(Position::new(0, 0, 0), Position::new(0, 0, 0), "1"))
             ]
         });
     }
@@ -396,11 +396,11 @@ mod test_parse {
     fn unicode_escape_multiple() {
         assert_segments(r#""\u(a1) this is \u(2Bcd) unicode \u(ef97)""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Loc::new(Position::new(0, 4), Position::new(0, 6), "a1")),
+                Unicode(Loc::new(Position::new(0, 0, 0), Position::new(0, 0, 0), "a1")),
                 Plaintext(" this is "),
-                Unicode(Loc::new(Position::new(0, 19), Position::new(0, 23), "2Bcd")),
+                Unicode(Loc::new(Position::new(0, 0, 0), Position::new(0, 0, 0), "2Bcd")),
                 Plaintext(" unicode "),
-                Unicode(Loc::new(Position::new(0, 36), Position::new(0, 40), "ef97"))
+                Unicode(Loc::new(Position::new(0, 0, 0), Position::new(0, 0, 0), "ef97"))
             ]
         });
     }
@@ -417,7 +417,7 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Interpolated(Loc::new(Position::new(0, 7), Position::new(0, 11), expr)),
+                Interpolated(Loc::new(Position::new(0, 0, 0), Position::new(0, 0, 0), expr)),
                 Plaintext("!")
             ]
         });
@@ -432,7 +432,7 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Interpolated(Loc::new(Position::new(0, 3), Position::new(0, 7), expr)),
+                Interpolated(Loc::new(Position::new(0, 0, 0), Position::new(0, 0, 0), expr)),
                 Plaintext(", hi!")
             ]
         });
@@ -448,7 +448,7 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hello "),
-                Interpolated(Loc::new(Position::new(0, 9), Position::new(0, 13), expr))
+                Interpolated(Loc::new(Position::new(0, 0, 0), Position::new(0, 0, 0), expr))
             ]
         });
     }
@@ -468,9 +468,9 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Interpolated(Loc::new(Position::new(0, 7), Position::new(0, 11), expr1)),
+                Interpolated(Loc::new(Position::new(0, 0, 0), Position::new(0, 0, 0), expr1)),
                 Plaintext("! How is "),
-                Interpolated(Loc::new(Position::new(0, 23), Position::new(0, 30), expr2)),
+                Interpolated(Loc::new(Position::new(0, 0, 0), Position::new(0, 0, 0), expr2)),
                 Plaintext(" going?")
             ]
         });

@@ -944,12 +944,12 @@ mod test_can {
         let problem = Problem::RuntimeError(RuntimeError::CircularDef(vec![CycleEntry {
             symbol: interns.symbol(home, "x".into()),
             symbol_region: Region::new(
-                Position::new(0, 0),
-                Position::new(0, 1),
+                Position::new(0, 0, 0),
+                Position::new(0, 0, 0),
             ),
             expr_region: Region::new(
-                Position::new(0, 4),
-                Position::new(0, 5),
+                Position::new(0, 0, 0),
+                Position::new(0, 0, 0),
             ),
         }]));
 
@@ -981,34 +981,34 @@ mod test_can {
             CycleEntry {
                 symbol: interns.symbol(home, "x".into()),
                 symbol_region: Region::new(
-                    Position::new(0, 0),
-                    Position::new(0, 1),
+                    Position::new(0, 0, 0),
+                    Position::new(0, 0, 0),
                 ),
                 expr_region: Region::new(
-                    Position::new(0, 4),
-                    Position::new(0, 5),
+                    Position::new(0, 0, 0),
+                    Position::new(0, 0, 0),
                 ),
             },
             CycleEntry {
                 symbol: interns.symbol(home, "y".into()),
                 symbol_region: Region::new(
-                    Position::new(1, 0),
-                    Position::new(1, 1),
+                    Position::new(0, 0, 0),
+                    Position::new(0, 0, 0),
                 ),
                 expr_region: Region::new(
-                    Position::new(1, 4),
-                    Position::new(1, 5),
+                    Position::new(0, 0, 0),
+                    Position::new(0, 0, 0),
                 ),
             },
             CycleEntry {
                 symbol: interns.symbol(home, "z".into()),
                 symbol_region: Region::new(
-                    Position::new(2, 0),
-                    Position::new(2, 1),
+                    Position::new(0, 0, 0),
+                    Position::new(0, 0, 0),
                 ),
                 expr_region: Region::new(
-                    Position::new(2, 4),
-                    Position::new(2, 5),
+                    Position::new(0, 0, 0),
+                    Position::new(0, 0, 0),
                 ),
             },
         ]));

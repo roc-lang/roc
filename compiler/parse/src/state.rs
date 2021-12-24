@@ -8,7 +8,11 @@ use std::fmt;
 #[derive(Clone)]
 pub struct State<'a> {
     /// The raw input bytes from the file.
+    /// Beware: bytes[0] always points the the current byte the parser is examining.
     bytes: &'a [u8],
+
+    /// Length of the original input in bytes
+    input_len: usize,
 
     /// Current position within the input (line/column)
     pub xyzlcol: LineColumn,
@@ -22,6 +26,7 @@ impl<'a> State<'a> {
     pub fn new(bytes: &'a [u8]) -> State<'a> {
         State {
             bytes,
+            input_len: bytes.len(),
             xyzlcol: LineColumn::default(),
             indent_column: 0,
         }
@@ -40,7 +45,10 @@ impl<'a> State<'a> {
 
     /// Returns the current position
     pub const fn pos(&self) -> Position {
-        Position::new(self.xyzlcol.line, self.xyzlcol.column)
+        Position::new(
+            (self.input_len - self.bytes.len()) as u32,
+            self.xyzlcol.line,
+            self.xyzlcol.column)
     }
 
     /// Returns whether the parser has reached the end of the input
@@ -95,6 +103,7 @@ impl<'a> State<'a> {
         Region::new(
             self.pos(),
             Position::new(
+                self.pos().bump_column(length).offset,
                 self.xyzlcol.line,
                 self
                     .xyzlcol
