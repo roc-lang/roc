@@ -1907,6 +1907,7 @@ fn to_type_report<'a>(
         EType::TTagUnion(tag_union, pos) => to_ttag_union_report(alloc, filename, tag_union, *pos),
         EType::TInParens(tinparens, pos) => to_tinparens_report(alloc, filename, tinparens, *pos),
         EType::TApply(tapply, pos) => to_tapply_report(alloc, filename, tapply, *pos),
+        EType::TInlineAlias(talias, _) => to_talias_report(alloc, filename, talias),
 
         EType::TFunctionArgument(pos) => match what_is_next(alloc.src_lines, *pos) {
             Next::Other(Some(',')) => {
@@ -2813,6 +2814,75 @@ fn to_tapply_report<'a>(
         }
 
         ETypeApply::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
+    }
+}
+
+fn to_talias_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::ETypeInlineAlias,
+) -> Report<'a> {
+    use roc_parse::parser::ETypeInlineAlias;
+
+    match *parse_problem {
+        ETypeInlineAlias::NotAnAlias(pos) => {
+            let region = Region::from_pos(pos);
+
+            let doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The inline type after this "),
+                    alloc.keyword("as"),
+                    alloc.reflow(" is not a type alias:"),
+                ]),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("Inline alias types must start with an uppercase identifier and be followed by zero or more type arguments, like "),
+                    alloc.type_str("Point"),
+                    alloc.reflow(" or "),
+                    alloc.type_str("List a"),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "NOT AN INLINE ALIAS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        ETypeInlineAlias::Qualified(pos) => {
+            let region = Region::from_pos(pos);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"This type alias has a qualified name:"),
+                alloc.region(region),
+                alloc.reflow("Alias can't be qualified."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "QUALIFIED ALIAS NAME".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        ETypeInlineAlias::ArgumentNotLowercase(pos) => {
+            let region = Region::from_pos(pos);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"This alias type argument is not lowercase:"),
+                alloc.region(region),
+                alloc.reflow("All type arguments must be lowercase."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "TYPE ARGUMENT NOT LOWERCASE".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
     }
 }
 
