@@ -91,15 +91,9 @@ impl fmt::Debug for Region {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Position {
     pub offset: u32,
-}
-
-impl PartialEq for Position {
-    fn eq(&self, other: &Self) -> bool {
-        self.offset == other.offset
-    }
 }
 
 impl Position {
@@ -348,8 +342,7 @@ pub struct LineInfo {
 
 impl LineInfo {
     pub fn new(src: &str) -> LineInfo {
-        let mut line_offsets = Vec::new();
-        line_offsets.push(0);
+        let mut line_offsets = vec![0];
         line_offsets.extend(src.match_indices('\n').map(|(offset, _)| offset as u32 + 1));
         LineInfo { line_offsets }
     }
