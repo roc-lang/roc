@@ -9,6 +9,7 @@ use roc_types::subs::VarStore;
 
 use super::core::def::def::References;
 
+/// TODO document
 #[derive(Debug)]
 pub struct Env<'a> {
     pub home: ModuleId,
