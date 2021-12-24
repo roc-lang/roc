@@ -514,11 +514,10 @@ fn fmt_when<'a, 'buf>(
         let patterns = &branch.patterns;
         let expr = &branch.value;
         let (first_pattern, rest) = patterns.split_first().unwrap();
-        let is_multiline = match rest.last() {
-            None => false,
-            Some(last_pattern) => {
-                first_pattern.region.start().line != last_pattern.region.end().line
-            }
+        let is_multiline = if rest.is_empty() {
+            false
+        } else {
+            patterns.iter().any(|p| p.is_multiline())
         };
 
         fmt_pattern(

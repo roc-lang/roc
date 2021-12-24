@@ -40,10 +40,7 @@ impl<'a> State<'a> {
 
     /// Returns the current position
     pub const fn pos(&self) -> Position {
-        Position {
-            line: self.xyzlcol.line,
-            column: self.xyzlcol.column,
-        }
+        Position::new(self.xyzlcol.line, self.xyzlcol.column)
     }
 
     /// Returns whether the parser has reached the end of the input
@@ -97,14 +94,14 @@ impl<'a> State<'a> {
     pub fn len_region(&self, length: u16) -> Region {
         Region::new(
             self.pos(),
-            Position {
-                line: self.xyzlcol.line,
-                column: self
+            Position::new(
+                self.xyzlcol.line,
+                self
                     .xyzlcol
                     .column
                     .checked_add(length)
                     .unwrap_or_else(|| panic!("len_region overflowed")),
-            },
+            ),
         )
     }
 

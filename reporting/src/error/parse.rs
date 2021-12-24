@@ -1,5 +1,5 @@
 use roc_parse::parser::{ParseProblem, SyntaxError};
-use roc_region::all::{Position, Region, LineInfo};
+use roc_region::all::{Position, Region, LineInfo, LineColumn, LineColumnRegion};
 use std::path::PathBuf;
 
 use crate::report::{Report, RocDocAllocator, RocDocBuilder, Severity};
@@ -102,9 +102,10 @@ fn to_syntax_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        Unexpected(mut region) => {
+        Unexpected(region) => {
+            let mut region = lines.convert_region(*region);
             if region.start().column == region.end().column {
-                region = Region::new(region.start(), region.end().bump_column(1));
+                region = LineColumnRegion::new(region.start(), region.end().bump_column(1));
             }
 
             let doc = alloc.stack(vec![
@@ -113,7 +114,7 @@ fn to_syntax_report<'a>(
                     // context(alloc, &parse_problem.context_stack, "here"),
                     alloc.text(":"),
                 ]),
-                alloc.region(lines.convert_region(region)),
+                alloc.region(region),
             ]);
 
             report(doc)
@@ -537,7 +538,7 @@ fn to_lambda_report<'a>(
     use roc_parse::parser::ELambda;
 
     match *parse_problem {
-        ELambda::Arrow(pos) => match what_is_next(alloc.src_lines, pos) {
+        ELambda::Arrow(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Token("=>") => {
                 let surroundings = Region::new(start, pos);
                 let region = Region::from_pos(pos);
@@ -584,7 +585,7 @@ fn to_lambda_report<'a>(
             }
         },
 
-        ELambda::Comma(pos) => match what_is_next(alloc.src_lines, pos) {
+        ELambda::Comma(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Token("=>") => {
                 let surroundings = Region::new(start, pos);
                 let region = Region::from_pos(pos);
@@ -631,7 +632,7 @@ fn to_lambda_report<'a>(
             }
         },
 
-        ELambda::Arg(pos) => match what_is_next(alloc.src_lines, pos) {
+        ELambda::Arg(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Other(Some(',')) => {
                 let surroundings = Region::new(start, pos);
                 let region = Region::from_pos(pos);
@@ -1005,7 +1006,7 @@ fn to_list_report<'a>(
             pos,
         ),
 
-        EList::Open(pos) | EList::End(pos) => match what_is_next(alloc.src_lines, pos) {
+        EList::Open(pos) | EList::End(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Other(Some(',')) => {
                 let surroundings = Region::new(start, pos);
                 let region = Region::from_pos(pos);
@@ -1217,7 +1218,7 @@ fn to_when_report<'a>(
     use roc_parse::parser::EWhen;
 
     match *parse_problem {
-        EWhen::IfGuard(nested, pos) => match what_is_next(alloc.src_lines, pos) {
+        EWhen::IfGuard(nested, pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Token("->") => {
                 let surroundings = Region::new(start, pos);
                 let region = Region::from_pos(pos);
@@ -1402,7 +1403,7 @@ fn to_unfinished_when_report<'a>(
     start: Position,
     message: RocDocBuilder<'a>,
 ) -> Report<'a> {
-    match what_is_next(alloc.src_lines, pos) {
+    match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
         Next::Token("->") => to_unexpected_arrow_report(alloc, lines, filename, pos, start),
 
         _ => {
@@ -1558,14 +1559,14 @@ fn to_precord_report<'a>(
     use roc_parse::parser::PRecord;
 
     match *parse_problem {
-        PRecord::Open(pos) => match what_is_next(alloc.src_lines, pos) {
+        PRecord::Open(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Keyword(keyword) => {
                 let surroundings = Region::new(start, pos);
-                let region = to_keyword_region(pos, keyword);
+                let region = to_keyword_region(lines.convert_pos(pos), keyword);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a record pattern, but I got stuck on this field name:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
                     alloc.concat(vec![
                         alloc.reflow(r"Looks like you are trying to use "),
                         alloc.keyword(keyword),
@@ -1603,7 +1604,7 @@ fn to_precord_report<'a>(
             let surroundings = Region::new(start, pos);
             let region = Region::from_pos(pos);
 
-            match what_is_next(alloc.src_lines, pos) {
+            match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
                 Next::Other(Some(c)) if c.is_alphabetic() => {
                     let doc = alloc.stack(vec![
                         alloc.reflow(r"I am partway through parsing a record pattern, but I got stuck here:"),
@@ -1645,14 +1646,14 @@ fn to_precord_report<'a>(
             }
         }
 
-        PRecord::Field(pos) => match what_is_next(alloc.src_lines, pos) {
+        PRecord::Field(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Keyword(keyword) => {
                 let surroundings = Region::new(start, pos);
-                let region = to_keyword_region(pos, keyword);
+                let region = to_keyword_region(lines.convert_pos(pos), keyword);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a record pattern, but I got stuck on this field name:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
                     alloc.concat(vec![
                         alloc.reflow(r"Looks like you are trying to use "),
                         alloc.keyword(keyword),
@@ -1735,16 +1736,16 @@ fn to_precord_report<'a>(
             }
         }
 
-        PRecord::IndentEnd(pos) => match next_line_starts_with_close_curly(alloc.src_lines, pos) {
+        PRecord::IndentEnd(pos) => match next_line_starts_with_close_curly(alloc.src_lines, lines.convert_pos(pos)) {
             Some(curly_pos) => {
-                let surroundings = Region::new(start, curly_pos);
-                let region = Region::from_pos(curly_pos);
+                let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
+                let region = LineColumnRegion::from_pos(curly_pos);
 
                 let doc = alloc.stack(vec![
                         alloc.reflow(
                             "I am partway through parsing a record pattern, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                        alloc.region_with_subregion(surroundings, region),
                         alloc.concat(vec![
                             alloc.reflow("I need this curly brace to be indented more. Try adding more spaces before it!"),
                         ]),
@@ -1881,16 +1882,16 @@ fn to_pattern_in_parens_report<'a>(
         }
 
         PInParens::IndentEnd(pos) => {
-            match next_line_starts_with_close_parenthesis(alloc.src_lines, pos) {
+            match next_line_starts_with_close_parenthesis(alloc.src_lines, lines.convert_pos(pos)) {
                 Some(curly_pos) => {
-                    let surroundings = Region::new(start, curly_pos);
-                    let region = Region::from_pos(curly_pos);
+                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
+                    let region = LineColumnRegion::from_pos(curly_pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
                             "I am partway through parsing a pattern in parentheses, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                        alloc.region_with_subregion(surroundings, region),
                         alloc.concat(vec![
                             alloc.reflow("I need this parenthesis to be indented more. Try adding more spaces before it!"),
                         ]),
@@ -1951,7 +1952,7 @@ fn to_type_report<'a>(
         EType::TApply(tapply, pos) => to_tapply_report(alloc, lines, filename, tapply, *pos),
         EType::TInlineAlias(talias, _) => to_talias_report(alloc, lines, filename, talias),
 
-        EType::TFunctionArgument(pos) => match what_is_next(alloc.src_lines, *pos) {
+        EType::TFunctionArgument(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(*pos)) {
             Next::Other(Some(',')) => {
                 let surroundings = Region::new(start, *pos);
                 let region = Region::from_pos(*pos);
@@ -2081,14 +2082,14 @@ fn to_trecord_report<'a>(
     use roc_parse::parser::ETypeRecord;
 
     match *parse_problem {
-        ETypeRecord::Open(pos) => match what_is_next(alloc.src_lines, pos) {
+        ETypeRecord::Open(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Keyword(keyword) => {
                 let surroundings = Region::new(start, pos);
-                let region = to_keyword_region(pos, keyword);
+                let region = to_keyword_region(lines.convert_pos(pos), keyword);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a record type, but I got stuck on this field name:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
                     alloc.concat(vec![
                         alloc.reflow(r"Looks like you are trying to use "),
                         alloc.keyword(keyword),
@@ -2130,7 +2131,7 @@ fn to_trecord_report<'a>(
             let surroundings = Region::new(start, pos);
             let region = Region::from_pos(pos);
 
-            match what_is_next(alloc.src_lines, pos) {
+            match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
                 Next::Other(Some(c)) if c.is_alphabetic() => {
                     let doc = alloc.stack(vec![
                         alloc.reflow(r"I am partway through parsing a record type, but I got stuck here:"),
@@ -2172,14 +2173,14 @@ fn to_trecord_report<'a>(
             }
         }
 
-        ETypeRecord::Field(pos) => match what_is_next(alloc.src_lines, pos) {
+        ETypeRecord::Field(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Keyword(keyword) => {
                 let surroundings = Region::new(start, pos);
-                let region = to_keyword_region(pos, keyword);
+                let region = to_keyword_region(lines.convert_pos(pos), keyword);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a record type, but I got stuck on this field name:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
                     alloc.concat(vec![
                         alloc.reflow(r"Looks like you are trying to use "),
                         alloc.keyword(keyword),
@@ -2254,16 +2255,16 @@ fn to_trecord_report<'a>(
         }
 
         ETypeRecord::IndentEnd(pos) => {
-            match next_line_starts_with_close_curly(alloc.src_lines, pos) {
+            match next_line_starts_with_close_curly(alloc.src_lines, lines.convert_pos(pos)) {
                 Some(curly_pos) => {
-                    let surroundings = Region::new(start, curly_pos);
-                    let region = Region::from_pos(curly_pos);
+                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
+                    let region = LineColumnRegion::from_pos(curly_pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
                             "I am partway through parsing a record type, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                        alloc.region_with_subregion(surroundings, region),
                         alloc.concat(vec![
                             alloc.reflow("I need this curly brace to be indented more. Try adding more spaces before it!"),
                         ]),
@@ -2326,14 +2327,14 @@ fn to_ttag_union_report<'a>(
     use roc_parse::parser::ETypeTagUnion;
 
     match *parse_problem {
-        ETypeTagUnion::Open(pos) => match what_is_next(alloc.src_lines, pos) {
+        ETypeTagUnion::Open(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Keyword(keyword) => {
                 let surroundings = Region::new(start, pos);
-                let region = to_keyword_region(pos, keyword);
+                let region = to_keyword_region(lines.convert_pos(pos), keyword);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a tag union, but I got stuck on this field name:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
                     alloc.concat(vec![
                         alloc.reflow(r"Looks like you are trying to use "),
                         alloc.keyword(keyword),
@@ -2397,7 +2398,7 @@ fn to_ttag_union_report<'a>(
             let surroundings = Region::new(start, pos);
             let region = Region::from_pos(pos);
 
-            match what_is_next(alloc.src_lines, pos) {
+            match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
                 Next::Other(Some(c)) if c.is_alphabetic() => {
                     debug_assert!(c.is_lowercase());
 
@@ -2483,16 +2484,16 @@ fn to_ttag_union_report<'a>(
         }
 
         ETypeTagUnion::IndentEnd(pos) => {
-            match next_line_starts_with_close_square_bracket(alloc.src_lines, pos) {
+            match next_line_starts_with_close_square_bracket(alloc.src_lines, lines.convert_pos(pos)) {
                 Some(curly_pos) => {
-                    let surroundings = Region::new(start, curly_pos);
-                    let region = Region::from_pos(curly_pos);
+                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
+                    let region = LineColumnRegion::from_pos(curly_pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
                             "I am partway through parsing a tag union type, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                        alloc.region_with_subregion(surroundings, region),
                         alloc.concat(vec![
                             alloc.reflow("I need this square bracket to be indented more. Try adding more spaces before it!"),
                         ]),
@@ -2548,14 +2549,14 @@ fn to_tinparens_report<'a>(
 
     match *parse_problem {
         ETypeInParens::Open(pos) => {
-            match what_is_next(alloc.src_lines, pos) {
+            match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
                 Next::Keyword(keyword) => {
                     let surroundings = Region::new(start, pos);
-                    let region = to_keyword_region(pos, keyword);
+                    let region = to_keyword_region(lines.convert_pos(pos), keyword);
 
                     let doc = alloc.stack(vec![
                     alloc.reflow(r"I just saw an open parenthesis, so I was expecting to see a type next."),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
                     alloc.concat(vec![
                         alloc.reflow(r"Something like "),
                         alloc.parser_suggestion("(List Person)"),
@@ -2623,7 +2624,7 @@ fn to_tinparens_report<'a>(
             let surroundings = Region::new(start, pos);
             let region = Region::from_pos(pos);
 
-            match what_is_next(alloc.src_lines, pos) {
+            match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
                 Next::Other(Some(c)) if c.is_alphabetic() => {
                     debug_assert!(c.is_lowercase());
 
@@ -2694,16 +2695,16 @@ fn to_tinparens_report<'a>(
         }
 
         ETypeInParens::IndentEnd(pos) => {
-            match next_line_starts_with_close_parenthesis(alloc.src_lines, pos) {
+            match next_line_starts_with_close_parenthesis(alloc.src_lines, lines.convert_pos(pos)) {
                 Some(curly_pos) => {
-                    let surroundings = Region::new(start, curly_pos);
-                    let region = Region::from_pos(curly_pos);
+                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
+                    let region = LineColumnRegion::from_pos(curly_pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
                             "I am partway through parsing a type in parentheses, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                        alloc.region_with_subregion(surroundings, region),
                         alloc.concat(vec![
                             alloc.reflow("I need this parenthesis to be indented more. Try adding more spaces before it!"),
                         ]),
@@ -3505,7 +3506,7 @@ enum Next<'a> {
     Other(Option<char>),
 }
 
-fn what_is_next<'a>(source_lines: &'a [&'a str], pos: Position) -> Next<'a> {
+fn what_is_next<'a>(source_lines: &'a [&'a str], pos: LineColumn) -> Next<'a> {
     let row_index = pos.line as usize;
     let col_index = pos.column as usize;
     match source_lines.get(row_index) {
@@ -3547,36 +3548,36 @@ pub fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
     }
 }
 
-fn next_line_starts_with_close_curly(source_lines: &[&str], pos: Position) -> Option<Position> {
+fn next_line_starts_with_close_curly(source_lines: &[&str], pos: LineColumn) -> Option<LineColumn> {
     next_line_starts_with_char(source_lines, pos, '}')
 }
 
 fn next_line_starts_with_close_parenthesis(
     source_lines: &[&str],
-    pos: Position,
-) -> Option<Position> {
+    pos: LineColumn,
+) -> Option<LineColumn> {
     next_line_starts_with_char(source_lines, pos, ')')
 }
 
 fn next_line_starts_with_close_square_bracket(
     source_lines: &[&str],
-    pos: Position,
-) -> Option<Position> {
+    pos: LineColumn,
+) -> Option<LineColumn> {
     next_line_starts_with_char(source_lines, pos, ']')
 }
 
 fn next_line_starts_with_char(
     source_lines: &[&str],
-    pos: Position,
+    pos: LineColumn,
     character: char,
-) -> Option<Position> {
+) -> Option<LineColumn> {
     match source_lines.get(pos.line as usize + 1) {
         None => None,
 
         Some(line) => {
             let spaces_dropped = line.trim_start_matches(' ');
             match spaces_dropped.chars().next() {
-                Some(c) if c == character => Some(Position {
+                Some(c) if c == character => Some(LineColumn {
                     line: pos.line + 1,
                     column: (line.len() - spaces_dropped.len()) as u16,
                 }),
@@ -3586,6 +3587,9 @@ fn next_line_starts_with_char(
     }
 }
 
-fn to_keyword_region(pos: Position, keyword: &str) -> Region {
-    Region::new(pos, pos.bump_column(keyword.len() as u16))
+fn to_keyword_region(pos: LineColumn, keyword: &str) -> LineColumnRegion {
+    LineColumnRegion {
+        start: pos,
+        end: pos.bump_column(keyword.len() as u16)
+    }
 }

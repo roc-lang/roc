@@ -154,8 +154,8 @@ impl fmt::Debug for Region {
 
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 pub struct Position {
-    pub line: u32,
-    pub column: u16,
+    line: u32,
+    column: u16,
 }
 
 impl Position {
@@ -163,12 +163,12 @@ impl Position {
         Position { line: 0, column: 0 }
     }
     
-    pub fn new(line: u32, column: u16) -> Position {
+    pub const fn new(line: u32, column: u16) -> Position {
         Position { line, column }
     }
 
     #[must_use]
-    pub fn bump_column(self, count: u16) -> Self {
+    pub const fn bump_column(self, count: u16) -> Self {
         Self {
             line: self.line,
             column: self.column + count,
@@ -189,6 +189,14 @@ impl Position {
         Self {
             line: self.line + 1,
             column: 0,
+        }
+    }
+
+    #[must_use]
+    pub const fn sub(self, count: u16) -> Self {
+        Self {
+            line: self.line,
+            column: self.column - count,
         }
     }
 }
@@ -212,6 +220,14 @@ impl LineColumn {
             column: 0,
         }
     }
+
+    #[must_use]
+    pub const fn bump_column(self, count: u16) -> Self {
+        Self {
+            line: self.line,
+            column: self.column + count,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
@@ -221,6 +237,13 @@ pub struct LineColumnRegion {
 }
 
 impl LineColumnRegion {
+    pub const fn new(start: LineColumn, end: LineColumn) -> Self {
+        LineColumnRegion {
+            start,
+            end,
+        }
+    }
+
     pub const fn zero() -> Self {
         LineColumnRegion {
             start: LineColumn::zero(),
@@ -242,6 +265,13 @@ impl LineColumnRegion {
                 Equal => self.end.column >= other.end.column,
                 Greater => true,
             },
+        }
+    }
+
+    pub const fn from_pos(pos: LineColumn) -> Self {
+        Self {
+            start: pos,
+            end: pos.bump_column(1),
         }
     }
 

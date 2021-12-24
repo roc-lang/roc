@@ -2,7 +2,7 @@ use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
-use roc_region::all::{Loc, Position, Region, LineInfo};
+use roc_region::all::{Loc, Region, LineInfo, LineColumn};
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
@@ -570,7 +570,7 @@ fn to_bad_ident_expr_report<'b>(
 
         BadPrivateTag(pos) => {
             use BadIdentNext::*;
-            match what_is_next(alloc.src_lines, pos) {
+            match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
                 LowercaseAccess(width) => {
                     let region = Region::new(pos, pos.bump_column(width));
                     alloc.stack(vec![
@@ -694,10 +694,7 @@ fn to_bad_ident_pattern_report<'b>(
         }
 
         Underscore(pos) => {
-            let region = Region::from_pos(Position {
-                line: pos.line,
-                column: pos.column - 1,
-            });
+            let region = Region::from_pos(pos.sub(1));
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse an identifier here:"),
@@ -722,7 +719,7 @@ enum BadIdentNext<'a> {
     Other(Option<char>),
 }
 
-fn what_is_next<'a>(source_lines: &'a [&'a str], pos: Position) -> BadIdentNext<'a> {
+fn what_is_next<'a>(source_lines: &'a [&'a str], pos: LineColumn) -> BadIdentNext<'a> {
     let row_index = pos.line as usize;
     let col_index = pos.column as usize;
     match source_lines.get(row_index) {
