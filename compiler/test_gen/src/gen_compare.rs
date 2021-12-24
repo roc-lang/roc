@@ -179,7 +179,7 @@ fn record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn unit() {
     assert_evals_to!("Unit == Unit", true, bool);
     assert_evals_to!("Unit != Unit", false, bool);
@@ -231,7 +231,7 @@ fn large_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_result_tag_true() {
     assert_evals_to!(
         indoc!(
@@ -251,7 +251,7 @@ fn eq_result_tag_true() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_result_tag_false() {
     assert_evals_to!(
         indoc!(
@@ -271,7 +271,7 @@ fn eq_result_tag_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_expr() {
     assert_evals_to!(
         indoc!(
@@ -293,7 +293,7 @@ fn eq_expr() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_linked_list() {
     assert_evals_to!(
         indoc!(
@@ -351,7 +351,7 @@ fn eq_linked_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_linked_list_false() {
     assert_evals_to!(
         indoc!(
@@ -373,7 +373,7 @@ fn eq_linked_list_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_nullable_expr() {
     assert_evals_to!(
         indoc!(
@@ -460,49 +460,49 @@ fn rosetree_with_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_eq_empty() {
     assert_evals_to!("[] == []", true, bool);
     assert_evals_to!("[] != []", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_eq_by_length() {
     assert_evals_to!("[1] == []", false, bool);
     assert_evals_to!("[] == [1]", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_eq_compare_pointwise() {
     assert_evals_to!("[1] == [1]", true, bool);
     assert_evals_to!("[2] == [1]", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_eq_nested() {
     assert_evals_to!("[[1]] == [[1]]", true, bool);
     assert_evals_to!("[[2]] == [[1]]", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_neq_compare_pointwise() {
     assert_evals_to!("[1] != [1]", false, bool);
     assert_evals_to!("[2] != [1]", true, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_neq_nested() {
     assert_evals_to!("[[1]] != [[1]]", false, bool);
     assert_evals_to!("[[2]] != [[1]]", true, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn compare_union_same_content() {
     assert_evals_to!(
         indoc!(
@@ -524,7 +524,7 @@ fn compare_union_same_content() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn compare_recursive_union_same_content() {
     assert_evals_to!(
         indoc!(
@@ -546,7 +546,7 @@ fn compare_recursive_union_same_content() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn compare_nullable_recursive_union_same_content() {
     assert_evals_to!(
         indoc!(

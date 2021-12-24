@@ -3,7 +3,7 @@ use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{Def, Expr, Pattern};
-use roc_region::all::Located;
+use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
 impl<'a> Formattable for Def<'a> {
@@ -59,13 +59,9 @@ impl<'a> Formattable for Def<'a> {
                 buf.indent(indent);
                 buf.push_str(name.value);
 
-                if vars.is_empty() {
+                for var in *vars {
                     buf.spaces(1);
-                } else {
-                    for var in *vars {
-                        buf.spaces(1);
-                        fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
-                    }
+                    fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
                 }
 
                 buf.push_str(" :");
@@ -112,7 +108,7 @@ impl<'a> Formattable for Def<'a> {
 
 fn fmt_expect<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    condition: &'a Located<Expr<'a>>,
+    condition: &'a Loc<Expr<'a>>,
     is_multiline: bool,
     indent: u16,
 ) {

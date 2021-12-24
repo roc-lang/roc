@@ -11,13 +11,10 @@ use crate::wasm_module::{Align, CodeBuilder, ValueType::*};
 pub enum LowlevelBuildResult {
     Done,
     BuiltinCall(&'static str),
-    SpecializedEq,
-    SpecializedNotEq,
-    SpecializedHash,
     NotImplemented,
 }
 
-pub fn decode_low_level<'a>(
+pub fn dispatch_low_level<'a>(
     code_builder: &mut CodeBuilder<'a>,
     storage: &mut Storage<'a>,
     lowlevel: LowLevel,
@@ -30,8 +27,9 @@ pub fn decode_low_level<'a>(
         || internal_error!("Invalid return layout for {:?}: {:?}", lowlevel, ret_layout);
 
     match lowlevel {
+        // Str
         StrConcat => return BuiltinCall(bitcode::STR_CONCAT),
-        StrJoinWith => return NotImplemented, // needs Array
+        StrJoinWith => return BuiltinCall(bitcode::STR_JOIN_WITH),
         StrIsEmpty => {
             code_builder.i64_const(i64::MIN);
             code_builder.i64_eq();
@@ -39,23 +37,37 @@ pub fn decode_low_level<'a>(
         StrStartsWith => return BuiltinCall(bitcode::STR_STARTS_WITH),
         StrStartsWithCodePt => return BuiltinCall(bitcode::STR_STARTS_WITH_CODE_PT),
         StrEndsWith => return BuiltinCall(bitcode::STR_ENDS_WITH),
-        StrSplit => return NotImplemented,          // needs Array
-        StrCountGraphemes => return NotImplemented, // test needs Array
-        StrToNum => return NotImplemented,          // choose builtin based on storage size
-        StrFromInt => return NotImplemented,        // choose builtin based on storage size
-        StrFromUtf8 => return NotImplemented,       // needs Array
-        StrTrimLeft => return BuiltinCall(bitcode::STR_TRIM_LEFT),
-        StrTrimRight => return BuiltinCall(bitcode::STR_TRIM_RIGHT),
-        StrFromUtf8Range => return NotImplemented, // needs Array
-        StrToUtf8 => return NotImplemented,        // needs Array
-        StrRepeat => return BuiltinCall(bitcode::STR_REPEAT),
+        StrSplit => {
+            // Roughly we need to:
+            // 1. count segments
+            // 2. make a new pointer
+            // 3. split that pointer in place
+            // see: build_str.rs line 31
+            return NotImplemented;
+        }
+        StrCountGraphemes => return BuiltinCall(bitcode::STR_COUNT_GRAPEHEME_CLUSTERS),
+        StrToNum => return NotImplemented, // choose builtin based on storage size
+        StrFromInt => {
+            // This does not get exposed in user space. We switched to NumToStr instead.
+            // We can probably just leave this as NotImplemented. We may want remove this LowLevel.
+            // see: https://github.com/rtfeldman/roc/pull/2108
+            return NotImplemented;
+        }
         StrFromFloat => {
             // linker errors for __ashlti3, __fixunsdfti, __multi3, __udivti3, __umodti3
             // https://gcc.gnu.org/onlinedocs/gccint/Integer-library-routines.html
             // https://gcc.gnu.org/onlinedocs/gccint/Soft-float-library-routines.html
             return NotImplemented;
         }
+        StrFromUtf8 => return BuiltinCall(bitcode::STR_FROM_UTF8),
+        StrTrimLeft => return BuiltinCall(bitcode::STR_TRIM_LEFT),
+        StrTrimRight => return BuiltinCall(bitcode::STR_TRIM_RIGHT),
+        StrFromUtf8Range => return BuiltinCall(bitcode::STR_FROM_UTF8_RANGE), // refcounting errors
+        StrToUtf8 => return BuiltinCall(bitcode::STR_TO_UTF8),                // refcounting errors
+        StrRepeat => return BuiltinCall(bitcode::STR_REPEAT),
         StrTrim => return BuiltinCall(bitcode::STR_TRIM),
+
+        // List
         ListLen => {
             if let StoredValue::StackMemory { location, .. } = storage.get(&args[0]) {
                 let (local_id, offset) = location.local_and_offset(storage.stack_frame_pointer);
@@ -77,6 +89,7 @@ pub fn decode_low_level<'a>(
             return NotImplemented;
         }
 
+        // Num
         NumAdd => match ret_layout {
             WasmLayout::Primitive(value_type, _) => match value_type {
                 I32 => code_builder.i32_add(),
@@ -509,109 +522,15 @@ pub fn decode_low_level<'a>(
                 WasmLayout::StackMemory { .. } => return NotImplemented,
             }
         }
-        Eq => {
-            use StoredValue::*;
-            match storage.get(&args[0]).to_owned() {
-                VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
-                    match value_type {
-                        I32 => code_builder.i32_eq(),
-                        I64 => code_builder.i64_eq(),
-                        F32 => code_builder.f32_eq(),
-                        F64 => code_builder.f64_eq(),
-                    }
-                }
-                StackMemory {
-                    format,
-                    location: location0,
-                    ..
-                } => {
-                    if let StackMemory {
-                        location: location1,
-                        ..
-                    } = storage.get(&args[1]).to_owned()
-                    {
-                        let stack_frame_pointer = storage.stack_frame_pointer;
-                        let compare_bytes = |code_builder: &mut CodeBuilder| {
-                            let (local0, offset0) = location0.local_and_offset(stack_frame_pointer);
-                            let (local1, offset1) = location1.local_and_offset(stack_frame_pointer);
-
-                            code_builder.get_local(local0);
-                            code_builder.i64_load(Align::Bytes8, offset0);
-                            code_builder.get_local(local1);
-                            code_builder.i64_load(Align::Bytes8, offset1);
-                            code_builder.i64_eq();
-
-                            code_builder.get_local(local0);
-                            code_builder.i64_load(Align::Bytes8, offset0 + 8);
-                            code_builder.get_local(local1);
-                            code_builder.i64_load(Align::Bytes8, offset1 + 8);
-                            code_builder.i64_eq();
-
-                            code_builder.i32_and();
-                        };
-
-                        match format {
-                            Decimal => {
-                                // Both args are finite
-                                let first = [args[0]];
-                                let second = [args[1]];
-                                decode_low_level(
-                                    code_builder,
-                                    storage,
-                                    LowLevel::NumIsFinite,
-                                    &first,
-                                    ret_layout,
-                                );
-                                decode_low_level(
-                                    code_builder,
-                                    storage,
-                                    LowLevel::NumIsFinite,
-                                    &second,
-                                    ret_layout,
-                                );
-                                code_builder.i32_and();
-
-                                // AND they have the same bytes
-                                compare_bytes(code_builder);
-                                code_builder.i32_and();
-                            }
-                            Int128 => compare_bytes(code_builder),
-                            Float128 => return NotImplemented,
-                            DataStructure => return SpecializedEq,
-                        }
-                    }
-                }
-            }
-        }
-        NotEq => match storage.get(&args[0]) {
-            StoredValue::VirtualMachineStack { value_type, .. }
-            | StoredValue::Local { value_type, .. } => match value_type {
-                I32 => code_builder.i32_ne(),
-                I64 => code_builder.i64_ne(),
-                F32 => code_builder.f32_ne(),
-                F64 => code_builder.f64_ne(),
-            },
-            StoredValue::StackMemory { format, .. } => {
-                if matches!(format, DataStructure) {
-                    return SpecializedNotEq;
-                } else {
-                    decode_low_level(code_builder, storage, LowLevel::Eq, args, ret_layout);
-                    code_builder.i32_eqz();
-                }
-            }
-        },
         And => code_builder.i32_and(),
         Or => code_builder.i32_or(),
         Not => code_builder.i32_eqz(),
-        Hash => return SpecializedHash,
         ExpectTrue => return NotImplemented,
-        PtrCast => {
-            // We don't need any instructions here, since we've already loaded the value.
-            // PtrCast just creates separate Symbols and Layouts for the argument and return value.
-            // This is used for pointer math in refcounting and for pointer equality
-        }
         RefCountInc => return BuiltinCall(bitcode::UTILS_INCREF),
         RefCountDec => return BuiltinCall(bitcode::UTILS_DECREF),
+        Eq | NotEq | Hash | PtrCast => {
+            internal_error!("{:?} should be handled in backend.rs", lowlevel)
+        }
     }
     Done
 }

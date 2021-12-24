@@ -1,6 +1,9 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::expect_runtime_error_panic;
+
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to;
 
@@ -362,6 +365,99 @@ fn list_drop_at_shared() {
             RocList::from_slice(&[4, 5, 6]),
         ),
         (RocList<i64>, RocList<i64>,)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_empty_list_of_int() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            empty : List I64
+            empty = []
+
+            List.dropIf empty \_ -> True
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            alwaysTrue : I64 -> Bool
+            alwaysTrue = \_ -> True
+
+            List.dropIf [] alwaysTrue
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_always_false_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> False)
+            "#
+        ),
+        RocList::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_always_true_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> True)
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_geq3() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\n -> n >= 3)
+            "#
+        ),
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_string_eq() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             List.dropIf ["x", "y", "x"] (\s -> s == "y")
+             "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from_slice("x".as_bytes()),
+            RocStr::from_slice("x".as_bytes())
+        ]),
+        RocList<RocStr>
     );
 }
 
@@ -2435,7 +2531,10 @@ fn list_any_empty_with_unknown_element_type() {
     //     Application crashed with message
     //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
     //     Shutting down
-    assert_evals_to!("List.any [] (\\_ -> True)", false, bool);
+    //
+    // TODO: eventually we should insert the empty type for unresolved type
+    // variables, since that means they're unbound.
+    expect_runtime_error_panic!("List.any [] (\\_ -> True)");
 }
 
 #[test]
@@ -2457,7 +2556,10 @@ fn list_all_empty_with_unknown_element_type() {
     //     Application crashed with message
     //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
     //     Shutting down
-    assert_evals_to!("List.all [] (\\_ -> True)", false, bool);
+    //
+    // TODO: eventually we should insert the empty type for unresolved type
+    // variables, since that means they're unbound.
+    expect_runtime_error_panic!("List.all [] (\\_ -> True)");
 }
 
 #[test]

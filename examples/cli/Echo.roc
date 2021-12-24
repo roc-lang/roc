@@ -1,5 +1,3 @@
-#!/usr/bin/env roc
-
 app "echo"
     packages { pf: "platform" }
     imports [ pf.Task.{ Task, await }, pf.Stdout, pf.Stdin ]
@@ -7,11 +5,11 @@ app "echo"
 
 main : Task {} *
 main =
-    {} <- await (Stdout.line "What's your first name?")
+    {  } <- await (Stdout.line "What's your first name?")
 
     firstName <- await Stdin.line
 
-    {} <- await (Stdout.line "What's your last name?")
+    {  } <- await (Stdout.line "What's your last name?")
 
     lastName <- await Stdin.line
 

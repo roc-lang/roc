@@ -12,7 +12,7 @@ use crate::helpers::wasm::assert_evals_to;
 
 #[allow(unused_imports)]
 use indoc::indoc;
-use roc_std::RocStr;
+use roc_std::{RocList, RocStr};
 
 // #[test]
 // fn str_split_empty_delimiter() {
@@ -424,24 +424,24 @@ fn str_ends_with() {
     assert_evals_to!(r#"Str.endsWith "" "hello world""#, false, bool);
 }
 
-// #[test]
-// fn str_count_graphemes_small_str() {
-//     assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
-// }
+#[test]
+fn str_count_graphemes_small_str() {
+    assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
+}
 
-// #[test]
-// fn str_count_graphemes_three_js() {
-//     assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
-// }
+#[test]
+fn str_count_graphemes_three_js() {
+    assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
+}
 
-// #[test]
-// fn str_count_graphemes_big_str() {
-//     assert_evals_to!(
-//         r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
-//         45,
-//         usize
-//     );
-// }
+#[test]
+fn str_count_graphemes_big_str() {
+    assert_evals_to!(
+        r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
+        45,
+        usize
+    );
+}
 
 #[test]
 fn str_starts_with_same_big_str() {
@@ -736,45 +736,45 @@ fn str_equality() {
 //     );
 // }
 
-// #[test]
-// fn str_join_comma_small() {
-//     assert_evals_to!(
-//         r#"Str.joinWith ["1", "2"] ", " "#,
-//         RocStr::from("1, 2"),
-//         RocStr
-//     );
-// }
+#[test]
+fn str_join_comma_small() {
+    assert_evals_to!(
+        r#"Str.joinWith ["1", "2"] ", " "#,
+        RocStr::from("1, 2"),
+        RocStr
+    );
+}
 
-// #[test]
-// fn str_join_comma_big() {
-//     assert_evals_to!(
-//         r#"Str.joinWith ["10000000", "2000000", "30000000"] ", " "#,
-//         RocStr::from("10000000, 2000000, 30000000"),
-//         RocStr
-//     );
-// }
+#[test]
+fn str_join_comma_big() {
+    assert_evals_to!(
+        r#"Str.joinWith ["10000000", "2000000", "30000000"] ", " "#,
+        RocStr::from("10000000, 2000000, 30000000"),
+        RocStr
+    );
+}
 
-// #[test]
-// fn str_join_comma_single() {
-//     assert_evals_to!(r#"Str.joinWith ["1"] ", " "#, RocStr::from("1"), RocStr);
-// }
+#[test]
+fn str_join_comma_single() {
+    assert_evals_to!(r#"Str.joinWith ["1"] ", " "#, RocStr::from("1"), RocStr);
+}
 
-// #[test]
-// fn str_to_utf8() {
-//     assert_evals_to!(
-//         r#"Str.toUtf8 "hello""#,
-//         RocList::from_slice(&[104, 101, 108, 108, 111]),
-//         RocList<u8>
-//     );
-//     assert_evals_to!(
-//         r#"Str.toUtf8 "this is a long string""#,
-//         RocList::from_slice(&[
-//             116, 104, 105, 115, 32, 105, 115, 32, 97, 32, 108, 111, 110, 103, 32, 115, 116, 114,
-//             105, 110, 103
-//         ]),
-//         RocList<u8>
-//     );
-// }
+#[test]
+fn str_to_utf8() {
+    assert_evals_to!(
+        r#"Str.toUtf8 "hello""#,
+        RocList::from_slice(&[104, 101, 108, 108, 111]),
+        RocList<u8>
+    );
+    assert_evals_to!(
+        r#"Str.toUtf8 "this is a long string""#,
+        RocList::from_slice(&[
+            116, 104, 105, 115, 32, 105, 115, 32, 97, 32, 108, 111, 110, 103, 32, 115, 116, 114,
+            105, 110, 103
+        ]),
+        RocList<u8>
+    );
+}
 
 // #[test]
 // fn str_from_utf8_range() {

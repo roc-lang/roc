@@ -1101,6 +1101,8 @@ define_builtins! {
         52 LIST_SPLIT: "split"
         53 LIST_SPLIT_CLOS: "#splitClos"
         54 LIST_ALL: "all"
+        55 LIST_DROP_IF: "dropIf"
+        56 LIST_DROP_IF_PREDICATE: "#dropIfPred"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

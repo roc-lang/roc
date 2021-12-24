@@ -16,3 +16,4 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 pretty_assertions = "1.0.0"
 indoc = "1.0.3"
 roc_test_utils = { path = "../../test_utils" }
+walkdir = "2.3.2"

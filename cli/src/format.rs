@@ -12,7 +12,7 @@ use roc_parse::ast::{
 };
 use roc_parse::header::{
     AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    PackageName, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
 };
 use roc_parse::{
     ast::{Def, Module},
@@ -20,7 +20,7 @@ use roc_parse::{
     parser::{Parser, SyntaxError},
     state::State,
 };
-use roc_region::all::Located;
+use roc_region::all::Loc;
 use roc_reporting::{internal_error, user_error};
 
 pub fn format(files: std::vec::Vec<PathBuf>) {
@@ -106,7 +106,7 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
 #[derive(Debug, PartialEq)]
 struct Ast<'a> {
     module: Module<'a>,
-    defs: Vec<'a, Located<Def<'a>>>,
+    defs: Vec<'a, Loc<Def<'a>>>,
 }
 
 fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
@@ -296,16 +296,7 @@ impl<'a> RemoveSpaces<'a> for PackageEntry<'a> {
         PackageEntry {
             shorthand: self.shorthand,
             spaces_after_shorthand: &[],
-            package_or_path: self.package_or_path.remove_spaces(arena),
-        }
-    }
-}
-
-impl<'a> RemoveSpaces<'a> for PackageOrPath<'a> {
-    fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match *self {
-            PackageOrPath::Package(a, b) => PackageOrPath::Package(a, b),
-            PackageOrPath::Path(p) => PackageOrPath::Path(p.remove_spaces(arena)),
+            package_name: self.package_name.remove_spaces(arena),
         }
     }
 }
@@ -325,10 +316,10 @@ impl<'a, T: RemoveSpaces<'a>> RemoveSpaces<'a> for Option<T> {
     }
 }
 
-impl<'a, T: RemoveSpaces<'a> + std::fmt::Debug> RemoveSpaces<'a> for Located<T> {
+impl<'a, T: RemoveSpaces<'a> + std::fmt::Debug> RemoveSpaces<'a> for Loc<T> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         let res = self.value.remove_spaces(arena);
-        Located::new(0, 0, 0, 0, res)
+        Loc::new(0, 0, 0, 0, res)
     }
 }
 

@@ -4,7 +4,7 @@ use crate::{
     Buf,
 };
 use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
-use roc_region::all::Located;
+use roc_region::all::Loc;
 
 /// Does an AST node need parens around it?
 ///
@@ -83,7 +83,7 @@ where
 }
 
 /// A Located formattable value is also formattable
-impl<T> Formattable for Located<T>
+impl<T> Formattable for Loc<T>
 where
     T: Formattable,
 {

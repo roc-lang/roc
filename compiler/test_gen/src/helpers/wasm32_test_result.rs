@@ -57,7 +57,7 @@ macro_rules! build_wrapper_body_primitive {
             code_builder.$store_instruction($align, 0);
             code_builder.get_local(frame_pointer_id);
 
-            code_builder.build_fn_header(local_types, frame_size, frame_pointer);
+            code_builder.build_fn_header_and_footer(local_types, frame_size, frame_pointer);
         }
     };
 }
@@ -84,7 +84,7 @@ fn build_wrapper_body_stack_memory(
     code_builder.get_local(local_id);
     code_builder.call(main_function_index, main_symbol_index, 0, true);
     code_builder.get_local(local_id);
-    code_builder.build_fn_header(local_types, size as i32, frame_pointer);
+    code_builder.build_fn_header_and_footer(local_types, size as i32, frame_pointer);
 }
 
 macro_rules! wasm_test_result_stack_memory {
@@ -147,7 +147,7 @@ impl Wasm32TestResult for () {
         let main_symbol_index = main_function_index;
         code_builder.call(main_function_index, main_symbol_index, 0, false);
         code_builder.get_global(0);
-        code_builder.build_fn_header(&[], 0, None);
+        code_builder.build_fn_header_and_footer(&[], 0, None);
     }
 }
 

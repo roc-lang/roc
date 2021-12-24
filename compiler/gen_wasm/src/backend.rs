@@ -14,9 +14,9 @@ use roc_mono::ir::{
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_reporting::internal_error;
 
-use crate::layout::{CallConv, ReturnMethod, WasmLayout};
-use crate::low_level::{decode_low_level, LowlevelBuildResult};
-use crate::storage::{Storage, StoredValue, StoredValueKind};
+use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
+use crate::low_level::{dispatch_low_level, LowlevelBuildResult};
+use crate::storage::{StackMemoryLocation, Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
     DataSymbol, LinkingSection, RelocationSection, WasmObjectSymbol, WASM_SYM_BINDING_WEAK,
     WASM_SYM_UNDEFINED,
@@ -26,7 +26,7 @@ use crate::wasm_module::sections::{
     Import, ImportDesc, ImportSection, MemorySection, TypeSection, WasmModule,
 };
 use crate::wasm_module::{
-    code_builder, BlockType, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
+    code_builder, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
     LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
@@ -58,7 +58,6 @@ pub struct WasmBackend<'a> {
     // Function-level data
     code_builder: CodeBuilder<'a>,
     storage: Storage<'a>,
-    symbol_layouts: MutMap<Symbol, Layout<'a>>,
 
     /// how many blocks deep are we (used for jumps)
     block_depth: u32,
@@ -155,7 +154,6 @@ impl<'a> WasmBackend<'a> {
             joinpoint_label_map: MutMap::default(),
             code_builder: CodeBuilder::new(arena),
             storage: Storage::new(arena),
-            symbol_layouts: MutMap::default(),
 
             debug_current_proc_index: 0,
         }
@@ -231,7 +229,6 @@ impl<'a> WasmBackend<'a> {
 
         self.storage.clear();
         self.joinpoint_label_map.clear();
-        self.symbol_layouts.clear();
         assert_eq!(self.block_depth, 0);
     }
 
@@ -269,12 +266,16 @@ impl<'a> WasmBackend<'a> {
 
         // Create a block so we can exit the function without skipping stack frame "pop" code.
         // We never use the `return` instruction. Instead, we break from this block.
-        self.start_block(BlockType::from(ret_type));
+        self.start_block();
 
         for (layout, symbol) in proc.args {
-            let arg_layout = WasmLayout::new(layout);
             self.storage
-                .allocate(&arg_layout, *symbol, StoredValueKind::Parameter);
+                .allocate(*layout, *symbol, StoredValueKind::Parameter);
+        }
+
+        if let Some(ty) = ret_type {
+            let ret_var = self.storage.create_anonymous_local(ty);
+            self.storage.return_var = Some(ret_var);
         }
 
         self.module.add_function_signature(Signature {
@@ -287,8 +288,12 @@ impl<'a> WasmBackend<'a> {
         // end the block from start_proc, to ensure all paths pop stack memory (if any)
         self.end_block();
 
+        if let Some(ret_var) = self.storage.return_var {
+            self.code_builder.get_local(ret_var);
+        }
+
         // Write local declarations and stack frame push/pop code
-        self.code_builder.build_fn_header(
+        self.code_builder.build_fn_header_and_footer(
             &self.storage.local_types,
             self.storage.stack_frame_size,
             self.storage.stack_frame_pointer,
@@ -301,14 +306,18 @@ impl<'a> WasmBackend<'a> {
 
     ***********************************************************/
 
-    fn start_loop(&mut self, block_type: BlockType) {
+    fn start_block(&mut self) {
+        // Wasm blocks can have result types, but we don't use them.
+        // You need the right type on the stack when you jump from an inner block to an outer one.
+        // The rules are confusing, and implementing them would add complexity and slow down code gen.
+        // Instead we use local variables to move a value from an inner block to an outer one.
         self.block_depth += 1;
-        self.code_builder.loop_(block_type);
+        self.code_builder.block();
     }
 
-    fn start_block(&mut self, block_type: BlockType) {
+    fn start_loop(&mut self) {
         self.block_depth += 1;
-        self.code_builder.block(block_type);
+        self.code_builder.loop_();
     }
 
     fn end_block(&mut self) {
@@ -323,9 +332,7 @@ impl<'a> WasmBackend<'a> {
         expr: &Expr<'a>,
         kind: StoredValueKind,
     ) {
-        let wasm_layout = WasmLayout::new(layout);
-
-        let sym_storage = self.storage.allocate(&wasm_layout, sym, kind);
+        let sym_storage = self.storage.allocate(*layout, sym, kind);
 
         self.build_expr(&sym, expr, layout, &sym_storage);
 
@@ -336,8 +343,6 @@ impl<'a> WasmBackend<'a> {
         {
             *vm_state = self.code_builder.set_top_symbol(sym);
         }
-
-        self.symbol_layouts.insert(sym, *layout);
     }
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
@@ -389,6 +394,12 @@ impl<'a> WasmBackend<'a> {
 
                     _ => {
                         self.storage.load_symbols(&mut self.code_builder, &[*sym]);
+
+                        // If we have a return value, store it to the return variable
+                        // This avoids complications with block result types when returning from nested blocks
+                        if let Some(ret_var) = self.storage.return_var {
+                            self.code_builder.set_local(ret_var);
+                        }
                     }
                 }
                 // jump to the "stack frame pop" code at the end of the function
@@ -417,7 +428,7 @@ impl<'a> WasmBackend<'a> {
 
                 // create a block for each branch except the default
                 for _ in 0..branches.len() {
-                    self.start_block(BlockType::NoResult)
+                    self.start_block()
                 }
 
                 let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Bool));
@@ -480,9 +491,8 @@ impl<'a> WasmBackend<'a> {
                 // make locals for join pointer parameters
                 let mut jp_param_storages = Vec::with_capacity_in(parameters.len(), self.env.arena);
                 for parameter in parameters.iter() {
-                    let wasm_layout = WasmLayout::new(&parameter.layout);
                     let mut param_storage = self.storage.allocate(
-                        &wasm_layout,
+                        parameter.layout,
                         parameter.symbol,
                         StoredValueKind::Variable,
                     );
@@ -494,7 +504,7 @@ impl<'a> WasmBackend<'a> {
                     jp_param_storages.push(param_storage);
                 }
 
-                self.start_block(BlockType::NoResult);
+                self.start_block();
 
                 self.joinpoint_label_map
                     .insert(*id, (self.block_depth, jp_param_storages));
@@ -502,15 +512,7 @@ impl<'a> WasmBackend<'a> {
                 self.build_stmt(remainder, ret_layout);
 
                 self.end_block();
-
-                // A loop (or any block) needs to declare the type of the value it leaves on the stack on exit.
-                // The runtime needs this to statically validate the program before running it.
-                let loop_block_type = match WasmLayout::new(ret_layout).return_method() {
-                    ReturnMethod::Primitive(ty) => BlockType::Value(ty),
-                    ReturnMethod::WriteToPointerArg => BlockType::NoResult,
-                    ReturnMethod::NoReturnValue => BlockType::NoResult,
-                };
-                self.start_loop(loop_block_type);
+                self.start_loop();
 
                 self.build_stmt(body, ret_layout);
 
@@ -537,7 +539,7 @@ impl<'a> WasmBackend<'a> {
 
             Stmt::Refcounting(modify, following) => {
                 let value = modify.get_symbol();
-                let layout = self.symbol_layouts.get(&value).unwrap();
+                let layout = self.storage.symbol_layouts[&value];
 
                 let ident_ids = self
                     .interns
@@ -547,7 +549,7 @@ impl<'a> WasmBackend<'a> {
 
                 let (rc_stmt, new_specializations) = self
                     .helper_proc_gen
-                    .expand_refcount_stmt(ident_ids, *layout, modify, *following);
+                    .expand_refcount_stmt(ident_ids, layout, modify, *following);
 
                 if false {
                     self.register_symbol_debug_names();
@@ -645,21 +647,34 @@ impl<'a> WasmBackend<'a> {
                 field_layouts,
                 structure,
             } => {
-                if let StoredValue::StackMemory { location, .. } = self.storage.get(structure) {
-                    let (local_id, mut offset) =
-                        location.local_and_offset(self.storage.stack_frame_pointer);
-                    for field in field_layouts.iter().take(*index as usize) {
-                        offset += field.stack_size(PTR_SIZE);
+                self.storage.ensure_value_has_local(
+                    &mut self.code_builder,
+                    *sym,
+                    storage.to_owned(),
+                );
+                let (local_id, mut offset) = match self.storage.get(structure) {
+                    StoredValue::StackMemory { location, .. } => {
+                        location.local_and_offset(self.storage.stack_frame_pointer)
                     }
-                    self.storage.copy_value_from_memory(
-                        &mut self.code_builder,
-                        *sym,
+
+                    StoredValue::Local {
+                        value_type,
                         local_id,
-                        offset,
-                    );
-                } else {
-                    internal_error!("Unexpected storage for {:?}", structure)
+                        ..
+                    } => {
+                        debug_assert!(matches!(value_type, ValueType::I32));
+                        (*local_id, 0)
+                    }
+
+                    StoredValue::VirtualMachineStack { .. } => {
+                        internal_error!("ensure_value_has_local didn't work")
+                    }
+                };
+                for field in field_layouts.iter().take(*index as usize) {
+                    offset += field.stack_size(PTR_SIZE);
                 }
+                self.storage
+                    .copy_value_from_memory(&mut self.code_builder, *sym, local_id, offset);
             }
 
             Expr::Array { elems, elem_layout } => {
@@ -751,7 +766,7 @@ impl<'a> WasmBackend<'a> {
             Expr::GetTagId {
                 structure,
                 union_layout,
-            } => self.build_get_tag_id(*structure, union_layout),
+            } => self.build_get_tag_id(*structure, union_layout, *sym, storage),
 
             Expr::UnionAtIndex {
                 structure,
@@ -845,35 +860,52 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn build_get_tag_id(&mut self, structure: Symbol, union_layout: &UnionLayout<'a>) {
+    fn build_get_tag_id(
+        &mut self,
+        structure: Symbol,
+        union_layout: &UnionLayout<'a>,
+        tag_id_symbol: Symbol,
+        stored_value: &StoredValue,
+    ) {
         use UnionLayout::*;
 
-        let mut need_to_close_block = false;
-        match union_layout {
-            NonRecursive(_) => {}
-            Recursive(_) => {}
+        let block_result_id = match union_layout {
+            NonRecursive(_) => None,
+            Recursive(_) => None,
             NonNullableUnwrapped(_) => {
                 self.code_builder.i32_const(0);
                 return;
             }
             NullableWrapped { nullable_id, .. } => {
+                let stored_with_local = self.storage.ensure_value_has_local(
+                    &mut self.code_builder,
+                    tag_id_symbol,
+                    stored_value.to_owned(),
+                );
+                let local_id = match stored_with_local {
+                    StoredValue::Local { local_id, .. } => local_id,
+                    _ => internal_error!("ensure_value_has_local didn't work"),
+                };
+
+                // load pointer
                 self.storage
                     .load_symbols(&mut self.code_builder, &[structure]);
+
+                // null check
                 self.code_builder.i32_eqz();
-                self.code_builder.if_(BlockType::Value(ValueType::I32));
+                self.code_builder.if_();
                 self.code_builder.i32_const(*nullable_id as i32);
+                self.code_builder.set_local(local_id);
                 self.code_builder.else_();
-                need_to_close_block = true;
+                Some(local_id)
             }
             NullableUnwrapped { nullable_id, .. } => {
+                self.code_builder.i32_const(!(*nullable_id) as i32);
+                self.code_builder.i32_const(*nullable_id as i32);
                 self.storage
                     .load_symbols(&mut self.code_builder, &[structure]);
-                self.code_builder.i32_eqz();
-                self.code_builder.if_(BlockType::Value(ValueType::I32));
-                self.code_builder.i32_const(*nullable_id as i32);
-                self.code_builder.else_();
-                self.code_builder.i32_const(!(*nullable_id) as i32);
-                self.code_builder.end();
+                self.code_builder.select();
+                None
             }
         };
 
@@ -901,7 +933,8 @@ impl<'a> WasmBackend<'a> {
             self.code_builder.i32_and();
         }
 
-        if need_to_close_block {
+        if let Some(local_id) = block_result_id {
+            self.code_builder.set_local(local_id);
             self.code_builder.end();
         }
     }
@@ -1024,75 +1057,245 @@ impl<'a> WasmBackend<'a> {
         return_layout: WasmLayout,
         storage: &StoredValue,
     ) {
-        let (param_types, ret_type) = self.storage.load_symbols_for_call(
-            self.env.arena,
-            &mut self.code_builder,
-            arguments,
-            return_sym,
-            &return_layout,
-            CallConv::Zig,
-        );
+        use LowLevel::*;
 
-        let build_result = decode_low_level(
-            &mut self.code_builder,
-            &mut self.storage,
-            lowlevel,
-            arguments,
-            &return_layout,
-        );
-        use LowlevelBuildResult::*;
-
-        match build_result {
-            Done => {}
-            BuiltinCall(name) => {
-                self.call_zig_builtin(name, param_types, ret_type);
+        match lowlevel {
+            Eq | NotEq => self.build_eq(lowlevel, arguments, return_sym, return_layout, storage),
+            PtrCast => {
+                // Don't want Zig calling convention when casting pointers.
+                self.storage.load_symbols(&mut self.code_builder, arguments);
             }
-            SpecializedEq | SpecializedNotEq => {
-                let layout = self.symbol_layouts[&arguments[0]];
-                let layout_rhs = self.symbol_layouts[&arguments[1]];
-                debug_assert!(
-                    layout == layout_rhs,
-                    "Cannot do `==` comparison on different types"
+            Hash => todo!("Generic hash function generation"),
+
+            // Almost all lowlevels take this branch, except for the special cases above
+            _ => {
+                // Load the arguments using Zig calling convention
+                let (param_types, ret_type) = self.storage.load_symbols_for_call(
+                    self.env.arena,
+                    &mut self.code_builder,
+                    arguments,
+                    return_sym,
+                    &return_layout,
+                    CallConv::Zig,
                 );
 
-                if layout == Layout::Builtin(Builtin::Str) {
-                    self.call_zig_builtin(bitcode::STR_EQUAL, param_types, ret_type);
-                } else if layout.stack_size(PTR_SIZE) == 0 {
-                    // If the layout has zero size, and it type-checks, the values must be equal
-                    let value = matches!(build_result, SpecializedEq);
-                    self.code_builder.i32_const(value as i32);
-                    return;
-                } else {
-                    let ident_ids = self
-                        .interns
-                        .all_ident_ids
-                        .get_mut(&self.env.module_id)
-                        .unwrap();
+                // Generate instructions OR decide which Zig function to call
+                let build_result = dispatch_low_level(
+                    &mut self.code_builder,
+                    &mut self.storage,
+                    lowlevel,
+                    arguments,
+                    &return_layout,
+                );
 
-                    let (replacement_expr, new_specializations) = self
-                        .helper_proc_gen
-                        .specialize_equals(ident_ids, &layout, arguments);
-
-                    // If any new specializations were created, register their symbol data
-                    for spec in new_specializations.into_iter() {
-                        self.register_helper_proc(spec);
+                // Handle the result
+                use LowlevelBuildResult::*;
+                match build_result {
+                    Done => {}
+                    BuiltinCall(name) => {
+                        self.call_zig_builtin(name, param_types, ret_type);
                     }
-
-                    let bool_layout = Layout::Builtin(Builtin::Bool);
-                    self.build_expr(&return_sym, replacement_expr, &bool_layout, storage);
+                    NotImplemented => {
+                        todo!("Low level operation {:?}", lowlevel)
+                    }
                 }
+            }
+        }
+    }
 
-                if matches!(build_result, SpecializedNotEq) {
+    fn build_eq(
+        &mut self,
+        lowlevel: LowLevel,
+        arguments: &'a [Symbol],
+        return_sym: Symbol,
+        return_layout: WasmLayout,
+        storage: &StoredValue,
+    ) {
+        let arg_layout = self.storage.symbol_layouts[&arguments[0]];
+        let other_arg_layout = self.storage.symbol_layouts[&arguments[1]];
+        debug_assert!(
+            arg_layout == other_arg_layout,
+            "Cannot do `==` comparison on different types"
+        );
+
+        match arg_layout {
+            Layout::Builtin(
+                Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
+            ) => self.build_eq_number(lowlevel, arguments, return_layout),
+
+            Layout::Builtin(Builtin::Str) => {
+                let (param_types, ret_type) = self.storage.load_symbols_for_call(
+                    self.env.arena,
+                    &mut self.code_builder,
+                    arguments,
+                    return_sym,
+                    &return_layout,
+                    CallConv::Zig,
+                );
+                self.call_zig_builtin(bitcode::STR_EQUAL, param_types, ret_type);
+                if matches!(lowlevel, LowLevel::NotEq) {
                     self.code_builder.i32_eqz();
                 }
             }
-            SpecializedHash => {
-                todo!("Specialized hash functions")
+
+            Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
+            | Layout::Struct(_)
+            | Layout::Union(_)
+            | Layout::LambdaSet(_) => {
+                if arg_layout.stack_size(PTR_SIZE) == 0 {
+                    // A zero-size type has only one possible value, like `{}` or `Unit`
+                    // The arguments don't exist at runtime. Just emit True (Eq) or False (NotEq).
+                    let result = matches!(lowlevel, LowLevel::Eq);
+                    self.code_builder.i32_const(result as i32);
+                } else {
+                    self.build_eq_specialized(&arg_layout, arguments, return_sym, storage);
+                    if matches!(lowlevel, LowLevel::NotEq) {
+                        self.code_builder.i32_eqz();
+                    }
+                }
             }
-            NotImplemented => {
-                todo!("Low level operation {:?}", lowlevel)
+
+            Layout::RecursivePointer => {
+                internal_error!("`==` on RecursivePointer should be converted to the parent layout")
             }
         }
+    }
+
+    fn build_eq_number(
+        &mut self,
+        lowlevel: LowLevel,
+        arguments: &'a [Symbol],
+        return_layout: WasmLayout,
+    ) {
+        use StoredValue::*;
+        match self.storage.get(&arguments[0]).to_owned() {
+            VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+                self.storage.load_symbols(&mut self.code_builder, arguments);
+                match lowlevel {
+                    LowLevel::Eq => match value_type {
+                        ValueType::I32 => self.code_builder.i32_eq(),
+                        ValueType::I64 => self.code_builder.i64_eq(),
+                        ValueType::F32 => self.code_builder.f32_eq(),
+                        ValueType::F64 => self.code_builder.f64_eq(),
+                    },
+                    LowLevel::NotEq => match value_type {
+                        ValueType::I32 => self.code_builder.i32_ne(),
+                        ValueType::I64 => self.code_builder.i64_ne(),
+                        ValueType::F32 => self.code_builder.f32_ne(),
+                        ValueType::F64 => self.code_builder.f64_ne(),
+                    },
+                    _ => internal_error!("Low-level op {:?} handled in the wrong place", lowlevel),
+                }
+            }
+            StackMemory {
+                format,
+                location: location0,
+                ..
+            } => {
+                if let StackMemory {
+                    location: location1,
+                    ..
+                } = self.storage.get(&arguments[1]).to_owned()
+                {
+                    self.build_eq_num128(format, [location0, location1], arguments, return_layout);
+                    if matches!(lowlevel, LowLevel::NotEq) {
+                        self.code_builder.i32_eqz();
+                    }
+                }
+            }
+        }
+    }
+
+    fn build_eq_num128(
+        &mut self,
+        format: StackMemoryFormat,
+        locations: [StackMemoryLocation; 2],
+        arguments: &'a [Symbol],
+        return_layout: WasmLayout,
+    ) {
+        match format {
+            StackMemoryFormat::Decimal => {
+                // Both args are finite
+                let first = [arguments[0]];
+                let second = [arguments[1]];
+                dispatch_low_level(
+                    &mut self.code_builder,
+                    &mut self.storage,
+                    LowLevel::NumIsFinite,
+                    &first,
+                    &return_layout,
+                );
+                dispatch_low_level(
+                    &mut self.code_builder,
+                    &mut self.storage,
+                    LowLevel::NumIsFinite,
+                    &second,
+                    &return_layout,
+                );
+                self.code_builder.i32_and();
+
+                // AND they have the same bytes
+                self.build_eq_num128_bytes(locations);
+                self.code_builder.i32_and();
+            }
+
+            StackMemoryFormat::Int128 => self.build_eq_num128_bytes(locations),
+
+            StackMemoryFormat::Float128 => todo!("equality for f128"),
+
+            StackMemoryFormat::DataStructure => {
+                internal_error!("Data structure equality is handled elsewhere")
+            }
+        }
+    }
+
+    /// Check that two 128-bit numbers contain the same bytes
+    fn build_eq_num128_bytes(&mut self, locations: [StackMemoryLocation; 2]) {
+        let (local0, offset0) = locations[0].local_and_offset(self.storage.stack_frame_pointer);
+        let (local1, offset1) = locations[1].local_and_offset(self.storage.stack_frame_pointer);
+
+        self.code_builder.get_local(local0);
+        self.code_builder.i64_load(Align::Bytes8, offset0);
+        self.code_builder.get_local(local1);
+        self.code_builder.i64_load(Align::Bytes8, offset1);
+        self.code_builder.i64_eq();
+
+        self.code_builder.get_local(local0);
+        self.code_builder.i64_load(Align::Bytes8, offset0 + 8);
+        self.code_builder.get_local(local1);
+        self.code_builder.i64_load(Align::Bytes8, offset1 + 8);
+        self.code_builder.i64_eq();
+
+        self.code_builder.i32_and();
+    }
+
+    /// Call a helper procedure that implements `==` for a specific data structure
+    fn build_eq_specialized(
+        &mut self,
+        arg_layout: &Layout<'a>,
+        arguments: &'a [Symbol],
+        return_sym: Symbol,
+        storage: &StoredValue,
+    ) {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        // Get an IR expression for the call to the specialized procedure
+        let (specialized_call_expr, new_specializations) = self
+            .helper_proc_gen
+            .call_specialized_equals(ident_ids, arg_layout, arguments);
+
+        // If any new specializations were created, register their symbol data
+        for spec in new_specializations.into_iter() {
+            self.register_helper_proc(spec);
+        }
+
+        // Generate Wasm code for the IR call expression
+        let bool_layout = Layout::Builtin(Builtin::Bool);
+        self.build_expr(&return_sym, specialized_call_expr, &bool_layout, storage);
     }
 
     fn load_literal(

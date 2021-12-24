@@ -1167,6 +1167,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1))),
     );
 
+    // dropIf : List elem, (elem -> Bool) -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_DROP_IF,
+        vec![
+            list_type(flex(TVAR1)),
+            closure(vec![flex(TVAR1)], TVAR2, Box::new(bool_type())),
+        ],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
     // swap : List elem, Nat, Nat -> List elem
     add_top_level_function_type!(
         Symbol::LIST_SWAP,

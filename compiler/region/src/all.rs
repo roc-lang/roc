@@ -1,14 +1,11 @@
-use std::fmt;
-
-/// TODO replace Located with this
-pub type Loc<T> = Located<T>;
+use std::fmt::{self, Debug};
 
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 pub struct Region {
-    pub start_line: u32,
-    pub end_line: u32,
-    pub start_col: u16,
-    pub end_col: u16,
+    start_line: u32,
+    end_line: u32,
+    start_col: u16,
+    end_col: u16,
 }
 
 impl Region {
@@ -21,12 +18,12 @@ impl Region {
         }
     }
 
-    pub const fn new(start_line: u32, end_line: u32, start_col: u16, end_col: u16) -> Self {
+    pub const fn new(start: Position, end: Position) -> Self {
         Self {
-            start_line,
-            end_line,
-            start_col,
-            end_col,
+            start_line: start.line,
+            end_line: end.line,
+            start_col: start.column,
+            end_col: end.column,
         }
     }
 
@@ -90,12 +87,12 @@ impl Region {
         }
     }
 
-    pub const fn from_row_col(row: u32, col: u16) -> Self {
+    pub const fn from_pos(pos: Position) -> Self {
         Region {
-            start_col: col,
-            start_line: row,
-            end_col: col + 1,
-            end_line: row,
+            start_col: pos.column,
+            start_line: pos.line,
+            end_col: pos.column + 1,
+            end_line: pos.line,
         }
     }
 
@@ -115,20 +112,20 @@ impl Region {
 
     pub const fn start(&self) -> Position {
         Position {
-            row: self.start_line,
-            col: self.start_col,
+            line: self.start_line,
+            column: self.start_col,
         }
     }
 
     pub const fn end(&self) -> Position {
         Position {
-            row: self.end_line,
-            col: self.end_col,
+            line: self.end_line,
+            column: self.end_col,
         }
     }
 
     pub const fn between(start: Position, end: Position) -> Self {
-        Self::from_rows_cols(start.row, start.col, end.row, end.col)
+        Self::from_rows_cols(start.line, start.column, end.line, end.column)
     }
 }
 
@@ -155,65 +152,74 @@ impl fmt::Debug for Region {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 pub struct Position {
-    pub row: u32,
-    pub col: u16,
+    pub line: u32,
+    pub column: u16,
+}
+
+impl Position {
+    pub fn bump_column(self, count: u16) -> Self {
+        Self {
+            line: self.line,
+            column: self.column + count,
+        }
+    }
+}
+
+impl Debug for Position {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.line, self.column)
+    }
 }
 
 #[derive(Clone, Eq, Copy, PartialEq, PartialOrd, Ord, Hash)]
-pub struct Located<T> {
+pub struct Loc<T> {
     pub region: Region,
     pub value: T,
 }
 
-impl<T> Located<T> {
-    pub fn new(
-        start_line: u32,
-        end_line: u32,
-        start_col: u16,
-        end_col: u16,
-        value: T,
-    ) -> Located<T> {
+impl<T> Loc<T> {
+    pub fn new(start_line: u32, end_line: u32, start_col: u16, end_col: u16, value: T) -> Loc<T> {
         let region = Region {
             start_line,
             end_line,
             start_col,
             end_col,
         };
-        Located { region, value }
+        Loc { region, value }
     }
 
-    pub fn at(region: Region, value: T) -> Located<T> {
-        Located { region, value }
+    pub fn at(region: Region, value: T) -> Loc<T> {
+        Loc { region, value }
     }
 
-    pub fn at_zero(value: T) -> Located<T> {
+    pub fn at_zero(value: T) -> Loc<T> {
         let region = Region::zero();
-        Located { region, value }
+        Loc { region, value }
     }
 }
 
-impl<T> Located<T> {
-    pub fn with_value<U>(&self, value: U) -> Located<U> {
-        Located {
+impl<T> Loc<T> {
+    pub fn with_value<U>(&self, value: U) -> Loc<U> {
+        Loc {
             region: self.region,
             value,
         }
     }
 
-    pub fn map<U, F>(&self, transform: F) -> Located<U>
+    pub fn map<U, F>(&self, transform: F) -> Loc<U>
     where
         F: (FnOnce(&T) -> U),
     {
-        Located {
+        Loc {
             region: self.region,
             value: transform(&self.value),
         }
     }
 }
 
-impl<T> fmt::Debug for Located<T>
+impl<T> fmt::Debug for Loc<T>
 where
     T: fmt::Debug,
 {
