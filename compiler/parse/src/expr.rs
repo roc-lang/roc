@@ -339,7 +339,7 @@ fn parse_expr_operator_chain<'a>(
         loc_possibly_negative_or_negated_term(min_indent, options).parse(arena, state)?;
 
     let initial = state.clone();
-    let end = state.get_position();
+    let end = state.pos();
 
     match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
         Err((_, _, state)) => Ok((MadeProgress, expr.value, state)),
@@ -732,7 +732,7 @@ fn append_expect_definition<'a>(
     let def = Def::Expect(arena.alloc(loc_expect_body));
 
     let end = loc_expect_body.region.end();
-    let region = Region::between(start, end);
+    let region = Region::new(start, end);
 
     let mut loc_def = Loc::at(region, def);
 
@@ -799,7 +799,7 @@ fn parse_defs_end<'a>(
         Err((NoProgress, _, state)) => state,
     };
 
-    let start = state.get_position();
+    let start = state.pos();
 
     match space0_after_e(
         crate::pattern::loc_pattern_help(min_indent),
@@ -949,13 +949,13 @@ fn parse_expr_operator<'a>(
     let op = loc_op.value;
     let op_start = loc_op.region.start();
     let op_end = loc_op.region.end();
-    let new_start = state.get_position();
+    let new_start = state.pos();
     match op {
         BinOp::Minus if expr_state.end != op_start && op_end == new_start => {
             // negative terms
 
             let (_, negated_expr, state) = parse_loc_term(min_indent, options, arena, state)?;
-            let new_end = state.get_position();
+            let new_end = state.pos();
 
             let arg = numeric_negate_expression(
                 arena,
@@ -1175,7 +1175,7 @@ fn parse_expr_operator<'a>(
         _ => match loc_possibly_negative_or_negated_term(min_indent, options).parse(arena, state) {
             Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
             Ok((_, mut new_expr, state)) => {
-                let new_end = state.get_position();
+                let new_end = state.pos();
 
                 expr_state.initial = state.clone();
 
@@ -1237,7 +1237,7 @@ fn parse_expr_end<'a>(
     match parser.parse(arena, state.clone()) {
         Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
         Ok((_, mut arg, state)) => {
-            let new_end = state.get_position();
+            let new_end = state.pos();
 
             // now that we have `function arg1 ... <spaces> argn`, attach the spaces to the `argn`
             if !expr_state.spaces_after.is_empty() {
@@ -1393,7 +1393,7 @@ fn parse_loc_expr_with_options<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    let start = state.get_position();
+    let start = state.pos();
     parse_expr_start(min_indent, options, start, arena, state)
 }
 
@@ -1541,7 +1541,7 @@ pub fn defs<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, EExpr
         let (_, initial_space, state) =
             space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
 
-        let start = state.get_position();
+        let start = state.pos();
 
         let options = ExprParseOptions {
             accept_multi_backpassing: false,
@@ -1966,7 +1966,7 @@ fn expect_help<'a>(
     options: ExprParseOptions,
 ) -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let start = state.get_position();
+        let start = state.pos();
 
         let (_, _, state) =
             parser::keyword_e(keyword::EXPECT, EExpect::Expect).parse(arena, state)?;

@@ -20,7 +20,7 @@ use roc_parse::{
     parser::{Parser, SyntaxError},
     state::State,
 };
-use roc_region::all::Loc;
+use roc_region::all::{Loc, Region};
 use roc_reporting::{internal_error, user_error};
 
 pub fn format(files: std::vec::Vec<PathBuf>) {
@@ -319,7 +319,7 @@ impl<'a, T: RemoveSpaces<'a>> RemoveSpaces<'a> for Option<T> {
 impl<'a, T: RemoveSpaces<'a> + std::fmt::Debug> RemoveSpaces<'a> for Loc<T> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         let res = self.value.remove_spaces(arena);
-        Loc::new(0, 0, 0, 0, res)
+        Loc::at(Region::zero(), res)
     }
 }
 

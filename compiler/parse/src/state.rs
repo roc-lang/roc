@@ -39,8 +39,7 @@ impl<'a> State<'a> {
     }
 
     /// Returns the current position
-    // TODO: replace this with just accessing the field
-    pub const fn get_position(&self) -> Position {
+    pub const fn pos(&self) -> Position {
         self.pos
     }
 
