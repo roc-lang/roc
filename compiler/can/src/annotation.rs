@@ -102,6 +102,40 @@ pub fn canonicalize_annotation(
     }
 }
 
+fn make_apply_symbol(
+    env: &mut Env,
+    region: Region,
+    scope: &mut Scope,
+    module_name: &str,
+    ident: &str,
+) -> Result<Symbol, Type> {
+    if module_name.is_empty() {
+        // Since module_name was empty, this is an unqualified type.
+        // Look it up in scope!
+        let ident: Ident = (*ident).into();
+
+        match scope.lookup(&ident, region) {
+            Ok(symbol) => Ok(symbol),
+            Err(problem) => {
+                env.problem(roc_problem::can::Problem::RuntimeError(problem));
+
+                Err(Type::Erroneous(Problem::UnrecognizedIdent(ident)))
+            }
+        }
+    } else {
+        match env.qualified_lookup(module_name, ident, region) {
+            Ok(symbol) => Ok(symbol),
+            Err(problem) => {
+                // Either the module wasn't imported, or
+                // it was imported but it doesn't expose this ident.
+                env.problem(roc_problem::can::Problem::RuntimeError(problem));
+
+                Err(Type::Erroneous(Problem::UnrecognizedIdent((*ident).into())))
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn can_annotation_help(
     env: &mut Env,
@@ -150,30 +184,9 @@ fn can_annotation_help(
             Type::Function(args, Box::new(closure), Box::new(ret))
         }
         Apply(module_name, ident, type_arguments) => {
-            let symbol = if module_name.is_empty() {
-                // Since module_name was empty, this is an unqualified type.
-                // Look it up in scope!
-                let ident: Ident = (*ident).into();
-
-                match scope.lookup(&ident, region) {
-                    Ok(symbol) => symbol,
-                    Err(problem) => {
-                        env.problem(roc_problem::can::Problem::RuntimeError(problem));
-
-                        return Type::Erroneous(Problem::UnrecognizedIdent(ident));
-                    }
-                }
-            } else {
-                match env.qualified_lookup(module_name, ident, region) {
-                    Ok(symbol) => symbol,
-                    Err(problem) => {
-                        // Either the module wasn't imported, or
-                        // it was imported but it doesn't expose this ident.
-                        env.problem(roc_problem::can::Problem::RuntimeError(problem));
-
-                        return Type::Erroneous(Problem::UnrecognizedIdent((*ident).into()));
-                    }
-                }
+            let symbol = match make_apply_symbol(env, region, scope, module_name, ident) {
+                Err(problem) => return problem,
+                Ok(symbol) => symbol,
             };
 
             let mut args = Vec::new();

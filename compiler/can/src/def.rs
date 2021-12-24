@@ -179,6 +179,7 @@ pub fn canonicalize_defs<'a>(
     let mut aliases = SendMap::default();
     let mut value_defs = Vec::new();
 
+    println!("anew");
     for pending_def in pending.into_iter() {
         match pending_def {
             PendingDef::Alias { name, vars, ann } => {
@@ -233,6 +234,7 @@ pub fn canonicalize_defs<'a>(
                     );
                 }
 
+                dbg!(symbol);
                 scope.add_alias(symbol, ann.region, can_vars.clone(), can_ann.typ.clone());
                 let alias = scope.lookup_alias(symbol).expect("alias is added to scope");
                 aliases.insert(symbol, alias.clone());
@@ -917,6 +919,7 @@ fn canonicalize_pending_def<'a>(
                 }
             }
 
+            dbg!(symbol);
             scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
 
             if can_ann.typ.contains_symbol(symbol) {
@@ -927,6 +930,7 @@ fn canonicalize_pending_def<'a>(
                     let mut rec_type_union = Type::RecursiveTagUnion(rec_var, tags, ext);
                     rec_type_union.substitute_alias(symbol, &Type::Variable(rec_var));
 
+                    dbg!(symbol);
                     scope.add_alias(symbol, name.region, can_vars, rec_type_union);
                 } else {
                     env.problems
