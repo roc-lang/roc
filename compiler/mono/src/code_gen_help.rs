@@ -41,6 +41,7 @@ impl From<&ModifyRc> for HelperOp {
     }
 }
 
+#[derive(Debug)]
 struct SpecializedProc<'a> {
     op: HelperOp,
     layout: Layout<'a>,
@@ -285,8 +286,6 @@ impl<'a> CodeGenHelp<'a> {
     ) -> Symbol {
         use HelperOp::*;
 
-        let mut new_procs_info = Vec::new_in(self.arena);
-
         let found = self
             .specialized_procs
             .iter()
@@ -297,7 +296,7 @@ impl<'a> CodeGenHelp<'a> {
         }
 
         let (proc_symbol, proc_layout) = self.create_proc_symbol(ident_ids, ctx, &layout);
-        new_procs_info.push((proc_symbol, proc_layout));
+        ctx.new_linker_data.push((proc_symbol, proc_layout));
 
         // Generate the body of the Proc
         let (ret_layout, body) = match ctx.op {
@@ -342,7 +341,7 @@ impl<'a> CodeGenHelp<'a> {
         ident_ids: &mut IdentIds,
         ctx: &mut Context<'a>,
         layout: &Layout<'a>,
-    ) -> (Symbol, Option<ProcLayout<'a>>) {
+    ) -> (Symbol, ProcLayout<'a>) {
         let layout_name = layout_debug_name(layout);
         let debug_name = format!(
             "#help{:?}_{}_{}",
@@ -353,19 +352,19 @@ impl<'a> CodeGenHelp<'a> {
         let proc_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
 
         let proc_layout = match ctx.op {
-            HelperOp::Inc => Some(ProcLayout {
+            HelperOp::Inc => ProcLayout {
                 arguments: self.arena.alloc([*layout, self.layout_isize]),
                 result: LAYOUT_UNIT,
-            }),
-            HelperOp::Dec => Some(ProcLayout {
+            },
+            HelperOp::Dec => ProcLayout {
                 arguments: self.arena.alloc([*layout]),
                 result: LAYOUT_UNIT,
-            }),
-            HelperOp::DecRef => None,
-            HelperOp::Eq => Some(ProcLayout {
+            },
+            HelperOp::DecRef => unreachable!("No generated Proc for DecRef"),
+            HelperOp::Eq => ProcLayout {
                 arguments: self.arena.alloc([*layout, *layout]),
                 result: LAYOUT_BOOL,
-            }),
+            },
         };
 
         (proc_symbol, proc_layout)
