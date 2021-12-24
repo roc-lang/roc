@@ -629,69 +629,63 @@ fn solve(
                 }
             }
         }
-        Present(typ, constr) => {
+        Present(typ, PresenceConstraint::IsOpen) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-            match constr {
-                PresenceConstraint::IsOpen => {
-                    let mut new_desc = subs.get(actual);
-                    match new_desc.content {
-                        Content::Structure(FlatType::TagUnion(tags, _)) => {
-                            let new_ext = subs.fresh_unnamed_flex_var();
-                            let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
-                            new_desc.content = new_union;
-                            subs.set(actual, new_desc);
-                            state
-                        }
-                        _ => {
-                            // Today, an "open" constraint doesn't affect any types
-                            // other than tag unions. Recursive tag unions are constructed
-                            // at a later time (during occurs checks after tag unions are
-                            // resolved), so that's not handled here either.
-                            // NB: Handle record types here if we add presence constraints
-                            // to their type inference as well.
-                            state
-                        }
-                    }
+            let mut new_desc = subs.get(actual);
+            match new_desc.content {
+                Content::Structure(FlatType::TagUnion(tags, _)) => {
+                    let new_ext = subs.fresh_unnamed_flex_var();
+                    let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
+                    new_desc.content = new_union;
+                    subs.set(actual, new_desc);
+                    state
                 }
-                PresenceConstraint::IncludesTag(tag_name, tys) => {
-                    let tag_ty = Type::TagUnion(
-                        vec![(tag_name.clone(), tys.clone())],
-                        Box::new(Type::EmptyTagUnion),
+                _ => {
+                    // Today, an "open" constraint doesn't affect any types
+                    // other than tag unions. Recursive tag unions are constructed
+                    // at a later time (during occurs checks after tag unions are
+                    // resolved), so that's not handled here either.
+                    // NB: Handle record types here if we add presence constraints
+                    // to their type inference as well.
+                    state
+                }
+            }
+        }
+        Present(typ, PresenceConstraint::IncludesTag(tag_name, tys)) => {
+            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+            let tag_ty = Type::TagUnion(
+                vec![(tag_name.clone(), tys.clone())],
+                Box::new(Type::EmptyTagUnion),
+            );
+            let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
+
+            match unify(subs, actual, includes, Mode::Present) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    state
+                }
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // TODO: do we need a better error type here?
+                    let problem = TypeError::BadExpr(
+                        Region::zero(),
+                        Category::When,
+                        actual_type,
+                        Expected::NoExpectation(expected_type),
                     );
-                    let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
 
-                    match unify(subs, actual, includes, Mode::Present) {
-                        Success(vars) => {
-                            introduce(subs, rank, pools, &vars);
+                    problems.push(problem);
 
-                            state
-                        }
-                        Failure(vars, actual_type, expected_type) => {
-                            introduce(subs, rank, pools, &vars);
-
-                            // TODO: do we need a better error type here?
-                            let problem = TypeError::BadExpr(
-                                Region::zero(),
-                                Category::When,
-                                actual_type,
-                                Expected::NoExpectation(expected_type),
-                            );
-
-                            problems.push(problem);
-
-                            state
-                        }
-                        BadType(vars, problem) => {
-                            introduce(subs, rank, pools, &vars);
-
-                            problems.push(TypeError::BadType(problem));
-
-                            state
-                        }
-                    }
+                    state
                 }
-                PresenceConstraint::Pattern(_, _, _) => {
-                    unreachable!("Handled in a previous branch")
+                BadType(vars, problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::BadType(problem));
+
+                    state
                 }
             }
         }
