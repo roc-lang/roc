@@ -194,8 +194,8 @@ where
     move |arena, mut state: State<'a>| {
         let comments_and_newlines = Vec::new_in(arena);
         let col = state.xyzlcol;
-        match eat_spaces(state.clone(), false, col, state.pos(), comments_and_newlines) {
-            HasTab(xyzlcol, pos, mut state) => {
+        match eat_spaces(state.clone(), false, col, comments_and_newlines) {
+            HasTab(xyzlcol, mut state) => {
                 // there was a tab character
                 state.xyzlcol = xyzlcol;
                 // TODO: it _seems_ like if we're changing the line/column, we should also be
@@ -204,7 +204,7 @@ where
                 // state = state.advance(<something>);
                 Err((
                     MadeProgress,
-                    space_problem(BadInputError::HasTab, pos),
+                    space_problem(BadInputError::HasTab, state.pos()),
                     state,
                 ))
             }
@@ -247,14 +247,13 @@ enum SpaceState<'a> {
         multiline: bool,
         comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
     },
-    HasTab(JustColumn, Position, State<'a>),
+    HasTab(JustColumn, State<'a>),
 }
 
 fn eat_spaces<'a>(
     mut state: State<'a>,
     mut multiline: bool,
     mut xyzlcol: JustColumn,
-    mut pos: Position,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
     use SpaceState::*;
@@ -262,12 +261,10 @@ fn eat_spaces<'a>(
     for c in state.bytes() {
         match c {
             b' ' => {
-                pos = pos.bump_column(1);
                 state = state.advance(1);
                 xyzlcol.column += 1;
             }
             b'\n' => {
-                pos = pos.bump_newline();
                 state = state.advance(1);
                 multiline = true;
                 xyzlcol.column = 0;
@@ -275,16 +272,14 @@ fn eat_spaces<'a>(
             }
             b'\r' => {
                 state = state.advance(1);
-                pos = pos.bump_invisible(1);
             }
             b'\t' => {
-                return HasTab(xyzlcol, pos, state);
+                return HasTab(xyzlcol, state);
             }
             b'#' => {
                 xyzlcol.column += 1;
                 state = state.advance(1);
-                pos = pos.bump_column(1);
-                return eat_line_comment(state, multiline, xyzlcol, pos, comments_and_newlines);
+                return eat_line_comment(state, multiline, xyzlcol, comments_and_newlines);
             }
             _ => break,
         }
@@ -302,7 +297,6 @@ fn eat_line_comment<'a>(
     mut state: State<'a>,
     mut multiline: bool,
     mut xyzlcol: JustColumn,
-    mut pos: Position,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
     use SpaceState::*;
@@ -311,21 +305,18 @@ fn eat_line_comment<'a>(
         match state.bytes().get(1) {
             Some(b' ') => {
                 xyzlcol.column += 2;
-                pos = pos.bump_column(2);
                 state = state.advance(2);
 
                 true
             }
             Some(b'\n') => {
                 // consume the second # and the \n
-                pos = pos.bump_column(1);
-                pos = pos.bump_newline();
                 state = state.advance(2);
 
                 comments_and_newlines.push(CommentOrNewline::DocComment(""));
                 multiline = true;
                 xyzlcol.column = 0;
-                return eat_spaces(state, multiline, xyzlcol, pos, comments_and_newlines);
+                return eat_spaces(state, multiline, xyzlcol, comments_and_newlines);
             }
             None => {
                 // consume the second #
@@ -352,7 +343,7 @@ fn eat_line_comment<'a>(
 
     for c in state.bytes() {
         match c {
-            b'\t' => return HasTab(xyzlcol, pos, state),
+            b'\t' => return HasTab(xyzlcol, state),
             b'\n' => {
                 let delta = (xyzlcol.column - initial_column) as usize;
                 let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
@@ -362,15 +353,13 @@ fn eat_line_comment<'a>(
                 } else {
                     comments_and_newlines.push(CommentOrNewline::LineComment(comment));
                 }
-                pos = pos.bump_newline();
                 state = state.advance(1);
                 multiline = true;
                 xyzlcol.column = 0;
-                return eat_spaces(state, multiline, xyzlcol, pos, comments_and_newlines);
+                return eat_spaces(state, multiline, xyzlcol, comments_and_newlines);
             }
             _ => {
                 state = state.advance(1);
-                pos = pos.bump_column(1);
                 xyzlcol.column += 1;
             }
         }
