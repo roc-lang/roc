@@ -1133,20 +1133,27 @@ impl<'a> WasmBackend<'a> {
                 }
             }
 
+            // Empty record is always equal to empty record.
+            // There are no runtime arguments to check, so just emit true or false.
+            Layout::Struct(fields) if fields.is_empty() => {
+                self.code_builder
+                    .i32_const(if lowlevel == LowLevel::Eq { 1 } else { 0 });
+            }
+
+            // Void is always equal to void. This is the type for the contents of the empty list in `[] == []`
+            // This code will never execute, but we need a true or false value to type-check
+            Layout::Union(UnionLayout::NonRecursive(tags)) if tags.is_empty() => {
+                self.code_builder
+                    .i32_const(if lowlevel == LowLevel::Eq { 1 } else { 0 });
+            }
+
             Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
             | Layout::Struct(_)
             | Layout::Union(_)
             | Layout::LambdaSet(_) => {
-                if arg_layout.stack_size(PTR_SIZE) == 0 {
-                    // A zero-size type has only one possible value, like `{}` or `Unit`
-                    // The arguments don't exist at runtime. Just emit True (Eq) or False (NotEq).
-                    let result = matches!(lowlevel, LowLevel::Eq);
-                    self.code_builder.i32_const(result as i32);
-                } else {
-                    self.build_eq_specialized(&arg_layout, arguments, return_sym, storage);
-                    if matches!(lowlevel, LowLevel::NotEq) {
-                        self.code_builder.i32_eqz();
-                    }
+                self.build_eq_specialized(&arg_layout, arguments, return_sym, storage);
+                if matches!(lowlevel, LowLevel::NotEq) {
+                    self.code_builder.i32_eqz();
                 }
             }
 

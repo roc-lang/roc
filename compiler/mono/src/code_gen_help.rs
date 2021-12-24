@@ -227,8 +227,6 @@ impl<'a> CodeGenHelp<'a> {
 
         let expr = self.call_specialized_op(ident_ids, &mut ctx, *layout, arguments);
 
-        dbg!(&ctx);
-
         (expr, ctx.new_linker_data)
     }
 
