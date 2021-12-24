@@ -1,6 +1,7 @@
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_region::all::LineColumnRegion;
 use std::fmt;
 use std::path::PathBuf;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
@@ -391,9 +392,9 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn region_all_the_things(
         &'a self,
-        region: roc_region::all::Region,
-        sub_region1: roc_region::all::Region,
-        sub_region2: roc_region::all::Region,
+        region: LineColumnRegion,
+        sub_region1: LineColumnRegion,
+        sub_region2: LineColumnRegion,
         error_annotation: Annotation,
     ) -> DocBuilder<'a, Self, Annotation> {
         debug_assert!(region.contains(&sub_region1));
@@ -502,8 +503,8 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn region_with_subregion(
         &'a self,
-        region: roc_region::all::Region,
-        sub_region: roc_region::all::Region,
+        region: LineColumnRegion,
+        sub_region: LineColumnRegion,
     ) -> DocBuilder<'a, Self, Annotation> {
         // debug_assert!(region.contains(&sub_region));
 
@@ -588,13 +589,13 @@ impl<'a> RocDocAllocator<'a> {
         result
     }
 
-    pub fn region(&'a self, region: roc_region::all::Region) -> DocBuilder<'a, Self, Annotation> {
+    pub fn region(&'a self, region: LineColumnRegion) -> DocBuilder<'a, Self, Annotation> {
         self.region_with_subregion(region, region)
     }
 
     pub fn region_without_error(
         &'a self,
-        region: roc_region::all::Region,
+        region: LineColumnRegion,
     ) -> DocBuilder<'a, Self, Annotation> {
         let mut result = self.nil();
         for i in region.start().line..=region.end().line {

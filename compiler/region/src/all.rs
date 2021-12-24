@@ -205,6 +205,96 @@ pub struct LineColumn {
     pub column: u16,
 }
 
+impl LineColumn {
+    pub const fn zero() -> Self {
+        LineColumn {
+            line: 0,
+            column: 0,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
+pub struct LineColumnRegion {
+    pub start: LineColumn,
+    pub end: LineColumn,
+}
+
+impl LineColumnRegion {
+    pub const fn zero() -> Self {
+        LineColumnRegion {
+            start: LineColumn::zero(),
+            end: LineColumn::zero(),
+        }
+    }
+
+    pub fn contains(&self, other: &Self) -> bool {
+        use std::cmp::Ordering::*;
+        match self.start.line.cmp(&other.start.line) {
+            Greater => false,
+            Equal => match self.end.line.cmp(&other.end.line) {
+                Less => false,
+                Equal => self.start.column <= other.start.column && self.end.column >= other.end.column,
+                Greater => self.start.column >= other.start.column,
+            },
+            Less => match self.end.line.cmp(&other.end.line) {
+                Less => false,
+                Equal => self.end.column >= other.end.column,
+                Greater => true,
+            },
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.end.line == self.start.line && self.start.column == self.end.column
+    }
+
+    pub fn span_across(start: &LineColumnRegion, end: &LineColumnRegion) -> Self {
+        LineColumnRegion {
+            start: start.start,
+            end: end.end,
+        }
+    }
+
+    pub fn across_all<'a, I>(regions: I) -> Self
+    where
+        I: IntoIterator<Item = &'a LineColumnRegion>,
+    {
+        let mut it = regions.into_iter();
+
+        if let Some(first) = it.next() {
+            let mut result = *first;
+
+            for r in it {
+                result = Self::span_across(&result, r);
+            }
+
+            result
+        } else {
+            Self::zero()
+        }
+    }
+
+    pub fn lines_between(&self, other: &LineColumnRegion) -> u32 {
+        if self.end.line <= other.start.line {
+            other.start.line - self.end.line
+        } else if self.start.line >= other.end.line {
+            self.start.line - other.end.line
+        } else {
+            // intersection
+            0
+        }
+    }
+
+    pub const fn start(&self) -> LineColumn {
+        self.start
+    }
+
+    pub const fn end(&self) -> LineColumn {
+        self.end
+    }
+}
+
 #[derive(Clone, Eq, Copy, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Loc<T> {
     pub region: Region,
@@ -266,6 +356,32 @@ where
             write!(f, "{:?} {:#?}", region, self.value)
         } else {
             write!(f, "{:?} {:?}", region, self.value)
+        }
+    }
+}
+
+pub struct LineInfo {
+    // TODO
+}
+
+impl LineInfo {
+    pub fn new(_text: &str) -> LineInfo {
+        // TODO
+        LineInfo {}
+    }
+
+    pub fn convert_pos(&self, pos: Position) -> LineColumn {
+        // TODO
+        LineColumn {
+            line: pos.line,
+            column: pos.column,
+        }
+    }
+
+    pub fn convert_region(&self, region: Region) -> LineColumnRegion {
+        LineColumnRegion {
+            start: self.convert_pos(region.start()),
+            end: self.convert_pos(region.end()),
         }
     }
 }

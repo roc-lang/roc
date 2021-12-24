@@ -15,6 +15,7 @@ mod test_reporting {
     use roc_module::symbol::{Interns, ModuleId};
     use roc_mono::ir::{Procs, Stmt, UpdateModeIds};
     use roc_mono::layout::LayoutCache;
+    use roc_region::all::LineInfo;
     use roc_reporting::report::{
         can_problem, mono_problem, parse_problem, type_problem, Report, Severity, BLUE_CODE,
         BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE,
@@ -126,6 +127,7 @@ mod test_reporting {
         use ven_pretty::DocAllocator;
 
         let src_lines: Vec<&str> = src.split('\n').collect();
+        let lines = LineInfo::new(src);
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
 
@@ -140,7 +142,7 @@ mod test_reporting {
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
                 let problem = fail.into_parse_problem(filename.clone(), "", src.as_bytes());
-                let doc = parse_problem(&alloc, filename, 0, problem);
+                let doc = parse_problem(&alloc, &lines, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
             }
@@ -150,18 +152,18 @@ mod test_reporting {
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
                 for problem in can_problems {
-                    let report = can_problem(&alloc, filename.clone(), problem.clone());
+                    let report = can_problem(&alloc, &lines, filename.clone(), problem.clone());
                     reports.push(report);
                 }
 
                 for problem in type_problems {
-                    if let Some(report) = type_problem(&alloc, filename.clone(), problem.clone()) {
+                    if let Some(report) = type_problem(&alloc, &lines, filename.clone(), problem.clone()) {
                         reports.push(report);
                     }
                 }
 
                 for problem in mono_problems {
-                    let report = mono_problem(&alloc, filename.clone(), problem.clone());
+                    let report = mono_problem(&alloc, &lines, filename.clone(), problem.clone());
                     reports.push(report);
                 }
 
@@ -192,6 +194,7 @@ mod test_reporting {
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
         let src_lines: Vec<&str> = src.split('\n').collect();
+        let lines = LineInfo::new(src);
 
         match roc_parse::module::parse_header(arena, state) {
             Err(fail) => {
@@ -206,7 +209,7 @@ mod test_reporting {
                     "",
                     src.as_bytes(),
                 );
-                let doc = parse_problem(&alloc, filename, 0, problem);
+                let doc = parse_problem(&alloc, &lines, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
             }
