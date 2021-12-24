@@ -293,14 +293,15 @@ impl<'a> CodeGenHelp<'a> {
             return spec.proc.name;
         }
 
-        let (proc_symbol, proc_layout) = self.create_proc_symbol(ident_ids, ctx, &layout);
-        ctx.new_linker_data.push((proc_symbol, proc_layout));
-
-        // Generate the body of the Proc
+        // Generate the body of the Proc (and recursively generate any sub-procs)
         let (ret_layout, body) = match ctx.op {
             Inc | Dec | DecRef => (LAYOUT_UNIT, self.refcount_generic(ident_ids, ctx, layout)),
             Eq => (LAYOUT_BOOL, self.eq_generic(ident_ids, ctx, layout)),
         };
+
+        // Give it a name (must come after the recursive call for the body)
+        let (proc_symbol, proc_layout) = self.create_proc_symbol(ident_ids, ctx, &layout);
+        ctx.new_linker_data.push((proc_symbol, proc_layout));
 
         let args: &'a [(Layout<'a>, Symbol)] = {
             let roc_value = (layout, ARG_1);
