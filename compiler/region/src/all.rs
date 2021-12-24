@@ -361,13 +361,27 @@ where
 }
 
 pub struct LineInfo {
-    // TODO
+    line_offsets: Vec<u32>,
 }
 
 impl LineInfo {
-    pub fn new(_text: &str) -> LineInfo {
-        // TODO
-        LineInfo {}
+    pub fn new(src: &str) -> LineInfo {
+        let mut line_offsets = Vec::new();
+        line_offsets.push(0);
+        line_offsets.extend(src.match_indices('\n').map(|(offset, _)| offset as u32 + 1));
+        LineInfo {
+            line_offsets,
+        }
+    }
+
+    pub fn convert_offset(&self, offset: u32) -> LineColumn {
+        let search = self.line_offsets.binary_search(&offset);
+        let line = match search {
+            Ok(i) => i,
+            Err(i) => i - 1,
+        };
+        let column = offset - self.line_offsets[line];
+        LineColumn { line: line as u32, column: column as u16 }
     }
 
     pub fn convert_pos(&self, pos: Position) -> LineColumn {
@@ -384,4 +398,76 @@ impl LineInfo {
             end: self.convert_pos(region.end()),
         }
     }
+}
+
+#[test]
+fn test_line_info() {
+
+    fn char_at_line<'a>(lines: &[&'a str], line_column: LineColumn) -> &'a str {
+        let line = line_column.line as usize;
+        let line_text = if line < lines.len() {
+            lines[line]
+        } else {
+            ""
+        };
+        let column = line_column.column as usize;
+        if column == line_text.len() {
+            "\n"
+        } else {
+            &line_text[column .. column + 1]
+        }
+    }
+
+    fn check_correctness(lines: &[&str]) {
+        let mut input = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                input.push('\n');
+            }
+            input.push_str(line);
+        }
+        let info = LineInfo::new(&input);
+
+        let mut last: Option<LineColumn> = None;
+        
+        for offset in 0..=input.len() {
+            let expected = if offset < input.len() {
+                &input[offset..offset + 1]
+            } else {
+                "\n" // HACK! pretend there's an extra newline on the end, strictly so we can do the comparison
+            };
+            println!("checking {:?} {:?}, expecting {:?}", input, offset, expected);
+            let line_column = info.convert_offset(offset as u32);
+            assert!(Some(line_column) > last, "{:?} > {:?}", Some(line_column), last);
+            assert_eq!(
+                expected,
+                char_at_line(lines, line_column));
+            last = Some(line_column);
+        }
+
+        assert_eq!(
+            info.convert_offset(input.len() as u32),
+            LineColumn {
+                line: lines.len().saturating_sub(1) as u32,
+                column: lines.last().map(|l| l.len()).unwrap_or(0) as u16,
+            }
+        )
+    }
+
+    check_correctness(&[
+        "",
+        "abc",
+        "def",
+        "",
+        "gi",
+    ]);
+
+    check_correctness(&[]);
+
+    check_correctness(&["a"]);
+
+    check_correctness(&[
+        "",
+        "",
+    ]);
 }
