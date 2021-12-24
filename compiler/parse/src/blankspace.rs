@@ -193,11 +193,10 @@ where
 
     move |arena, mut state: State<'a>| {
         let comments_and_newlines = Vec::new_in(arena);
-        let col =state.xyzlcol;
-        match eat_spaces(state.bytes(), state.clone(), false, col, state.pos(), comments_and_newlines) {
-            HasTab(xyzlcol, pos, new_state) => {
+        let col = state.xyzlcol;
+        match eat_spaces(state.clone(), false, col, state.pos(), comments_and_newlines) {
+            HasTab(xyzlcol, pos, mut state) => {
                 // there was a tab character
-                let mut state = state;
                 state.xyzlcol = xyzlcol;
                 // TODO: it _seems_ like if we're changing the line/column, we should also be
                 // advancing the state by the corresponding number of bytes.
@@ -213,14 +212,9 @@ where
                 xyzcol: pos,
                 state: new_state,
                 multiline,
-                bytes,
                 comments_and_newlines,
             } => {
-                assert_eq!(
-                    std::str::from_utf8(new_state.bytes()).unwrap(),
-                    std::str::from_utf8(bytes).unwrap());
-
-                if bytes == state.bytes() {
+                if new_state.bytes() == state.bytes() {
                     Ok((NoProgress, &[] as &[_], state))
                 } else if multiline {
                     // we parsed at least one newline
@@ -229,7 +223,7 @@ where
 
                     if pos.column >= min_indent {
                         state.xyzlcol = pos;
-                        state = state.advance(state.bytes().len() - bytes.len());
+                        state = state.advance(state.bytes().len() - new_state.bytes().len());
 
                         Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
                     } else {
@@ -237,7 +231,7 @@ where
                     }
                 } else {
                     state.xyzlcol.column = pos.column;
-                    state = state.advance(state.bytes().len() - bytes.len());
+                    state = state.advance(state.bytes().len() - new_state.bytes().len());
 
                     Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
                 }
@@ -251,14 +245,12 @@ enum SpaceState<'a> {
         xyzcol: JustColumn,
         state: State<'a>,
         multiline: bool,
-        bytes: &'a [u8],
         comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
     },
     HasTab(JustColumn, Position, State<'a>),
 }
 
 fn eat_spaces<'a>(
-    mut bytes: &'a [u8],
     mut state: State<'a>,
     mut multiline: bool,
     mut xyzlcol: JustColumn,
@@ -267,16 +259,14 @@ fn eat_spaces<'a>(
 ) -> SpaceState<'a> {
     use SpaceState::*;
 
-    for c in bytes {
+    for c in state.bytes() {
         match c {
             b' ' => {
                 pos = pos.bump_column(1);
-                bytes = &bytes[1..];
                 state = state.advance(1);
                 xyzlcol.column += 1;
             }
             b'\n' => {
-                bytes = &bytes[1..];
                 pos = pos.bump_newline();
                 state = state.advance(1);
                 multiline = true;
@@ -284,7 +274,6 @@ fn eat_spaces<'a>(
                 comments_and_newlines.push(CommentOrNewline::Newline);
             }
             b'\r' => {
-                bytes = &bytes[1..];
                 state = state.advance(1);
                 pos = pos.bump_invisible(1);
             }
@@ -295,7 +284,7 @@ fn eat_spaces<'a>(
                 xyzlcol.column += 1;
                 state = state.advance(1);
                 pos = pos.bump_column(1);
-                return eat_line_comment(&bytes[1..], state, multiline, xyzlcol, pos, comments_and_newlines);
+                return eat_line_comment(state, multiline, xyzlcol, pos, comments_and_newlines);
             }
             _ => break,
         }
@@ -305,13 +294,11 @@ fn eat_spaces<'a>(
         xyzcol: xyzlcol,
         state,
         multiline,
-        bytes,
         comments_and_newlines,
     }
 }
 
 fn eat_line_comment<'a>(
-    mut bytes: &'a [u8],
     mut state: State<'a>,
     mut multiline: bool,
     mut xyzlcol: JustColumn,
@@ -320,10 +307,9 @@ fn eat_line_comment<'a>(
 ) -> SpaceState<'a> {
     use SpaceState::*;
 
-    let is_doc_comment = if let Some(b'#') = bytes.get(0) {
-        match bytes.get(1) {
+    let is_doc_comment = if let Some(b'#') = state.bytes().get(0) {
+        match state.bytes().get(1) {
             Some(b' ') => {
-                bytes = &bytes[2..];
                 xyzlcol.column += 2;
                 pos = pos.bump_column(2);
                 state = state.advance(2);
@@ -332,7 +318,6 @@ fn eat_line_comment<'a>(
             }
             Some(b'\n') => {
                 // consume the second # and the \n
-                bytes = &bytes[2..];
                 pos = pos.bump_column(1);
                 pos = pos.bump_newline();
                 state = state.advance(2);
@@ -340,12 +325,11 @@ fn eat_line_comment<'a>(
                 comments_and_newlines.push(CommentOrNewline::DocComment(""));
                 multiline = true;
                 xyzlcol.column = 0;
-                return eat_spaces(bytes, state, multiline, xyzlcol, pos, comments_and_newlines);
+                return eat_spaces(state, multiline, xyzlcol, pos, comments_and_newlines);
             }
             None => {
                 // consume the second #
                 xyzlcol.column += 1;
-                bytes = &bytes[1..];
                 state = state.advance(1);
                 // pos = pos.bump_column(1);
 
@@ -353,7 +337,6 @@ fn eat_line_comment<'a>(
                     xyzcol: xyzlcol,
                     state,
                     multiline,
-                    bytes,
                     comments_and_newlines,
                 };
             }
@@ -364,10 +347,10 @@ fn eat_line_comment<'a>(
         false
     };
 
-    let initial = bytes;
+    let initial = state.bytes();
     let initial_column = xyzlcol.column;
 
-    for c in bytes {
+    for c in state.bytes() {
         match c {
             b'\t' => return HasTab(xyzlcol, pos, state),
             b'\n' => {
@@ -383,10 +366,9 @@ fn eat_line_comment<'a>(
                 state = state.advance(1);
                 multiline = true;
                 xyzlcol.column = 0;
-                return eat_spaces(&bytes[1..], state, multiline, xyzlcol, pos, comments_and_newlines);
+                return eat_spaces(state, multiline, xyzlcol, pos, comments_and_newlines);
             }
             _ => {
-                bytes = &bytes[1..];
                 state = state.advance(1);
                 pos = pos.bump_column(1);
                 xyzlcol.column += 1;
@@ -408,7 +390,6 @@ fn eat_line_comment<'a>(
         xyzcol: xyzlcol,
         state,
         multiline,
-        bytes,
         comments_and_newlines,
     }
 }
