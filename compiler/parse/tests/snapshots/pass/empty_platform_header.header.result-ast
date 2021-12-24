@@ -1,14 +1,14 @@
 Platform {
     header: PlatformHeader {
-        name: |L 0-0, C 9-25| PackageName(
+        name: @9-25 PackageName(
             "rtfeldman/blah",
         ),
         requires: PlatformRequires {
             rigids: [],
-            signature: |L 0-0, C 40-49| TypedIdent {
-                ident: |L 0-0, C 40-44| "main",
+            signature: @40-49 TypedIdent {
+                ident: @40-44 "main",
                 spaces_before_colon: [],
-                ann: |L 0-0, C 47-49| Record {
+                ann: @47-49 Record {
                     fields: [],
                     ext: None,
                 },

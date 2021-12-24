@@ -1,12 +1,12 @@
 Apply(
-    |L 0-0, C 0-4| GlobalTag(
+    @0-4 GlobalTag(
         "Whee",
     ),
     [
-        |L 0-0, C 5-7| Num(
+        @5-7 Num(
             "12",
         ),
-        |L 0-0, C 8-10| Num(
+        @8-10 Num(
             "34",
         ),
     ],

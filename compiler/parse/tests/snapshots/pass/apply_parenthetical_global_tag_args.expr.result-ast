@@ -1,14 +1,14 @@
 Apply(
-    |L 0-0, C 0-4| GlobalTag(
+    @0-4 GlobalTag(
         "Whee",
     ),
     [
-        |L 0-0, C 6-8| ParensAround(
+        @6-8 ParensAround(
             Num(
                 "12",
             ),
         ),
-        |L 0-0, C 11-13| ParensAround(
+        @11-13 ParensAround(
             Num(
                 "34",
             ),

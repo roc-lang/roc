@@ -98,11 +98,17 @@ impl fmt::Debug for Region {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
+#[derive(Copy, Clone, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Position {
     pub offset: u32,
     line: u32,
     column: u16,
+}
+
+impl PartialEq for Position {
+    fn eq(&self, other: &Self) -> bool {
+        self.offset == other.offset
+    }
 }
 
 impl Position {
