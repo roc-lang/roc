@@ -47,10 +47,12 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ET
     }
 }
 
-fn check_type_alias<'a>(
+type AliasParts<'a> = Loc<(&'a str, &'a [Loc<&'a str>])>;
+
+fn check_type_alias(
     p: Progress,
-    annot: Loc<TypeAnnotation<'a>>,
-) -> impl Parser<'a, Loc<(&'a str, &'a [Loc<&'a str>])>, ETypeInlineAlias> {
+    annot: Loc<TypeAnnotation>,
+) -> impl Parser<AliasParts, ETypeInlineAlias> {
     move |arena, state| match annot.value {
         TypeAnnotation::Apply("", tag_name, args) => {
             let mut arg_names = Vec::new_in(arena);
@@ -80,9 +82,7 @@ fn check_type_alias<'a>(
     }
 }
 
-fn parse_type_alias_after_as<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Loc<(&'a str, &'a [Loc<&'a str>])>, EType<'a>> {
+fn parse_type_alias_after_as<'a>(min_indent: u16) -> impl Parser<'a, AliasParts<'a>, EType<'a>> {
     move |arena, state| {
         space0_before_e(
             term(min_indent),
@@ -130,10 +130,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'
             ]
         ),
         |arena: &'a Bump,
-         (loc_ann, opt_as): (
-            Loc<TypeAnnotation<'a>>,
-            Option<(&'a [_], Loc<(&'a str, &'a [Loc<&'a str>])>)>
-        )| {
+         (loc_ann, opt_as): (Loc<TypeAnnotation<'a>>, Option<(&'a [_], AliasParts<'a>)>)| {
             match opt_as {
                 Some((
                     spaces,
