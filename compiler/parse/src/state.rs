@@ -14,6 +14,8 @@ pub struct State<'a> {
     /// Length of the original input in bytes
     input_len: usize,
 
+    line_start: Position,
+
     /// Current position within the input (line/column)
     pub xyzlcol: JustColumn,
 
@@ -33,6 +35,7 @@ impl<'a> State<'a> {
         State {
             bytes,
             input_len: bytes.len(),
+            line_start: Position::zero(),
             xyzlcol: JustColumn { column: 0 },
             indent_column: 0,
         }
@@ -46,6 +49,13 @@ impl<'a> State<'a> {
     pub fn advance(&self, offset: usize) -> State<'a> {
         let mut state = self.clone();
         state.bytes = &state.bytes[offset..];
+        state
+    }
+
+    #[must_use]
+    pub fn advance_newline(&self) -> State<'a> {
+        let mut state = self.advance(1);
+        state.line_start = state.pos();
         state
     }
 

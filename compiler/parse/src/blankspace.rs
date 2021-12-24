@@ -265,13 +265,13 @@ fn eat_spaces<'a>(
                 xyzlcol.column += 1;
             }
             b'\n' => {
-                state = state.advance(1);
+                state = state.advance_newline();
                 multiline = true;
                 xyzlcol.column = 0;
                 comments_and_newlines.push(CommentOrNewline::Newline);
             }
             b'\r' => {
-                state = state.advance(1);
+                state = state.advance_newline();
             }
             b'\t' => {
                 return HasTab(xyzlcol, state);
@@ -353,10 +353,14 @@ fn eat_line_comment<'a>(
                 } else {
                     comments_and_newlines.push(CommentOrNewline::LineComment(comment));
                 }
-                state = state.advance(1);
+                state = state.advance_newline();
                 multiline = true;
                 xyzlcol.column = 0;
                 return eat_spaces(state, multiline, xyzlcol, comments_and_newlines);
+            }
+            b'\r' => {
+                state = state.advance_newline();
+                xyzlcol.column += 1;
             }
             _ => {
                 state = state.advance(1);
