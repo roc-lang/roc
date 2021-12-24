@@ -101,7 +101,7 @@ fn parse_type_alias_after_as<'a>(min_indent: u16) -> impl Parser<'a, AliasHeader
 }
 
 fn fail_type_start<'a, T: 'a>() -> impl Parser<'a, T, EType<'a>> {
-    |_arena, state: State<'a>| Err((NoProgress, EType::TStart(state.pos), state))
+    |_arena, state: State<'a>| Err((NoProgress, EType::TStart(state.xyzlcol), state))
 }
 
 fn term<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
@@ -240,7 +240,7 @@ where
 {
     move |arena, state: State<'a>| match crate::ident::tag_name().parse(arena, state) {
         Ok(good) => Ok(good),
-        Err((progress, _, state)) => Err((progress, to_problem(state.pos), state)),
+        Err((progress, _, state)) => Err((progress, to_problem(state.xyzlcol), state)),
     }
 }
 
@@ -254,7 +254,7 @@ fn record_type_field<'a>(
     (move |arena, state: State<'a>| {
         // You must have a field name, e.g. "email"
         // using the initial pos is important for error reporting
-        let pos = state.pos;
+        let pos = state.xyzlcol;
         let (progress, loc_label, state) = loc!(specialize(
             move |_, _| ETypeRecord::Field(pos),
             lowercase_ident()
@@ -410,7 +410,7 @@ fn expression<'a>(
                     ),
                     |_, state: State<'a>| Err((
                         NoProgress,
-                        EType::TFunctionArgument(state.pos),
+                        EType::TFunctionArgument(state.xyzlcol),
                         state
                     ))
                 ]
@@ -503,7 +503,7 @@ fn parse_concrete_type<'a>(
 
             Ok((MadeProgress, answer, state))
         }
-        Err((NoProgress, _, state)) => Err((NoProgress, ETypeApply::End(state.pos), state)),
+        Err((NoProgress, _, state)) => Err((NoProgress, ETypeApply::End(state.xyzlcol), state)),
         Err((MadeProgress, _, mut state)) => {
             // we made some progress, but ultimately failed.
             // that means a malformed type name
@@ -531,6 +531,6 @@ fn parse_type_variable<'a>(
 
             Ok((MadeProgress, answer, state))
         }
-        Err((progress, _, state)) => Err((progress, EType::TBadTypeVariable(state.pos), state)),
+        Err((progress, _, state)) => Err((progress, EType::TBadTypeVariable(state.xyzlcol), state)),
     }
 }

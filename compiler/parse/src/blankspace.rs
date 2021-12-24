@@ -160,10 +160,10 @@ where
     E: 'a,
 {
     move |_, state: State<'a>| {
-        if state.pos.column >= min_indent {
+        if state.xyzlcol.column >= min_indent {
             Ok((NoProgress, (), state))
         } else {
-            Err((NoProgress, indent_problem(state.pos), state))
+            Err((NoProgress, indent_problem(state.xyzlcol), state))
         }
     }
 }
@@ -193,11 +193,11 @@ where
     move |arena, mut state: State<'a>| {
         let comments_and_newlines = Vec::new_in(arena);
 
-        match eat_spaces(state.bytes(), state.pos, comments_and_newlines) {
+        match eat_spaces(state.bytes(), state.xyzlcol, comments_and_newlines) {
             HasTab(pos) => {
                 // there was a tab character
                 let mut state = state;
-                state.pos = pos;
+                state.xyzlcol = pos;
                 // TODO: it _seems_ like if we're changing the line/column, we should also be
                 // advancing the state by the corresponding number of bytes.
                 // Not doing this is likely a bug!
@@ -215,21 +215,21 @@ where
             } => {
                 if bytes == state.bytes() {
                     Ok((NoProgress, &[] as &[_], state))
-                } else if state.pos.line != pos.line {
+                } else if state.xyzlcol.line != pos.line {
                     // we parsed at least one newline
 
                     state.indent_column = pos.column;
 
                     if pos.column >= min_indent {
-                        state.pos = pos;
+                        state.xyzlcol = pos;
                         state = state.advance(state.bytes().len() - bytes.len());
 
                         Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
                     } else {
-                        Err((MadeProgress, indent_problem(state.pos), state))
+                        Err((MadeProgress, indent_problem(state.xyzlcol), state))
                     }
                 } else {
-                    state.pos.column = pos.column;
+                    state.xyzlcol.column = pos.column;
                     state = state.advance(state.bytes().len() - bytes.len());
 
                     Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))

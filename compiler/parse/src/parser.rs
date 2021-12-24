@@ -723,23 +723,23 @@ where
         let width = keyword.len();
 
         if !state.bytes().starts_with(keyword.as_bytes()) {
-            return Err((NoProgress, if_error(state.pos), state));
+            return Err((NoProgress, if_error(state.xyzlcol), state));
         }
 
         // the next character should not be an identifier character
         // to prevent treating `whence` or `iffy` as keywords
         match state.bytes().get(width) {
             Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' => {
-                state.pos.column += width as u16;
+                state.xyzlcol.column += width as u16;
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
             None => {
-                state.pos.column += width as u16;
+                state.xyzlcol.column += width as u16;
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
-            Some(_) => Err((NoProgress, if_error(state.pos), state)),
+            Some(_) => Err((NoProgress, if_error(state.xyzlcol), state)),
         }
     }
 }
@@ -964,7 +964,7 @@ where
                                     return Err((MadeProgress, fail, state));
                                 }
                                 Err((NoProgress, _fail, state)) => {
-                                    return Err((NoProgress, to_element_error(state.pos), state));
+                                    return Err((NoProgress, to_element_error(state.xyzlcol), state));
                                 }
                             }
                         }
@@ -989,7 +989,7 @@ where
 
             Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
             Err((NoProgress, _fail, state)) => {
-                Err((NoProgress, to_element_error(state.pos), state))
+                Err((NoProgress, to_element_error(state.xyzlcol), state))
             }
         }
     }
@@ -1039,11 +1039,11 @@ macro_rules! loc {
         move |arena, state: $crate::state::State<'a>| {
             use roc_region::all::{Loc, Region};
 
-            let start = state.pos;
+            let start = state.xyzlcol;
 
             match $parser.parse(arena, state) {
                 Ok((progress, value, state)) => {
-                    let end = state.pos;
+                    let end = state.xyzlcol;
                     let region = Region::new(start, end);
 
                     Ok((progress, Loc { region, value }, state))
@@ -1245,7 +1245,7 @@ macro_rules! one_of_with_error {
             match $p1.parse(arena, state) {
                 valid @ Ok(_) => valid,
                 Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state )),
-                Err((NoProgress, _, state)) => Err((MadeProgress, $toerror(state.pos), state)),
+                Err((NoProgress, _, state)) => Err((MadeProgress, $toerror(state.xyzlcol), state)),
             }
         }
     };
@@ -1263,7 +1263,7 @@ where
 {
     move |a, s| match parser.parse(a, s) {
         Ok(t) => Ok(t),
-        Err((p, error, s)) => Err((p, map_error(error, s.pos), s)),
+        Err((p, error, s)) => Err((p, map_error(error, s.xyzlcol), s)),
     }
 }
 
@@ -1276,7 +1276,7 @@ where
 {
     move |a, s| match parser.parse(a, s) {
         Ok(t) => Ok(t),
-        Err((p, error, s)) => Err((p, map_error(a.alloc(error), s.pos), s)),
+        Err((p, error, s)) => Err((p, map_error(a.alloc(error), s.xyzlcol), s)),
     }
 }
 
@@ -1290,10 +1290,10 @@ where
     move |_arena: &'a Bump, state: State<'a>| match state.bytes().get(0) {
         Some(x) if *x == word => {
             let mut state = state.advance(1);
-            state.pos.column += 1;
+            state.xyzlcol.column += 1;
             Ok((MadeProgress, (), state))
         }
-        _ => Err((NoProgress, to_error(state.pos), state)),
+        _ => Err((NoProgress, to_error(state.xyzlcol), state)),
     }
 }
 
@@ -1310,10 +1310,10 @@ where
     move |_arena: &'a Bump, state: State<'a>| {
         if state.bytes().starts_with(&needle) {
             let mut state = state.advance(2);
-            state.pos.column += 2;
+            state.xyzlcol.column += 2;
             Ok((MadeProgress, (), state))
         } else {
-            Err((NoProgress, to_error(state.pos), state))
+            Err((NoProgress, to_error(state.xyzlcol), state))
         }
     }
 }
@@ -1326,7 +1326,7 @@ where
     move |_arena, state: State<'a>| {
         dbg!(state.indent_column, min_indent);
         if state.indent_column < min_indent {
-            Err((NoProgress, to_problem(state.pos), state))
+            Err((NoProgress, to_problem(state.xyzlcol), state))
         } else {
             Ok((NoProgress, (), state))
         }

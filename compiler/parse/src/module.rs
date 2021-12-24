@@ -21,7 +21,7 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {
-            Err((NoProgress, SyntaxError::NotEndOfFile(state.pos), state))
+            Err((NoProgress, SyntaxError::NotEndOfFile(state.xyzlcol), state))
         }
     }
 }
@@ -167,7 +167,7 @@ fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
     |_, mut state: State<'a>| match chomp_module_name(state.bytes()) {
         Ok(name) => {
             let width = name.len();
-            state.pos.column += width as u16;
+            state.xyzlcol.column += width as u16;
             state = state.advance(width);
 
             Ok((MadeProgress, ModuleName::new(name), state))

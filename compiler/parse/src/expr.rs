@@ -25,7 +25,7 @@ fn expr_end<'a>() -> impl Parser<'a, (), EExpr<'a>> {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {
-            Err((NoProgress, EExpr::BadExprEnd(state.pos), state))
+            Err((NoProgress, EExpr::BadExprEnd(state.xyzlcol), state))
         }
     }
 }
@@ -175,7 +175,7 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, &'a str>, EExpr<'a
             }
         }
         Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
-        Err((NoProgress, _, state)) => Err((NoProgress, EExpr::Access(state.pos), state)),
+        Err((NoProgress, _, state)) => Err((NoProgress, EExpr::Access(state.xyzlcol), state)),
     }
 }
 
@@ -233,7 +233,7 @@ fn parse_loc_term<'a>(
 
 fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let start = state.pos;
+        let start = state.xyzlcol;
 
         let (_, _, next_state) = word1(b'_', EExpr::Underscore).parse(arena, state)?;
 
@@ -280,7 +280,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
 }
 
 fn fail_expr_start_e<'a, T: 'a>() -> impl Parser<'a, T, EExpr<'a>> {
-    |_arena, state: State<'a>| Err((NoProgress, EExpr::Start(state.pos), state))
+    |_arena, state: State<'a>| Err((NoProgress, EExpr::Start(state.xyzlcol), state))
 }
 
 fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
@@ -298,11 +298,11 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
         if state.bytes().starts_with(b"-") && !followed_by_whitespace {
             // the negate is only unary if it is not followed by whitespace
             let mut state = state.advance(1);
-            state.pos.column += 1;
+            state.xyzlcol.column += 1;
             Ok((MadeProgress, (), state))
         } else {
             // this is not a negated expression
-            Err((NoProgress, EExpr::UnaryNot(state.pos), state))
+            Err((NoProgress, EExpr::UnaryNot(state.xyzlcol), state))
         }
     }
 }
@@ -790,7 +790,7 @@ fn parse_defs_end<'a>(
 
     let state = match space0_e(min_indent, EExpr::Space, EExpr::IndentStart).parse(arena, state) {
         Err((MadeProgress, _, s)) => {
-            return Err((MadeProgress, EExpr::DefMissingFinalExpr(s.pos), s));
+            return Err((MadeProgress, EExpr::DefMissingFinalExpr(s.xyzlcol), s));
         }
         Ok((_, spaces, state)) => {
             def_state.spaces_after = spaces;
@@ -916,7 +916,7 @@ fn parse_defs_expr<'a>(
                 Err((_, fail, state)) => {
                     return Err((
                         MadeProgress,
-                        EExpr::DefMissingFinalExpr2(arena.alloc(fail), state.pos),
+                        EExpr::DefMissingFinalExpr2(arena.alloc(fail), state.xyzlcol),
                         state,
                     ));
                 }
@@ -1282,7 +1282,7 @@ fn parse_expr_end<'a>(
                     // try multi-backpassing
                     if options.accept_multi_backpassing && state.bytes().starts_with(b",") {
                         state = state.advance(1);
-                        state.pos.column += 1;
+                        state.xyzlcol.column += 1;
 
                         let (_, mut patterns, state) = specialize_ref(
                             EExpr::Pattern,
@@ -1342,7 +1342,7 @@ fn parse_expr_end<'a>(
                             }
                         }
                     } else if options.check_for_arrow && state.bytes().starts_with(b"->") {
-                        Err((MadeProgress, EExpr::BadOperator("->", state.pos), state))
+                        Err((MadeProgress, EExpr::BadOperator("->", state.xyzlcol), state))
                     } else {
                         // roll back space parsing
                         let state = expr_state.initial.clone();
@@ -1662,7 +1662,7 @@ mod when {
                     return Err((
                         progress,
                         // TODO maybe pass case_indent here?
-                        EWhen::PatternAlignment(5, state.pos),
+                        EWhen::PatternAlignment(5, state.xyzlcol),
                         state,
                     ));
                 }
@@ -1733,7 +1733,7 @@ mod when {
                                 let indent = pattern_indent_level - indent_column;
                                 Err((
                                     MadeProgress,
-                                    EWhen::PatternAlignment(indent, state.pos),
+                                    EWhen::PatternAlignment(indent, state.xyzlcol),
                                     state,
                                 ))
                             }
@@ -1853,15 +1853,15 @@ mod when {
                 Err((NoProgress, fail, _)) => Err((NoProgress, fail, initial)),
                 Ok((_progress, spaces, state)) => {
                     match pattern_indent_level {
-                        Some(wanted) if state.pos.column > wanted => {
+                        Some(wanted) if state.xyzlcol.column > wanted => {
                             // this branch is indented too much
-                            Err((NoProgress, EWhen::IndentPattern(state.pos), initial))
+                            Err((NoProgress, EWhen::IndentPattern(state.xyzlcol), initial))
                         }
-                        Some(wanted) if state.pos.column < wanted => {
-                            let indent = wanted - state.pos.column;
+                        Some(wanted) if state.xyzlcol.column < wanted => {
+                            let indent = wanted - state.xyzlcol.column;
                             Err((
                                 NoProgress,
-                                EWhen::PatternAlignment(indent, state.pos),
+                                EWhen::PatternAlignment(indent, state.xyzlcol),
                                 initial,
                             ))
                         }
@@ -1870,7 +1870,7 @@ mod when {
                                 min_indent.max(pattern_indent_level.unwrap_or(min_indent));
                             // the region is not reliable for the indent column in the case of
                             // parentheses around patterns
-                            let pattern_indent_column = state.pos.column;
+                            let pattern_indent_column = state.xyzlcol.column;
 
                             let parser = sep_by1(
                                 word1(b'|', EWhen::Bar),
@@ -2377,7 +2377,7 @@ where
 
     macro_rules! good {
         ($op:expr, $width:expr) => {{
-            state.pos.column += $width;
+            state.xyzlcol.column += $width;
             state = state.advance($width);
 
             Ok((MadeProgress, $op, state))
@@ -2386,12 +2386,12 @@ where
 
     macro_rules! bad_made_progress {
         ($op:expr) => {{
-            Err((MadeProgress, to_error($op, state.pos), state))
+            Err((MadeProgress, to_error($op, state.xyzlcol), state))
         }};
     }
 
     match chomped {
-        "" => Err((NoProgress, to_expectation(state.pos), state)),
+        "" => Err((NoProgress, to_expectation(state.xyzlcol), state)),
         "+" => good!(BinOp::Plus, 1),
         "-" => good!(BinOp::Minus, 1),
         "*" => good!(BinOp::Star, 1),
@@ -2402,7 +2402,7 @@ where
         "<" => good!(BinOp::LessThan, 1),
         "." => {
             // a `.` makes no progress, so it does not interfere with `.foo` access(or)
-            Err((NoProgress, to_error(".", state.pos), state))
+            Err((NoProgress, to_error(".", state.xyzlcol), state))
         }
         "=" => good!(BinOp::Assignment, 1),
         ":" => good!(BinOp::HasType, 1),
@@ -2417,7 +2417,7 @@ where
         "%%" => good!(BinOp::DoublePercent, 2),
         "->" => {
             // makes no progress, so it does not interfere with `_ if isGood -> ...`
-            Err((NoProgress, to_error("->", state.pos), state))
+            Err((NoProgress, to_error("->", state.xyzlcol), state))
         }
         "<-" => good!(BinOp::Backpassing, 2),
         _ => bad_made_progress!(chomped),

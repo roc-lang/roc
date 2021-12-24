@@ -232,7 +232,7 @@ fn loc_ident_pattern_help<'a>(
                 if crate::keyword::KEYWORDS.contains(&parts[0]) {
                     Err((
                         NoProgress,
-                        EPattern::End(original_state.pos),
+                        EPattern::End(original_state.xyzlcol),
                         original_state,
                     ))
                 } else if module_name.is_empty() && parts.len() == 1 {
@@ -304,7 +304,7 @@ fn lowercase_ident_pattern<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, &'a str, EPattern<'a>> {
-    let pos = state.pos;
+    let pos = state.xyzlcol;
 
     specialize(move |_, _| EPattern::End(pos), lowercase_ident()).parse(arena, state)
 }
@@ -339,7 +339,7 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>
     move |arena, state: State<'a>| {
         // You must have a field name, e.g. "email"
         // using the initial pos is important for error reporting
-        let pos = state.pos;
+        let pos = state.xyzlcol;
         let (progress, loc_label, state) = loc!(specialize(
             move |_, _| PRecord::Field(pos),
             lowercase_ident()

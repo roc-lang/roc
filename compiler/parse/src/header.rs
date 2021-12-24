@@ -250,7 +250,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
 
 pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
     move |arena, state: State<'a>| {
-        let pos = state.pos;
+        let pos = state.pos();
         specialize(EPackageName::BadPath, string_literal::parse())
             .parse(arena, state)
             .and_then(|(progress, text, next_state)| match text {

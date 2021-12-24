@@ -11,7 +11,7 @@ pub struct State<'a> {
     bytes: &'a [u8],
 
     /// Current position within the input (line/column)
-    pub pos: Position,
+    pub xyzlcol: Position,
 
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)
@@ -22,7 +22,7 @@ impl<'a> State<'a> {
     pub fn new(bytes: &'a [u8]) -> State<'a> {
         State {
             bytes,
-            pos: Position::default(),
+            xyzlcol: Position::default(),
             indent_column: 0,
         }
     }
@@ -40,7 +40,7 @@ impl<'a> State<'a> {
 
     /// Returns the current position
     pub const fn pos(&self) -> Position {
-        self.pos
+        self.xyzlcol
     }
 
     /// Returns whether the parser has reached the end of the input
@@ -71,19 +71,19 @@ impl<'a> State<'a> {
     where
         TE: Fn(Position) -> E,
     {
-        match (self.pos.column as usize).checked_add(quantity) {
+        match (self.xyzlcol.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
                     bytes: &self.bytes[quantity..],
-                    pos: Position {
-                        line: self.pos.line,
+                    xyzlcol: Position {
+                        line: self.xyzlcol.line,
                         column: column_usize as u16,
                     },
                     // Once we hit a nonspace character, we are no longer indenting.
                     ..self
                 })
             }
-            _ => Err((NoProgress, to_error(self.pos), self)),
+            _ => Err((NoProgress, to_error(self.xyzlcol), self)),
         }
     }
 
@@ -93,11 +93,11 @@ impl<'a> State<'a> {
     /// and thus wanting a Region while not having access to loc().
     pub fn len_region(&self, length: u16) -> Region {
         Region::new(
-            self.pos,
+            self.xyzlcol,
             Position {
-                line: self.pos.line,
+                line: self.xyzlcol.line,
                 column: self
-                    .pos
+                    .xyzlcol
                     .column
                     .checked_add(length)
                     .unwrap_or_else(|| panic!("len_region overflowed")),
@@ -128,7 +128,7 @@ impl<'a> fmt::Debug for State<'a> {
         write!(
             f,
             "\n\t(line, col): ({}, {}),",
-            self.pos.line, self.pos.column
+            self.xyzlcol.line, self.xyzlcol.column
         )?;
         write!(f, "\n\tindent_column: {}", self.indent_column)?;
         write!(f, "\n}}")
