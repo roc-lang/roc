@@ -133,7 +133,8 @@ export fn roc_fx_stdoutWrite(rocPath: str.RocStr) callconv(.C) void {
     }
 }
 
-fn stdinRead() []u8 {
+export fn roc_fx_stdinRead() callconv(.C) str.RocStr {
     const stdin = std.io.getStdIn().reader();
-    return (stdin.readUntilDelimiterOrEof(&line_buf, '\n') catch unreachable) orelse "";
+    const data = (stdin.readUntilDelimiterOrEof(&line_buf, '\n') catch unreachable) orelse "";
+    return RocStr.fromSlice();
 }
