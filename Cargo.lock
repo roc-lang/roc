@@ -3671,6 +3671,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_test_utils",
  "roc_types",
  "ven_pretty",
 ]

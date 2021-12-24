@@ -23,6 +23,7 @@ mod test_reporting {
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
+    use roc_test_utils::assert_multiline_str_eq;
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
@@ -236,7 +237,7 @@ mod test_reporting {
             }
         }
 
-        assert_eq!(buf, expected_rendering);
+        assert_multiline_str_eq!(expected_rendering, buf.as_str());
     }
 
     fn report_header_problem_as(src: &str, expected_rendering: &str) {
