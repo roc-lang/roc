@@ -512,10 +512,7 @@ fn numeric_negate_expression<'a, T>(
     debug_assert_eq!(state.bytes().get(0), Some(&b'-'));
     // for overflow reasons, we must make the unary minus part of the number literal.
     let start = state.pos();
-    let region = Region::new(
-        start,
-        expr.region.end(),
-    );
+    let region = Region::new(start, expr.region.end());
 
     let new_expr = match &expr.value {
         Expr::Num(string) => {
@@ -1272,7 +1269,13 @@ fn parse_expr_end<'a>(
                     expr_state.consume_spaces(arena);
                     expr_state.initial = before_op;
                     parse_expr_operator(
-                        min_indent, options, start_column, expr_state, loc_op, arena, state,
+                        min_indent,
+                        options,
+                        start_column,
+                        expr_state,
+                        loc_op,
+                        arena,
+                        state,
                     )
                 }
                 Err((NoProgress, _, mut state)) => {

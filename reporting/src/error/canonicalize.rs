@@ -2,7 +2,7 @@ use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
-use roc_region::all::{Loc, Region, LineInfo, LineColumn, LineColumnRegion};
+use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
@@ -357,8 +357,9 @@ pub fn can_problem<'b>(
                 alloc.reflow(
                     "This annotation does not match the definition immediately following it:",
                 ),
-                alloc.region(lines.convert_region(
-                    Region::span_across(annotation_pattern, def_pattern))),
+                alloc.region(
+                    lines.convert_region(Region::span_across(annotation_pattern, def_pattern)),
+                ),
                 alloc.reflow("Is it a typo? If not, put either a newline or comment between them."),
             ]);
 
@@ -454,7 +455,13 @@ fn to_invalid_optional_value_report<'b>(
     field_region: Region,
     record_region: Region,
 ) -> Report<'b> {
-    let doc = to_invalid_optional_value_report_help(alloc, lines, field_name, field_region, record_region);
+    let doc = to_invalid_optional_value_report_help(
+        alloc,
+        lines,
+        field_name,
+        field_region,
+        record_region,
+    );
 
     Report {
         title: "BAD OPTIONAL VALUE".to_string(),
@@ -477,7 +484,12 @@ fn to_invalid_optional_value_report_help<'b>(
             alloc.record_field(field_name),
             alloc.reflow(" field in an incorrect context!"),
         ]),
-        alloc.region_all_the_things(lines.convert_region(record_region), lines.convert_region(field_region), lines.convert_region(field_region), Annotation::Error),
+        alloc.region_all_the_things(
+            lines.convert_region(record_region),
+            lines.convert_region(field_region),
+            lines.convert_region(field_region),
+            Annotation::Error,
+        ),
         alloc.reflow(r"You can only use optional values in record destructuring, like:"),
         alloc
             .reflow(r"{ answer ? 42, otherField } = myRecord")
@@ -561,7 +573,10 @@ fn to_bad_ident_expr_report<'b>(
             let region = Region::new(surroundings.start(), pos);
             alloc.stack(vec![
                 alloc.reflow("Underscores are not allowed in identifier names:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                alloc.region_with_subregion(
+                    lines.convert_region(surroundings),
+                    lines.convert_region(region),
+                ),
                 alloc.concat(vec![alloc.reflow(
                     r"I recommend using camelCase, it is the standard in the Roc ecosystem.",
                 )]),
@@ -575,7 +590,10 @@ fn to_bad_ident_expr_report<'b>(
                     let region = Region::new(pos, pos.bump_column(width));
                     alloc.stack(vec![
                         alloc.reflow("I am very confused by this field access:"),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                        alloc.region_with_subregion(
+                            lines.convert_region(surroundings),
+                            lines.convert_region(region),
+                        ),
                         alloc.concat(vec![
                             alloc.reflow(r"It looks like a record field access on a private tag.")
                         ]),
@@ -585,7 +603,10 @@ fn to_bad_ident_expr_report<'b>(
                     let region = Region::new(pos, pos.bump_column(width));
                     alloc.stack(vec![
                         alloc.reflow("I am very confused by this expression:"),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                        alloc.region_with_subregion(
+                            lines.convert_region(surroundings),
+                            lines.convert_region(region),
+                        ),
                         alloc.concat(vec![
                             alloc.reflow(
                                 r"Looks like a private tag is treated like a module name. ",
@@ -601,7 +622,10 @@ fn to_bad_ident_expr_report<'b>(
                         Region::new(surroundings.start().bump_column(1), pos.bump_column(1));
                     alloc.stack(vec![
                         alloc.reflow("I am trying to parse a private tag here:"),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                        alloc.region_with_subregion(
+                            lines.convert_region(surroundings),
+                            lines.convert_region(region),
+                        ),
                         alloc.concat(vec![
                             alloc.reflow(r"But after the "),
                             alloc.keyword("@"),
@@ -698,7 +722,10 @@ fn to_bad_ident_pattern_report<'b>(
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse an identifier here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), lines.convert_region(region)),
+                alloc.region_with_subregion(
+                    lines.convert_region(surroundings),
+                    lines.convert_region(region),
+                ),
                 alloc.concat(vec![alloc.reflow(
                     r"Underscores are not allowed in identifiers. Use camelCase instead!",
                 )]),
@@ -821,7 +848,14 @@ fn pretty_runtime_error<'b>(
         }
 
         RuntimeError::LookupNotInScope(loc_name, options) => {
-            doc = not_found(alloc, lines, loc_name.region, &loc_name.value, "value", options);
+            doc = not_found(
+                alloc,
+                lines,
+                loc_name.region,
+                &loc_name.value,
+                "value",
+                options,
+            );
             title = UNRECOGNIZED_NAME;
         }
         RuntimeError::CircularDef(entries) => {

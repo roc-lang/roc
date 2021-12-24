@@ -70,10 +70,7 @@ impl<'a> State<'a> {
     /// useful when parsing something "manually" (using input.chars())
     /// and thus wanting a Region while not having access to loc().
     pub fn len_region(&self, length: u32) -> Region {
-        Region::new(
-            self.pos(),
-            self.pos().bump_column(length),
-        )
+        Region::new(self.pos(), self.pos().bump_column(length))
     }
 
     /// Return a failing ParseResult for the given FailReason
@@ -96,11 +93,7 @@ impl<'a> fmt::Debug for State<'a> {
             Err(_) => write!(f, "\n\tbytes: [invalid utf8] {:?}", self.bytes)?,
         }
 
-        write!(
-            f,
-            "\n\t(offset): {:?},",
-            self.pos()
-        )?;
+        write!(f, "\n\t(offset): {:?},", self.pos())?;
         write!(f, "\n\tindent_column: {}", self.indent_column)?;
         write!(f, "\n}}")
     }

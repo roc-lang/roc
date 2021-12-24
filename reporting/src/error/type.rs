@@ -3,7 +3,7 @@ use roc_collections::all::{Index, MutSet, SendMap};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Loc, Region, LineInfo};
+use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve::solve;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
@@ -203,7 +203,10 @@ fn report_mismatch<'b>(
     further_details: Option<RocDocBuilder<'b>>,
 ) -> Report<'b> {
     let snippet = if let Some(highlight) = opt_highlight {
-        alloc.region_with_subregion(lines.convert_region(highlight), lines.convert_region(region))
+        alloc.region_with_subregion(
+            lines.convert_region(highlight),
+            lines.convert_region(region),
+        )
     } else {
         alloc.region(lines.convert_region(region))
     };
@@ -244,7 +247,10 @@ fn report_bad_type<'b>(
     further_details: RocDocBuilder<'b>,
 ) -> Report<'b> {
     let snippet = if let Some(highlight) = opt_highlight {
-        alloc.region_with_subregion(lines.convert_region(highlight), lines.convert_region(region))
+        alloc.region_with_subregion(
+            lines.convert_region(highlight),
+            lines.convert_region(region),
+        )
     } else {
         alloc.region(lines.convert_region(region))
     };
@@ -428,7 +434,10 @@ fn to_expr_report<'b>(
                         // for typed bodies, include the line(s) with the signature
                         let joined =
                             roc_region::all::Region::span_across(&ann_region, &expr_region);
-                        alloc.region_with_subregion(lines.convert_region(joined), lines.convert_region(expr_region))
+                        alloc.region_with_subregion(
+                            lines.convert_region(joined),
+                            lines.convert_region(expr_region),
+                        )
                     },
                     comparison,
                 ]),

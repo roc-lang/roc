@@ -1,6 +1,6 @@
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
-use std::path::PathBuf;
 use roc_region::all::LineInfo;
+use std::path::PathBuf;
 use ven_pretty::DocAllocator;
 
 pub fn mono_problem<'b>(
@@ -98,7 +98,10 @@ pub fn mono_problem<'b>(
                     alloc.string(index.ordinal()),
                     alloc.reflow(" pattern is redundant:"),
                 ]),
-                alloc.region_with_subregion(lines.convert_region(overall_region), lines.convert_region(branch_region)),
+                alloc.region_with_subregion(
+                    lines.convert_region(overall_region),
+                    lines.convert_region(branch_region),
+                ),
                 alloc.reflow(
                     "Any value of this shape will be handled by \
                 a previous pattern, so this one should be removed.",

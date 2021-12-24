@@ -100,8 +100,7 @@ fn chomp_number_dec<'a>(
     let string =
         unsafe { std::str::from_utf8_unchecked(&state.bytes()[0..chomped + is_negative as usize]) };
 
-    let new = state
-        .advance(chomped + is_negative as usize);
+    let new = state.advance(chomped + is_negative as usize);
 
     Ok((
         Progress::MadeProgress,

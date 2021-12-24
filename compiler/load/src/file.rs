@@ -28,7 +28,7 @@ use roc_parse::header::PackageName;
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{ParseProblem, Parser, SyntaxError};
-use roc_region::all::{Loc, Region, LineInfo};
+use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_types::solved_types::Solved;
@@ -4334,7 +4334,13 @@ fn to_parse_problem_report<'a>(
 
     let lines = LineInfo::new(src);
 
-    let report = parse_problem(&alloc, &lines, problem.filename.clone(), starting_line, problem);
+    let report = parse_problem(
+        &alloc,
+        &lines,
+        problem.filename.clone(),
+        starting_line,
+        problem,
+    );
 
     let mut buf = String::new();
     let palette = DEFAULT_PALETTE;

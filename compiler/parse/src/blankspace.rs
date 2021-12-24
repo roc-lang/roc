@@ -193,13 +193,11 @@ where
     move |arena, state: State<'a>| {
         let comments_and_newlines = Vec::new_in(arena);
         match eat_spaces(state.clone(), false, comments_and_newlines) {
-            HasTab(state) => {
-                Err((
-                    MadeProgress,
-                    space_problem(BadInputError::HasTab, state.pos()),
-                    state,
-                ))
-            }
+            HasTab(state) => Err((
+                MadeProgress,
+                space_problem(BadInputError::HasTab, state.pos()),
+                state,
+            )),
             Good {
                 state: mut new_state,
                 multiline,
@@ -213,12 +211,20 @@ where
                     new_state.indent_column = new_state.column();
 
                     if new_state.column() >= min_indent {
-                        Ok((MadeProgress, comments_and_newlines.into_bump_slice(), new_state))
+                        Ok((
+                            MadeProgress,
+                            comments_and_newlines.into_bump_slice(),
+                            new_state,
+                        ))
                     } else {
                         Err((MadeProgress, indent_problem(state.pos()), state))
                     }
                 } else {
-                    Ok((MadeProgress, comments_and_newlines.into_bump_slice(), new_state))
+                    Ok((
+                        MadeProgress,
+                        comments_and_newlines.into_bump_slice(),
+                        new_state,
+                    ))
                 }
             }
         }
