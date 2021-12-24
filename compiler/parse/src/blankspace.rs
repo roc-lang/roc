@@ -210,7 +210,7 @@ where
             }
             Good {
                 xyzcol: pos,
-                state: new_state,
+                state: mut new_state,
                 multiline,
                 comments_and_newlines,
             } => {
@@ -219,21 +219,23 @@ where
                 } else if multiline {
                     // we parsed at least one newline
 
-                    state.indent_column = pos.column;
+                    new_state.indent_column = pos.column;
 
                     if pos.column >= min_indent {
-                        state.xyzlcol = pos;
-                        state = state.advance(state.bytes().len() - new_state.bytes().len());
+                        new_state.xyzlcol = pos;
+                        // state = state.advance(state.bytes().len() - new_state.bytes().len());
+                        // assert_eq!(state.bytes().len(), new_state.bytes().len());
 
-                        Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
+                        Ok((MadeProgress, comments_and_newlines.into_bump_slice(), new_state))
                     } else {
                         Err((MadeProgress, indent_problem(state.pos()), state))
                     }
                 } else {
-                    state.xyzlcol.column = pos.column;
-                    state = state.advance(state.bytes().len() - new_state.bytes().len());
+                    new_state.xyzlcol.column = pos.column;
+                    // state = state.advance(state.bytes().len() - new_state.bytes().len());
+                    // assert_eq!(state.bytes().len(), new_state.bytes().len());
 
-                    Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
+                    Ok((MadeProgress, comments_and_newlines.into_bump_slice(), new_state))
                 }
             }
         }

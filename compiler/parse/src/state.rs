@@ -11,6 +11,8 @@ pub struct State<'a> {
     /// Beware: bytes[0] always points the the current byte the parser is examining.
     bytes: &'a [u8],
 
+    original_bytes: &'a [u8],
+
     /// Length of the original input in bytes
     input_len: usize,
 
@@ -34,6 +36,7 @@ impl<'a> State<'a> {
     pub fn new(bytes: &'a [u8]) -> State<'a> {
         State {
             bytes,
+            original_bytes: bytes,
             input_len: bytes.len(),
             line_start: Position::zero(),
             xyzlcol: JustColumn { column: 0 },
@@ -45,16 +48,29 @@ impl<'a> State<'a> {
         self.bytes
     }
 
+    pub fn column(&self) -> u16 {
+        assert_eq!(
+            self.xyzlcol.column as u32,
+            self.pos().offset - self.line_start.offset,
+            "between {:?} and {:?}",
+            std::str::from_utf8(&self.original_bytes[..self.pos().offset as usize]).unwrap(),
+            std::str::from_utf8(&self.original_bytes[self.pos().offset as usize..]).unwrap(),
+            );
+        self.xyzlcol.column
+    }
+
     #[must_use]
     pub fn advance(&self, offset: usize) -> State<'a> {
         let mut state = self.clone();
+        // debug_assert!(!state.bytes[..offset].iter().any(|b| *b == b'\n'));
         state.bytes = &state.bytes[offset..];
         state
     }
 
     #[must_use]
     pub fn advance_newline(&self) -> State<'a> {
-        let mut state = self.advance(1);
+        let mut state = self.clone();
+        state.bytes = &state.bytes[1..];
         state.line_start = state.pos();
         state
     }

@@ -310,7 +310,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 fn parse_expr_start<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: JustColumn,
+    start_column: u16,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
@@ -322,7 +322,7 @@ fn parse_expr_start<'a>(
         )),
         loc!(specialize(EExpr::Expect, expect_help(min_indent, options))),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
-        loc!(move |a, s| parse_expr_operator_chain(min_indent, options, start, a, s)),
+        loc!(move |a, s| parse_expr_operator_chain(min_indent, options, start_column, a, s)),
         fail_expr_start_e()
     ]
     .parse(arena, state)
@@ -331,7 +331,7 @@ fn parse_expr_start<'a>(
 fn parse_expr_operator_chain<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: JustColumn,
+    start_column: u16,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
@@ -353,7 +353,7 @@ fn parse_expr_operator_chain<'a>(
                 end,
             };
 
-            parse_expr_end(min_indent, options, start, expr_state, arena, state)
+            parse_expr_end(min_indent, options, start_column, expr_state, arena, state)
         }
     }
 }
@@ -777,12 +777,12 @@ struct DefState<'a> {
 
 fn parse_defs_end<'a>(
     options: ExprParseOptions,
-    start: JustColumn,
+    start_column: u16,
     mut def_state: DefState<'a>,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, DefState<'a>, EExpr<'a>> {
-    let min_indent = start.column;
+    let min_indent = start_column;
     let initial = state.clone();
 
     let state = match space0_e(min_indent, EExpr::Space, EExpr::IndentStart).parse(arena, state) {
@@ -797,7 +797,7 @@ fn parse_defs_end<'a>(
     };
 
     let start = state.pos();
-    let xyzlcol = state.xyzlcol;
+    let column = state.column();
 
     match space0_after_e(
         crate::pattern::loc_pattern_help(min_indent),
@@ -833,7 +833,7 @@ fn parse_defs_end<'a>(
                         loc_def_expr,
                     );
 
-                    parse_defs_end(options, xyzlcol, def_state, arena, state)
+                    parse_defs_end(options, column, def_state, arena, state)
                 }
             }
         }
@@ -860,7 +860,7 @@ fn parse_defs_end<'a>(
                     loc_def_expr,
                 );
 
-                parse_defs_end(options, xyzlcol, def_state, arena, state)
+                parse_defs_end(options, column, def_state, arena, state)
             }
             Ok((_, BinOp::HasType, state)) => {
                 let (_, ann_type, state) = specialize(
@@ -882,7 +882,7 @@ fn parse_defs_end<'a>(
                     ann_type,
                 );
 
-                parse_defs_end(options, xyzlcol, def_state, arena, state)
+                parse_defs_end(options, column, def_state, arena, state)
             }
 
             _ => Ok((MadeProgress, def_state, initial)),
@@ -892,14 +892,14 @@ fn parse_defs_end<'a>(
 
 fn parse_defs_expr<'a>(
     options: ExprParseOptions,
-    start: JustColumn,
+    start_column: u16,
     def_state: DefState<'a>,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let min_indent = start.column;
+    let min_indent = start_column;
 
-    match parse_defs_end(options, start, def_state, arena, state) {
+    match parse_defs_end(options, start_column, def_state, arena, state) {
         Err(bad) => Err(bad),
         Ok((_, def_state, state)) => {
             // this is no def, because there is no `=` or `:`; parse as an expr
@@ -933,7 +933,7 @@ fn parse_defs_expr<'a>(
 fn parse_expr_operator<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: JustColumn,
+    start_column: u16,
     mut expr_state: ExprState<'a>,
     loc_op: Loc<BinOp>,
     arena: &'a Bump,
@@ -975,11 +975,11 @@ fn parse_expr_operator<'a>(
             expr_state.spaces_after = spaces;
             expr_state.end = new_end;
 
-            parse_expr_end(min_indent, options, start, expr_state, arena, state)
+            parse_expr_end(min_indent, options, start_column, expr_state, arena, state)
         }
         BinOp::Assignment => {
             let expr_region = expr_state.expr.region;
-            let indented_more = start.column + 1;
+            let indented_more = start_column + 1;
 
             let call = expr_state
                 .validate_assignment_or_backpassing(arena, loc_op, EExpr::ElmStyleFunction)
@@ -1020,11 +1020,11 @@ fn parse_expr_operator<'a>(
                 spaces_after: &[],
             };
 
-            parse_defs_expr(options, start, def_state, arena, state)
+            parse_defs_expr(options, start_column, def_state, arena, state)
         }
         BinOp::Backpassing => {
             let expr_region = expr_state.expr.region;
-            let indented_more = start.column + 1;
+            let indented_more = start_column + 1;
 
             let call = expr_state
                 .validate_assignment_or_backpassing(arena, loc_op, |_, pos| {
@@ -1074,7 +1074,7 @@ fn parse_expr_operator<'a>(
         }
         BinOp::HasType => {
             let expr_region = expr_state.expr.region;
-            let indented_more = start.column + 1;
+            let indented_more = start_column + 1;
 
             let (expr, arguments) = expr_state
                 .validate_has_type(arena, loc_op)
@@ -1168,7 +1168,7 @@ fn parse_expr_operator<'a>(
                 spaces_after: &[],
             };
 
-            parse_defs_expr(options, start, def_state, arena, state)
+            parse_defs_expr(options, start_column, def_state, arena, state)
         }
         _ => match loc_possibly_negative_or_negated_term(min_indent, options).parse(arena, state) {
             Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
@@ -1208,7 +1208,7 @@ fn parse_expr_operator<'a>(
                         expr_state.spaces_after = spaces;
 
                         // TODO new start?
-                        parse_expr_end(min_indent, options, start, expr_state, arena, state)
+                        parse_expr_end(min_indent, options, start_column, expr_state, arena, state)
                     }
                 }
             }
@@ -1222,7 +1222,7 @@ fn parse_expr_operator<'a>(
 fn parse_expr_end<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: JustColumn,
+    start_column: u16,
     mut expr_state: ExprState<'a>,
     arena: &'a Bump,
     state: State<'a>,
@@ -1260,7 +1260,7 @@ fn parse_expr_end<'a>(
                     expr_state.end = new_end;
                     expr_state.spaces_after = new_spaces;
 
-                    parse_expr_end(min_indent, options, start, expr_state, arena, state)
+                    parse_expr_end(min_indent, options, start_column, expr_state, arena, state)
                 }
             }
         }
@@ -1273,7 +1273,7 @@ fn parse_expr_end<'a>(
                     expr_state.consume_spaces(arena);
                     expr_state.initial = before_op;
                     parse_expr_operator(
-                        min_indent, options, start, expr_state, loc_op, arena, state,
+                        min_indent, options, start_column, expr_state, loc_op, arena, state,
                     )
                 }
                 Err((NoProgress, _, mut state)) => {
@@ -1310,7 +1310,7 @@ fn parse_expr_end<'a>(
                         match word2(b'<', b'-', EExpr::BackpassArrow).parse(arena, state) {
                             Err((_, fail, state)) => Err((MadeProgress, fail, state)),
                             Ok((_, _, state)) => {
-                                let min_indent = start.column;
+                                let min_indent = start_column;
 
                                 let parse_body = space0_before_e(
                                     move |a, s| parse_loc_expr(min_indent + 1, a, s),
@@ -1391,8 +1391,8 @@ fn parse_loc_expr_with_options<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    let start = state.xyzlcol;
-    parse_expr_start(min_indent, options, start, arena, state)
+    let column = state.column();
+    parse_expr_start(min_indent, options, column, arena, state)
 }
 
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
@@ -1539,17 +1539,17 @@ pub fn defs<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, EExpr
         let (_, initial_space, state) =
             space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
 
-        let xyzlcol = state.xyzlcol;
+        let start_column = state.column();
 
         let options = ExprParseOptions {
             accept_multi_backpassing: false,
             check_for_arrow: true,
         };
 
-        let (_, def_state, state) = parse_defs_end(options, xyzlcol, def_state, arena, state)?;
+        let (_, def_state, state) = parse_defs_end(options, start_column, def_state, arena, state)?;
 
         let (_, final_space, state) =
-            space0_e(xyzlcol.column, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
+            space0_e(start_column, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
 
         let mut output = Vec::with_capacity_in(def_state.defs.len(), arena);
 
@@ -1851,12 +1851,12 @@ mod when {
                 Err((NoProgress, fail, _)) => Err((NoProgress, fail, initial)),
                 Ok((_progress, spaces, state)) => {
                     match pattern_indent_level {
-                        Some(wanted) if state.xyzlcol.column > wanted => {
+                        Some(wanted) if state.column() > wanted => {
                             // this branch is indented too much
                             Err((NoProgress, EWhen::IndentPattern(state.pos()), initial))
                         }
-                        Some(wanted) if state.xyzlcol.column < wanted => {
-                            let indent = wanted - state.xyzlcol.column;
+                        Some(wanted) if state.column() < wanted => {
+                            let indent = wanted - state.column();
                             Err((
                                 NoProgress,
                                 EWhen::PatternAlignment(indent, state.pos()),
@@ -1868,7 +1868,7 @@ mod when {
                                 min_indent.max(pattern_indent_level.unwrap_or(min_indent));
                             // the region is not reliable for the indent column in the case of
                             // parentheses around patterns
-                            let pattern_indent_column = state.xyzlcol.column;
+                            let pattern_indent_column = state.column();
 
                             let parser = sep_by1(
                                 word1(b'|', EWhen::Bar),
@@ -1964,16 +1964,16 @@ fn expect_help<'a>(
     options: ExprParseOptions,
 ) -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let start = state.xyzlcol;
+        let start_column = state.column();
 
         let (_, _, state) =
             parser::keyword_e(keyword::EXPECT, EExpect::Expect).parse(arena, state)?;
 
         let (_, condition, state) = space0_before_e(
             specialize_ref(EExpect::Condition, move |arena, state| {
-                parse_loc_expr_with_options(start.column + 1, options, arena, state)
+                parse_loc_expr_with_options(start_column + 1, options, arena, state)
             }),
-            start.column + 1,
+            start_column + 1,
             EExpect::Space,
             EExpect::IndentCondition,
         )
