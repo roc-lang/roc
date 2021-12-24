@@ -125,17 +125,15 @@ fn call_the_closure(closure_data_pointer: [*]u8) void {
     // The closure returns result, nothing interesting to do with it
     return;
 
-export fn roc_fx_putLine(rocPath: str.RocStr) callconv(.C) void {
+export fn roc_fx_stdoutWrite(rocPath: str.RocStr) callconv(.C) void {
     const stdout = std.io.getStdOut().writer();
 
     for (rocPath.asSlice()) |char| {
         stdout.print("{c}", .{char}) catch unreachable;
     }
-
-    stdout.print("\n", .{}) catch unreachable;
 }
 
-fn readLine() []u8 {
+fn stdinRead() []u8 {
     const stdin = std.io.getStdIn().reader();
     return (stdin.readUntilDelimiterOrEof(&line_buf, '\n') catch unreachable) orelse "";
 }
