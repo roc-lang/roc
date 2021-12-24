@@ -15,9 +15,10 @@ use roc_types::types::{
     gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory, RecordField,
 };
 use roc_unify::unify::unify;
+use roc_unify::unify::Mode;
 use roc_unify::unify::Unified::*;
 
-use crate::constrain::Constraint;
+use crate::constrain::{Constraint, PresenceConstraint};
 use crate::lang::core::types::Type2;
 use crate::mem_pool::pool::Pool;
 use crate::mem_pool::pool_vec::PoolVec;
@@ -224,7 +225,7 @@ fn solve<'a>(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected) {
+            match unify(subs, actual, expected, Mode::Eq) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -317,7 +318,7 @@ fn solve<'a>(
                         expectation.get_type_ref(),
                     );
 
-                    match unify(subs, actual, expected) {
+                    match unify(subs, actual, expected, Mode::Eq) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);
 
@@ -374,7 +375,8 @@ fn solve<'a>(
 
             state
         }
-        Pattern(region, category, typ, expectation) => {
+        Pattern(region, category, typ, expectation)
+        | Present(typ, PresenceConstraint::Pattern(region, category, expectation)) => {
             let actual = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, typ);
             let expected = type_to_var(
                 arena,
@@ -386,7 +388,8 @@ fn solve<'a>(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected) {
+            // TODO(ayazhafiz): presence constraints for Expr2/Type2
+            match unify(subs, actual, expected, Mode::Eq) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -657,7 +660,73 @@ fn solve<'a>(
                     new_state
                 }
             }
-        } // _ => todo!("implement {:?}", constraint),
+        }
+        Present(typ, PresenceConstraint::IsOpen) => {
+            let actual = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, typ);
+            let mut new_desc = subs.get(actual);
+            match new_desc.content {
+                Content::Structure(FlatType::TagUnion(tags, _)) => {
+                    let new_ext = subs.fresh_unnamed_flex_var();
+                    let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
+                    new_desc.content = new_union;
+                    subs.set(actual, new_desc);
+                    state
+                }
+                _ => {
+                    // Today, an "open" constraint doesn't affect any types
+                    // other than tag unions. Recursive tag unions are constructed
+                    // at a later time (during occurs checks after tag unions are
+                    // resolved), so that's not handled here either.
+                    // NB: Handle record types here if we add presence constraints
+                    // to their type inference as well.
+                    state
+                }
+            }
+        }
+        Present(typ, PresenceConstraint::IncludesTag(tag_name, tys)) => {
+            let actual = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, typ);
+            let tag_ty = Type2::TagUnion(
+                PoolVec::new(
+                    std::iter::once((
+                        tag_name.clone(),
+                        PoolVec::new(tys.into_iter().map(ShallowClone::shallow_clone), mempool),
+                    )),
+                    mempool,
+                ),
+                mempool.add(Type2::EmptyTagUnion),
+            );
+            let includes = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, &tag_ty);
+
+            match unify(subs, actual, includes, Mode::Present) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    state
+                }
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // TODO: do we need a better error type here?
+                    let problem = TypeError::BadExpr(
+                        Region::zero(),
+                        Category::When,
+                        actual_type,
+                        Expected::NoExpectation(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
+                BadType(vars, problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::BadType(problem));
+
+                    state
+                }
+            }
+        }
     }
 }
 
