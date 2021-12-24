@@ -495,7 +495,7 @@ mod test_parse {
         // Make sure it's longer than our maximum line length
         assert_eq!(too_long_str.len(), max_line_length + 1);
 
-        assert_parsing_fails(&too_long_str, SyntaxError::LineTooLong(0));
+        assert_parsing_fails(&too_long_str, SyntaxError::LineTooLong(Position::zero()));
     }
 
     #[quickcheck]

@@ -159,6 +159,10 @@ pub struct Position {
 }
 
 impl Position {
+    pub const fn zero() -> Position {
+        Position { line: 0, column: 0 }
+    }
+    
     pub fn new(line: u32, column: u16) -> Position {
         Position { line, column }
     }

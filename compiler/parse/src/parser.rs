@@ -49,7 +49,7 @@ pub enum SyntaxError<'a> {
     Unexpected(Region),
     OutdentedTooFar,
     ConditionFailed,
-    LineTooLong(u32 /* which line was too long */),
+    LineTooLong(Position),
     TooManyLines,
     Eof(Region),
     InvalidPattern,
@@ -219,7 +219,7 @@ pub fn bad_input_to_syntax_error<'a>(bad_input: BadInputError, pos: Position) ->
     use crate::parser::BadInputError::*;
     match bad_input {
         HasTab => SyntaxError::NotYetImplemented("call error on tabs".to_string()),
-        LineTooLong => SyntaxError::LineTooLong(pos.line),
+        LineTooLong => SyntaxError::LineTooLong(pos),
         TooManyLines => SyntaxError::TooManyLines,
         BadUtf8 => SyntaxError::BadUtf8,
     }

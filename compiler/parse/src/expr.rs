@@ -16,7 +16,7 @@ use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
-use roc_region::all::{Loc, Position, Region};
+use roc_region::all::{Loc, Position, Region, LineColumn};
 
 use crate::parser::Progress::{self, *};
 
@@ -310,7 +310,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 fn parse_expr_start<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: Position,
+    start: LineColumn,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
@@ -331,7 +331,7 @@ fn parse_expr_start<'a>(
 fn parse_expr_operator_chain<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: Position,
+    start: LineColumn,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
@@ -512,12 +512,9 @@ fn numeric_negate_expression<'a, T>(
 ) -> Loc<Expr<'a>> {
     debug_assert_eq!(state.bytes().get(0), Some(&b'-'));
     // for overflow reasons, we must make the unary minus part of the number literal.
-    let start = expr.region.start();
+    let start = state.pos();
     let region = Region::new(
-        Position {
-            column: start.column - 1,
-            ..start
-        },
+        start,
         expr.region.end(),
     );
 
@@ -780,7 +777,7 @@ struct DefState<'a> {
 
 fn parse_defs_end<'a>(
     options: ExprParseOptions,
-    start: Position,
+    start: LineColumn,
     mut def_state: DefState<'a>,
     arena: &'a Bump,
     state: State<'a>,
@@ -800,6 +797,7 @@ fn parse_defs_end<'a>(
     };
 
     let start = state.pos();
+    let xyzlcol = state.xyzlcol;
 
     match space0_after_e(
         crate::pattern::loc_pattern_help(min_indent),
@@ -835,7 +833,7 @@ fn parse_defs_end<'a>(
                         loc_def_expr,
                     );
 
-                    parse_defs_end(options, start, def_state, arena, state)
+                    parse_defs_end(options, xyzlcol, def_state, arena, state)
                 }
             }
         }
@@ -862,7 +860,7 @@ fn parse_defs_end<'a>(
                     loc_def_expr,
                 );
 
-                parse_defs_end(options, start, def_state, arena, state)
+                parse_defs_end(options, xyzlcol, def_state, arena, state)
             }
             Ok((_, BinOp::HasType, state)) => {
                 let (_, ann_type, state) = specialize(
@@ -884,7 +882,7 @@ fn parse_defs_end<'a>(
                     ann_type,
                 );
 
-                parse_defs_end(options, start, def_state, arena, state)
+                parse_defs_end(options, xyzlcol, def_state, arena, state)
             }
 
             _ => Ok((MadeProgress, def_state, initial)),
@@ -894,7 +892,7 @@ fn parse_defs_end<'a>(
 
 fn parse_defs_expr<'a>(
     options: ExprParseOptions,
-    start: Position,
+    start: LineColumn,
     def_state: DefState<'a>,
     arena: &'a Bump,
     state: State<'a>,
@@ -935,7 +933,7 @@ fn parse_defs_expr<'a>(
 fn parse_expr_operator<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: Position,
+    start: LineColumn,
     mut expr_state: ExprState<'a>,
     loc_op: Loc<BinOp>,
     arena: &'a Bump,
@@ -1224,7 +1222,7 @@ fn parse_expr_operator<'a>(
 fn parse_expr_end<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: Position,
+    start: LineColumn,
     mut expr_state: ExprState<'a>,
     arena: &'a Bump,
     state: State<'a>,
@@ -1393,7 +1391,7 @@ fn parse_loc_expr_with_options<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    let start = state.pos();
+    let start = state.xyzlcol;
     parse_expr_start(min_indent, options, start, arena, state)
 }
 
@@ -1541,17 +1539,17 @@ pub fn defs<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, EExpr
         let (_, initial_space, state) =
             space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
 
-        let start = state.pos();
+        let xyzlcol = state.xyzlcol;
 
         let options = ExprParseOptions {
             accept_multi_backpassing: false,
             check_for_arrow: true,
         };
 
-        let (_, def_state, state) = parse_defs_end(options, start, def_state, arena, state)?;
+        let (_, def_state, state) = parse_defs_end(options, xyzlcol, def_state, arena, state)?;
 
         let (_, final_space, state) =
-            space0_e(start.column, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
+            space0_e(xyzlcol.column, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
 
         let mut output = Vec::with_capacity_in(def_state.defs.len(), arena);
 
@@ -1966,7 +1964,7 @@ fn expect_help<'a>(
     options: ExprParseOptions,
 ) -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let start = state.pos();
+        let start = state.xyzlcol;
 
         let (_, _, state) =
             parser::keyword_e(keyword::EXPECT, EExpect::Expect).parse(arena, state)?;

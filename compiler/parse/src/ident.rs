@@ -276,10 +276,7 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
         }
         Err(_) => {
             // we've already made progress with the initial `.`
-            Err(BadIdent::StrayDot(Position {
-                line: pos.line,
-                column: pos.column + 1,
-            }))
+            Err(BadIdent::StrayDot(pos.bump_column(1)))
         }
     }
 }
@@ -301,10 +298,7 @@ fn chomp_private_tag(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
                 Ok(value)
             }
         }
-        Err(_) => Err(BadIdent::BadPrivateTag(Position {
-            line: pos.line,
-            column: pos.column + 1,
-        })),
+        Err(_) => Err(BadIdent::BadPrivateTag(pos.bump_column(1))),
     }
 }
 
