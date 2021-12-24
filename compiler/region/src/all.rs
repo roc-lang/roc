@@ -101,8 +101,6 @@ impl fmt::Debug for Region {
 #[derive(Copy, Clone, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Position {
     pub offset: u32,
-    line: u32,
-    column: u16,
 }
 
 impl PartialEq for Position {
@@ -113,18 +111,16 @@ impl PartialEq for Position {
 
 impl Position {
     pub const fn zero() -> Position {
-        Position { offset: 0, line: 0, column: 0 }
+        Position { offset: 0 }
     }
     
-    pub const fn new(offset: u32, line: u32, column: u16) -> Position {
-        Position { offset, line, column }
+    pub const fn new(offset: u32) -> Position {
+        Position { offset }
     }
 
     #[must_use]
     pub const fn bump_column(self, count: u16) -> Self {
         Self {
-            line: self.line,
-            column: self.column + count,
             offset: self.offset + count as u32,
         }
     }
@@ -132,8 +128,6 @@ impl Position {
     #[must_use]
     pub fn bump_invisible(self, count: u16) -> Self {
         Self {
-            line: self.line,
-            column: self.column,
             offset: self.offset + count as u32,
         }
     }
@@ -141,8 +135,6 @@ impl Position {
     #[must_use]
     pub fn bump_newline(self) -> Self {
         Self {
-            line: self.line + 1,
-            column: 0,
             offset: self.offset + 1,
         }
     }
@@ -151,8 +143,6 @@ impl Position {
     pub const fn sub(self, count: u16) -> Self {
         Self {
             offset: self.offset - count as u32,
-            line: self.line,
-            column: self.column - count,
         }
     }
 }
@@ -305,8 +295,8 @@ pub struct Loc<T> {
 }
 
 impl<T> Loc<T> {
-    pub fn new(start: Position, end: Position, value: T) -> Loc<T> {
-        let region = Region::new(start, end);
+    pub fn new(start: u32, end: u32, value: T) -> Loc<T> {
+        let region = Region::new(Position::new(start), Position::new(end));
         Loc { region, value }
     }
 
@@ -386,23 +376,14 @@ impl LineInfo {
     }
 
     pub fn convert_pos(&self, pos: Position) -> LineColumn {
-        let res = self.convert_offset(pos.offset);
-        // let expected = LineColumn { line: pos.line, column: pos.column };
-        // assert_eq!(expected, res);
-        res
+        self.convert_offset(pos.offset)
     }
 
     pub fn convert_region(&self, region: Region) -> LineColumnRegion {
-        let res = LineColumnRegion {
+        LineColumnRegion {
             start: self.convert_pos(region.start()),
             end: self.convert_pos(region.end()),
-        };
-        let expected = LineColumnRegion::new(
-            LineColumn { line: region.start.line, column: region.start.column },
-            LineColumn { line: region.end.line, column: region.end.column },
-        );
-        assert_eq!(expected, res);
-        res
+        }
     }
 }
 
