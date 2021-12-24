@@ -1,10 +1,10 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
 use crate::parser::{self, and, backtrackable, BadInputError, Parser, Progress::*};
+use crate::state::JustColumn;
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::LineColumn;
 use roc_region::all::Loc;
 use roc_region::all::Position;
 
@@ -194,7 +194,7 @@ where
     move |arena, mut state: State<'a>| {
         let comments_and_newlines = Vec::new_in(arena);
 
-        match eat_spaces(state.bytes(), state.xyzlcol, state.pos(), comments_and_newlines) {
+        match eat_spaces(state.bytes(), false, state.xyzlcol, state.pos(), comments_and_newlines) {
             HasTab(xyzlcol, pos) => {
                 // there was a tab character
                 let mut state = state;
@@ -211,12 +211,13 @@ where
             }
             Good {
                 xyzcol: pos,
+                multiline,
                 bytes,
                 comments_and_newlines,
             } => {
                 if bytes == state.bytes() {
                     Ok((NoProgress, &[] as &[_], state))
-                } else if state.xyzlcol.line != pos.line {
+                } else if multiline {
                     // we parsed at least one newline
 
                     state.indent_column = pos.column;
@@ -242,16 +243,18 @@ where
 
 enum SpaceState<'a> {
     Good {
-        xyzcol: LineColumn,
+        xyzcol: JustColumn,
+        multiline: bool,
         bytes: &'a [u8],
         comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
     },
-    HasTab(LineColumn, Position),
+    HasTab(JustColumn, Position),
 }
 
 fn eat_spaces<'a>(
     mut bytes: &'a [u8],
-    mut xyzlcol: LineColumn,
+    mut multiline: bool,
+    mut xyzlcol: JustColumn,
     mut pos: Position,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
@@ -267,7 +270,7 @@ fn eat_spaces<'a>(
             b'\n' => {
                 bytes = &bytes[1..];
                 pos = pos.bump_newline();
-                xyzlcol.line += 1;
+                multiline = true;
                 xyzlcol.column = 0;
                 comments_and_newlines.push(CommentOrNewline::Newline);
             }
@@ -281,7 +284,7 @@ fn eat_spaces<'a>(
             b'#' => {
                 xyzlcol.column += 1;
                 pos = pos.bump_column(1);
-                return eat_line_comment(&bytes[1..], xyzlcol, pos, comments_and_newlines);
+                return eat_line_comment(&bytes[1..], multiline, xyzlcol, pos, comments_and_newlines);
             }
             _ => break,
         }
@@ -289,6 +292,7 @@ fn eat_spaces<'a>(
 
     Good {
         xyzcol: xyzlcol,
+        multiline,
         bytes,
         comments_and_newlines,
     }
@@ -296,7 +300,8 @@ fn eat_spaces<'a>(
 
 fn eat_line_comment<'a>(
     mut bytes: &'a [u8],
-    mut xyzlcol: LineColumn,
+    mut multiline: bool,
+    mut xyzlcol: JustColumn,
     mut pos: Position,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
@@ -318,9 +323,9 @@ fn eat_line_comment<'a>(
                 pos = pos.bump_newline();
 
                 comments_and_newlines.push(CommentOrNewline::DocComment(""));
-                xyzlcol.line += 1;
+                multiline = true;
                 xyzlcol.column = 0;
-                return eat_spaces(bytes, xyzlcol, pos, comments_and_newlines);
+                return eat_spaces(bytes, multiline, xyzlcol, pos, comments_and_newlines);
             }
             None => {
                 // consume the second #
@@ -330,6 +335,7 @@ fn eat_line_comment<'a>(
 
                 return Good {
                     xyzcol: xyzlcol,
+                    multiline,
                     bytes,
                     comments_and_newlines,
                 };
@@ -357,9 +363,9 @@ fn eat_line_comment<'a>(
                     comments_and_newlines.push(CommentOrNewline::LineComment(comment));
                 }
                 pos = pos.bump_newline();
-                xyzlcol.line += 1;
+                multiline = true;
                 xyzlcol.column = 0;
-                return eat_spaces(&bytes[1..], xyzlcol, pos, comments_and_newlines);
+                return eat_spaces(&bytes[1..], multiline, xyzlcol, pos, comments_and_newlines);
             }
             _ => {
                 bytes = &bytes[1..];
@@ -381,6 +387,7 @@ fn eat_line_comment<'a>(
 
     Good {
         xyzcol: xyzlcol,
+        multiline,
         bytes,
         comments_and_newlines,
     }

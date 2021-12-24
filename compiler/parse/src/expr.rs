@@ -11,12 +11,12 @@ use crate::parser::{
     EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::loc_closure_param;
-use crate::state::State;
+use crate::state::{State, JustColumn};
 use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
-use roc_region::all::{Loc, Position, Region, LineColumn};
+use roc_region::all::{Loc, Position, Region};
 
 use crate::parser::Progress::{self, *};
 
@@ -310,7 +310,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 fn parse_expr_start<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: LineColumn,
+    start: JustColumn,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
@@ -331,7 +331,7 @@ fn parse_expr_start<'a>(
 fn parse_expr_operator_chain<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: LineColumn,
+    start: JustColumn,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
@@ -777,7 +777,7 @@ struct DefState<'a> {
 
 fn parse_defs_end<'a>(
     options: ExprParseOptions,
-    start: LineColumn,
+    start: JustColumn,
     mut def_state: DefState<'a>,
     arena: &'a Bump,
     state: State<'a>,
@@ -892,7 +892,7 @@ fn parse_defs_end<'a>(
 
 fn parse_defs_expr<'a>(
     options: ExprParseOptions,
-    start: LineColumn,
+    start: JustColumn,
     def_state: DefState<'a>,
     arena: &'a Bump,
     state: State<'a>,
@@ -933,7 +933,7 @@ fn parse_defs_expr<'a>(
 fn parse_expr_operator<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: LineColumn,
+    start: JustColumn,
     mut expr_state: ExprState<'a>,
     loc_op: Loc<BinOp>,
     arena: &'a Bump,
@@ -1222,7 +1222,7 @@ fn parse_expr_operator<'a>(
 fn parse_expr_end<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-    start: LineColumn,
+    start: JustColumn,
     mut expr_state: ExprState<'a>,
     arena: &'a Bump,
     state: State<'a>,

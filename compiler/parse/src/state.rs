@@ -1,7 +1,7 @@
 use crate::parser::Progress::*;
 use crate::parser::{BadInputError, Progress};
 use bumpalo::Bump;
-use roc_region::all::{Position, Region, LineColumn};
+use roc_region::all::{Position, Region};
 use std::fmt;
 
 /// A position in a source file.
@@ -15,11 +15,17 @@ pub struct State<'a> {
     input_len: usize,
 
     /// Current position within the input (line/column)
-    pub xyzlcol: LineColumn,
+    pub xyzlcol: JustColumn,
 
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)
     pub indent_column: u16,
+}
+
+
+#[derive(Clone, Copy)]
+pub struct JustColumn {
+    pub column: u16,
 }
 
 impl<'a> State<'a> {
@@ -27,7 +33,7 @@ impl<'a> State<'a> {
         State {
             bytes,
             input_len: bytes.len(),
-            xyzlcol: LineColumn::default(),
+            xyzlcol: JustColumn { column: 0 },
             indent_column: 0,
         }
     }
@@ -80,8 +86,7 @@ impl<'a> State<'a> {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
                     bytes: &self.bytes[quantity..],
-                    xyzlcol: LineColumn {
-                        line: self.xyzlcol.line,
+                    xyzlcol: JustColumn {
                         column: column_usize as u16,
                     },
                     // Once we hit a nonspace character, we are no longer indenting.
@@ -125,8 +130,8 @@ impl<'a> fmt::Debug for State<'a> {
 
         write!(
             f,
-            "\n\t(line, col): ({}, {}),",
-            self.xyzlcol.line, self.xyzlcol.column
+            "\n\t(col): {},",
+            self.xyzlcol.column
         )?;
         write!(f, "\n\tindent_column: {}", self.indent_column)?;
         write!(f, "\n}}")
