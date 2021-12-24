@@ -3,13 +3,13 @@ use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::keyword;
 use crate::parser::{
     allocated, backtrackable, optional, specialize, specialize_ref, word1, word2, EType,
-    ETypeApply, ETypeInParens, ETypeRecord, ETypeTagUnion, ParseResult, Parser,
+    ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ParseResult, Parser,
     Progress::{self, *},
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Loc, Position, Region};
+use roc_region::all::{Loc, Position};
 
 pub fn located_help<'a>(
     min_indent: u16,
@@ -47,6 +47,56 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ET
     }
 }
 
+fn check_type_alias<'a>(
+    p: Progress,
+    annot: Loc<TypeAnnotation<'a>>,
+) -> impl Parser<'a, Loc<(&'a str, &'a [Loc<&'a str>])>, ETypeInlineAlias> {
+    move |arena, state| match annot.value {
+        TypeAnnotation::Apply("", tag_name, args) => {
+            let mut arg_names = Vec::new_in(arena);
+            arg_names.reserve(args.len());
+            for arg in args {
+                if let TypeAnnotation::BoundVariable(v) = arg.value {
+                    arg_names.push(Loc::at(arg.region, v));
+                } else {
+                    return Err((
+                        p,
+                        ETypeInlineAlias::ArgumentNotLowercase(arg.region.start()),
+                        state,
+                    ));
+                }
+            }
+
+            Ok((
+                p,
+                Loc::at(annot.region, (tag_name, arg_names.into_bump_slice())),
+                state,
+            ))
+        }
+        TypeAnnotation::Apply(_, _, _) => {
+            Err((p, ETypeInlineAlias::Qualified(annot.region.start()), state))
+        }
+        _ => Err((p, ETypeInlineAlias::NotAnAlias(annot.region.start()), state)),
+    }
+}
+
+fn parse_type_alias_after_as<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Loc<(&'a str, &'a [Loc<&'a str>])>, EType<'a>> {
+    move |arena, state| {
+        space0_before_e(
+            term(min_indent),
+            min_indent,
+            EType::TSpace,
+            EType::TAsIndentStart,
+        )
+        .parse(arena, state)
+        .and_then(|(p, annot, state)| {
+            specialize(EType::TInlineAlias, check_type_alias(p, annot)).parse(arena, state)
+        })
+    }
+}
+
 fn fail_type_start<'a, T: 'a>() -> impl Parser<'a, T, EType<'a>> {
     |_arena, state: State<'a>| Err((NoProgress, EType::TStart(state.pos), state))
 }
@@ -72,12 +122,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'
                             backtrackable(space0_e(min_indent, EType::TSpace, EType::TIndentEnd)),
                             crate::parser::keyword_e(keyword::AS, EType::TEnd)
                         ),
-                        space0_before_e(
-                            term(min_indent),
-                            min_indent,
-                            EType::TSpace,
-                            EType::TAsIndentStart
-                        )
+                        parse_type_alias_after_as(min_indent)
                     ),
                     Some
                 ),
@@ -87,13 +132,17 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'
         |arena: &'a Bump,
          (loc_ann, opt_as): (
             Loc<TypeAnnotation<'a>>,
-            Option<(&'a [_], Loc<TypeAnnotation<'a>>)>
+            Option<(&'a [_], Loc<(&'a str, &'a [Loc<&'a str>])>)>
         )| {
             match opt_as {
-                Some((spaces, loc_as)) => {
-                    let region = Region::span_across(&loc_ann.region, &loc_as.region);
-                    let value =
-                        TypeAnnotation::As(arena.alloc(loc_ann), spaces, arena.alloc(loc_as));
+                Some((
+                    spaces,
+                    Loc {
+                        region,
+                        value: alias,
+                    },
+                )) => {
+                    let value = TypeAnnotation::As(arena.alloc(loc_ann), spaces, alias);
 
                     Loc { region, value }
                 }

@@ -4,7 +4,7 @@ Defs(
             |L 0-0, C 0-3| Identifier(
                 "foo",
             ),
-            |L 0-0, C 6-33| As(
+            |L 0-0, C 25-33| As(
                 |L 0-0, C 6-21| Apply(
                     "Foo.Bar",
                     "Baz",
@@ -18,16 +18,11 @@ Defs(
                     ],
                 ),
                 [],
-                |L 0-0, C 25-33| Apply(
-                    "",
+                (
                     "Blah",
                     [
-                        |L 0-0, C 30-31| BoundVariable(
-                            "a",
-                        ),
-                        |L 0-0, C 32-33| BoundVariable(
-                            "b",
-                        ),
+                        |L 0-0, C 30-31| "a",
+                        |L 0-0, C 32-33| "b",
                     ],
                 ),
             ),

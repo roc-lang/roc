@@ -280,7 +280,7 @@ pub enum TypeAnnotation<'a> {
     As(
         &'a Loc<TypeAnnotation<'a>>,
         &'a [CommentOrNewline<'a>],
-        &'a Loc<TypeAnnotation<'a>>,
+        (&'a str, &'a [Loc<&'a str>]),
     ),
 
     Record {

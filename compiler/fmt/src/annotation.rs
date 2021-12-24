@@ -126,7 +126,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     || args.iter().any(|loc_arg| (&loc_arg.value).is_multiline())
             }
             Apply(_, _, args) => args.iter().any(|loc_arg| loc_arg.value.is_multiline()),
-            As(lhs, _, rhs) => lhs.value.is_multiline() || rhs.value.is_multiline(),
+            As(lhs, _, _) => lhs.value.is_multiline(),
 
             Record { fields, ext } => {
                 match ext {
@@ -245,12 +245,17 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 }
             }
 
-            As(lhs, _spaces, rhs) => {
+            As(lhs, _spaces, (name, args)) => {
                 // TODO use spaces?
                 lhs.value.format(buf, indent);
-                buf.push_str(" as");
                 buf.spaces(1);
-                rhs.value.format(buf, indent);
+                buf.push_str("as");
+                buf.spaces(1);
+                buf.push_str(name);
+                for arg in *args {
+                    buf.spaces(1);
+                    buf.push_str(arg.value);
+                }
             }
 
             SpaceBefore(ann, spaces) => {
