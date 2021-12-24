@@ -1,4 +1,4 @@
-platform examples/arena-allocator
+platform "examples/arena-allocator"
     requires {}{ main : Task {} [] }
     exposes []
     packages {}
