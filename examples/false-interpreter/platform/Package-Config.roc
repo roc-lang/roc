@@ -1,4 +1,4 @@
-platform examples/cli
+platform "examples/cli"
     requires {} { main : Str -> Task {} [] }# TODO FIXME
     exposes []
     packages {}

@@ -1,9 +1,8 @@
 Platform {
     header: PlatformHeader {
-        name: |L 0-0, C 9-19| PackageName {
-            account: "foo",
-            pkg: "barbaz",
-        },
+        name: |L 0-0, C 9-21| PackageName(
+            "foo/barbaz",
+        ),
         requires: PlatformRequires {
             rigids: [
                 |L 1-1, C 14-26| PlatformRigid {
@@ -25,10 +24,8 @@ Platform {
             |L 3-3, C 15-27| PackageEntry {
                 shorthand: "foo",
                 spaces_after_shorthand: [],
-                package_or_path: |L 3-3, C 20-27| Path(
-                    PlainLine(
-                        "./foo",
-                    ),
+                package_name: |L 3-3, C 20-27| PackageName(
+                    "./foo",
                 ),
             },
         ],

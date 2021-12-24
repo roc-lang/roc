@@ -1,9 +1,8 @@
 use crate::ast::{Collection, CommentOrNewline, Def, Module, Spaced};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
-    package_entry, package_name, package_or_path, AppHeader, Effects, ExposedName, ImportsEntry,
-    InterfaceHeader, ModuleName, PackageEntry, PlatformHeader, PlatformRequires, PlatformRigid, To,
-    TypedIdent,
+    package_entry, package_name, AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader,
+    ModuleName, PackageEntry, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
 };
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
@@ -312,7 +311,7 @@ fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, EProvides<'a>> {
             |_, pos| EProvides::Identifier(pos),
             map!(lowercase_ident(), To::ExistingPackage)
         ),
-        specialize(EProvides::Package, map!(package_or_path(), To::NewPackage))
+        specialize(EProvides::Package, map!(package_name(), To::NewPackage))
     ]
 }
 
