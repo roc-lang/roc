@@ -164,6 +164,7 @@ mod test_parse {
         pass/negative_float.expr,
         pass/negative_int.expr,
         pass/nested_def_annotation.module,
+        pass/nested_if.expr,
         pass/nested_module.header,
         pass/newline_after_equals.expr, // Regression test for https://github.com/rtfeldman/roc/issues/51
         pass/newline_after_mul.expr,
