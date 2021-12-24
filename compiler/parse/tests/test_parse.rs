@@ -23,7 +23,7 @@ mod test_parse {
     use roc_parse::parser::{Parser, SyntaxError};
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
-    use roc_region::all::{Loc, Region, Position};
+    use roc_region::all::{Loc, Region};
     use roc_test_utils::assert_multiline_str_eq;
     use std::{f64, i64};
 
@@ -479,23 +479,6 @@ mod test_parse {
     #[test]
     fn empty_source_file() {
         assert_parsing_fails("", SyntaxError::Eof(Region::zero()));
-    }
-
-    #[test]
-    fn first_line_too_long() {
-        let max_line_length = u16::MAX as usize;
-
-        // the string literal "ZZZZZZZZZ" but with way more Zs
-        let too_long_str_body: String = (1..max_line_length)
-            .into_iter()
-            .map(|_| "Z".to_string())
-            .collect();
-        let too_long_str = format!("\"{}\"", too_long_str_body);
-
-        // Make sure it's longer than our maximum line length
-        assert_eq!(too_long_str.len(), max_line_length + 1);
-
-        assert_parsing_fails(&too_long_str, SyntaxError::LineTooLong(Position::zero()));
     }
 
     #[quickcheck]

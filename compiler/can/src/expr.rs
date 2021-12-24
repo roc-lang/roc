@@ -758,13 +758,13 @@ pub fn canonicalize_expr<'a>(
 
             let region1 = Region::new(
                 *binop1_position,
-                binop1_position.bump_column(binop1.width()),
+                binop1_position.bump_column(binop1.width() as u32),
             );
             let loc_binop1 = Loc::at(region1, *binop1);
 
             let region2 = Region::new(
                 *binop2_position,
-                binop2_position.bump_column(binop2.width()),
+                binop2_position.bump_column(binop2.width() as u32),
             );
             let loc_binop2 = Loc::at(region2, *binop2);
 

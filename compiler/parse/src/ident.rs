@@ -68,10 +68,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
                 Err((NoProgress, (), state))
             } else {
                 let width = ident.len();
-                match state.advance_without_indenting_ee(width, |_| ()) {
-                    Ok(state) => Ok((MadeProgress, ident, state)),
-                    Err(bad) => Err(bad),
-                }
+                Ok((MadeProgress, ident, state.advance(width)))
             }
         }
     }
@@ -85,10 +82,7 @@ pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
                 Err(_) => Err((MadeProgress, (), state)),
                 Ok(ident) => {
                     let width = ident.len();
-                    match state.advance_without_indenting_ee(width, |_| ()) {
-                        Ok(state) => Ok((MadeProgress, ident, state)),
-                        Err(bad) => Err(bad),
-                    }
+                    Ok((MadeProgress, ident, state.advance(width)))
                 }
             }
         } else {
@@ -107,10 +101,7 @@ pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             let width = ident.len();
-            match state.advance_without_indenting_ee(width, |_| ()) {
-                Ok(state) => Ok((MadeProgress, ident, state)),
-                Err(bad) => Err(bad),
-            }
+            Ok((MadeProgress, ident, state.advance(width)))
         }
     }
 }
@@ -123,10 +114,7 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
                 Err((MadeProgress, (), state))
             } else {
                 let width = ident.len();
-                match state.advance_without_indenting_ee(width, |_| ()) {
-                    Ok(state) => Ok((MadeProgress, ident, state)),
-                    Err(bad) => Err(bad),
-                }
+                Ok((MadeProgress, ident, state.advance(width)))
             }
         }
     }
@@ -134,9 +122,7 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 
 macro_rules! advance_state {
     ($state:expr, $n:expr) => {
-        $state.advance_without_indenting_ee($n, |pos| {
-            BadIdent::Space(crate::parser::BadInputError::LineTooLong, pos)
-        })
+        Ok($state.advance($n))
     };
 }
 
@@ -177,9 +163,7 @@ fn malformed_identifier<'a>(
     let delta = initial_bytes.len() - state.bytes().len();
     let parsed_str = unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
-    state = state.advance_without_indenting_ee(chomped, |pos| {
-        EExpr::Space(crate::parser::BadInputError::LineTooLong, pos)
-    })?;
+    state = state.advance(chomped);
 
     Ok((MadeProgress, Ident::Malformed(parsed_str, problem), state))
 }
@@ -292,7 +276,7 @@ fn chomp_private_tag(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
             let width = 1 + name.len();
 
             if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[width..]) {
-                Err(BadIdent::BadPrivateTag(pos.bump_column(width as u16)))
+                Err(BadIdent::BadPrivateTag(pos.bump_column(width as u32)))
             } else {
                 let value = unsafe { std::str::from_utf8_unchecked(&buffer[..width]) };
                 Ok(value)
@@ -306,7 +290,7 @@ fn chomp_identifier_chain<'a>(
     arena: &'a Bump,
     buffer: &'a [u8],
     pos: Position,
-) -> Result<(u16, Ident<'a>), (u16, BadIdent)> {
+) -> Result<(u32, Ident<'a>), (u32, BadIdent)> {
     use encode_unicode::CharExt;
 
     let first_is_uppercase;
@@ -318,7 +302,7 @@ fn chomp_identifier_chain<'a>(
                 Ok(accessor) => {
                     let bytes_parsed = 1 + accessor.len();
 
-                    return Ok((bytes_parsed as u16, Ident::AccessorFunction(accessor)));
+                    return Ok((bytes_parsed as u32, Ident::AccessorFunction(accessor)));
                 }
                 Err(fail) => return Err((1, fail)),
             },
@@ -326,7 +310,7 @@ fn chomp_identifier_chain<'a>(
                 Ok(tagname) => {
                     let bytes_parsed = tagname.len();
 
-                    return Ok((bytes_parsed as u16, Ident::PrivateTag(tagname)));
+                    return Ok((bytes_parsed as u32, Ident::PrivateTag(tagname)));
                 }
                 Err(fail) => return Err((1, fail)),
             },
@@ -381,19 +365,19 @@ fn chomp_identifier_chain<'a>(
                     parts: parts.into_bump_slice(),
                 };
 
-                Ok((chomped as u16, ident))
+                Ok((chomped as u32, ident))
             }
             Err(0) if !module_name.is_empty() => Err((
-                chomped as u16,
-                BadIdent::QualifiedTag(pos.bump_column(chomped as u16)),
+                chomped as u32,
+                BadIdent::QualifiedTag(pos.bump_column(chomped as u32)),
             )),
             Err(1) if parts.is_empty() => Err((
-                chomped as u16 + 1,
-                BadIdent::WeirdDotQualified(pos.bump_column(chomped as u16 + 1)),
+                chomped as u32 + 1,
+                BadIdent::WeirdDotQualified(pos.bump_column(chomped as u32 + 1)),
             )),
             Err(width) => Err((
-                chomped as u16 + width,
-                BadIdent::WeirdDotAccess(pos.bump_column(chomped as u16 + width)),
+                chomped as u32 + width,
+                BadIdent::WeirdDotAccess(pos.bump_column(chomped as u32 + width)),
             )),
         }
     } else if let Ok(('_', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
@@ -401,13 +385,13 @@ fn chomp_identifier_chain<'a>(
         // but still parse them (and generate a malformed identifier)
         // to give good error messages for this case
         Err((
-            chomped as u16 + 1,
-            BadIdent::Underscore(pos.bump_column(chomped as u16 + 1)),
+            chomped as u32 + 1,
+            BadIdent::Underscore(pos.bump_column(chomped as u32 + 1)),
         ))
     } else if first_is_uppercase {
         // just one segment, starting with an uppercase letter; that's a global tag
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
-        Ok((chomped as u16, Ident::GlobalTag(value)))
+        Ok((chomped as u32, Ident::GlobalTag(value)))
     } else {
         // just one segment, starting with a lowercase letter; that's a normal identifier
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
@@ -415,11 +399,11 @@ fn chomp_identifier_chain<'a>(
             module_name: "",
             parts: arena.alloc([value]),
         };
-        Ok((chomped as u16, ident))
+        Ok((chomped as u32, ident))
     }
 }
 
-fn chomp_module_chain(buffer: &[u8]) -> Result<u16, Progress> {
+fn chomp_module_chain(buffer: &[u8]) -> Result<u32, Progress> {
     let mut chomped = 0;
 
     while let Some(b'.') = buffer.get(chomped) {
@@ -438,7 +422,7 @@ fn chomp_module_chain(buffer: &[u8]) -> Result<u16, Progress> {
     if chomped == 0 {
         Err(NoProgress)
     } else {
-        Ok(chomped as u16)
+        Ok(chomped as u32)
     }
 }
 
@@ -446,10 +430,7 @@ pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
     move |_, state: State<'a>| match chomp_concrete_type(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok((module_name, type_name, width)) => {
-            match state.advance_without_indenting_ee(width, |_| ()) {
-                Ok(state) => Ok((MadeProgress, (module_name, type_name), state)),
-                Err(bad) => Err(bad),
-            }
+            Ok((MadeProgress, (module_name, type_name), state.advance(width)))
         }
     }
 }
@@ -489,7 +470,7 @@ fn chomp_concrete_type(buffer: &[u8]) -> Result<(&str, &str, usize), Progress> {
     }
 }
 
-fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, &'a str>) -> Result<u16, u16> {
+fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, &'a str>) -> Result<u32, u32> {
     let mut chomped = 0;
 
     while let Some(b'.') = buffer.get(chomped) {
@@ -505,16 +486,16 @@ fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, &'a str>) -> Res
 
                     chomped += name.len() + 1;
                 }
-                Err(_) => return Err(chomped as u16 + 1),
+                Err(_) => return Err(chomped as u32 + 1),
             },
-            None => return Err(chomped as u16 + 1),
+            None => return Err(chomped as u32 + 1),
         }
     }
 
     if chomped == 0 {
         Err(0)
     } else {
-        Ok(chomped as u16)
+        Ok(chomped as u32)
     }
 }
 

@@ -119,14 +119,14 @@ impl Position {
     }
 
     #[must_use]
-    pub const fn bump_column(self, count: u16) -> Self {
+    pub const fn bump_column(self, count: u32) -> Self {
         Self {
             offset: self.offset + count as u32,
         }
     }
 
     #[must_use]
-    pub fn bump_invisible(self, count: u16) -> Self {
+    pub fn bump_invisible(self, count: u32) -> Self {
         Self {
             offset: self.offset + count as u32,
         }
@@ -140,7 +140,7 @@ impl Position {
     }
 
     #[must_use]
-    pub const fn sub(self, count: u16) -> Self {
+    pub const fn sub(self, count: u32) -> Self {
         Self {
             offset: self.offset - count as u32,
         }

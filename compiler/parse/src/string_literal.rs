@@ -19,9 +19,7 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
                 // We didn't find any hex digits!
                 return Err((NoProgress, EString::CodePtEnd(state.pos()), state));
             } else {
-                let state = state.advance_without_indenting_ee(buf.len(), |pos| {
-                    EString::Space(BadInputError::LineTooLong, pos)
-                })?;
+                let state = state.advance(buf.len());
 
                 return Ok((MadeProgress, buf.into_bump_str(), state));
             }
@@ -33,8 +31,7 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
 
 macro_rules! advance_state {
     ($state:expr, $n:expr) => {
-        $state
-            .advance_without_indenting_ee($n, |pos| EString::Space(BadInputError::LineTooLong, pos))
+        Ok($state.advance($n))
     };
 }
 

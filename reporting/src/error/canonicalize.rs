@@ -711,9 +711,9 @@ fn to_bad_ident_pattern_report<'b>(
 
 #[derive(Debug)]
 enum BadIdentNext<'a> {
-    LowercaseAccess(u16),
-    UppercaseAccess(u16),
-    NumberAccess(u16),
+    LowercaseAccess(u32),
+    UppercaseAccess(u32),
+    NumberAccess(u32),
     Keyword(&'a str),
     DanglingDot,
     Other(Option<char>),
@@ -737,13 +737,13 @@ fn what_is_next<'a>(source_lines: &'a [&'a str], pos: LineColumn) -> BadIdentNex
                     None => BadIdentNext::Other(None),
                     Some('.') => match it.next() {
                         Some(c) if c.is_lowercase() => {
-                            BadIdentNext::LowercaseAccess(2 + till_whitespace(it) as u16)
+                            BadIdentNext::LowercaseAccess(2 + till_whitespace(it) as u32)
                         }
                         Some(c) if c.is_uppercase() => {
-                            BadIdentNext::UppercaseAccess(2 + till_whitespace(it) as u16)
+                            BadIdentNext::UppercaseAccess(2 + till_whitespace(it) as u32)
                         }
                         Some(c) if c.is_ascii_digit() => {
-                            BadIdentNext::NumberAccess(2 + till_whitespace(it) as u16)
+                            BadIdentNext::NumberAccess(2 + till_whitespace(it) as u32)
                         }
                         _ => BadIdentNext::DanglingDot,
                     },

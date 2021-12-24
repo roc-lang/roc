@@ -12,14 +12,14 @@ use bumpalo::Bump;
 use roc_region::all::{Loc, Position, Region};
 
 pub fn located_help<'a>(
-    min_indent: u16,
+    min_indent: u32,
     is_trailing_comma_valid: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     expression(min_indent, is_trailing_comma_valid)
 }
 
 #[inline(always)]
-fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ETypeTagUnion<'a>> {
+fn tag_union_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, ETypeTagUnion<'a>> {
     move |arena, state| {
         let (_, tags, state) = collection_trailing_sep_e!(
             word1(b'[', ETypeTagUnion::Open),
@@ -104,7 +104,7 @@ fn fail_type_start<'a, T: 'a>() -> impl Parser<'a, T, EType<'a>> {
     |_arena, state: State<'a>| Err((NoProgress, EType::TStart(state.pos()), state))
 }
 
-fn term<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+fn term<'a>(min_indent: u32) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     map_with_arena!(
         and!(
             one_of!(
@@ -165,7 +165,7 @@ fn loc_inferred<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     })
 }
 
-fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+fn loc_applied_arg<'a>(min_indent: u32) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     use crate::ast::Spaceable;
 
     map_with_arena!(
@@ -193,7 +193,7 @@ fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a
 }
 
 fn loc_type_in_parens<'a>(
-    min_indent: u16,
+    min_indent: u32,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
     between!(
         word1(b'(', ETypeInParens::Open),
@@ -210,7 +210,7 @@ fn loc_type_in_parens<'a>(
 }
 
 #[inline(always)]
-fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>, ETypeTagUnion<'a>> {
+fn tag_type<'a>(min_indent: u32) -> impl Parser<'a, Tag<'a>, ETypeTagUnion<'a>> {
     move |arena, state: State<'a>| {
         let (_, name, state) = loc!(parse_tag_name(ETypeTagUnion::End)).parse(arena, state)?;
 
@@ -245,7 +245,7 @@ where
 }
 
 fn record_type_field<'a>(
-    min_indent: u16,
+    min_indent: u32,
 ) -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'a>>, ETypeRecord<'a>> {
     use crate::ident::lowercase_ident;
     use crate::parser::Either::*;
@@ -323,7 +323,7 @@ fn record_type_field<'a>(
 }
 
 #[inline(always)]
-fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
+fn record_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
     use crate::type_annotation::TypeAnnotation::*;
 
     (move |arena, state| {
@@ -352,7 +352,7 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, EType
     .trace("type_annotation:record_type")
 }
 
-fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
+fn applied_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
     map!(
         and!(
             specialize(EType::TApply, parse_concrete_type),
@@ -379,13 +379,13 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ETyp
 }
 
 fn loc_applied_args_e<'a>(
-    min_indent: u16,
+    min_indent: u32,
 ) -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, EType<'a>> {
     zero_or_more!(loc_applied_arg(min_indent))
 }
 
 fn expression<'a>(
-    min_indent: u16,
+    min_indent: u32,
     is_trailing_comma_valid: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     (move |arena, state: State<'a>| {
@@ -512,9 +512,7 @@ fn parse_concrete_type<'a>(
             let parsed_str =
                 unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
-            state = state.advance_without_indenting_ee(chomped, |pos| {
-                ETypeApply::Space(crate::parser::BadInputError::LineTooLong, pos)
-            })?;
+            state = state.advance(chomped);
 
             Ok((MadeProgress, TypeAnnotation::Malformed(parsed_str), state))
         }

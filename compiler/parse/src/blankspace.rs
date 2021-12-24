@@ -1,7 +1,6 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
 use crate::parser::{self, and, backtrackable, BadInputError, Parser, Progress::*};
-use crate::state::JustColumn;
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -10,7 +9,7 @@ use roc_region::all::Position;
 
 pub fn space0_around_ee<'a, P, S, E>(
     parser: P,
-    min_indent: u16,
+    min_indent: u32,
     space_problem: fn(BadInputError, Position) -> E,
     indent_before_problem: fn(Position) -> E,
     indent_after_problem: fn(Position) -> E,
@@ -36,7 +35,7 @@ where
 
 pub fn space0_before_optional_after<'a, P, S, E>(
     parser: P,
-    min_indent: u16,
+    min_indent: u32,
     space_problem: fn(BadInputError, Position) -> E,
     indent_before_problem: fn(Position) -> E,
     indent_after_problem: fn(Position) -> E,
@@ -101,7 +100,7 @@ where
 
 pub fn space0_before_e<'a, P, S, E>(
     parser: P,
-    min_indent: u16,
+    min_indent: u32,
     space_problem: fn(BadInputError, Position) -> E,
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
@@ -128,7 +127,7 @@ where
 
 pub fn space0_after_e<'a, P, S, E>(
     parser: P,
-    min_indent: u16,
+    min_indent: u32,
     space_problem: fn(BadInputError, Position) -> E,
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
@@ -154,14 +153,14 @@ where
 }
 
 pub fn check_indent<'a, E>(
-    min_indent: u16,
+    min_indent: u32,
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, (), E>
 where
     E: 'a,
 {
     move |_, state: State<'a>| {
-        if state.xyzlcol.column >= min_indent {
+        if state.column() >= min_indent {
             Ok((NoProgress, (), state))
         } else {
             Err((NoProgress, indent_problem(state.pos()), state))
@@ -170,7 +169,7 @@ where
 }
 
 pub fn space0_e<'a, E>(
-    min_indent: u16,
+    min_indent: u32,
     space_problem: fn(BadInputError, Position) -> E,
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
@@ -182,7 +181,7 @@ where
 
 #[inline(always)]
 fn spaces_help_help<'a, E>(
-    min_indent: u16,
+    min_indent: u32,
     space_problem: fn(BadInputError, Position) -> E,
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
@@ -191,17 +190,10 @@ where
 {
     use SpaceState::*;
 
-    move |arena, mut state: State<'a>| {
+    move |arena, state: State<'a>| {
         let comments_and_newlines = Vec::new_in(arena);
-        let col = state.xyzlcol;
-        match eat_spaces(state.clone(), false, col, comments_and_newlines) {
-            HasTab(xyzlcol, mut state) => {
-                // there was a tab character
-                state.xyzlcol = xyzlcol;
-                // TODO: it _seems_ like if we're changing the line/column, we should also be
-                // advancing the state by the corresponding number of bytes.
-                // Not doing this is likely a bug!
-                // state = state.advance(<something>);
+        match eat_spaces(state.clone(), false, comments_and_newlines) {
+            HasTab(state) => {
                 Err((
                     MadeProgress,
                     space_problem(BadInputError::HasTab, state.pos()),
@@ -209,7 +201,6 @@ where
                 ))
             }
             Good {
-                xyzcol: pos,
                 state: mut new_state,
                 multiline,
                 comments_and_newlines,
@@ -219,22 +210,14 @@ where
                 } else if multiline {
                     // we parsed at least one newline
 
-                    new_state.indent_column = pos.column;
+                    new_state.indent_column = new_state.column();
 
-                    if pos.column >= min_indent {
-                        new_state.xyzlcol = pos;
-                        // state = state.advance(state.bytes().len() - new_state.bytes().len());
-                        // assert_eq!(state.bytes().len(), new_state.bytes().len());
-
+                    if new_state.column() >= min_indent {
                         Ok((MadeProgress, comments_and_newlines.into_bump_slice(), new_state))
                     } else {
                         Err((MadeProgress, indent_problem(state.pos()), state))
                     }
                 } else {
-                    new_state.xyzlcol.column = pos.column;
-                    // state = state.advance(state.bytes().len() - new_state.bytes().len());
-                    // assert_eq!(state.bytes().len(), new_state.bytes().len());
-
                     Ok((MadeProgress, comments_and_newlines.into_bump_slice(), new_state))
                 }
             }
@@ -244,18 +227,16 @@ where
 
 enum SpaceState<'a> {
     Good {
-        xyzcol: JustColumn,
         state: State<'a>,
         multiline: bool,
         comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
     },
-    HasTab(JustColumn, State<'a>),
+    HasTab(State<'a>),
 }
 
 fn eat_spaces<'a>(
     mut state: State<'a>,
     mut multiline: bool,
-    mut xyzlcol: JustColumn,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
     use SpaceState::*;
@@ -264,31 +245,27 @@ fn eat_spaces<'a>(
         match c {
             b' ' => {
                 state = state.advance(1);
-                xyzlcol.column += 1;
             }
             b'\n' => {
                 state = state.advance_newline();
                 multiline = true;
-                xyzlcol.column = 0;
                 comments_and_newlines.push(CommentOrNewline::Newline);
             }
             b'\r' => {
                 state = state.advance_newline();
             }
             b'\t' => {
-                return HasTab(xyzlcol, state);
+                return HasTab(state);
             }
             b'#' => {
-                xyzlcol.column += 1;
                 state = state.advance(1);
-                return eat_line_comment(state, multiline, xyzlcol, comments_and_newlines);
+                return eat_line_comment(state, multiline, comments_and_newlines);
             }
             _ => break,
         }
     }
 
     Good {
-        xyzcol: xyzlcol,
         state,
         multiline,
         comments_and_newlines,
@@ -298,7 +275,6 @@ fn eat_spaces<'a>(
 fn eat_line_comment<'a>(
     mut state: State<'a>,
     mut multiline: bool,
-    mut xyzlcol: JustColumn,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
     use SpaceState::*;
@@ -306,28 +282,24 @@ fn eat_line_comment<'a>(
     let is_doc_comment = if let Some(b'#') = state.bytes().get(0) {
         match state.bytes().get(1) {
             Some(b' ') => {
-                xyzlcol.column += 2;
                 state = state.advance(2);
 
                 true
             }
             Some(b'\n') => {
                 // consume the second # and the \n
-                state = state.advance(2);
+                state = state.advance(1);
+                state = state.advance_newline();
 
                 comments_and_newlines.push(CommentOrNewline::DocComment(""));
                 multiline = true;
-                xyzlcol.column = 0;
-                return eat_spaces(state, multiline, xyzlcol, comments_and_newlines);
+                return eat_spaces(state, multiline, comments_and_newlines);
             }
             None => {
                 // consume the second #
-                xyzlcol.column += 1;
                 state = state.advance(1);
-                // pos = pos.bump_column(1);
 
                 return Good {
-                    xyzcol: xyzlcol,
                     state,
                     multiline,
                     comments_and_newlines,
@@ -341,13 +313,12 @@ fn eat_line_comment<'a>(
     };
 
     let initial = state.bytes();
-    let initial_column = xyzlcol.column;
 
     for c in state.bytes() {
         match c {
-            b'\t' => return HasTab(xyzlcol, state),
+            b'\t' => return HasTab(state),
             b'\n' => {
-                let delta = (xyzlcol.column - initial_column) as usize;
+                let delta = initial.len() - state.bytes().len();
                 let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
 
                 if is_doc_comment {
@@ -357,22 +328,19 @@ fn eat_line_comment<'a>(
                 }
                 state = state.advance_newline();
                 multiline = true;
-                xyzlcol.column = 0;
-                return eat_spaces(state, multiline, xyzlcol, comments_and_newlines);
+                return eat_spaces(state, multiline, comments_and_newlines);
             }
             b'\r' => {
                 state = state.advance_newline();
-                xyzlcol.column += 1;
             }
             _ => {
                 state = state.advance(1);
-                xyzlcol.column += 1;
             }
         }
     }
 
     // We made it to the end of the bytes. This means there's a comment without a trailing newline.
-    let delta = (xyzlcol.column - initial_column) as usize;
+    let delta = initial.len() - state.bytes().len();
     let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
 
     if is_doc_comment {
@@ -382,7 +350,6 @@ fn eat_line_comment<'a>(
     }
 
     Good {
-        xyzcol: xyzlcol,
         state,
         multiline,
         comments_and_newlines,

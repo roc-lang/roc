@@ -397,7 +397,7 @@ pub enum EWhen<'a> {
     IndentArrow(Position),
     IndentBranch(Position),
     IndentIfGuard(Position),
-    PatternAlignment(u16, Position),
+    PatternAlignment(u32, Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -730,12 +730,10 @@ where
         // to prevent treating `whence` or `iffy` as keywords
         match state.bytes().get(width) {
             Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' => {
-                state.xyzlcol.column += width as u16;
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
             None => {
-                state.xyzlcol.column += width as u16;
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
@@ -1289,8 +1287,7 @@ where
 
     move |_arena: &'a Bump, state: State<'a>| match state.bytes().get(0) {
         Some(x) if *x == word => {
-            let mut state = state.advance(1);
-            state.xyzlcol.column += 1;
+            let state = state.advance(1);
             Ok((MadeProgress, (), state))
         }
         _ => Err((NoProgress, to_error(state.pos()), state)),
@@ -1309,8 +1306,7 @@ where
 
     move |_arena: &'a Bump, state: State<'a>| {
         if state.bytes().starts_with(&needle) {
-            let mut state = state.advance(2);
-            state.xyzlcol.column += 2;
+            let state = state.advance(2);
             Ok((MadeProgress, (), state))
         } else {
             Err((NoProgress, to_error(state.pos()), state))
@@ -1318,7 +1314,7 @@ where
     }
 }
 
-pub fn check_indent<'a, TE, E>(min_indent: u16, to_problem: TE) -> impl Parser<'a, (), E>
+pub fn check_indent<'a, TE, E>(min_indent: u32, to_problem: TE) -> impl Parser<'a, (), E>
 where
     TE: Fn(Position) -> E,
     E: 'a,

@@ -167,7 +167,6 @@ fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
     |_, mut state: State<'a>| match chomp_module_name(state.bytes()) {
         Ok(name) => {
             let width = name.len();
-            state.xyzlcol.column += width as u16;
             state = state.advance(width);
 
             Ok((MadeProgress, ModuleName::new(name), state))
@@ -436,7 +435,7 @@ fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a
 
 #[inline(always)]
 fn requires_rigids<'a>(
-    min_indent: u16,
+    min_indent: u32,
 ) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, PlatformRigid<'a>>>>, ERequires<'a>> {
     collection_trailing_sep_e!(
         word1(b'{', ERequires::ListStart),
@@ -514,7 +513,7 @@ fn exposes_values<'a>() -> impl Parser<
 }
 
 fn spaces_around_keyword<'a, E>(
-    min_indent: u16,
+    min_indent: u32,
     keyword: &'static str,
     expectation: fn(Position) -> E,
     space_problem: fn(crate::parser::BadInputError, Position) -> E,

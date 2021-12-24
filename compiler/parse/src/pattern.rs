@@ -24,14 +24,14 @@ pub enum PatternType {
     WhenBranch,
 }
 
-pub fn loc_closure_param<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+pub fn loc_closure_param<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     move |arena, state| parse_closure_param(arena, state, min_indent)
 }
 
 fn parse_closure_param<'a>(
     arena: &'a Bump,
     state: State<'a>,
-    min_indent: u16,
+    min_indent: u32,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         // An ident is the most common param, e.g. \foo -> ...
@@ -50,7 +50,7 @@ fn parse_closure_param<'a>(
     .parse(arena, state)
 }
 
-pub fn loc_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+pub fn loc_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         specialize(EPattern::PInParens, loc_pattern_in_parens_help(min_indent)),
         loc!(underscore_pattern_help()),
@@ -65,12 +65,12 @@ pub fn loc_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>
 }
 
 fn loc_tag_pattern_args_help<'a>(
-    min_indent: u16,
+    min_indent: u32,
 ) -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
     zero_or_more!(loc_tag_pattern_arg(min_indent))
 }
 
-fn loc_tag_pattern_arg<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+fn loc_tag_pattern_arg<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     // Don't parse operators, because they have a higher precedence than function application.
     // If we encounter one, we're done parsing function args!
     move |arena, state| {
@@ -95,7 +95,7 @@ fn loc_tag_pattern_arg<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>,
 }
 
 fn loc_parse_tag_pattern_arg<'a>(
-    min_indent: u16,
+    min_indent: u32,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
@@ -115,7 +115,7 @@ fn loc_parse_tag_pattern_arg<'a>(
 }
 
 fn loc_pattern_in_parens_help<'a>(
-    min_indent: u16,
+    min_indent: u32,
 ) -> impl Parser<'a, Loc<Pattern<'a>>, PInParens<'a>> {
     between!(
         word1(b'(', PInParens::Open),
@@ -162,7 +162,7 @@ fn string_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
 }
 
 fn loc_ident_pattern_help<'a>(
-    min_indent: u16,
+    min_indent: u32,
     can_have_arguments: bool,
 ) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
@@ -310,7 +310,7 @@ fn lowercase_ident_pattern<'a>(
 }
 
 #[inline(always)]
-fn record_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
+fn record_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
     move |arena, state| {
         let (_, fields, state) = collection_trailing_sep_e!(
             // word1_check_indent!(b'{', PRecord::Open, min_indent, PRecord::IndentOpen),
@@ -333,7 +333,7 @@ fn record_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRec
     }
 }
 
-fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> {
+fn record_pattern_field<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> {
     use crate::parser::Either::*;
 
     move |arena, state: State<'a>| {

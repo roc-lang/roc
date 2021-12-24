@@ -1,5 +1,4 @@
-use crate::parser::Progress::*;
-use crate::parser::{BadInputError, Progress};
+use crate::parser::Progress;
 use bumpalo::Bump;
 use roc_region::all::{Position, Region};
 use std::fmt;
@@ -11,35 +10,23 @@ pub struct State<'a> {
     /// Beware: bytes[0] always points the the current byte the parser is examining.
     bytes: &'a [u8],
 
-    original_bytes: &'a [u8],
-
     /// Length of the original input in bytes
     input_len: usize,
 
+    /// Position of the start of the current line
     line_start: Position,
-
-    /// Current position within the input (line/column)
-    pub xyzlcol: JustColumn,
 
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)
-    pub indent_column: u16,
-}
-
-
-#[derive(Clone, Copy)]
-pub struct JustColumn {
-    pub column: u16,
+    pub indent_column: u32,
 }
 
 impl<'a> State<'a> {
     pub fn new(bytes: &'a [u8]) -> State<'a> {
         State {
             bytes,
-            original_bytes: bytes,
             input_len: bytes.len(),
             line_start: Position::zero(),
-            xyzlcol: JustColumn { column: 0 },
             indent_column: 0,
         }
     }
@@ -48,15 +35,8 @@ impl<'a> State<'a> {
         self.bytes
     }
 
-    pub fn column(&self) -> u16 {
-        assert_eq!(
-            self.xyzlcol.column as u32,
-            self.pos().offset - self.line_start.offset,
-            "between {:?} and {:?}",
-            std::str::from_utf8(&self.original_bytes[..self.pos().offset as usize]).unwrap(),
-            std::str::from_utf8(&self.original_bytes[self.pos().offset as usize..]).unwrap(),
-            );
-        self.xyzlcol.column
+    pub fn column(&self) -> u32 {
+        self.pos().offset - self.line_start.offset
     }
 
     #[must_use]
@@ -85,49 +65,11 @@ impl<'a> State<'a> {
         self.bytes.is_empty()
     }
 
-    /// Use advance_spaces to advance with indenting.
-    /// This assumes we are *not* advancing with spaces, or at least that
-    /// any spaces on the line were preceded by non-spaces - which would mean
-    /// they weren't eligible to indent anyway.
-    pub fn advance_without_indenting_e<TE, E>(
-        self,
-        quantity: usize,
-        to_error: TE,
-    ) -> Result<Self, (Progress, E, Self)>
-    where
-        TE: Fn(BadInputError, Position) -> E,
-    {
-        self.advance_without_indenting_ee(quantity, |p| to_error(BadInputError::LineTooLong, p))
-    }
-
-    pub fn advance_without_indenting_ee<TE, E>(
-        self,
-        quantity: usize,
-        to_error: TE,
-    ) -> Result<Self, (Progress, E, Self)>
-    where
-        TE: Fn(Position) -> E,
-    {
-        match (self.xyzlcol.column as usize).checked_add(quantity) {
-            Some(column_usize) if column_usize <= u16::MAX as usize => {
-                Ok(State {
-                    bytes: &self.bytes[quantity..],
-                    xyzlcol: JustColumn {
-                        column: column_usize as u16,
-                    },
-                    // Once we hit a nonspace character, we are no longer indenting.
-                    ..self
-                })
-            }
-            _ => Err((NoProgress, to_error(self.pos()), self)),
-        }
-    }
-
     /// Returns a Region corresponding to the current state, but
     /// with the the end column advanced by the given amount. This is
     /// useful when parsing something "manually" (using input.chars())
     /// and thus wanting a Region while not having access to loc().
-    pub fn len_region(&self, length: u16) -> Region {
+    pub fn len_region(&self, length: u32) -> Region {
         Region::new(
             self.pos(),
             self.pos().bump_column(length),
@@ -156,8 +98,8 @@ impl<'a> fmt::Debug for State<'a> {
 
         write!(
             f,
-            "\n\t(col): {},",
-            self.xyzlcol.column
+            "\n\t(offset): {:?},",
+            self.pos()
         )?;
         write!(f, "\n\tindent_column: {}", self.indent_column)?;
         write!(f, "\n}}")

@@ -236,7 +236,7 @@ fn to_expr_report<'a>(
 
         EExpr::BadOperator(op, pos) => {
             let surroundings = Region::new(start, *pos);
-            let region = Region::new(*pos, pos.bump_column(op.len() as u16));
+            let region = Region::new(*pos, pos.bump_column(op.len() as u32));
 
             let suggestion = match *op {
                 "|" => vec![
