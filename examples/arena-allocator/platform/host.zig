@@ -138,3 +138,11 @@ export fn roc_fx_stdinRead() callconv(.C) str.RocStr {
     const data = (stdin.readUntilDelimiterOrEof(&line_buf, '\n') catch unreachable) orelse "";
     return RocStr.fromSlice();
 }
+
+export fn roc_fx_arenaStart() callconv(.C) void {
+    // todo
+}
+
+export fn roc_fx_arenaEnd() callconv(.C) void {
+    // todo
+}
