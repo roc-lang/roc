@@ -21,7 +21,7 @@ use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
-use ven_graph::{strongly_connected_components, topological_sort_into_groups};
+use ven_graph::{strongly_connected_components, topological_sort, topological_sort_into_groups};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Def {
@@ -106,6 +106,69 @@ impl Declaration {
     }
 }
 
+/// Returns a topologically sorted sequence of alias names
+fn sort_aliases_before_introduction(mut alias_symbols: MutMap<Symbol, Vec<Symbol>>) -> Vec<Symbol> {
+    let defined_symbols: Vec<Symbol> = alias_symbols.keys().copied().collect();
+
+    // find the strongly connected components and their relations
+    let sccs = {
+        // only retain symbols from the current alias_defs
+        for v in alias_symbols.iter_mut() {
+            v.1.retain(|x| defined_symbols.iter().any(|s| s == x));
+        }
+
+        let all_successors_with_self = |symbol: &Symbol| alias_symbols[symbol].iter().copied();
+
+        strongly_connected_components(&defined_symbols, all_successors_with_self)
+    };
+
+    // then sort the strongly connected components
+    let groups: Vec<_> = (0..sccs.len()).collect();
+    let mut group_symbols: Vec<Vec<Symbol>> = vec![Vec::new(); groups.len()];
+
+    let mut symbol_to_group_index = MutMap::default();
+    let mut group_to_groups = vec![Vec::new(); groups.len()];
+
+    for (index, group) in sccs.iter().enumerate() {
+        for s in group {
+            symbol_to_group_index.insert(*s, index);
+        }
+    }
+
+    for (index, group) in sccs.iter().enumerate() {
+        for s in group {
+            let reachable = &alias_symbols[s];
+            for r in reachable {
+                let new_index = symbol_to_group_index[r];
+
+                if new_index != index {
+                    group_to_groups[index].push(new_index);
+                }
+            }
+        }
+    }
+
+    for v in group_symbols.iter_mut() {
+        v.sort();
+        v.dedup();
+    }
+
+    let all_successors_with_self = |group: &usize| group_to_groups[*group].iter().copied();
+
+    // split into self-recursive and mutually recursive
+    match topological_sort(&groups, all_successors_with_self) {
+        Ok(result) => result
+            .iter()
+            .rev()
+            .map(|group_index| sccs[*group_index].iter())
+            .flatten()
+            .copied()
+            .collect(),
+
+        Err(_loop_detected) => unreachable!("the groups cannot recurse"),
+    }
+}
+
 #[inline(always)]
 pub fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
@@ -179,68 +242,81 @@ pub fn canonicalize_defs<'a>(
     let mut aliases = SendMap::default();
     let mut value_defs = Vec::new();
 
-    println!("anew");
+    let mut alias_defs = MutMap::default();
+    let mut alias_symbols = MutMap::default();
+
     for pending_def in pending.into_iter() {
         match pending_def {
             PendingDef::Alias { name, vars, ann } => {
-                let symbol = name.value;
-                let mut can_ann =
-                    canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
+                let symbols =
+                    crate::annotation::find_alias_symbols(env.home, &mut env.ident_ids, &ann.value);
 
-                // Record all the annotation's references in output.references.lookups
-                for symbol in can_ann.references {
-                    output.references.lookups.insert(symbol);
-                    output.references.referenced_aliases.insert(symbol);
-                }
-
-                let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
-                let mut is_phantom = false;
-
-                for loc_lowercase in vars {
-                    if let Some(var) = can_ann
-                        .introduced_variables
-                        .var_by_name(&loc_lowercase.value)
-                    {
-                        // This is a valid lowercase rigid var for the alias.
-                        can_vars.push(Loc {
-                            value: (loc_lowercase.value.clone(), *var),
-                            region: loc_lowercase.region,
-                        });
-                    } else {
-                        is_phantom = true;
-
-                        env.problems.push(Problem::PhantomTypeArgument {
-                            alias: symbol,
-                            variable_region: loc_lowercase.region,
-                            variable_name: loc_lowercase.value.clone(),
-                        });
-                    }
-                }
-
-                if is_phantom {
-                    // Bail out
-                    continue;
-                }
-
-                if can_ann.typ.contains_symbol(symbol) {
-                    make_tag_union_recursive(
-                        env,
-                        symbol,
-                        name.region,
-                        vec![],
-                        &mut can_ann.typ,
-                        var_store,
-                        &mut false,
-                    );
-                }
-
-                dbg!(symbol);
-                scope.add_alias(symbol, ann.region, can_vars.clone(), can_ann.typ.clone());
-                let alias = scope.lookup_alias(symbol).expect("alias is added to scope");
-                aliases.insert(symbol, alias.clone());
+                alias_symbols.insert(name.value, symbols);
+                alias_defs.insert(name.value, (name, vars, ann));
             }
             other => value_defs.push(other),
         }
+    }
+
+    let sorted = sort_aliases_before_introduction(alias_symbols);
+
+    for alias_name in sorted {
+        let (name, vars, ann) = alias_defs.remove(&alias_name).unwrap();
+
+        let symbol = name.value;
+        let mut can_ann =
+            canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
+
+        // Record all the annotation's references in output.references.lookups
+        for symbol in can_ann.references {
+            output.references.lookups.insert(symbol);
+            output.references.referenced_aliases.insert(symbol);
+        }
+
+        let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
+        let mut is_phantom = false;
+
+        for loc_lowercase in vars {
+            if let Some(var) = can_ann
+                .introduced_variables
+                .var_by_name(&loc_lowercase.value)
+            {
+                // This is a valid lowercase rigid var for the alias.
+                can_vars.push(Loc {
+                    value: (loc_lowercase.value.clone(), *var),
+                    region: loc_lowercase.region,
+                });
+            } else {
+                is_phantom = true;
+
+                env.problems.push(Problem::PhantomTypeArgument {
+                    alias: symbol,
+                    variable_region: loc_lowercase.region,
+                    variable_name: loc_lowercase.value.clone(),
+                });
+            }
+        }
+
+        if is_phantom {
+            // Bail out
+            continue;
+        }
+
+        if can_ann.typ.contains_symbol(symbol) {
+            make_tag_union_recursive(
+                env,
+                symbol,
+                name.region,
+                vec![],
+                &mut can_ann.typ,
+                var_store,
+                &mut false,
+            );
+        }
+
+        scope.add_alias(symbol, ann.region, can_vars.clone(), can_ann.typ.clone());
+        let alias = scope.lookup_alias(symbol).expect("alias is added to scope");
+        aliases.insert(symbol, alias.clone());
     }
 
     correct_mutual_recursive_type_alias(env, &mut aliases, var_store);
@@ -919,7 +995,6 @@ fn canonicalize_pending_def<'a>(
                 }
             }
 
-            dbg!(symbol);
             scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
 
             if can_ann.typ.contains_symbol(symbol) {
@@ -930,7 +1005,6 @@ fn canonicalize_pending_def<'a>(
                     let mut rec_type_union = Type::RecursiveTagUnion(rec_var, tags, ext);
                     rec_type_union.substitute_alias(symbol, &Type::Variable(rec_var));
 
-                    dbg!(symbol);
                     scope.add_alias(symbol, name.region, can_vars, rec_type_union);
                 } else {
                     env.problems
