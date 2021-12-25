@@ -92,7 +92,7 @@ pub fn gen_and_eval<'a>(
             continue;
         }
 
-        let line_info = LineInfo::new(&src);
+        let line_info = LineInfo::new(&module_src);
         let src_lines: Vec<&str> = src.split('\n').collect();
         let palette = DEFAULT_PALETTE;
 
