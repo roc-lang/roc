@@ -46,6 +46,7 @@ struct Specialization<'a> {
     op: HelperOp,
     layout: Layout<'a>,
     symbol: Symbol,
+    proc: Option<Proc<'a>>,
 }
 
 #[derive(Debug)]
@@ -79,7 +80,6 @@ pub struct CodeGenHelp<'a> {
     ptr_size: u32,
     layout_isize: Layout<'a>,
     specializations: Vec<'a, Specialization<'a>>,
-    procs: Vec<'a, Proc<'a>>,
     debug_recursion_depth: usize,
 }
 
@@ -91,13 +91,16 @@ impl<'a> CodeGenHelp<'a> {
             ptr_size: intwidth_isize.stack_size(),
             layout_isize: Layout::Builtin(Builtin::Int(intwidth_isize)),
             specializations: Vec::with_capacity_in(16, arena),
-            procs: Vec::with_capacity_in(16, arena),
             debug_recursion_depth: 0,
         }
     }
 
     pub fn take_procs(&mut self) -> Vec<'a, Proc<'a>> {
-        std::mem::replace(&mut self.procs, Vec::new_in(self.arena))
+        let procs_iter = self
+            .specializations
+            .drain(0..)
+            .map(|spec| spec.proc.unwrap());
+        Vec::from_iter_in(procs_iter, self.arena)
     }
 
     // ============================================================================
@@ -302,13 +305,17 @@ impl<'a> CodeGenHelp<'a> {
             return spec.symbol;
         }
 
-        // Create the specialization before recursing
+        // Procs can be recursive, so we need to create the symbol before the body is complete
+        // But with nested recursion, that means Symbols and Procs can end up in different orders.
+        // We want the same order, especially for function indices in Wasm. So create an empty slot and fill it in later.
         let (proc_symbol, proc_layout) = self.create_proc_symbol(ident_ids, ctx, &layout);
         ctx.new_linker_data.push((proc_symbol, proc_layout));
+        let spec_index = self.specializations.len();
         self.specializations.push(Specialization {
             op: ctx.op,
             layout,
             symbol: proc_symbol,
+            proc: None,
         });
 
         // Recursively generate the body of the Proc and sub-procs
@@ -329,7 +336,7 @@ impl<'a> CodeGenHelp<'a> {
             }
         };
 
-        self.procs.push(Proc {
+        self.specializations[spec_index].proc = Some(Proc {
             name: proc_symbol,
             args,
             body,
