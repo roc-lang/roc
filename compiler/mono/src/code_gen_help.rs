@@ -51,7 +51,7 @@ struct Specialization<'a> {
 #[derive(Debug)]
 struct Context<'a> {
     new_linker_data: Vec<'a, (Symbol, ProcLayout<'a>)>,
-    rec_ptr_layout: Option<UnionLayout<'a>>,
+    recursive_union: Option<UnionLayout<'a>>,
     op: HelperOp,
 }
 
@@ -129,7 +129,7 @@ impl<'a> CodeGenHelp<'a> {
 
         let mut ctx = Context {
             new_linker_data: Vec::new_in(self.arena),
-            rec_ptr_layout: None,
+            recursive_union: None,
             op: HelperOp::from(modify),
         };
 
@@ -220,7 +220,7 @@ impl<'a> CodeGenHelp<'a> {
     ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
         let mut ctx = Context {
             new_linker_data: Vec::new_in(self.arena),
-            rec_ptr_layout: None,
+            recursive_union: None,
             op: HelperOp::Eq,
         };
 
@@ -248,7 +248,7 @@ impl<'a> CodeGenHelp<'a> {
         self.debug_recursion_depth += 1;
 
         let layout = if matches!(called_layout, Layout::RecursivePointer) {
-            let union_layout = ctx.rec_ptr_layout.unwrap();
+            let union_layout = ctx.recursive_union.unwrap();
             Layout::Union(union_layout)
         } else {
             called_layout
@@ -778,9 +778,9 @@ impl<'a> CodeGenHelp<'a> {
     ) -> Stmt<'a> {
         use UnionLayout::*;
 
-        let parent_rec_ptr_layout = ctx.rec_ptr_layout;
+        let parent_rec_ptr_layout = ctx.recursive_union;
         if !matches!(union_layout, NonRecursive(_)) {
-            ctx.rec_ptr_layout = Some(union_layout);
+            ctx.recursive_union = Some(union_layout);
         }
 
         let main_stmt = match union_layout {
@@ -809,7 +809,7 @@ impl<'a> CodeGenHelp<'a> {
             ),
         };
 
-        ctx.rec_ptr_layout = parent_rec_ptr_layout;
+        ctx.recursive_union = parent_rec_ptr_layout;
 
         self.if_pointers_equal_return_true(ident_ids, self.arena.alloc(main_stmt))
     }
