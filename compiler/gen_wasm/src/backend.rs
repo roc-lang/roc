@@ -30,8 +30,8 @@ use crate::wasm_module::{
     LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
-    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_SIZE,
-    PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
+    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, DEBUG_LOG_SETTINGS,
+    MEMORY_NAME, PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -232,7 +232,10 @@ impl<'a> WasmBackend<'a> {
     ***********************************************************/
 
     pub fn build_proc(&mut self, proc: &Proc<'a>) {
-        // println!("\ngenerating procedure {:?}\n", proc.name);
+        if DEBUG_LOG_SETTINGS.proc_start_end {
+            println!("\ngenerating procedure {:?}\n", proc.name);
+        }
+
         self.debug_current_proc_index += 1;
 
         self.start_proc(proc);
@@ -242,7 +245,9 @@ impl<'a> WasmBackend<'a> {
         self.finalize_proc();
         self.reset();
 
-        // println!("\nfinished generating {:?}\n", proc.name);
+        if DEBUG_LOG_SETTINGS.proc_start_end {
+            println!("\nfinished generating {:?}\n", proc.name);
+        }
     }
 
     fn start_proc(&mut self, proc: &Proc<'a>) {
@@ -343,7 +348,9 @@ impl<'a> WasmBackend<'a> {
             Stmt::Let(_, _, _, _) => {
                 let mut current_stmt = stmt;
                 while let Stmt::Let(sym, expr, layout, following) = current_stmt {
-                    // println!("let {:?} = {}", sym, expr.to_pretty(200)); // ignore `following`! Too confusing otherwise.
+                    if DEBUG_LOG_SETTINGS.let_stmt_ir {
+                        println!("let {:?} = {}", sym, expr.to_pretty(200)); // ignore `following`! Too confusing otherwise.
+                    }
 
                     let kind = match following {
                         Stmt::Ret(ret_sym) if *sym == *ret_sym => StoredValueKind::ReturnValue,
@@ -1158,7 +1165,10 @@ impl<'a> WasmBackend<'a> {
             }
 
             Layout::RecursivePointer => {
-                internal_error!("`==` on RecursivePointer should be converted to the parent layout")
+                internal_error!(
+                    "Tried to apply `==` to RecursivePointer values {:?}",
+                    arguments,
+                )
             }
         }
     }

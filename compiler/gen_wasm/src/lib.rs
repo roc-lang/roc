@@ -97,11 +97,11 @@ pub fn build_module_help<'a>(
         CodeGenHelp::new(env.arena, IntWidth::I32, env.module_id),
     );
 
-    if false {
+    if DEBUG_LOG_SETTINGS.user_procs_ir {
         println!("## procs");
         for proc in procs.iter() {
             println!("{}", proc.to_pretty(200));
-            println!("{:#?}", proc);
+            // println!("{:#?}", proc);
         }
     }
 
@@ -115,11 +115,11 @@ pub fn build_module_help<'a>(
 
     backend.register_symbol_debug_names();
 
-    if false {
+    if DEBUG_LOG_SETTINGS.helper_procs_ir {
         println!("## helper_procs");
         for proc in helper_procs.iter() {
             println!("{}", proc.to_pretty(200));
-            println!("{:#?}", proc);
+            // println!("{:#?}", proc);
         }
     }
 
@@ -198,3 +198,21 @@ macro_rules! round_up_to_alignment {
 pub fn debug_panic<E: std::fmt::Debug>(error: E) {
     internal_error!("{:?}", error);
 }
+
+pub struct WasmDebugLogSettings {
+    proc_start_end: bool,
+    user_procs_ir: bool,
+    helper_procs_ir: bool,
+    let_stmt_ir: bool,
+    instructions: bool,
+    pub keep_test_binary: bool,
+}
+
+pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
+    proc_start_end: false && cfg!(debug_assertions),
+    user_procs_ir: false && cfg!(debug_assertions),
+    helper_procs_ir: false && cfg!(debug_assertions),
+    let_stmt_ir: false && cfg!(debug_assertions),
+    instructions: false && cfg!(debug_assertions),
+    keep_test_binary: false && cfg!(debug_assertions),
+};
