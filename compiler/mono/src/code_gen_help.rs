@@ -42,10 +42,10 @@ impl From<&ModifyRc> for HelperOp {
 }
 
 #[derive(Debug)]
-struct SpecializedProc<'a> {
+struct Specialization<'a> {
     op: HelperOp,
     layout: Layout<'a>,
-    proc: Proc<'a>,
+    symbol: Symbol,
 }
 
 #[derive(Debug)]
@@ -78,7 +78,9 @@ pub struct CodeGenHelp<'a> {
     home: ModuleId,
     ptr_size: u32,
     layout_isize: Layout<'a>,
-    specialized_procs: Vec<'a, SpecializedProc<'a>>,
+    specializations: Vec<'a, Specialization<'a>>,
+    procs: Vec<'a, Proc<'a>>,
+    debug_recursion_depth: usize,
 }
 
 impl<'a> CodeGenHelp<'a> {
@@ -88,17 +90,14 @@ impl<'a> CodeGenHelp<'a> {
             home,
             ptr_size: intwidth_isize.stack_size(),
             layout_isize: Layout::Builtin(Builtin::Int(intwidth_isize)),
-            specialized_procs: Vec::with_capacity_in(16, arena),
+            specializations: Vec::with_capacity_in(16, arena),
+            procs: Vec::with_capacity_in(16, arena),
+            debug_recursion_depth: 0,
         }
     }
 
     pub fn take_procs(&mut self) -> Vec<'a, Proc<'a>> {
-        let procs_iter = self
-            .specialized_procs
-            .drain(0..)
-            .map(|SpecializedProc { proc, .. }| proc);
-
-        Vec::from_iter_in(procs_iter, self.arena)
+        std::mem::replace(&mut self.procs, Vec::new_in(self.arena))
     }
 
     // ============================================================================
@@ -240,10 +239,20 @@ impl<'a> CodeGenHelp<'a> {
         &mut self,
         ident_ids: &mut IdentIds,
         ctx: &mut Context<'a>,
-        layout: Layout<'a>,
+        called_layout: Layout<'a>,
         arguments: &[Symbol],
     ) -> Expr<'a> {
         use HelperOp::*;
+
+        debug_assert!(self.debug_recursion_depth < 10);
+        self.debug_recursion_depth += 1;
+
+        let layout = if matches!(called_layout, Layout::RecursivePointer) {
+            let union_layout = ctx.rec_ptr_layout.unwrap();
+            Layout::Union(union_layout)
+        } else {
+            called_layout
+        };
 
         if layout_needs_helper_proc(&layout, ctx.op) {
             let proc_name = self.find_or_create_proc(ident_ids, ctx, layout);
@@ -285,23 +294,28 @@ impl<'a> CodeGenHelp<'a> {
         use HelperOp::*;
 
         let found = self
-            .specialized_procs
+            .specializations
             .iter()
             .find(|spec| spec.op == ctx.op && spec.layout == layout);
 
         if let Some(spec) = found {
-            return spec.proc.name;
+            return spec.symbol;
         }
 
-        // Generate the body of the Proc (and recursively generate any sub-procs)
+        // Create the specialization before recursing
+        let (proc_symbol, proc_layout) = self.create_proc_symbol(ident_ids, ctx, &layout);
+        ctx.new_linker_data.push((proc_symbol, proc_layout));
+        self.specializations.push(Specialization {
+            op: ctx.op,
+            layout,
+            symbol: proc_symbol,
+        });
+
+        // Recursively generate the body of the Proc and sub-procs
         let (ret_layout, body) = match ctx.op {
             Inc | Dec | DecRef => (LAYOUT_UNIT, self.refcount_generic(ident_ids, ctx, layout)),
             Eq => (LAYOUT_BOOL, self.eq_generic(ident_ids, ctx, layout)),
         };
-
-        // Give it a name (must come after the recursive call for the body)
-        let (proc_symbol, proc_layout) = self.create_proc_symbol(ident_ids, ctx, &layout);
-        ctx.new_linker_data.push((proc_symbol, proc_layout));
 
         let args: &'a [(Layout<'a>, Symbol)] = {
             let roc_value = (layout, ARG_1);
@@ -315,7 +329,7 @@ impl<'a> CodeGenHelp<'a> {
             }
         };
 
-        let proc = Proc {
+        self.procs.push(Proc {
             name: proc_symbol,
             args,
             body,
@@ -324,12 +338,6 @@ impl<'a> CodeGenHelp<'a> {
             is_self_recursive: SelfRecursive::NotSelfRecursive,
             must_own_arguments: false,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-        };
-
-        self.specialized_procs.push(SpecializedProc {
-            op: ctx.op,
-            layout,
-            proc,
         });
 
         proc_symbol
@@ -341,13 +349,13 @@ impl<'a> CodeGenHelp<'a> {
         ctx: &mut Context<'a>,
         layout: &Layout<'a>,
     ) -> (Symbol, ProcLayout<'a>) {
-        let layout_name = layout_debug_name(layout);
         let debug_name = format!(
-            "#help{:?}_{}_{}",
+            "#help{}_{:?}_{:?}",
+            self.specializations.len(),
             ctx.op,
-            layout_name,
-            self.specialized_procs.len()
-        );
+            layout
+        )
+        .replace("Builtin", "");
         let proc_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
 
         let proc_layout = match ctx.op {
@@ -1202,20 +1210,6 @@ fn let_lowlevel<'a>(
         result_layout,
         next,
     )
-}
-
-/// Helper to derive a debug function name from a layout
-fn layout_debug_name<'a>(layout: &Layout<'a>) -> &'static str {
-    match layout {
-        Layout::Builtin(Builtin::List(_)) => "list",
-        Layout::Builtin(Builtin::Set(_)) => "set",
-        Layout::Builtin(Builtin::Dict(_, _)) => "dict",
-        Layout::Builtin(Builtin::Str) => "str",
-        Layout::Struct(_) => "struct",
-        Layout::Union(_) => "union",
-        Layout::LambdaSet(_) => "lambdaset",
-        _ => unreachable!("Can't create helper proc name for {:?}", layout),
-    }
 }
 
 fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
