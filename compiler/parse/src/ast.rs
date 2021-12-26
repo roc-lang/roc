@@ -226,6 +226,12 @@ pub struct PrecedenceConflict<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AliasHeader<'a> {
+    pub name: &'a str,
+    pub vars: &'a [Loc<&'a str>],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns
     // are allowed in annotations.
@@ -280,7 +286,7 @@ pub enum TypeAnnotation<'a> {
     As(
         &'a Loc<TypeAnnotation<'a>>,
         &'a [CommentOrNewline<'a>],
-        (&'a str, &'a [Loc<&'a str>]),
+        AliasHeader<'a>,
     ),
 
     Record {

@@ -1,4 +1,4 @@
-use crate::ast::{AssignedField, Tag, TypeAnnotation};
+use crate::ast::{AliasHeader, AssignedField, Tag, TypeAnnotation};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::keyword;
 use crate::parser::{
@@ -47,33 +47,32 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ET
     }
 }
 
-type AliasParts<'a> = Loc<(&'a str, &'a [Loc<&'a str>])>;
-
 fn check_type_alias(
     p: Progress,
     annot: Loc<TypeAnnotation>,
-) -> impl Parser<AliasParts, ETypeInlineAlias> {
+) -> impl Parser<Loc<AliasHeader>, ETypeInlineAlias> {
     move |arena, state| match annot.value {
-        TypeAnnotation::Apply("", tag_name, args) => {
-            let mut arg_names = Vec::new_in(arena);
-            arg_names.reserve(args.len());
-            for arg in args {
-                if let TypeAnnotation::BoundVariable(v) = arg.value {
-                    arg_names.push(Loc::at(arg.region, v));
+        TypeAnnotation::Apply("", tag_name, vars) => {
+            let mut var_names = Vec::new_in(arena);
+            var_names.reserve(vars.len());
+            for var in vars {
+                if let TypeAnnotation::BoundVariable(v) = var.value {
+                    var_names.push(Loc::at(var.region, v));
                 } else {
                     return Err((
                         p,
-                        ETypeInlineAlias::ArgumentNotLowercase(arg.region.start()),
+                        ETypeInlineAlias::ArgumentNotLowercase(var.region.start()),
                         state,
                     ));
                 }
             }
 
-            Ok((
-                p,
-                Loc::at(annot.region, (tag_name, arg_names.into_bump_slice())),
-                state,
-            ))
+            let header = AliasHeader {
+                name: tag_name,
+                vars: var_names.into_bump_slice(),
+            };
+
+            Ok((p, Loc::at(annot.region, header), state))
         }
         TypeAnnotation::Apply(_, _, _) => {
             Err((p, ETypeInlineAlias::Qualified(annot.region.start()), state))
@@ -82,7 +81,9 @@ fn check_type_alias(
     }
 }
 
-fn parse_type_alias_after_as<'a>(min_indent: u16) -> impl Parser<'a, AliasParts<'a>, EType<'a>> {
+fn parse_type_alias_after_as<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Loc<AliasHeader<'a>>, EType<'a>> {
     move |arena, state| {
         space0_before_e(
             term(min_indent),
@@ -130,7 +131,10 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'
             ]
         ),
         |arena: &'a Bump,
-         (loc_ann, opt_as): (Loc<TypeAnnotation<'a>>, Option<(&'a [_], AliasParts<'a>)>)| {
+         (loc_ann, opt_as): (
+            Loc<TypeAnnotation<'a>>,
+            Option<(&'a [_], Loc<AliasHeader<'a>>)>
+        )| {
             match opt_as {
                 Some((
                     spaces,

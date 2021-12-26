@@ -329,6 +329,7 @@ pub fn to_type2<'a>(
     annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) -> Type2 {
+    use roc_parse::ast::AliasHeader;
     use roc_parse::ast::TypeAnnotation::*;
 
     match annotation {
@@ -450,10 +451,17 @@ pub fn to_type2<'a>(
 
             Type2::TagUnion(tag_types, ext_type)
         }
-        As(loc_inner, _spaces, (ident, loc_vars)) => {
+        As(
+            loc_inner,
+            _spaces,
+            AliasHeader {
+                name,
+                vars: loc_vars,
+            },
+        ) => {
             // e.g. `{ x : Int, y : Int } as Point`
             let symbol = match scope.introduce(
-                (*ident).into(),
+                (*name).into(),
                 &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 region,

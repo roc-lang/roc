@@ -3,7 +3,7 @@ use crate::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
+use roc_parse::ast::{AliasHeader, AssignedField, Tag, TypeAnnotation};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, LambdaSet, Problem, RecordField, Type};
@@ -374,9 +374,16 @@ fn can_annotation_help(
                 }
             }
         }
-        As(loc_inner, _spaces, (ident, loc_vars)) => {
+        As(
+            loc_inner,
+            _spaces,
+            AliasHeader {
+                name,
+                vars: loc_vars,
+            },
+        ) => {
             let symbol = match scope.introduce(
-                (*ident).into(),
+                (*name).into(),
                 &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 region,

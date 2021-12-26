@@ -3,7 +3,7 @@ use crate::{
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
-use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
+use roc_parse::ast::{AliasHeader, AssignedField, Expr, Tag, TypeAnnotation};
 use roc_region::all::Loc;
 
 /// Does an AST node need parens around it?
@@ -245,16 +245,16 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 }
             }
 
-            As(lhs, _spaces, (name, args)) => {
+            As(lhs, _spaces, AliasHeader { name, vars }) => {
                 // TODO use spaces?
                 lhs.value.format(buf, indent);
                 buf.spaces(1);
                 buf.push_str("as");
                 buf.spaces(1);
                 buf.push_str(name);
-                for arg in *args {
+                for var in *vars {
                     buf.spaces(1);
-                    buf.push_str(arg.value);
+                    buf.push_str(var.value);
                 }
             }
 
