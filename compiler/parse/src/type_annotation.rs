@@ -1,4 +1,4 @@
-use crate::ast::{AliasHeader, AssignedField, Tag, TypeAnnotation};
+use crate::ast::{AliasHeader, AssignedField, Pattern, Tag, TypeAnnotation};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::keyword;
 use crate::parser::{
@@ -57,7 +57,7 @@ fn check_type_alias(
             var_names.reserve(vars.len());
             for var in vars {
                 if let TypeAnnotation::BoundVariable(v) = var.value {
-                    var_names.push(Loc::at(var.region, v));
+                    var_names.push(Loc::at(var.region, Pattern::Identifier(v)));
                 } else {
                     return Err((
                         p,

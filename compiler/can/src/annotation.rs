@@ -3,7 +3,7 @@ use crate::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_parse::ast::{AliasHeader, AssignedField, Tag, TypeAnnotation};
+use roc_parse::ast::{AliasHeader, AssignedField, Pattern, Tag, TypeAnnotation};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, LambdaSet, Problem, RecordField, Type};
@@ -418,7 +418,13 @@ fn can_annotation_help(
             references.insert(symbol);
 
             for loc_var in *loc_vars {
-                let var_name = Lowercase::from(loc_var.value);
+                let var = match loc_var.value {
+                    Pattern::Identifier(name) if name.chars().next().unwrap().is_lowercase() => {
+                        name
+                    }
+                    _ => unreachable!("I thought this was validated during parsing"),
+                };
+                let var_name = Lowercase::from(var);
 
                 if let Some(var) = introduced_variables.var_by_name(&var_name) {
                     vars.push((var_name.clone(), Type::Variable(*var)));

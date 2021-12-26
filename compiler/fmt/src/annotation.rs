@@ -254,7 +254,8 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 buf.push_str(name.value);
                 for var in *vars {
                     buf.spaces(1);
-                    buf.push_str(var.value);
+                    var.value
+                        .format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
                 }
             }
 

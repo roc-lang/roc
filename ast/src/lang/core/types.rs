@@ -330,6 +330,7 @@ pub fn to_type2<'a>(
     region: Region,
 ) -> Type2 {
     use roc_parse::ast::AliasHeader;
+    use roc_parse::ast::Pattern;
     use roc_parse::ast::TypeAnnotation::*;
 
     match annotation {
@@ -491,7 +492,13 @@ pub fn to_type2<'a>(
                 .zip(lowercase_vars.iter_node_ids())
                 .zip(vars.iter_node_ids())
             {
-                let var_name = Lowercase::from(loc_var.value);
+                let var = match loc_var.value {
+                    Pattern::Identifier(name) if name.chars().next().unwrap().is_lowercase() => {
+                        name
+                    }
+                    _ => unreachable!("I thought this was validated during parsing"),
+                };
+                let var_name = Lowercase::from(var);
 
                 if let Some(var) = references.named.get(&var_name) {
                     let poolstr = PoolStr::new(var_name.as_str(), env.pool);

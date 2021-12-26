@@ -228,7 +228,7 @@ pub struct PrecedenceConflict<'a> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AliasHeader<'a> {
     pub name: Loc<&'a str>,
-    pub vars: &'a [Loc<&'a str>],
+    pub vars: &'a [Loc<Pattern<'a>>],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -242,8 +242,7 @@ pub enum Def<'a> {
     ///
     /// Foo : Bar Baz
     Alias {
-        name: Loc<&'a str>,
-        vars: &'a [Loc<Pattern<'a>>],
+        header: AliasHeader<'a>,
         ann: Loc<TypeAnnotation<'a>>,
     },
 
