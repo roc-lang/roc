@@ -137,7 +137,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'
             match opt_as {
                 Some((spaces, alias)) => {
                     let alias_vars_region =
-                        Region::across_all(alias.vars.into_iter().map(|v| &v.region));
+                        Region::across_all(alias.vars.iter().map(|v| &v.region));
                     let region = Region::span_across(&loc_ann.region, &alias_vars_region);
                     let value = TypeAnnotation::As(arena.alloc(loc_ann), spaces, alias);
 
