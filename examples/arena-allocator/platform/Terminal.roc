@@ -8,4 +8,4 @@ readLine =
 
 write : Str -> Task {} *
 write = \str ->
-   Effect.after (Effect.stdoutWrite str) Task.succeed
+    Effect.after (Effect.stdoutWrite str) Task.succeed
