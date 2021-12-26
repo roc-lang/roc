@@ -338,14 +338,9 @@ impl<'a> UnionLayout<'a> {
 
     pub fn tag_id_builtin(&self) -> Builtin<'a> {
         match self {
-            UnionLayout::NonRecursive(_tags) => {
-                // let union_size = tags.len();
-                // Self::tag_id_builtin_help(union_size)
-
-                // The quicksort-benchmarks version of Quicksort.roc segfaults when
-                // this number is not I64. There must be some dependence on that fact
-                // somewhere in the code, I have not found where that is yet...
-                Builtin::Int(IntWidth::U64)
+            UnionLayout::NonRecursive(tags) => {
+                let union_size = tags.len();
+                Self::tag_id_builtin_help(union_size)
             }
             UnionLayout::Recursive(tags) => {
                 let union_size = tags.len();
@@ -445,6 +440,27 @@ impl<'a> UnionLayout<'a> {
             None
         };
 
+        self.data_size_and_alignment_help_match(id_data_layout, pointer_size)
+    }
+
+    /// Size of the data before the tag_id, if it exists.
+    /// Returns None if the tag_id is not stored as data in the layout.
+    pub fn data_size_without_tag_id(&self, pointer_size: u32) -> Option<u32> {
+        if !self.stores_tag_id_as_data(pointer_size) {
+            return None;
+        };
+
+        return Some(
+            self.data_size_and_alignment_help_match(None, pointer_size)
+                .0,
+        );
+    }
+
+    fn data_size_and_alignment_help_match(
+        &self,
+        id_data_layout: Option<Layout>,
+        pointer_size: u32,
+    ) -> (u32, u32) {
         match self {
             Self::NonRecursive(tags) => {
                 Self::data_size_and_alignment_help(tags, id_data_layout, pointer_size)
@@ -788,7 +804,7 @@ impl<'a, 'b> Env<'a, 'b> {
     }
 }
 
-const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
+pub const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
     if alignment != 0 && width % alignment > 0 {
         width + alignment - (width % alignment)
     } else {
@@ -934,23 +950,7 @@ impl<'a> Layout<'a> {
                 use UnionLayout::*;
 
                 match variant {
-                    NonRecursive(fields) => {
-                        let tag_id_builtin = variant.tag_id_builtin();
-
-                        fields
-                            .iter()
-                            .map(|tag_layout| {
-                                tag_layout
-                                    .iter()
-                                    .map(|field| field.stack_size(pointer_size))
-                                    .sum::<u32>()
-                            })
-                            .max()
-                            .map(|w| round_up_to_alignment(w, tag_id_builtin.alignment_bytes(pointer_size)))
-                            .unwrap_or_default()
-                            // the size of the tag_id
-                            + tag_id_builtin.stack_size(pointer_size)
-                    }
+                    NonRecursive(_) => variant.data_size_and_alignment(pointer_size).0,
 
                     Recursive(_)
                     | NullableWrapped { .. }
