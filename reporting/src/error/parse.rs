@@ -2857,7 +2857,7 @@ fn to_talias_report<'a>(
             let doc = alloc.stack(vec![
                 alloc.reflow(r"This type alias has a qualified name:"),
                 alloc.region(region),
-                alloc.reflow("Alias can't be qualified."),
+                alloc.reflow("An alias introduces a new name to the current scope, so it must be unqualified."),
             ]);
 
             Report {

@@ -6955,7 +6955,8 @@ I need all branches in an `if` to have the same type!
                 1│  f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
                                                              ^
 
-                Alias can't be qualified.
+                An alias introduces a new name to the current scope, so it must be
+                unqualified.
                 "#
             ),
         )
