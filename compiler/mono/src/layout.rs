@@ -2795,9 +2795,8 @@ mod test {
 
         let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
 
-        // at the moment, the tag id uses an I64, so
         let ptr_width = 8;
-        assert_eq!(layout.stack_size(ptr_width), 8);
-        assert_eq!(layout.alignment_bytes(ptr_width), 8);
+        assert_eq!(layout.stack_size(ptr_width), 1);
+        assert_eq!(layout.alignment_bytes(ptr_width), 1);
     }
 }
