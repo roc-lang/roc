@@ -450,10 +450,10 @@ impl<'a> UnionLayout<'a> {
             return None;
         };
 
-        return Some(
+        Some(
             self.data_size_and_alignment_help_match(None, pointer_size)
                 .0,
-        );
+        )
     }
 
     fn data_size_and_alignment_help_match(
