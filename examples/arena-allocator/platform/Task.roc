@@ -22,8 +22,7 @@ attempt = \effect, transform ->
             Ok ok -> transform (Ok ok)
             Err err -> transform (Err err)
 
-# Uncommenting this type annotation causes more errors
-#await : Task a err, (a -> Task b err) -> Task b err
+await : Task a err, (a -> Task b err) -> Task b err
 await = \effect, transform ->
     Effect.after effect \result ->
         when result is
@@ -46,8 +45,8 @@ map = \effect, transform ->
 
 useArenaAlloc : Task a err -> Task a err
 useArenaAlloc = \task ->
-    {} <- await (Effect.map Effect.arenaStart succeed)
+    {} <- await (Effect.after Effect.arenaStart succeed)
     result <- attempt task
-    {} <- await (Effect.map Effect.arenaEnd succeed)
+    {} <- await (Effect.after Effect.arenaEnd succeed)
 
     Effect.always result
