@@ -634,7 +634,9 @@ impl<'a> CodeGenHelp<'a> {
             Layout::Struct(field_layouts) => self.eq_struct(ident_ids, ctx, field_layouts),
             Layout::Union(union_layout) => self.eq_tag_union(ident_ids, ctx, union_layout),
             Layout::LambdaSet(_) => unreachable!("`==` is not defined on functions"),
-            Layout::RecursivePointer => eq_todo(),
+            Layout::RecursivePointer => {
+                unreachable!("Can't perform `==` on RecursivePointer. Should have been replaced by a tag union.")
+            }
         };
 
         Stmt::Let(
