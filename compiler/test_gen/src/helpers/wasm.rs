@@ -185,7 +185,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
             "#UserApp_main_1",
         ];
 
-        let linker_output = std::process::Command::new("zig")
+        let linker_output = std::process::Command::new(&crate::helpers::zig_executable())
             .args(args)
             .output()
             .unwrap();

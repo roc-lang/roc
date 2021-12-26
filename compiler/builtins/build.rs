@@ -7,6 +7,13 @@ use std::path::Path;
 use std::process::Command;
 use std::str;
 
+fn zig_executable() -> String {
+    match std::env::var("ROC_ZIG") {
+        Ok(path) => path,
+        Err(_) => "zig".into(),
+    }
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -89,7 +96,7 @@ fn generate_object_file(
 
     run_command(
         &bitcode_path,
-        "zig",
+        &zig_executable(),
         &["build", zig_object, "-Drelease=true"],
     );
 
@@ -113,7 +120,7 @@ fn generate_bc_file(
 
     run_command(
         &bitcode_path,
-        "zig",
+        &zig_executable(),
         &["build", zig_object, "-Drelease=true"],
     );
 
@@ -177,26 +184,3 @@ fn get_zig_files(dir: &Path, cb: &dyn Fn(&Path)) -> io::Result<()> {
     }
     Ok(())
 }
-
-// fn get_zig_files(dir: &Path) -> io::Result<Vec<&Path>> {
-// let mut vec = Vec::new();
-// if dir.is_dir() {
-// for entry in fs::read_dir(dir)? {
-// let entry = entry?;
-// let path_buf = entry.path();
-// if path_buf.is_dir() {
-// match get_zig_files(&path_buf) {
-// Ok(sub_files) => vec = [vec, sub_files].concat(),
-// Err(_) => (),
-// };
-// } else {
-// let path = path_buf.as_path();
-// let path_ext = path.extension().unwrap();
-// if path_ext == "zig" {
-// vec.push(path.clone());
-// }
-// }
-// }
-// }
-// Ok(vec)
-// }
