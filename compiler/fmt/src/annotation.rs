@@ -251,7 +251,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 buf.spaces(1);
                 buf.push_str("as");
                 buf.spaces(1);
-                buf.push_str(name);
+                buf.push_str(name.value);
                 for var in *vars {
                     buf.spaces(1);
                     buf.push_str(var.value);

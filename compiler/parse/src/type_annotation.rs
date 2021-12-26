@@ -9,7 +9,7 @@ use crate::parser::{
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Loc, Position};
+use roc_region::all::{Loc, Position, Region};
 
 pub fn located_help<'a>(
     min_indent: u16,
@@ -50,7 +50,7 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ET
 fn check_type_alias(
     p: Progress,
     annot: Loc<TypeAnnotation>,
-) -> impl Parser<Loc<AliasHeader>, ETypeInlineAlias> {
+) -> impl Parser<AliasHeader, ETypeInlineAlias> {
     move |arena, state| match annot.value {
         TypeAnnotation::Apply("", tag_name, vars) => {
             let mut var_names = Vec::new_in(arena);
@@ -67,12 +67,16 @@ fn check_type_alias(
                 }
             }
 
+            let name_start = annot.region.start();
+            let name_region =
+                Region::between(name_start, name_start.bump_column(tag_name.len() as u16));
+
             let header = AliasHeader {
-                name: tag_name,
+                name: Loc::at(name_region, tag_name),
                 vars: var_names.into_bump_slice(),
             };
 
-            Ok((p, Loc::at(annot.region, header), state))
+            Ok((p, header, state))
         }
         TypeAnnotation::Apply(_, _, _) => {
             Err((p, ETypeInlineAlias::Qualified(annot.region.start()), state))
@@ -81,9 +85,7 @@ fn check_type_alias(
     }
 }
 
-fn parse_type_alias_after_as<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Loc<AliasHeader<'a>>, EType<'a>> {
+fn parse_type_alias_after_as<'a>(min_indent: u16) -> impl Parser<'a, AliasHeader<'a>, EType<'a>> {
     move |arena, state| {
         space0_before_e(
             term(min_indent),
@@ -131,18 +133,12 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'
             ]
         ),
         |arena: &'a Bump,
-         (loc_ann, opt_as): (
-            Loc<TypeAnnotation<'a>>,
-            Option<(&'a [_], Loc<AliasHeader<'a>>)>
-        )| {
+         (loc_ann, opt_as): (Loc<TypeAnnotation<'a>>, Option<(&'a [_], AliasHeader<'a>)>)| {
             match opt_as {
-                Some((
-                    spaces,
-                    Loc {
-                        region,
-                        value: alias,
-                    },
-                )) => {
+                Some((spaces, alias)) => {
+                    let alias_vars_region =
+                        Region::across_all(alias.vars.into_iter().map(|v| &v.region));
+                    let region = Region::span_across(&loc_ann.region, &alias_vars_region);
                     let value = TypeAnnotation::As(arena.alloc(loc_ann), spaces, alias);
 
                     Loc { region, value }

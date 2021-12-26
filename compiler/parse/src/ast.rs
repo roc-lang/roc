@@ -227,7 +227,7 @@ pub struct PrecedenceConflict<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AliasHeader<'a> {
-    pub name: &'a str,
+    pub name: Loc<&'a str>,
     pub vars: &'a [Loc<&'a str>],
 }
 

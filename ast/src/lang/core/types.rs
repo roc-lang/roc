@@ -461,7 +461,7 @@ pub fn to_type2<'a>(
         ) => {
             // e.g. `{ x : Int, y : Int } as Point`
             let symbol = match scope.introduce(
-                (*name).into(),
+                name.value.into(),
                 &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 region,
