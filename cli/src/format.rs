@@ -7,8 +7,8 @@ use roc_fmt::module::fmt_module;
 use roc_fmt::Buf;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::ast::{
-    AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation,
-    WhenBranch,
+    AliasHeader, AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag,
+    TypeAnnotation, WhenBranch,
 };
 use roc_parse::header::{
     AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
@@ -374,9 +374,14 @@ impl<'a> RemoveSpaces<'a> for Def<'a> {
             Def::Annotation(a, b) => {
                 Def::Annotation(a.remove_spaces(arena), b.remove_spaces(arena))
             }
-            Def::Alias { name, vars, ann } => Def::Alias {
-                name: name.remove_spaces(arena),
-                vars: vars.remove_spaces(arena),
+            Def::Alias {
+                header: AliasHeader { name, vars },
+                ann,
+            } => Def::Alias {
+                header: AliasHeader {
+                    name: name.remove_spaces(arena),
+                    vars: vars.remove_spaces(arena),
+                },
                 ann: ann.remove_spaces(arena),
             },
             Def::Body(a, b) => Def::Body(
@@ -576,11 +581,9 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
             ),
             TypeAnnotation::Apply(a, b, c) => TypeAnnotation::Apply(a, b, c.remove_spaces(arena)),
             TypeAnnotation::BoundVariable(a) => TypeAnnotation::BoundVariable(a),
-            TypeAnnotation::As(a, _, c) => TypeAnnotation::As(
-                arena.alloc(a.remove_spaces(arena)),
-                &[],
-                arena.alloc(c.remove_spaces(arena)),
-            ),
+            TypeAnnotation::As(a, _, c) => {
+                TypeAnnotation::As(arena.alloc(a.remove_spaces(arena)), &[], c)
+            }
             TypeAnnotation::Record { fields, ext } => TypeAnnotation::Record {
                 fields: fields.remove_spaces(arena),
                 ext: ext.remove_spaces(arena),

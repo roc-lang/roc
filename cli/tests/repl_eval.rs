@@ -567,6 +567,23 @@ mod repl_eval {
         );
     }
 
+    #[test]
+    fn issue_2149() {
+        expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [ InvalidNumStr ]*");
+        expect_success(
+            r#"Str.toI8 "128""#,
+            "Err InvalidNumStr : Result I8 [ InvalidNumStr ]*",
+        );
+        expect_success(
+            r#"Str.toI16 "32767""#,
+            "Ok 32767 : Result I16 [ InvalidNumStr ]*",
+        );
+        expect_success(
+            r#"Str.toI16 "32768""#,
+            "Err InvalidNumStr : Result I16 [ InvalidNumStr ]*",
+        );
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently

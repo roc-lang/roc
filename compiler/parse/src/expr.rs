@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Pattern, Spaceable,
-    TypeAnnotation,
+    AliasHeader, AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Pattern,
+    Spaceable, TypeAnnotation,
 };
 use crate::blankspace::{space0_after_e, space0_around_ee, space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
@@ -571,27 +571,8 @@ fn append_body_definition<'a>(
 
     if spaces.len() <= 1 {
         let last = defs.pop();
-        match last {
-            Some(Loc {
-                value: Def::Annotation(ann_pattern, ann_type),
-                ..
-            }) => {
-                return append_body_definition_help(
-                    arena,
-                    defs,
-                    region,
-                    &[],
-                    spaces,
-                    loc_pattern,
-                    loc_def_body,
-                    ann_pattern,
-                    ann_type,
-                );
-            }
-            Some(Loc {
-                value: Def::SpaceBefore(Def::Annotation(ann_pattern, ann_type), before_ann_spaces),
-                ..
-            }) => {
+        match last.map(|d| d.value.unroll_spaces_before()) {
+            Some((before_ann_spaces, Def::Annotation(ann_pattern, ann_type))) => {
                 return append_body_definition_help(
                     arena,
                     defs,
@@ -601,6 +582,37 @@ fn append_body_definition<'a>(
                     loc_pattern,
                     loc_def_body,
                     ann_pattern,
+                    ann_type,
+                );
+            }
+            Some((
+                before_ann_spaces,
+                Def::Alias {
+                    name,
+                    vars,
+                    ann: ann_type,
+                },
+            )) => {
+                // This is a case like
+                //   UserId x : [ UserId Int ]
+                //   UserId x = UserId 42
+                // We optimistically parsed the first line as an alias; we now turn it
+                // into an annotation.
+                let loc_name = arena.alloc(name.map(|x| Pattern::GlobalTag(x)));
+                let ann_pattern = Pattern::Apply(loc_name, vars);
+                let vars_region = Region::across_all(vars.iter().map(|v| &v.region));
+                let region_ann_pattern = Region::span_across(&loc_name.region, &vars_region);
+                let loc_ann_pattern = Loc::at(region_ann_pattern, ann_pattern);
+
+                return append_body_definition_help(
+                    arena,
+                    defs,
+                    region,
+                    before_ann_spaces,
+                    spaces,
+                    loc_pattern,
+                    loc_def_body,
+                    arena.alloc(loc_ann_pattern),
                     ann_type,
                 );
             }
@@ -744,8 +756,10 @@ fn append_alias_definition<'a>(
     loc_ann: Loc<TypeAnnotation<'a>>,
 ) {
     let def = Def::Alias {
-        name,
-        vars: pattern_arguments,
+        header: AliasHeader {
+            name,
+            vars: pattern_arguments,
+        },
         ann: loc_ann,
     };
     let mut loc_def = Loc::at(region, def);
@@ -1096,8 +1110,10 @@ fn parse_expr_operator<'a>(
                     let alias_region = Region::span_across(&expr.region, &ann_type.region);
 
                     let alias = Def::Alias {
-                        name: Loc::at(expr.region, name),
-                        vars: type_arguments.into_bump_slice(),
+                        header: AliasHeader {
+                            name: Loc::at(expr.region, name),
+                            vars: type_arguments.into_bump_slice(),
+                        },
                         ann: ann_type,
                     };
 

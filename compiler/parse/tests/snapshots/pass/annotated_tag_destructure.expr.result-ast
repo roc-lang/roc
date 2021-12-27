@@ -1,0 +1,63 @@
+Defs(
+    [
+        |L 1-1, C 0-20| AnnotatedBody {
+            ann_pattern: |L 0-0, C 0-8| Apply(
+                |L 0-0, C 0-6| GlobalTag(
+                    "UserId",
+                ),
+                [
+                    |L 0-0, C 7-8| Identifier(
+                        "x",
+                    ),
+                ],
+            ),
+            ann_type: |L 0-0, C 11-25| TagUnion {
+                ext: None,
+                tags: [
+                    |L 0-0, C 13-23| Global {
+                        name: |L 0-0, C 13-19| "UserId",
+                        args: [
+                            |L 0-0, C 20-23| Apply(
+                                "",
+                                "I64",
+                                [],
+                            ),
+                        ],
+                    },
+                ],
+            },
+            comment: None,
+            body_pattern: |L 1-1, C 0-8| Apply(
+                |L 1-1, C 0-6| GlobalTag(
+                    "UserId",
+                ),
+                [
+                    |L 1-1, C 7-8| Identifier(
+                        "x",
+                    ),
+                ],
+            ),
+            body_expr: |L 1-1, C 11-20| Apply(
+                |L 1-1, C 11-17| GlobalTag(
+                    "UserId",
+                ),
+                [
+                    |L 1-1, C 18-20| Num(
+                        "42",
+                    ),
+                ],
+                Space,
+            ),
+        },
+    ],
+    |L 3-3, C 0-1| SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "x",
+        },
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

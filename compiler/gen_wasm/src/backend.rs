@@ -830,7 +830,9 @@ impl<'a> WasmBackend<'a> {
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
             let id_offset = data_offset + data_size - data_alignment;
-            let id_align = Align::from(data_alignment);
+
+            let id_align = union_layout.tag_id_builtin().alignment_bytes(PTR_SIZE);
+            let id_align = Align::from(id_align);
 
             self.code_builder.get_local(local_id);
 
@@ -912,7 +914,9 @@ impl<'a> WasmBackend<'a> {
         if union_layout.stores_tag_id_as_data(PTR_SIZE) {
             let (data_size, data_alignment) = union_layout.data_size_and_alignment(PTR_SIZE);
             let id_offset = data_size - data_alignment;
-            let id_align = Align::from(data_alignment);
+
+            let id_align = union_layout.tag_id_builtin().alignment_bytes(PTR_SIZE);
+            let id_align = Align::from(id_align);
 
             self.storage
                 .load_symbols(&mut self.code_builder, &[structure]);
@@ -956,7 +960,17 @@ impl<'a> WasmBackend<'a> {
             NonRecursive(tags) => tags[tag_index],
             Recursive(tags) => tags[tag_index],
             NonNullableUnwrapped(layouts) => *layouts,
-            NullableWrapped { other_tags, .. } => other_tags[tag_index],
+            NullableWrapped {
+                other_tags,
+                nullable_id,
+            } => {
+                let index = if tag_index > *nullable_id as usize {
+                    tag_index - 1
+                } else {
+                    tag_index
+                };
+                other_tags[index]
+            }
             NullableUnwrapped { other_fields, .. } => *other_fields,
         };
 

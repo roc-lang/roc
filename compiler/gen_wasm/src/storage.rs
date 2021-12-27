@@ -519,6 +519,10 @@ impl<'a> Storage<'a> {
                 alignment_bytes,
                 ..
             } => {
+                if self.stack_frame_pointer.is_none() {
+                    self.stack_frame_pointer = Some(self.get_next_local_id());
+                }
+
                 let (to_ptr, to_offset) = location.local_and_offset(self.stack_frame_pointer);
                 copy_memory(
                     code_builder,
