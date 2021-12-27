@@ -956,7 +956,17 @@ impl<'a> WasmBackend<'a> {
             NonRecursive(tags) => tags[tag_index],
             Recursive(tags) => tags[tag_index],
             NonNullableUnwrapped(layouts) => *layouts,
-            NullableWrapped { other_tags, .. } => other_tags[tag_index],
+            NullableWrapped {
+                other_tags,
+                nullable_id,
+            } => {
+                let index = if tag_index > *nullable_id as usize {
+                    tag_index - 1
+                } else {
+                    tag_index
+                };
+                other_tags[index]
+            }
             NullableUnwrapped { other_fields, .. } => *other_fields,
         };
 
