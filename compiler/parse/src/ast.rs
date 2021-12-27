@@ -265,6 +265,17 @@ pub enum Def<'a> {
     NotYetImplemented(&'static str),
 }
 
+impl<'a> Def<'a> {
+    pub fn unroll_spaces_before(&self) -> (&'a [CommentOrNewline<'a>], &Def) {
+        let (spaces, def): (&'a [_], &Def) = match self {
+            Def::SpaceBefore(def, spaces) => (spaces, def),
+            def => (&[], def),
+        };
+        debug_assert!(!matches!(def, Def::SpaceBefore(_, _)));
+        (spaces, def)
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
     /// A function. The types of its arguments, then the type of its return value.
