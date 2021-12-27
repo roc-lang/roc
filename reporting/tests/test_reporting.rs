@@ -6913,4 +6913,75 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn error_inline_alias_not_an_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NOT AN INLINE ALIAS ─────────────────────────────────────────────────────────
+
+                The inline type after this `as` is not a type alias:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as a
+                                                             ^
+
+                Inline alias types must start with an uppercase identifier and be
+                followed by zero or more type arguments, like Point or List a.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_qualified() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── QUALIFIED ALIAS NAME ────────────────────────────────────────────────────────
+
+                This type alias has a qualified name:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
+                                                             ^
+
+                An alias introduces a new name to the current scope, so it must be
+                unqualified.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_argument_uppercase() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as LinkedList U
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE ARGUMENT NOT LOWERCASE ─────────────────────────────────────────────────
+
+                This alias type argument is not lowercase:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as LinkedList U
+                                                                        ^
+
+                All type arguments must be lowercase.
+                "#
+            ),
+        )
+    }
 }

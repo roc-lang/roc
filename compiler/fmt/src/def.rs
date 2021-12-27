@@ -2,7 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, INDENT};
 use crate::Buf;
-use roc_parse::ast::{Def, Expr, Pattern};
+use roc_parse::ast::{AliasHeader, Def, Expr, Pattern};
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
@@ -55,7 +55,10 @@ impl<'a> Formattable for Def<'a> {
                     );
                 }
             }
-            Alias { name, vars, ann } => {
+            Alias {
+                header: AliasHeader { name, vars },
+                ann,
+            } => {
                 buf.indent(indent);
                 buf.push_str(name.value);
 

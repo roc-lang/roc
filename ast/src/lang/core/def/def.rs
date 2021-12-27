@@ -15,7 +15,7 @@
 use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
-use roc_parse::ast;
+use roc_parse::ast::{self, AliasHeader};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -198,7 +198,10 @@ fn to_pending_def<'a>(
             }
         }
 
-        roc_parse::ast::Def::Alias { name, vars, ann } => {
+        roc_parse::ast::Def::Alias {
+            header: AliasHeader { name, vars },
+            ann,
+        } => {
             let region = Region::span_across(&name.region, &ann.region);
 
             match scope.introduce(

@@ -3,7 +3,7 @@ use crate::{
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
-use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
+use roc_parse::ast::{AliasHeader, AssignedField, Expr, Tag, TypeAnnotation};
 use roc_region::all::Loc;
 
 /// Does an AST node need parens around it?
@@ -126,7 +126,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     || args.iter().any(|loc_arg| (&loc_arg.value).is_multiline())
             }
             Apply(_, _, args) => args.iter().any(|loc_arg| loc_arg.value.is_multiline()),
-            As(lhs, _, rhs) => lhs.value.is_multiline() || rhs.value.is_multiline(),
+            As(lhs, _, _) => lhs.value.is_multiline(),
 
             Record { fields, ext } => {
                 match ext {
@@ -245,12 +245,18 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 }
             }
 
-            As(lhs, _spaces, rhs) => {
+            As(lhs, _spaces, AliasHeader { name, vars }) => {
                 // TODO use spaces?
                 lhs.value.format(buf, indent);
-                buf.push_str(" as");
                 buf.spaces(1);
-                rhs.value.format(buf, indent);
+                buf.push_str("as");
+                buf.spaces(1);
+                buf.push_str(name.value);
+                for var in *vars {
+                    buf.spaces(1);
+                    var.value
+                        .format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
+                }
             }
 
             SpaceBefore(ann, spaces) => {
