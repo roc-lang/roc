@@ -9,7 +9,7 @@ use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
-use roc_gen_wasm::MEMORY_NAME;
+use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
 
 // Should manually match build.rs
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
@@ -129,14 +129,11 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     let store = Store::default();
 
-    // Keep the output binary for debugging with wasm2wat, wasm-objdump, wasm-validate, wasmer...
-    const KEEP_WASM_FILE: bool = false;
-
     let wasmer_module = {
         let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
         let debug_dir: String; // persistent directory for debugging
 
-        let wasm_build_dir: &Path = if KEEP_WASM_FILE {
+        let wasm_build_dir: &Path = if DEBUG_LOG_SETTINGS.keep_test_binary {
             // Directory name based on a hash of the Roc source
             let mut hash_state = DefaultHasher::new();
             src.hash(&mut hash_state);
@@ -188,7 +185,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
             "#UserApp_main_1",
         ];
 
-        let linker_output = std::process::Command::new("zig")
+        let linker_output = std::process::Command::new(&crate::helpers::zig_executable())
             .args(args)
             .output()
             .unwrap();

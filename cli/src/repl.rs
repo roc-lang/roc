@@ -96,8 +96,8 @@ impl Validator for InputValidator {
 
             match roc_parse::expr::parse_loc_expr(0, &arena, state) {
                 // Special case some syntax errors to allow for multi-line inputs
-                Err((_, EExpr::DefMissingFinalExpr(_, _), _))
-                | Err((_, EExpr::DefMissingFinalExpr2(_, _, _), _)) => {
+                Err((_, EExpr::DefMissingFinalExpr(_), _))
+                | Err((_, EExpr::DefMissingFinalExpr2(_, _), _)) => {
                     Ok(ValidationResult::Incomplete)
                 }
                 _ => Ok(ValidationResult::Valid(None)),

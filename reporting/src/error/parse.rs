@@ -1,5 +1,5 @@
-use roc_parse::parser::{Col, ParseProblem, Row, SyntaxError};
-use roc_region::all::Region;
+use roc_parse::parser::{ParseProblem, SyntaxError};
+use roc_region::all::{Position, Region};
 use std::path::PathBuf;
 
 use crate::report::{Report, RocDocAllocator, RocDocBuilder, Severity};
@@ -11,13 +11,7 @@ pub fn parse_problem<'a>(
     _starting_line: u32,
     parse_problem: ParseProblem<SyntaxError<'a>>,
 ) -> Report<'a> {
-    to_syntax_report(
-        alloc,
-        filename,
-        &parse_problem.problem,
-        parse_problem.line,
-        parse_problem.column,
-    )
+    to_syntax_report(alloc, filename, &parse_problem.problem, parse_problem.pos)
 }
 
 fn note_for_record_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
@@ -66,8 +60,7 @@ fn to_syntax_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::SyntaxError<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use SyntaxError::*;
 
@@ -78,12 +71,7 @@ fn to_syntax_report<'a>(
         severity: Severity::RuntimeError,
     };
 
-    let region = Region {
-        start_line: start_row,
-        end_line: start_row,
-        start_col,
-        end_col: start_col + 1,
-    };
+    let region = Region::from_pos(start);
 
     match parse_problem {
         SyntaxError::ConditionFailed => {
@@ -113,8 +101,8 @@ fn to_syntax_report<'a>(
             }
         }
         Unexpected(mut region) => {
-            if region.start_col == region.end_col {
-                region.end_col += 1;
+            if region.start().column == region.end().column {
+                region = Region::new(region.start(), region.end().bump_column(1));
             }
 
             let doc = alloc.stack(vec![
@@ -128,9 +116,9 @@ fn to_syntax_report<'a>(
 
             report(doc)
         }
-        NotEndOfFile(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        NotEndOfFile(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I expected to reach the end of the file, but got stuck here:"),
@@ -165,26 +153,25 @@ fn to_syntax_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        Type(typ) => to_type_report(alloc, filename, typ, 0, 0),
-        Pattern(pat) => to_pattern_report(alloc, filename, pat, 0, 0),
+        Type(typ) => to_type_report(alloc, filename, typ, Position::default()),
+        Pattern(pat) => to_pattern_report(alloc, filename, pat, Position::default()),
         Expr(expr) => to_expr_report(
             alloc,
             filename,
-            Context::InDef(start_row, start_col),
+            Context::InDef(start),
             expr,
-            0,
-            0,
+            Position::default(),
         ),
-        Header(header) => to_header_report(alloc, filename, header, 0, 0),
+        Header(header) => to_header_report(alloc, filename, header, Position::default()),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
 
 #[allow(clippy::enum_variant_names)]
 enum Context {
-    InNode(Node, Row, Col, Box<Context>),
-    InDef(Row, Col),
-    InDefFinalExpr(Row, Col),
+    InNode(Node, Position, Box<Context>),
+    InDef(Position),
+    InDefFinalExpr(Position),
 }
 
 enum Node {
@@ -205,25 +192,22 @@ fn to_expr_report<'a>(
     filename: PathBuf,
     context: Context,
     parse_problem: &roc_parse::parser::EExpr<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EExpr;
 
     match parse_problem {
-        EExpr::If(if_, row, col) => to_if_report(alloc, filename, context, if_, *row, *col),
-        EExpr::When(when, row, col) => to_when_report(alloc, filename, context, when, *row, *col),
-        EExpr::Lambda(lambda, row, col) => {
-            to_lambda_report(alloc, filename, context, lambda, *row, *col)
+        EExpr::If(if_, pos) => to_if_report(alloc, filename, context, if_, *pos),
+        EExpr::When(when, pos) => to_when_report(alloc, filename, context, when, *pos),
+        EExpr::Lambda(lambda, pos) => to_lambda_report(alloc, filename, context, lambda, *pos),
+        EExpr::List(list, pos) => to_list_report(alloc, filename, context, list, *pos),
+        EExpr::Str(string, pos) => to_str_report(alloc, filename, context, string, *pos),
+        EExpr::InParens(expr, pos) => {
+            to_expr_in_parens_report(alloc, filename, context, expr, *pos)
         }
-        EExpr::List(list, row, col) => to_list_report(alloc, filename, context, list, *row, *col),
-        EExpr::Str(string, row, col) => to_str_report(alloc, filename, context, string, *row, *col),
-        EExpr::InParens(expr, row, col) => {
-            to_expr_in_parens_report(alloc, filename, context, expr, *row, *col)
-        }
-        EExpr::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, *row, *col),
-        EExpr::ElmStyleFunction(region, row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+        EExpr::Type(tipe, pos) => to_type_report(alloc, filename, tipe, *pos),
+        EExpr::ElmStyleFunction(region, pos) => {
+            let surroundings = Region::new(start, *pos);
             let region = *region;
 
             let doc = alloc.stack(vec![
@@ -245,9 +229,9 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::BadOperator(op, row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_rows_cols(*row, *col, *row, *col + op.len() as u16);
+        EExpr::BadOperator(op, pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::new(*pos, pos.bump_column(op.len() as u16));
 
             let suggestion = match *op {
                 "|" => vec![
@@ -278,10 +262,8 @@ fn to_expr_report<'a>(
                         .indent(4),
                 ])],
                 "->" => match context {
-                    Context::InNode(Node::WhenBranch, _row, _col, _) => {
-                        return to_unexpected_arrow_report(
-                            alloc, filename, *row, *col, start_row, start_col,
-                        );
+                    Context::InNode(Node::WhenBranch, _pos, _) => {
+                        return to_unexpected_arrow_report(alloc, filename, *pos, start);
                     }
                     _ => {
                         vec![alloc.stack(vec![
@@ -331,11 +313,11 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Ident(_row, _col) => unreachable!("another branch would be taken"),
+        EExpr::Ident(_pos) => unreachable!("another branch would be taken"),
 
-        EExpr::QualifiedTag(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EExpr::QualifiedTag(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am very confused by this identifier:"),
@@ -357,7 +339,7 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Start(row, col) | EExpr::IndentStart(row, col) => {
+        EExpr::Start(pos) | EExpr::IndentStart(pos) => {
             let (title, expecting) = match &context {
                 Context::InNode { .. } | Context::InDef { .. } => (
                     "MISSING EXPRESSION",
@@ -387,11 +369,10 @@ fn to_expr_report<'a>(
                 ),
             };
 
-            let (context_row, context_col, a_thing) = match context {
-                Context::InNode(node, r, c, _) => match node {
+            let (context_pos, a_thing) = match context {
+                Context::InNode(node, pos, _) => match node {
                     Node::WhenCondition | Node::WhenBranch | Node::WhenIfGuard => (
-                        r,
-                        c,
+                        pos,
                         alloc.concat(vec![
                             alloc.text("an "),
                             alloc.keyword("when"),
@@ -399,27 +380,26 @@ fn to_expr_report<'a>(
                         ]),
                     ),
                     Node::IfCondition | Node::IfThenBranch | Node::IfElseBranch => (
-                        r,
-                        c,
+                        pos,
                         alloc.concat(vec![
                             alloc.text("an "),
                             alloc.keyword("if"),
                             alloc.text(" expression"),
                         ]),
                     ),
-                    Node::ListElement => (r, c, alloc.text("a list")),
-                    Node::RecordConditionalDefault => (r, c, alloc.text("record field default")),
-                    Node::StringFormat => (r, c, alloc.text("a string format")),
-                    Node::InsideParens => (r, c, alloc.text("some parentheses")),
+                    Node::ListElement => (pos, alloc.text("a list")),
+                    Node::RecordConditionalDefault => (pos, alloc.text("record field default")),
+                    Node::StringFormat => (pos, alloc.text("a string format")),
+                    Node::InsideParens => (pos, alloc.text("some parentheses")),
                 },
-                Context::InDef(r, c) => (r, c, alloc.text("a definition")),
-                Context::InDefFinalExpr(r, c) => {
-                    (r, c, alloc.text("a definition's final expression"))
+                Context::InDef(pos) => (pos, alloc.text("a definition")),
+                Context::InDefFinalExpr(pos) => {
+                    (pos, alloc.text("a definition's final expression"))
                 }
             };
 
-            let surroundings = Region::from_rows_cols(context_row, context_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+            let surroundings = Region::new(context_pos, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.concat(vec![
@@ -439,9 +419,9 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::DefMissingFinalExpr(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EExpr::DefMissingFinalExpr(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a definition, but I got stuck here:"),
@@ -467,18 +447,13 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::DefMissingFinalExpr2(expr, row, col) => to_expr_report(
-            alloc,
-            filename,
-            Context::InDefFinalExpr(start_row, start_col),
-            expr,
-            *row,
-            *col,
-        ),
+        EExpr::DefMissingFinalExpr2(expr, pos) => {
+            to_expr_report(alloc, filename, Context::InDefFinalExpr(start), expr, *pos)
+        }
 
-        EExpr::BadExprEnd(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EExpr::BadExprEnd(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I got stuck here:"),
@@ -498,9 +473,9 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Colon(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EExpr::Colon(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a definition, but I got stuck here:"),
@@ -521,9 +496,9 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::BackpassArrow(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EExpr::BackpassArrow(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing an expression, but I got stuck here:"),
@@ -541,7 +516,7 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Space(error, row, col) => to_space_report(alloc, filename, error, *row, *col),
+        EExpr::Space(error, pos) => to_space_report(alloc, filename, error, *pos),
 
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
@@ -552,16 +527,15 @@ fn to_lambda_report<'a>(
     filename: PathBuf,
     _context: Context,
     parse_problem: &roc_parse::parser::ELambda<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::ELambda;
 
     match *parse_problem {
-        ELambda::Arrow(row, col) => match what_is_next(alloc.src_lines, row, col) {
+        ELambda::Arrow(pos) => match what_is_next(alloc.src_lines, pos) {
             Next::Token("=>") => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc
@@ -582,8 +556,8 @@ fn to_lambda_report<'a>(
                 }
             }
             _ => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc
@@ -605,10 +579,10 @@ fn to_lambda_report<'a>(
             }
         },
 
-        ELambda::Comma(row, col) => match what_is_next(alloc.src_lines, row, col) {
+        ELambda::Comma(pos) => match what_is_next(alloc.src_lines, pos) {
             Next::Token("=>") => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc
@@ -629,8 +603,8 @@ fn to_lambda_report<'a>(
                 }
             }
             _ => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc
@@ -652,10 +626,10 @@ fn to_lambda_report<'a>(
             }
         },
 
-        ELambda::Arg(row, col) => match what_is_next(alloc.src_lines, row, col) {
+        ELambda::Arg(pos) => match what_is_next(alloc.src_lines, pos) {
             Next::Other(Some(',')) => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc
@@ -675,8 +649,8 @@ fn to_lambda_report<'a>(
                 }
             }
             _ => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc
@@ -697,28 +671,19 @@ fn to_lambda_report<'a>(
             }
         },
 
-        ELambda::Start(_row, _col) => unreachable!("another branch would have been taken"),
+        ELambda::Start(_pos) => unreachable!("another branch would have been taken"),
 
-        ELambda::Body(expr, row, col) => to_expr_report(
-            alloc,
-            filename,
-            Context::InDef(start_row, start_col),
-            expr,
-            row,
-            col,
-        ),
-        ELambda::Pattern(ref pattern, row, col) => {
-            to_pattern_report(alloc, filename, pattern, row, col)
+        ELambda::Body(expr, pos) => {
+            to_expr_report(alloc, filename, Context::InDef(start), expr, pos)
         }
-        ELambda::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        ELambda::Pattern(ref pattern, pos) => to_pattern_report(alloc, filename, pattern, pos),
+        ELambda::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
 
-        ELambda::IndentArrow(row, col) => to_unfinished_lambda_report(
+        ELambda::IndentArrow(pos) => to_unfinished_lambda_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![
                 alloc.reflow(r"I just saw a pattern, so I was expecting to see a "),
                 alloc.parser_suggestion("->"),
@@ -726,13 +691,11 @@ fn to_lambda_report<'a>(
             ]),
         ),
 
-        ELambda::IndentBody(row, col) => to_unfinished_lambda_report(
+        ELambda::IndentBody(pos) => to_unfinished_lambda_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![
                 alloc.reflow(r"I just saw a pattern, so I was expecting to see a "),
                 alloc.parser_suggestion("->"),
@@ -740,13 +703,11 @@ fn to_lambda_report<'a>(
             ]),
         ),
 
-        ELambda::IndentArg(row, col) => to_unfinished_lambda_report(
+        ELambda::IndentArg(pos) => to_unfinished_lambda_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![
                 alloc.reflow(r"I just saw a pattern, so I was expecting to see a "),
                 alloc.parser_suggestion("->"),
@@ -760,14 +721,12 @@ fn to_lambda_report<'a>(
 fn to_unfinished_lambda_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    row: Row,
-    col: Col,
-    start_row: Row,
-    start_col: Col,
+    pos: Position,
+    start: Position,
     message: RocDocBuilder<'a>,
 ) -> Report<'a> {
-    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-    let region = Region::from_row_col(row, col);
+    let surroundings = Region::new(start, pos);
+    let region = Region::from_pos(pos);
 
     let doc = alloc.stack(vec![
         alloc.concat(vec![
@@ -791,25 +750,23 @@ fn to_str_report<'a>(
     filename: PathBuf,
     context: Context,
     parse_problem: &roc_parse::parser::EString<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EString;
 
     match *parse_problem {
-        EString::Open(_row, _col) => unreachable!("another branch would be taken"),
-        EString::Format(expr, row, col) => to_expr_report(
+        EString::Open(_pos) => unreachable!("another branch would be taken"),
+        EString::Format(expr, pos) => to_expr_report(
             alloc,
             filename,
-            Context::InNode(Node::StringFormat, start_row, start_col, Box::new(context)),
+            Context::InNode(Node::StringFormat, start, Box::new(context)),
             expr,
-            row,
-            col,
+            pos,
         ),
-        EString::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
-        EString::UnknownEscape(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_rows_cols(row, col, row, col + 2);
+        EString::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
+        EString::UnknownEscape(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::new(pos, pos.bump_column(2));
 
             let suggestion = |msg, sugg| {
                 alloc
@@ -848,9 +805,9 @@ fn to_str_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        EString::CodePtOpen(row, col) | EString::CodePtEnd(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EString::CodePtOpen(pos) | EString::CodePtEnd(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(
@@ -874,9 +831,9 @@ fn to_str_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        EString::FormatEnd(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EString::FormatEnd(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I cannot find the end of this format expression:"),
@@ -895,9 +852,9 @@ fn to_str_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        EString::EndlessSingle(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EString::EndlessSingle(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I cannot find the end of this string:"),
@@ -918,9 +875,9 @@ fn to_str_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        EString::EndlessMulti(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EString::EndlessMulti(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I cannot find the end of this block string:"),
@@ -948,24 +905,22 @@ fn to_expr_in_parens_report<'a>(
     filename: PathBuf,
     context: Context,
     parse_problem: &roc_parse::parser::EInParens<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EInParens;
 
     match *parse_problem {
-        EInParens::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
-        EInParens::Expr(expr, row, col) => to_expr_report(
+        EInParens::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
+        EInParens::Expr(expr, pos) => to_expr_report(
             alloc,
             filename,
-            Context::InNode(Node::InsideParens, start_row, start_col, Box::new(context)),
+            Context::InNode(Node::InsideParens, start, Box::new(context)),
             expr,
-            row,
-            col,
+            pos,
         ),
-        EInParens::End(row, col) | EInParens::IndentEnd(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EInParens::End(pos) | EInParens::IndentEnd(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc
@@ -987,9 +942,9 @@ fn to_expr_in_parens_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        EInParens::Open(row, col) | EInParens::IndentOpen(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EInParens::Open(pos) | EInParens::IndentOpen(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(
@@ -1020,87 +975,82 @@ fn to_list_report<'a>(
     filename: PathBuf,
     context: Context,
     parse_problem: &roc_parse::parser::EList<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EList;
 
     match *parse_problem {
-        EList::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        EList::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
 
-        EList::Expr(expr, row, col) => to_expr_report(
+        EList::Expr(expr, pos) => to_expr_report(
             alloc,
             filename,
-            Context::InNode(Node::ListElement, start_row, start_col, Box::new(context)),
+            Context::InNode(Node::ListElement, start, Box::new(context)),
             expr,
-            row,
-            col,
+            pos,
         ),
 
-        EList::Open(row, col) | EList::End(row, col) => {
-            match what_is_next(alloc.src_lines, row, col) {
-                Next::Other(Some(',')) => {
-                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                    let region = Region::from_row_col(row, col);
+        EList::Open(pos) | EList::End(pos) => match what_is_next(alloc.src_lines, pos) {
+            Next::Other(Some(',')) => {
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
-                    let doc = alloc.stack(vec![
-                        alloc.reflow(
-                            r"I am partway through started parsing a list, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(surroundings, region),
-                        alloc.concat(vec![
-                            alloc
-                                .reflow(r"I was expecting to see a list entry before this comma, "),
-                            alloc.reflow(r"so try adding a list entry"),
-                            alloc.reflow(r" and see if that helps?"),
-                        ]),
-                    ]);
-                    Report {
-                        filename,
-                        doc,
-                        title: "UNFINISHED LIST".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
-                }
-                _ => {
-                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                    let region = Region::from_row_col(row, col);
-
-                    let doc = alloc.stack(vec![
-                        alloc.reflow(
-                            r"I am partway through started parsing a list, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(surroundings, region),
-                        alloc.concat(vec![
-                            alloc.reflow(
-                                r"I was expecting to see a closing square bracket before this, ",
-                            ),
-                            alloc.reflow(r"so try adding a "),
-                            alloc.parser_suggestion("]"),
-                            alloc.reflow(r" and see if that helps?"),
-                        ]),
-                        alloc.concat(vec![
-                            alloc.note("When "),
-                            alloc.reflow(r"I get stuck like this, "),
-                            alloc.reflow(r"it usually means that there is a missing parenthesis "),
-                            alloc.reflow(r"or bracket somewhere earlier. "),
-                            alloc.reflow(r"It could also be a stray keyword or operator."),
-                        ]),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "UNFINISHED LIST".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
+                let doc = alloc.stack(vec![
+                    alloc.reflow(
+                        r"I am partway through started parsing a list, but I got stuck here:",
+                    ),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(r"I was expecting to see a list entry before this comma, "),
+                        alloc.reflow(r"so try adding a list entry"),
+                        alloc.reflow(r" and see if that helps?"),
+                    ]),
+                ]);
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED LIST".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
-        }
+            _ => {
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
-        EList::IndentOpen(row, col) | EList::IndentEnd(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+                let doc = alloc.stack(vec![
+                    alloc.reflow(
+                        r"I am partway through started parsing a list, but I got stuck here:",
+                    ),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow(
+                            r"I was expecting to see a closing square bracket before this, ",
+                        ),
+                        alloc.reflow(r"so try adding a "),
+                        alloc.parser_suggestion("]"),
+                        alloc.reflow(r" and see if that helps?"),
+                    ]),
+                    alloc.concat(vec![
+                        alloc.note("When "),
+                        alloc.reflow(r"I get stuck like this, "),
+                        alloc.reflow(r"it usually means that there is a missing parenthesis "),
+                        alloc.reflow(r"or bracket somewhere earlier. "),
+                        alloc.reflow(r"It could also be a stray keyword or operator."),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED LIST".to_string(),
+                    severity: Severity::RuntimeError,
+                }
+            }
+        },
+
+        EList::IndentOpen(pos) | EList::IndentEnd(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I cannot find the end of this list:"),
@@ -1131,52 +1081,46 @@ fn to_if_report<'a>(
     filename: PathBuf,
     context: Context,
     parse_problem: &roc_parse::parser::EIf<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EIf;
 
     match *parse_problem {
-        EIf::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        EIf::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
 
-        EIf::Condition(expr, row, col) => to_expr_report(
+        EIf::Condition(expr, pos) => to_expr_report(
             alloc,
             filename,
-            Context::InNode(Node::IfCondition, start_row, start_col, Box::new(context)),
+            Context::InNode(Node::IfCondition, start, Box::new(context)),
             expr,
-            row,
-            col,
+            pos,
         ),
 
-        EIf::ThenBranch(expr, row, col) => to_expr_report(
+        EIf::ThenBranch(expr, pos) => to_expr_report(
             alloc,
             filename,
-            Context::InNode(Node::IfThenBranch, start_row, start_col, Box::new(context)),
+            Context::InNode(Node::IfThenBranch, start, Box::new(context)),
             expr,
-            row,
-            col,
+            pos,
         ),
 
-        EIf::ElseBranch(expr, row, col) => to_expr_report(
+        EIf::ElseBranch(expr, pos) => to_expr_report(
             alloc,
             filename,
-            Context::InNode(Node::IfElseBranch, start_row, start_col, Box::new(context)),
+            Context::InNode(Node::IfElseBranch, start, Box::new(context)),
             expr,
-            row,
-            col,
+            pos,
         ),
 
-        EIf::If(_row, _col) => unreachable!("another branch would be taken"),
-        EIf::IndentIf(_row, _col) => unreachable!("another branch would be taken"),
+        EIf::If(_pos) => unreachable!("another branch would be taken"),
+        EIf::IndentIf(_pos) => unreachable!("another branch would be taken"),
 
-        EIf::Then(row, col) | EIf::IndentThenBranch(row, col) | EIf::IndentThenToken(row, col) => {
+        EIf::Then(pos) | EIf::IndentThenBranch(pos) | EIf::IndentThenToken(pos) => {
             to_unfinished_if_report(
                 alloc,
                 filename,
-                row,
-                col,
-                start_row,
-                start_col,
+                pos,
+                start,
                 alloc.concat(vec![
                     alloc.reflow(r"I was expecting to see the "),
                     alloc.keyword("then"),
@@ -1185,14 +1129,12 @@ fn to_if_report<'a>(
             )
         }
 
-        EIf::Else(row, col) | EIf::IndentElseBranch(row, col) | EIf::IndentElseToken(row, col) => {
+        EIf::Else(pos) | EIf::IndentElseBranch(pos) | EIf::IndentElseToken(pos) => {
             to_unfinished_if_report(
                 alloc,
                 filename,
-                row,
-                col,
-                start_row,
-                start_col,
+                pos,
+                start,
                 alloc.concat(vec![
                     alloc.reflow(r"I was expecting to see the "),
                     alloc.keyword("else"),
@@ -1201,13 +1143,11 @@ fn to_if_report<'a>(
             )
         }
 
-        EIf::IndentCondition(row, col) => to_unfinished_if_report(
+        EIf::IndentCondition(pos) => to_unfinished_if_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![
                 alloc.reflow(r"I was expecting to see a expression next")
             ]),
@@ -1218,14 +1158,12 @@ fn to_if_report<'a>(
 fn to_unfinished_if_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    row: Row,
-    col: Col,
-    start_row: Row,
-    start_col: Col,
+    pos: Position,
+    start: Position,
     message: RocDocBuilder<'a>,
 ) -> Report<'a> {
-    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-    let region = Region::from_row_col(row, col);
+    let surroundings = Region::new(start, pos);
+    let region = Region::from_pos(pos);
 
     let doc = alloc.stack(vec![
         alloc.concat(vec![
@@ -1250,16 +1188,15 @@ fn to_when_report<'a>(
     filename: PathBuf,
     context: Context,
     parse_problem: &roc_parse::parser::EWhen<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EWhen;
 
     match *parse_problem {
-        EWhen::IfGuard(nested, row, col) => match what_is_next(alloc.src_lines, row, col) {
+        EWhen::IfGuard(nested, pos) => match what_is_next(alloc.src_lines, pos) {
             Next::Token("->") => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(
@@ -1281,15 +1218,14 @@ fn to_when_report<'a>(
             _ => to_expr_report(
                 alloc,
                 filename,
-                Context::InNode(Node::WhenIfGuard, start_row, start_col, Box::new(context)),
+                Context::InNode(Node::WhenIfGuard, start, Box::new(context)),
                 nested,
-                row,
-                col,
+                pos,
             ),
         },
-        EWhen::Arrow(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EWhen::Arrow(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.concat(vec![
@@ -1310,33 +1246,29 @@ fn to_when_report<'a>(
             }
         }
 
-        EWhen::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        EWhen::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
 
-        EWhen::Branch(expr, row, col) => to_expr_report(
+        EWhen::Branch(expr, pos) => to_expr_report(
             alloc,
             filename,
-            Context::InNode(Node::WhenBranch, start_row, start_col, Box::new(context)),
+            Context::InNode(Node::WhenBranch, start, Box::new(context)),
             expr,
-            row,
-            col,
+            pos,
         ),
 
-        EWhen::Condition(expr, row, col) => to_expr_report(
+        EWhen::Condition(expr, pos) => to_expr_report(
             alloc,
             filename,
-            Context::InNode(Node::WhenCondition, start_row, start_col, Box::new(context)),
+            Context::InNode(Node::WhenCondition, start, Box::new(context)),
             expr,
-            row,
-            col,
+            pos,
         ),
 
-        EWhen::Bar(row, col) => to_unfinished_when_report(
+        EWhen::Bar(pos) => to_unfinished_when_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![
                 alloc.reflow(r"I just saw a "),
                 alloc.parser_suggestion(r"|"),
@@ -1344,16 +1276,14 @@ fn to_when_report<'a>(
             ]),
         ),
 
-        EWhen::IfToken(_row, _col) => unreachable!("the if-token is optional"),
-        EWhen::When(_row, _col) => unreachable!("another branch would be taken"),
+        EWhen::IfToken(_pos) => unreachable!("the if-token is optional"),
+        EWhen::When(_pos) => unreachable!("another branch would be taken"),
 
-        EWhen::Is(row, col) | EWhen::IndentIs(row, col) => to_unfinished_when_report(
+        EWhen::Is(pos) | EWhen::IndentIs(pos) => to_unfinished_when_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![
                 alloc.reflow(r"I was expecting to see the "),
                 alloc.keyword("is"),
@@ -1361,35 +1291,29 @@ fn to_when_report<'a>(
             ]),
         ),
 
-        EWhen::IndentCondition(row, col) => to_unfinished_when_report(
+        EWhen::IndentCondition(pos) => to_unfinished_when_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![
                 alloc.reflow(r"I was expecting to see a expression next")
             ]),
         ),
 
-        EWhen::IndentPattern(row, col) => to_unfinished_when_report(
+        EWhen::IndentPattern(pos) => to_unfinished_when_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![alloc.reflow(r"I was expecting to see a pattern next")]),
         ),
 
-        EWhen::IndentArrow(row, col) => to_unfinished_when_report(
+        EWhen::IndentArrow(pos) => to_unfinished_when_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![
                 alloc.reflow(r"I just saw a pattern, so I was expecting to see a "),
                 alloc.parser_suggestion("->"),
@@ -1397,13 +1321,11 @@ fn to_when_report<'a>(
             ]),
         ),
 
-        EWhen::IndentIfGuard(row, col) => to_unfinished_when_report(
+        EWhen::IndentIfGuard(pos) => to_unfinished_when_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![
                 alloc.reflow(r"I just saw the "),
                 alloc.keyword("if"),
@@ -1411,53 +1333,45 @@ fn to_when_report<'a>(
             ]),
         ),
 
-        EWhen::IndentBranch(row, col) => to_unfinished_when_report(
+        EWhen::IndentBranch(pos) => to_unfinished_when_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![
                 alloc.reflow(r"I was expecting to see an expression next. "),
                 alloc.reflow("What should I do when I run into this particular pattern?"),
             ]),
         ),
 
-        EWhen::PatternAlignment(indent, row, col) => to_unfinished_when_report(
+        EWhen::PatternAlignment(indent, pos) => to_unfinished_when_report(
             alloc,
             filename,
-            row,
-            col,
-            start_row,
-            start_col,
+            pos,
+            start,
             alloc.concat(vec![
                 alloc.reflow(r"I suspect this is a pattern that is not indented enough? (by "),
                 alloc.text(indent.to_string()),
                 alloc.reflow(" spaces)"),
             ]),
         ),
-        EWhen::Pattern(ref pat, row, col) => to_pattern_report(alloc, filename, pat, row, col),
+        EWhen::Pattern(ref pat, pos) => to_pattern_report(alloc, filename, pat, pos),
     }
 }
 
 fn to_unfinished_when_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    row: Row,
-    col: Col,
-    start_row: Row,
-    start_col: Col,
+    pos: Position,
+    start: Position,
     message: RocDocBuilder<'a>,
 ) -> Report<'a> {
-    match what_is_next(alloc.src_lines, row, col) {
-        Next::Token("->") => {
-            to_unexpected_arrow_report(alloc, filename, row, col, start_row, start_col)
-        }
+    match what_is_next(alloc.src_lines, pos) {
+        Next::Token("->") => to_unexpected_arrow_report(alloc, filename, pos, start),
 
         _ => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.concat(vec![
@@ -1483,13 +1397,11 @@ fn to_unfinished_when_report<'a>(
 fn to_unexpected_arrow_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
-    row: Row,
-    col: Col,
-    start_row: Row,
-    start_col: Col,
+    pos: Position,
+    start: Position,
 ) -> Report<'a> {
-    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-    let region = Region::from_rows_cols(row, col, row, col + 2);
+    let surroundings = Region::new(start, pos);
+    let region = Region::new(pos, pos.bump_column(2));
 
     let doc = alloc.stack(vec![
         alloc.concat(vec![
@@ -1568,15 +1480,14 @@ fn to_pattern_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::EPattern<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EPattern;
 
     match parse_problem {
-        EPattern::Start(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EPattern::Start(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I just started parsing a pattern, but I got stuck here:"),
@@ -1591,11 +1502,9 @@ fn to_pattern_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        EPattern::Record(record, row, col) => {
-            to_precord_report(alloc, filename, record, *row, *col)
-        }
-        EPattern::PInParens(inparens, row, col) => {
-            to_pattern_in_parens_report(alloc, filename, inparens, *row, *col)
+        EPattern::Record(record, pos) => to_precord_report(alloc, filename, record, *pos),
+        EPattern::PInParens(inparens, pos) => {
+            to_pattern_in_parens_report(alloc, filename, inparens, *pos)
         }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
@@ -1605,16 +1514,15 @@ fn to_precord_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::PRecord<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::PRecord;
 
     match *parse_problem {
-        PRecord::Open(row, col) => match what_is_next(alloc.src_lines, row, col) {
+        PRecord::Open(pos) => match what_is_next(alloc.src_lines, pos) {
             Next::Keyword(keyword) => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = to_keyword_region(row, col, keyword);
+                let surroundings = Region::new(start, pos);
+                let region = to_keyword_region(pos, keyword);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a record pattern, but I got stuck on this field name:"),
@@ -1634,8 +1542,8 @@ fn to_precord_report<'a>(
                 }
             }
             _ => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a record pattern, but I got stuck here:"),
@@ -1652,11 +1560,11 @@ fn to_precord_report<'a>(
             }
         },
 
-        PRecord::End(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        PRecord::End(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
-            match what_is_next(alloc.src_lines, row, col) {
+            match what_is_next(alloc.src_lines, pos) {
                 Next::Other(Some(c)) if c.is_alphabetic() => {
                     let doc = alloc.stack(vec![
                         alloc.reflow(r"I am partway through parsing a record pattern, but I got stuck here:"),
@@ -1698,10 +1606,10 @@ fn to_precord_report<'a>(
             }
         }
 
-        PRecord::Field(row, col) => match what_is_next(alloc.src_lines, row, col) {
+        PRecord::Field(pos) => match what_is_next(alloc.src_lines, pos) {
             Next::Keyword(keyword) => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = to_keyword_region(row, col, keyword);
+                let surroundings = Region::new(start, pos);
+                let region = to_keyword_region(pos, keyword);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a record pattern, but I got stuck on this field name:"),
@@ -1723,8 +1631,8 @@ fn to_precord_report<'a>(
             Next::Other(Some(',')) => todo!(),
             Next::Other(Some('}')) => unreachable!("or is it?"),
             _ => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I am partway through parsing a record pattern, but I got stuck here:"),
@@ -1747,34 +1655,30 @@ fn to_precord_report<'a>(
             }
         },
 
-        PRecord::Colon(_, _) => {
+        PRecord::Colon(_) => {
             unreachable!("because `{ foo }` is a valid field; the colon is not required")
         }
-        PRecord::Optional(_, _) => {
+        PRecord::Optional(_) => {
             unreachable!("because `{ foo }` is a valid field; the question mark is not required")
         }
 
-        PRecord::Pattern(pattern, row, col) => {
-            to_pattern_report(alloc, filename, pattern, row, col)
-        }
+        PRecord::Pattern(pattern, pos) => to_pattern_report(alloc, filename, pattern, pos),
 
-        PRecord::Expr(expr, row, col) => to_expr_report(
+        PRecord::Expr(expr, pos) => to_expr_report(
             alloc,
             filename,
             Context::InNode(
                 Node::RecordConditionalDefault,
-                start_row,
-                start_col,
-                Box::new(Context::InDef(row, col)),
+                start,
+                Box::new(Context::InDef(pos)),
             ),
             expr,
-            row,
-            col,
+            pos,
         ),
 
-        PRecord::IndentOpen(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        PRecord::IndentOpen(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I just started parsing a record pattern, but I got stuck here:"),
@@ -1791,14 +1695,12 @@ fn to_precord_report<'a>(
             }
         }
 
-        PRecord::IndentEnd(row, col) => {
-            match next_line_starts_with_close_curly(alloc.src_lines, row) {
-                Some((curly_row, curly_col)) => {
-                    let surroundings =
-                        Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
-                    let region = Region::from_row_col(curly_row, curly_col);
+        PRecord::IndentEnd(pos) => match next_line_starts_with_close_curly(alloc.src_lines, pos) {
+            Some(curly_pos) => {
+                let surroundings = Region::new(start, curly_pos);
+                let region = Region::from_pos(curly_pos);
 
-                    let doc = alloc.stack(vec![
+                let doc = alloc.stack(vec![
                         alloc.reflow(
                             "I am partway through parsing a record pattern, but I got stuck here:",
                         ),
@@ -1808,50 +1710,49 @@ fn to_precord_report<'a>(
                         ]),
                     ]);
 
-                    Report {
-                        filename,
-                        doc,
-                        title: "NEED MORE INDENTATION".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
-                }
-                None => {
-                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                    let region = Region::from_row_col(row, col);
-
-                    let doc = alloc.stack(vec![
-                        alloc.reflow(
-                            r"I am partway through parsing a record pattern, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(surroundings, region),
-                        alloc.concat(vec![
-                            alloc.reflow("I was expecting to see a closing curly "),
-                            alloc.reflow("brace before this, so try adding a "),
-                            alloc.parser_suggestion("}"),
-                            alloc.reflow(" and see if that helps?"),
-                        ]),
-                        note_for_record_pattern_indent(alloc),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "UNFINISHED RECORD PATTERN".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
+                Report {
+                    filename,
+                    doc,
+                    title: "NEED MORE INDENTATION".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
-        }
+            None => {
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
-        PRecord::IndentColon(_, _) => {
+                let doc = alloc.stack(vec![
+                    alloc.reflow(
+                        r"I am partway through parsing a record pattern, but I got stuck here:",
+                    ),
+                    alloc.region_with_subregion(surroundings, region),
+                    alloc.concat(vec![
+                        alloc.reflow("I was expecting to see a closing curly "),
+                        alloc.reflow("brace before this, so try adding a "),
+                        alloc.parser_suggestion("}"),
+                        alloc.reflow(" and see if that helps?"),
+                    ]),
+                    note_for_record_pattern_indent(alloc),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "UNFINISHED RECORD PATTERN".to_string(),
+                    severity: Severity::RuntimeError,
+                }
+            }
+        },
+
+        PRecord::IndentColon(_) => {
             unreachable!("because `{ foo }` is a valid field; the colon is not required")
         }
 
-        PRecord::IndentOptional(_, _) => {
+        PRecord::IndentOptional(_) => {
             unreachable!("because `{ foo }` is a valid field; the question mark is not required")
         }
 
-        PRecord::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        PRecord::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
     }
 }
 
@@ -1859,16 +1760,15 @@ fn to_pattern_in_parens_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::PInParens<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::PInParens;
 
     match *parse_problem {
-        PInParens::Open(row, col) => {
+        PInParens::Open(pos) => {
             // `Open` case is for exhaustiveness, this case shouldn not be reachable practically.
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(
@@ -1892,9 +1792,9 @@ fn to_pattern_in_parens_report<'a>(
             }
         }
 
-        PInParens::End(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        PInParens::End(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow("I am partway through parsing a pattern in parentheses, but I got stuck here:"),
@@ -1916,13 +1816,11 @@ fn to_pattern_in_parens_report<'a>(
             }
         }
 
-        PInParens::Pattern(pattern, row, col) => {
-            to_pattern_report(alloc, filename, pattern, row, col)
-        }
+        PInParens::Pattern(pattern, pos) => to_pattern_report(alloc, filename, pattern, pos),
 
-        PInParens::IndentOpen(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        PInParens::IndentOpen(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(
@@ -1941,12 +1839,11 @@ fn to_pattern_in_parens_report<'a>(
             }
         }
 
-        PInParens::IndentEnd(row, col) => {
-            match next_line_starts_with_close_parenthesis(alloc.src_lines, row) {
-                Some((curly_row, curly_col)) => {
-                    let surroundings =
-                        Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
-                    let region = Region::from_row_col(curly_row, curly_col);
+        PInParens::IndentEnd(pos) => {
+            match next_line_starts_with_close_parenthesis(alloc.src_lines, pos) {
+                Some(curly_pos) => {
+                    let surroundings = Region::new(start, curly_pos);
+                    let region = Region::from_pos(curly_pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
@@ -1966,8 +1863,8 @@ fn to_pattern_in_parens_report<'a>(
                     }
                 }
                 None => {
-                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                    let region = Region::from_row_col(row, col);
+                    let surroundings = Region::new(start, pos);
+                    let region = Region::from_pos(pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
@@ -1993,7 +1890,7 @@ fn to_pattern_in_parens_report<'a>(
             }
         }
 
-        PInParens::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        PInParens::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
     }
 }
 
@@ -2001,25 +1898,20 @@ fn to_type_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::EType<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EType;
 
     match parse_problem {
-        EType::TRecord(record, row, col) => to_trecord_report(alloc, filename, record, *row, *col),
-        EType::TTagUnion(tag_union, row, col) => {
-            to_ttag_union_report(alloc, filename, tag_union, *row, *col)
-        }
-        EType::TInParens(tinparens, row, col) => {
-            to_tinparens_report(alloc, filename, tinparens, *row, *col)
-        }
-        EType::TApply(tapply, row, col) => to_tapply_report(alloc, filename, tapply, *row, *col),
+        EType::TRecord(record, pos) => to_trecord_report(alloc, filename, record, *pos),
+        EType::TTagUnion(tag_union, pos) => to_ttag_union_report(alloc, filename, tag_union, *pos),
+        EType::TInParens(tinparens, pos) => to_tinparens_report(alloc, filename, tinparens, *pos),
+        EType::TApply(tapply, pos) => to_tapply_report(alloc, filename, tapply, *pos),
 
-        EType::TFunctionArgument(row, col) => match what_is_next(alloc.src_lines, *row, *col) {
+        EType::TFunctionArgument(pos) => match what_is_next(alloc.src_lines, *pos) {
             Next::Other(Some(',')) => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-                let region = Region::from_row_col(*row, *col);
+                let surroundings = Region::new(start, *pos);
+                let region = Region::from_pos(*pos);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a function argument type, but I encountered two commas in a row:"),
@@ -2037,9 +1929,9 @@ fn to_type_report<'a>(
             _ => todo!(),
         },
 
-        EType::TStart(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EType::TStart(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
@@ -2061,9 +1953,9 @@ fn to_type_report<'a>(
             }
         }
 
-        EType::TIndentStart(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EType::TIndentStart(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
@@ -2079,9 +1971,9 @@ fn to_type_report<'a>(
             }
         }
 
-        EType::TIndentEnd(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EType::TIndentEnd(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a type, but I got stuck here:"),
@@ -2097,9 +1989,9 @@ fn to_type_report<'a>(
             }
         }
 
-        EType::TAsIndentStart(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EType::TAsIndentStart(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I just started parsing an inline type alias, but I got stuck here:"),
@@ -2115,9 +2007,9 @@ fn to_type_report<'a>(
             }
         }
 
-        EType::TBadTypeVariable(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EType::TBadTypeVariable(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am expecting a type variable, but I got stuck here:"),
@@ -2140,16 +2032,15 @@ fn to_trecord_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::ETypeRecord<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::ETypeRecord;
 
     match *parse_problem {
-        ETypeRecord::Open(row, col) => match what_is_next(alloc.src_lines, row, col) {
+        ETypeRecord::Open(pos) => match what_is_next(alloc.src_lines, pos) {
             Next::Keyword(keyword) => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = to_keyword_region(row, col, keyword);
+                let surroundings = Region::new(start, pos);
+                let region = to_keyword_region(pos, keyword);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a record type, but I got stuck on this field name:"),
@@ -2169,8 +2060,8 @@ fn to_trecord_report<'a>(
                 }
             }
             _ => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a record type, but I got stuck here:"),
@@ -2191,11 +2082,11 @@ fn to_trecord_report<'a>(
             }
         },
 
-        ETypeRecord::End(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        ETypeRecord::End(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
-            match what_is_next(alloc.src_lines, row, col) {
+            match what_is_next(alloc.src_lines, pos) {
                 Next::Other(Some(c)) if c.is_alphabetic() => {
                     let doc = alloc.stack(vec![
                         alloc.reflow(r"I am partway through parsing a record type, but I got stuck here:"),
@@ -2237,10 +2128,10 @@ fn to_trecord_report<'a>(
             }
         }
 
-        ETypeRecord::Field(row, col) => match what_is_next(alloc.src_lines, row, col) {
+        ETypeRecord::Field(pos) => match what_is_next(alloc.src_lines, pos) {
             Next::Keyword(keyword) => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = to_keyword_region(row, col, keyword);
+                let surroundings = Region::new(start, pos);
+                let region = to_keyword_region(pos, keyword);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a record type, but I got stuck on this field name:"),
@@ -2262,8 +2153,8 @@ fn to_trecord_report<'a>(
             Next::Other(Some(',')) => todo!(),
             Next::Other(Some('}')) => unreachable!("or is it?"),
             _ => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I am partway through parsing a record type, but I got stuck here:"),
@@ -2286,18 +2177,18 @@ fn to_trecord_report<'a>(
             }
         },
 
-        ETypeRecord::Colon(_, _) => {
+        ETypeRecord::Colon(_) => {
             unreachable!("because `{ foo }` is a valid field; the colon is not required")
         }
-        ETypeRecord::Optional(_, _) => {
+        ETypeRecord::Optional(_) => {
             unreachable!("because `{ foo }` is a valid field; the question mark is not required")
         }
 
-        ETypeRecord::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, row, col),
+        ETypeRecord::Type(tipe, pos) => to_type_report(alloc, filename, tipe, pos),
 
-        ETypeRecord::IndentOpen(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        ETypeRecord::IndentOpen(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I just started parsing a record type, but I got stuck here:"),
@@ -2318,12 +2209,11 @@ fn to_trecord_report<'a>(
             }
         }
 
-        ETypeRecord::IndentEnd(row, col) => {
-            match next_line_starts_with_close_curly(alloc.src_lines, row) {
-                Some((curly_row, curly_col)) => {
-                    let surroundings =
-                        Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
-                    let region = Region::from_row_col(curly_row, curly_col);
+        ETypeRecord::IndentEnd(pos) => {
+            match next_line_starts_with_close_curly(alloc.src_lines, pos) {
+                Some(curly_pos) => {
+                    let surroundings = Region::new(start, curly_pos);
+                    let region = Region::from_pos(curly_pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
@@ -2343,8 +2233,8 @@ fn to_trecord_report<'a>(
                     }
                 }
                 None => {
-                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                    let region = Region::from_row_col(row, col);
+                    let surroundings = Region::new(start, pos);
+                    let region = Region::from_pos(pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
@@ -2370,15 +2260,15 @@ fn to_trecord_report<'a>(
             }
         }
 
-        ETypeRecord::IndentColon(_, _) => {
+        ETypeRecord::IndentColon(_) => {
             unreachable!("because `{ foo }` is a valid field; the colon is not required")
         }
 
-        ETypeRecord::IndentOptional(_, _) => {
+        ETypeRecord::IndentOptional(_) => {
             unreachable!("because `{ foo }` is a valid field; the question mark is not required")
         }
 
-        ETypeRecord::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        ETypeRecord::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
     }
 }
 
@@ -2386,16 +2276,15 @@ fn to_ttag_union_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::ETypeTagUnion<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::ETypeTagUnion;
 
     match *parse_problem {
-        ETypeTagUnion::Open(row, col) => match what_is_next(alloc.src_lines, row, col) {
+        ETypeTagUnion::Open(pos) => match what_is_next(alloc.src_lines, pos) {
             Next::Keyword(keyword) => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = to_keyword_region(row, col, keyword);
+                let surroundings = Region::new(start, pos);
+                let region = to_keyword_region(pos, keyword);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a tag union, but I got stuck on this field name:"),
@@ -2417,8 +2306,8 @@ fn to_ttag_union_report<'a>(
             Next::Other(Some(c)) if c.is_alphabetic() => {
                 debug_assert!(c.is_lowercase());
 
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(
@@ -2437,8 +2326,8 @@ fn to_ttag_union_report<'a>(
                 }
             }
             _ => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
+                let surroundings = Region::new(start, pos);
+                let region = Region::from_pos(pos);
 
                 let doc = alloc.stack(vec![
                     alloc.reflow(r"I just started parsing a tag union type, but I got stuck here:"),
@@ -2459,11 +2348,11 @@ fn to_ttag_union_report<'a>(
             }
         },
 
-        ETypeTagUnion::End(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        ETypeTagUnion::End(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
-            match what_is_next(alloc.src_lines, row, col) {
+            match what_is_next(alloc.src_lines, pos) {
                 Next::Other(Some(c)) if c.is_alphabetic() => {
                     debug_assert!(c.is_lowercase());
 
@@ -2523,11 +2412,11 @@ fn to_ttag_union_report<'a>(
             }
         }
 
-        ETypeTagUnion::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, row, col),
+        ETypeTagUnion::Type(tipe, pos) => to_type_report(alloc, filename, tipe, pos),
 
-        ETypeTagUnion::IndentOpen(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        ETypeTagUnion::IndentOpen(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I just started parsing a tag union type, but I got stuck here:"),
@@ -2548,12 +2437,11 @@ fn to_ttag_union_report<'a>(
             }
         }
 
-        ETypeTagUnion::IndentEnd(row, col) => {
-            match next_line_starts_with_close_square_bracket(alloc.src_lines, row) {
-                Some((curly_row, curly_col)) => {
-                    let surroundings =
-                        Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
-                    let region = Region::from_row_col(curly_row, curly_col);
+        ETypeTagUnion::IndentEnd(pos) => {
+            match next_line_starts_with_close_square_bracket(alloc.src_lines, pos) {
+                Some(curly_pos) => {
+                    let surroundings = Region::new(start, curly_pos);
+                    let region = Region::from_pos(curly_pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
@@ -2573,8 +2461,8 @@ fn to_ttag_union_report<'a>(
                     }
                 }
                 None => {
-                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                    let region = Region::from_row_col(row, col);
+                    let surroundings = Region::new(start, pos);
+                    let region = Region::from_pos(pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
@@ -2600,7 +2488,7 @@ fn to_ttag_union_report<'a>(
             }
         }
 
-        ETypeTagUnion::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        ETypeTagUnion::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
     }
 }
 
@@ -2608,17 +2496,16 @@ fn to_tinparens_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::ETypeInParens<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::ETypeInParens;
 
     match *parse_problem {
-        ETypeInParens::Open(row, col) => {
-            match what_is_next(alloc.src_lines, row, col) {
+        ETypeInParens::Open(pos) => {
+            match what_is_next(alloc.src_lines, pos) {
                 Next::Keyword(keyword) => {
-                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                    let region = to_keyword_region(row, col, keyword);
+                    let surroundings = Region::new(start, pos);
+                    let region = to_keyword_region(pos, keyword);
 
                     let doc = alloc.stack(vec![
                     alloc.reflow(r"I just saw an open parenthesis, so I was expecting to see a type next."),
@@ -2641,8 +2528,8 @@ fn to_tinparens_report<'a>(
                 Next::Other(Some(c)) if c.is_alphabetic() => {
                     debug_assert!(c.is_lowercase());
 
-                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                    let region = Region::from_row_col(row, col);
+                    let surroundings = Region::new(start, pos);
+                    let region = Region::from_pos(pos);
 
                     let doc = alloc.stack(vec![
                     alloc.reflow(
@@ -2661,8 +2548,8 @@ fn to_tinparens_report<'a>(
                     }
                 }
                 _ => {
-                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                    let region = Region::from_row_col(row, col);
+                    let surroundings = Region::new(start, pos);
+                    let region = Region::from_pos(pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
@@ -2686,11 +2573,11 @@ fn to_tinparens_report<'a>(
             }
         }
 
-        ETypeInParens::End(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        ETypeInParens::End(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
-            match what_is_next(alloc.src_lines, row, col) {
+            match what_is_next(alloc.src_lines, pos) {
                 Next::Other(Some(c)) if c.is_alphabetic() => {
                     debug_assert!(c.is_lowercase());
 
@@ -2734,11 +2621,11 @@ fn to_tinparens_report<'a>(
             }
         }
 
-        ETypeInParens::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, row, col),
+        ETypeInParens::Type(tipe, pos) => to_type_report(alloc, filename, tipe, pos),
 
-        ETypeInParens::IndentOpen(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        ETypeInParens::IndentOpen(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc
@@ -2760,12 +2647,11 @@ fn to_tinparens_report<'a>(
             }
         }
 
-        ETypeInParens::IndentEnd(row, col) => {
-            match next_line_starts_with_close_parenthesis(alloc.src_lines, row) {
-                Some((curly_row, curly_col)) => {
-                    let surroundings =
-                        Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
-                    let region = Region::from_row_col(curly_row, curly_col);
+        ETypeInParens::IndentEnd(pos) => {
+            match next_line_starts_with_close_parenthesis(alloc.src_lines, pos) {
+                Some(curly_pos) => {
+                    let surroundings = Region::new(start, curly_pos);
+                    let region = Region::from_pos(curly_pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
@@ -2785,8 +2671,8 @@ fn to_tinparens_report<'a>(
                     }
                 }
                 None => {
-                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                    let region = Region::from_row_col(row, col);
+                    let surroundings = Region::new(start, pos);
+                    let region = Region::from_pos(pos);
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
@@ -2812,7 +2698,7 @@ fn to_tinparens_report<'a>(
             }
         }
 
-        ETypeInParens::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        ETypeInParens::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
     }
 }
 
@@ -2820,14 +2706,13 @@ fn to_tapply_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::ETypeApply,
-    _start_row: Row,
-    _start_col: Col,
+    _start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::ETypeApply;
 
     match *parse_problem {
-        ETypeApply::DoubleDot(row, col) => {
-            let region = Region::from_row_col(row, col);
+        ETypeApply::DoubleDot(pos) => {
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I encountered two dots in a row:"),
@@ -2842,8 +2727,8 @@ fn to_tapply_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        ETypeApply::TrailingDot(row, col) => {
-            let region = Region::from_row_col(row, col);
+        ETypeApply::TrailingDot(pos) => {
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I encountered a dot with nothing after it:"),
@@ -2864,8 +2749,8 @@ fn to_tapply_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        ETypeApply::StartIsNumber(row, col) => {
-            let region = Region::from_row_col(row, col);
+        ETypeApply::StartIsNumber(pos) => {
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I encountered a number at the start of a qualified name segment:"),
@@ -2886,8 +2771,8 @@ fn to_tapply_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        ETypeApply::StartNotUppercase(row, col) => {
-            let region = Region::from_row_col(row, col);
+        ETypeApply::StartNotUppercase(pos) => {
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I encountered a lowercase letter at the start of a qualified name segment:"),
@@ -2909,8 +2794,8 @@ fn to_tapply_report<'a>(
             }
         }
 
-        ETypeApply::End(row, col) => {
-            let region = Region::from_row_col(row, col);
+        ETypeApply::End(pos) => {
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(
@@ -2927,7 +2812,7 @@ fn to_tapply_report<'a>(
             }
         }
 
-        ETypeApply::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        ETypeApply::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
     }
 }
 
@@ -2935,39 +2820,26 @@ fn to_header_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::EHeader<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EHeader;
 
     match parse_problem {
-        EHeader::Provides(provides, row, col) => {
-            to_provides_report(alloc, filename, provides, *row, *col)
-        }
+        EHeader::Provides(provides, pos) => to_provides_report(alloc, filename, provides, *pos),
 
-        EHeader::Exposes(exposes, row, col) => {
-            to_exposes_report(alloc, filename, exposes, *row, *col)
-        }
+        EHeader::Exposes(exposes, pos) => to_exposes_report(alloc, filename, exposes, *pos),
 
-        EHeader::Imports(imports, row, col) => {
-            to_imports_report(alloc, filename, imports, *row, *col)
-        }
+        EHeader::Imports(imports, pos) => to_imports_report(alloc, filename, imports, *pos),
 
-        EHeader::Requires(requires, row, col) => {
-            to_requires_report(alloc, filename, requires, *row, *col)
-        }
+        EHeader::Requires(requires, pos) => to_requires_report(alloc, filename, requires, *pos),
 
-        EHeader::Packages(packages, row, col) => {
-            to_packages_report(alloc, filename, packages, *row, *col)
-        }
+        EHeader::Packages(packages, pos) => to_packages_report(alloc, filename, packages, *pos),
 
-        EHeader::Effects(effects, row, col) => {
-            to_effects_report(alloc, filename, effects, *row, *col)
-        }
+        EHeader::Effects(effects, pos) => to_effects_report(alloc, filename, effects, *pos),
 
-        EHeader::IndentStart(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EHeader::IndentStart(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
@@ -2983,9 +2855,9 @@ fn to_header_report<'a>(
             }
         }
 
-        EHeader::Start(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EHeader::Start(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am expecting a header, but got stuck here:"),
@@ -3009,9 +2881,9 @@ fn to_header_report<'a>(
             }
         }
 
-        EHeader::ModuleName(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EHeader::ModuleName(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
@@ -3033,9 +2905,9 @@ fn to_header_report<'a>(
             }
         }
 
-        EHeader::AppName(_, row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EHeader::AppName(_, pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
@@ -3057,17 +2929,17 @@ fn to_header_report<'a>(
             }
         }
 
-        EHeader::PlatformName(_, row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
-            let region = Region::from_row_col(*row, *col);
+        EHeader::PlatformName(_, pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = Region::from_pos(*pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
                     alloc.reflow("I am expecting a platform name next, like "),
-                    alloc.parser_suggestion("roc/core"),
-                    alloc.reflow("."),
+                    alloc.parser_suggestion("\"roc/core\""),
+                    alloc.reflow(". Platform names must be quoted."),
                 ]),
             ]);
 
@@ -3079,7 +2951,7 @@ fn to_header_report<'a>(
             }
         }
 
-        EHeader::Space(error, row, col) => to_space_report(alloc, filename, error, *row, *col),
+        EHeader::Space(error, pos) => to_space_report(alloc, filename, error, *pos),
     }
 }
 
@@ -3087,16 +2959,15 @@ fn to_provides_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::EProvides,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EProvides;
 
     match *parse_problem {
-        EProvides::ListEnd(row, col) | // TODO: give this its own error message
-        EProvides::Identifier(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EProvides::ListEnd(pos) | // TODO: give this its own error message
+        EProvides::Identifier(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc
@@ -3118,9 +2989,9 @@ fn to_provides_report<'a>(
             }
         }
 
-        EProvides::Provides(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EProvides::Provides(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
@@ -3143,7 +3014,7 @@ fn to_provides_report<'a>(
             }
         }
 
-        EProvides::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        EProvides::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
@@ -3153,16 +3024,15 @@ fn to_exposes_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::EExposes,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EExposes;
 
     match *parse_problem {
-        EExposes::ListEnd(row, col) | // TODO: give this its own error message
-        EExposes::Identifier(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EExposes::ListEnd(pos) | // TODO: give this its own error message
+        EExposes::Identifier(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a exposes list, but I got stuck here:"),
@@ -3183,9 +3053,9 @@ fn to_exposes_report<'a>(
             }
         }
 
-        EExposes::Exposes(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EExposes::Exposes(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
@@ -3208,7 +3078,7 @@ fn to_exposes_report<'a>(
             }
         }
 
-        EExposes::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        EExposes::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
@@ -3218,15 +3088,14 @@ fn to_imports_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::EImports,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EImports;
 
     match *parse_problem {
-        EImports::Identifier(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EImports::Identifier(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a imports list, but I got stuck here:"),
@@ -3247,9 +3116,9 @@ fn to_imports_report<'a>(
             }
         }
 
-        EImports::Imports(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EImports::Imports(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
@@ -3272,11 +3141,11 @@ fn to_imports_report<'a>(
             }
         }
 
-        EImports::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        EImports::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
 
-        EImports::ModuleName(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EImports::ModuleName(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
@@ -3306,15 +3175,14 @@ fn to_requires_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::ERequires<'a>,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::ERequires;
 
     match *parse_problem {
-        ERequires::Requires(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        ERequires::Requires(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
@@ -3337,11 +3205,11 @@ fn to_requires_report<'a>(
             }
         }
 
-        ERequires::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        ERequires::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
 
-        ERequires::ListStart(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        ERequires::ListStart(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
@@ -3364,9 +3232,9 @@ fn to_requires_report<'a>(
             }
         }
 
-        ERequires::Rigid(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        ERequires::Rigid(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
@@ -3401,15 +3269,14 @@ fn to_packages_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::EPackages,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EPackages;
 
     match *parse_problem {
-        EPackages::Packages(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EPackages::Packages(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
@@ -3430,7 +3297,7 @@ fn to_packages_report<'a>(
             }
         }
 
-        EPackages::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        EPackages::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
@@ -3440,15 +3307,14 @@ fn to_effects_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::EEffects,
-    start_row: Row,
-    start_col: Col,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EEffects;
 
     match *parse_problem {
-        EEffects::Effects(row, col) => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_row_col(row, col);
+        EEffects::Effects(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
@@ -3469,7 +3335,7 @@ fn to_effects_report<'a>(
             }
         }
 
-        EEffects::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+        EEffects::Space(error, pos) => to_space_report(alloc, filename, &error, pos),
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
@@ -3479,14 +3345,13 @@ fn to_space_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::BadInputError,
-    row: Row,
-    col: Col,
+    pos: Position,
 ) -> Report<'a> {
     use roc_parse::parser::BadInputError;
 
     match parse_problem {
         BadInputError::HasTab => {
-            let region = Region::from_row_col(row, col);
+            let region = Region::from_pos(pos);
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I encountered a tab character"),
@@ -3515,9 +3380,9 @@ enum Next<'a> {
     Other(Option<char>),
 }
 
-fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a> {
-    let row_index = row as usize;
-    let col_index = col as usize;
+fn what_is_next<'a>(source_lines: &'a [&'a str], pos: Position) -> Next<'a> {
+    let row_index = pos.line as usize;
+    let col_index = pos.column as usize;
     match source_lines.get(row_index) {
         None => Next::Other(None),
         Some(line) => {
@@ -3557,46 +3422,45 @@ pub fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
     }
 }
 
-fn next_line_starts_with_close_curly(source_lines: &[&str], row: Row) -> Option<(Row, Col)> {
-    next_line_starts_with_char(source_lines, row, '}')
+fn next_line_starts_with_close_curly(source_lines: &[&str], pos: Position) -> Option<Position> {
+    next_line_starts_with_char(source_lines, pos, '}')
 }
 
-fn next_line_starts_with_close_parenthesis(source_lines: &[&str], row: Row) -> Option<(Row, Col)> {
-    next_line_starts_with_char(source_lines, row, ')')
+fn next_line_starts_with_close_parenthesis(
+    source_lines: &[&str],
+    pos: Position,
+) -> Option<Position> {
+    next_line_starts_with_char(source_lines, pos, ')')
 }
 
 fn next_line_starts_with_close_square_bracket(
     source_lines: &[&str],
-    row: Row,
-) -> Option<(Row, Col)> {
-    next_line_starts_with_char(source_lines, row, ']')
+    pos: Position,
+) -> Option<Position> {
+    next_line_starts_with_char(source_lines, pos, ']')
 }
 
 fn next_line_starts_with_char(
     source_lines: &[&str],
-    row: Row,
+    pos: Position,
     character: char,
-) -> Option<(Row, Col)> {
-    match source_lines.get(row as usize + 1) {
+) -> Option<Position> {
+    match source_lines.get(pos.line as usize + 1) {
         None => None,
 
         Some(line) => {
             let spaces_dropped = line.trim_start_matches(' ');
             match spaces_dropped.chars().next() {
-                Some(c) if c == character => {
-                    Some((row + 1, (line.len() - spaces_dropped.len()) as u16))
-                }
+                Some(c) if c == character => Some(Position {
+                    line: pos.line + 1,
+                    column: (line.len() - spaces_dropped.len()) as u16,
+                }),
                 _ => None,
             }
         }
     }
 }
 
-fn to_keyword_region(row: Row, col: Col, keyword: &str) -> Region {
-    Region {
-        start_line: row,
-        start_col: col,
-        end_line: row,
-        end_col: col + keyword.len() as u16,
-    }
+fn to_keyword_region(pos: Position, keyword: &str) -> Region {
+    Region::new(pos, pos.bump_column(keyword.len() as u16))
 }

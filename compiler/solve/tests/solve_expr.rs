@@ -1354,7 +1354,7 @@ mod solve_expr {
                             False -> 0
                 "#
             ),
-            "[ False, True ]* -> Num *",
+            "[ False, True ] -> Num *",
         );
     }
 
@@ -2416,7 +2416,7 @@ mod solve_expr {
                    toBit
                 "#
             ),
-            "[ False, True ]* -> Num *",
+            "[ False, True ] -> Num *",
         );
     }
 
@@ -2680,7 +2680,7 @@ mod solve_expr {
                     map
                        "#
             ),
-            "(a -> b), [ Cons a c, Nil ]* as c -> [ Cons b d, Nil ]* as d",
+            "(a -> b), [ Cons a c, Nil ] as c -> [ Cons b d, Nil ]* as d",
         );
     }
 
@@ -2941,7 +2941,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ]* as a -> [ S b, Z ]* as b",
+            "[ S a, Z ] as a -> [ S b, Z ]* as b",
         );
     }
 
@@ -2960,7 +2960,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ]* as a -> [ S b, Z ]* as b",
+            "[ S a, Z ] as a -> [ S b, Z ]* as b",
         );
     }
 
@@ -3031,7 +3031,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "(a -> b), [ Cons { x : a, xs : c }*, Nil ]* as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
+            "(a -> b), [ Cons { x : a, xs : c }*, Nil ] as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
         );
     }
 
@@ -3100,7 +3100,7 @@ mod solve_expr {
                    toAs
                 "#
             ),
-            "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
+            "(a -> b), [ Cons c [ Cons a d, Nil ], Nil ] as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
         );
     }
 
@@ -3905,7 +3905,7 @@ mod solve_expr {
                             x
                 "#
             ),
-            "[ Empty, Foo [ Bar ] I64 ]",
+            "[ Empty, Foo Bar I64 ]",
         );
     }
 
@@ -4747,6 +4747,166 @@ mod solve_expr {
                 "#
             ),
             "List elem -> LinkedList elem",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position1() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A -> X
+                       B -> Y
+                 "#
+            ),
+            "[ A, B ] -> [ X, Y ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position2() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A -> X
+                       B -> Y
+                       _ -> Z
+                 "#
+            ),
+            "[ A, B ]* -> [ X, Y, Z ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position3() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       A N -> Y
+                 "#
+            ),
+            "[ A [ M, N ] ] -> [ X, Y ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position4() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       A N -> Y
+                       A _ -> Z
+                 "#
+            ),
+            "[ A [ M, N ]* ] -> [ X, Y, Z ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position5() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A (M J) -> X
+                       A (N K) -> X
+                 "#
+            ),
+            "[ A [ M [ J ], N [ K ] ] ] -> [ X ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position6() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       B   -> X
+                       A N -> X
+                 "#
+            ),
+            "[ A [ M, N ], B ] -> [ X ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position7() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                         A -> X
+                         t -> t
+                 "#
+            ),
+            // TODO: we could be a bit smarter by subtracting "A" as a possible
+            // tag in the union known by t, which would yield the principal type
+            // [ A, ]a -> [ X ]a
+            "[ A, X ]a -> [ A, X ]a",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position8() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \opt ->
+                     when opt is
+                         Some ({tag: A}) -> 1
+                         Some ({tag: B}) -> 1
+                         None -> 0
+                 "#
+            ),
+            "[ None, Some { tag : [ A, B ] }* ] -> Num *",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position9() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 opt : [ Some Str, None ]
+                 opt = Some ""
+                 rcd = { opt }
+
+                 when rcd is
+                     { opt: Some s } -> s
+                     { opt: None } -> "?"
+                 "#
+            ),
+            "Str",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position10() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \r ->
+                     when r is
+                         { x: Blue, y ? 3 } -> y
+                         { x: Red, y ? 5 } -> y
+                 "#
+            ),
+            "{ x : [ Blue, Red ], y ? Num a }* -> Num a",
         )
     }
 }

@@ -9,7 +9,7 @@ use roc_module::symbol::IdentIds;
 use roc_parse::ast;
 use roc_parse::ast::CommentOrNewline;
 use roc_parse::ast::{AssignedField, Def};
-use roc_region::all::Located;
+use roc_region::all::Loc;
 
 // Documentation generation requirements
 
@@ -91,7 +91,7 @@ pub fn generate_module_docs<'a>(
     scope: Scope,
     module_name: ModuleName,
     ident_ids: &'a IdentIds,
-    parsed_defs: &'a [Located<ast::Def<'a>>],
+    parsed_defs: &'a [Loc<ast::Def<'a>>],
 ) -> ModuleDocumentation {
     let (entries, _) =
         parsed_defs

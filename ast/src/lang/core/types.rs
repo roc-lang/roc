@@ -5,7 +5,7 @@
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::types::{Problem, RecordField};
 use roc_types::{subs::Variable, types::ErrorType};
 
@@ -56,7 +56,7 @@ pub enum Problem2 {
     CircularType(Symbol, NodeId<ErrorType>), // 12B = 8B + 4B
     CyclicAlias(Symbol, PoolVec<Symbol>),    // 20B = 8B + 12B
     UnrecognizedIdent(PoolStr),              // 8B
-    Shadowed(Located<PoolStr>),
+    Shadowed(Loc<PoolStr>),
     BadTypeArguments {
         symbol: Symbol,  // 8B
         type_got: u8,    // 1B
@@ -584,7 +584,7 @@ fn can_assigned_fields<'a>(
     env: &mut Env,
     scope: &mut Scope,
     rigids: &mut References,
-    fields: &&[Located<roc_parse::ast::AssignedField<'a, roc_parse::ast::TypeAnnotation<'a>>>],
+    fields: &&[Loc<roc_parse::ast::AssignedField<'a, roc_parse::ast::TypeAnnotation<'a>>>],
     region: Region,
 ) -> MutMap<Lowercase, RecordField<Type2>> {
     use roc_parse::ast::AssignedField::*;
@@ -672,7 +672,7 @@ fn can_tags<'a>(
     env: &mut Env,
     scope: &mut Scope,
     rigids: &mut References,
-    tags: &'a [Located<roc_parse::ast::Tag<'a>>],
+    tags: &'a [Loc<roc_parse::ast::Tag<'a>>],
     region: Region,
 ) -> Vec<(TagName, PoolVec<Type2>)> {
     use roc_parse::ast::Tag;
@@ -758,7 +758,7 @@ fn to_type_apply<'a>(
     rigids: &mut References,
     module_name: &str,
     ident: &str,
-    type_arguments: &[Located<roc_parse::ast::TypeAnnotation<'a>>],
+    type_arguments: &[Loc<roc_parse::ast::TypeAnnotation<'a>>],
     region: Region,
 ) -> TypeApply {
     let symbol = if module_name.is_empty() {

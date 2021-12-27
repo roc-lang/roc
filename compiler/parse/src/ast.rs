@@ -5,7 +5,7 @@ use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
-use roc_region::all::{Loc, Located, Position, Region};
+use roc_region::all::{Loc, Position, Region};
 
 #[derive(Debug)]
 pub struct Spaces<'a, T> {
@@ -53,7 +53,7 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for &'a T {
     }
 }
 
-impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Located<T> {
+impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
     type Item = T::Item;
     fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
         let spaces = self.value.extract_spaces();
@@ -390,7 +390,7 @@ pub enum Pattern<'a> {
     PrivateTag(&'a str),
     Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
 
-    /// This is Loc<Pattern> rather than Loc<str> so we can record comments
+    /// This is Located<Pattern> rather than Located<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
     RecordDestructure(Collection<'a, Loc<Pattern<'a>>>),

@@ -395,18 +395,19 @@ fn eq_nullable_expr() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+
 fn eq_rosetree() {
     assert_evals_to!(
         indoc!(
             r#"
-                Rose a : [ Rose (List (Rose a)) ]
+                Rose a : [ Rose a (List (Rose a)) ]
 
                 x : Rose I64
-                x = Rose []
+                x = Rose 0 []
 
                 y : Rose I64
-                y = Rose []
+                y = Rose 0 []
 
                 x == y
                 "#
@@ -418,15 +419,45 @@ fn eq_rosetree() {
     assert_evals_to!(
         indoc!(
             r#"
-                Rose a : [ Rose (List (Rose a)) ]
+                Rose a : [ Rose a (List (Rose a)) ]
 
                 x : Rose I64
-                x = Rose []
+                x = Rose 0 []
 
                 y : Rose I64
-                y = Rose []
+                y = Rose 0 []
 
                 x != y
+                "#
+        ),
+        false,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Rose a : [ Rose a (List (Rose a)) ]
+
+                a1 : Rose I64
+                a1 = Rose 999 []
+
+                a2 : Rose I64
+                a2 = Rose 0 [a1, a1]
+
+                a3 : Rose I64
+                a3 = Rose 0 [a2, a2, a2]
+
+                b1 : Rose I64
+                b1 = Rose 111 []
+
+                b2 : Rose I64
+                b2 = Rose 0 [a1, b1]
+
+                b3 : Rose I64
+                b3 = Rose 0 [a2, a2, b2]
+
+                a3 == b3
                 "#
         ),
         false,
@@ -435,7 +466,7 @@ fn eq_rosetree() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn rosetree_with_tag() {
     // currently stack overflows in type checking

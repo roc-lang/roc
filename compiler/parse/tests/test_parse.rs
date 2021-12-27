@@ -23,7 +23,7 @@ mod test_parse {
     use roc_parse::parser::{Parser, SyntaxError};
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
-    use roc_region::all::{Located, Region};
+    use roc_region::all::{Loc, Region};
     use roc_test_utils::assert_multiline_str_eq;
     use std::{f64, i64};
 
@@ -164,6 +164,7 @@ mod test_parse {
         pass/negative_float.expr,
         pass/negative_int.expr,
         pass/nested_def_annotation.module,
+        pass/nested_if.expr,
         pass/nested_module.header,
         pass/newline_after_equals.expr, // Regression test for https://github.com/rtfeldman/roc/issues/51
         pass/newline_after_mul.expr,
@@ -362,7 +363,7 @@ mod test_parse {
         assert_segments(r#""Hi, \u(123)!""#, |arena| {
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Unicode(Located::new(0, 0, 8, 11, "123")),
+                Unicode(Loc::new(0, 0, 8, 11, "123")),
                 Plaintext("!")
             ]
         });
@@ -372,7 +373,7 @@ mod test_parse {
     fn unicode_escape_in_front() {
         assert_segments(r#""\u(1234) is a unicode char""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Located::new(0, 0, 4, 8, "1234")),
+                Unicode(Loc::new(0, 0, 4, 8, "1234")),
                 Plaintext(" is a unicode char")
             ]
         });
@@ -383,7 +384,7 @@ mod test_parse {
         assert_segments(r#""this is unicode: \u(1)""#, |arena| {
             bumpalo::vec![in arena;
                 Plaintext("this is unicode: "),
-                Unicode(Located::new(0, 0, 21, 22, "1"))
+                Unicode(Loc::new(0, 0, 21, 22, "1"))
             ]
         });
     }
@@ -392,11 +393,11 @@ mod test_parse {
     fn unicode_escape_multiple() {
         assert_segments(r#""\u(a1) this is \u(2Bcd) unicode \u(ef97)""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Located::new(0, 0, 4, 6, "a1")),
+                Unicode(Loc::new(0, 0, 4, 6, "a1")),
                 Plaintext(" this is "),
-                Unicode(Located::new(0, 0, 19, 23, "2Bcd")),
+                Unicode(Loc::new(0, 0, 19, 23, "2Bcd")),
                 Plaintext(" unicode "),
-                Unicode(Located::new(0, 0, 36, 40, "ef97"))
+                Unicode(Loc::new(0, 0, 36, 40, "ef97"))
             ]
         });
     }
@@ -413,7 +414,7 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Interpolated(Located::new(0, 0, 7, 11, expr)),
+                Interpolated(Loc::new(0, 0, 7, 11, expr)),
                 Plaintext("!")
             ]
         });
@@ -428,7 +429,7 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Interpolated(Located::new(0, 0, 3, 7, expr)),
+                Interpolated(Loc::new(0, 0, 3, 7, expr)),
                 Plaintext(", hi!")
             ]
         });
@@ -444,7 +445,7 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hello "),
-                Interpolated(Located::new(0, 0, 9, 13, expr))
+                Interpolated(Loc::new(0, 0, 9, 13, expr))
             ]
         });
     }
@@ -464,9 +465,9 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Interpolated(Located::new(0, 0, 7, 11, expr1)),
+                Interpolated(Loc::new(0, 0, 7, 11, expr1)),
                 Plaintext("! How is "),
-                Interpolated(Located::new(0, 0, 23, 30, expr2)),
+                Interpolated(Loc::new(0, 0, 23, 30, expr2)),
                 Plaintext(" going?")
             ]
         });

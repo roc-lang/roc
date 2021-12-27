@@ -1,4 +1,4 @@
-platform folkertdev/foo
+platform "folkertdev/foo"
     requires { model=>Model, msg=>Msg } { main : Effect {} }
     exposes []
     packages {}

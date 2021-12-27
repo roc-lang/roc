@@ -7,10 +7,8 @@ App {
         imports: [],
         provides: [],
         to: |L 0-0, C 30-38| NewPackage(
-            Path(
-                PlainLine(
-                    "./blah",
-                ),
+            PackageName(
+                "./blah",
             ),
         ),
         before_header: [],

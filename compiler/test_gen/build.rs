@@ -24,12 +24,19 @@ fn build_wasm() {
     build_wasm_libc(&out_dir);
 }
 
+fn zig_executable() -> String {
+    match std::env::var("ROC_ZIG") {
+        Ok(path) => path,
+        Err(_) => "zig".into(),
+    }
+}
+
 fn build_wasm_test_platform(out_dir: &str) {
     println!("cargo:rerun-if-changed=src/helpers/{}.c", PLATFORM_FILENAME);
 
     run_command(
         Path::new("."),
-        "zig",
+        &zig_executable(),
         [
             "build-obj",
             "-target",
@@ -49,7 +56,7 @@ fn build_wasm_libc(out_dir: &str) {
 
     run_command(
         cwd,
-        "zig",
+        &zig_executable(),
         [
             "build-exe", // must be an executable or it won't compile libc
             "-target",

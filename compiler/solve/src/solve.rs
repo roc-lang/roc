@@ -1,9 +1,10 @@
 use roc_can::constraint::Constraint::{self, *};
+use roc_can::constraint::PresenceConstraint;
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
     AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
@@ -11,7 +12,7 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory};
-use roc_unify::unify::{unify, Unified::*};
+use roc_unify::unify::{unify, Mode, Unified::*};
 use std::collections::hash_map::Entry;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
@@ -205,7 +206,7 @@ fn solve(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected) {
+            match unify(subs, actual, expected, Mode::Eq) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -240,7 +241,7 @@ fn solve(
             let actual = type_to_var(subs, rank, pools, cached_aliases, source);
             let target = *target;
 
-            match unify(subs, actual, target) {
+            match unify(subs, actual, target, Mode::Eq) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -294,7 +295,7 @@ fn solve(
                         cached_aliases,
                         expectation.get_type_ref(),
                     );
-                    match unify(subs, actual, expected) {
+                    match unify(subs, actual, expected, Mode::Eq) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);
 
@@ -349,7 +350,8 @@ fn solve(
 
             state
         }
-        Pattern(region, category, typ, expectation) => {
+        Pattern(region, category, typ, expectation)
+        | Present(typ, PresenceConstraint::Pattern(region, category, expectation)) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
             let expected = type_to_var(
                 subs,
@@ -359,7 +361,12 @@ fn solve(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected) {
+            let mode = match constraint {
+                Present(_, _) => Mode::Present,
+                _ => Mode::Eq,
+            };
+
+            match unify(subs, actual, expected, mode) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -426,7 +433,7 @@ fn solve(
 
                         local_def_vars.push((
                             *symbol,
-                            Located {
+                            Loc {
                                 value: var,
                                 region: loc_type.region,
                             },
@@ -506,7 +513,7 @@ fn solve(
 
                         local_def_vars.push((
                             *symbol,
-                            Located {
+                            Loc {
                                 value: var,
                                 region: loc_type.region,
                             },
@@ -619,6 +626,66 @@ fn solve(
                     }
 
                     new_state
+                }
+            }
+        }
+        Present(typ, PresenceConstraint::IsOpen) => {
+            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+            let mut new_desc = subs.get(actual);
+            match new_desc.content {
+                Content::Structure(FlatType::TagUnion(tags, _)) => {
+                    let new_ext = subs.fresh_unnamed_flex_var();
+                    let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
+                    new_desc.content = new_union;
+                    subs.set(actual, new_desc);
+                    state
+                }
+                _ => {
+                    // Today, an "open" constraint doesn't affect any types
+                    // other than tag unions. Recursive tag unions are constructed
+                    // at a later time (during occurs checks after tag unions are
+                    // resolved), so that's not handled here either.
+                    // NB: Handle record types here if we add presence constraints
+                    // to their type inference as well.
+                    state
+                }
+            }
+        }
+        Present(typ, PresenceConstraint::IncludesTag(tag_name, tys)) => {
+            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+            let tag_ty = Type::TagUnion(
+                vec![(tag_name.clone(), tys.clone())],
+                Box::new(Type::EmptyTagUnion),
+            );
+            let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
+
+            match unify(subs, actual, includes, Mode::Present) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    state
+                }
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // TODO: do we need a better error type here?
+                    let problem = TypeError::BadExpr(
+                        Region::zero(),
+                        Category::When,
+                        actual_type,
+                        Expected::NoExpectation(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
+                BadType(vars, problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::BadType(problem));
+
+                    state
                 }
             }
         }
@@ -1222,7 +1289,7 @@ fn check_for_infinite_type(
     subs: &mut Subs,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
-    loc_var: Located<Variable>,
+    loc_var: Loc<Variable>,
 ) {
     let var = loc_var.value;
 
@@ -1244,7 +1311,7 @@ fn circular_error(
     subs: &mut Subs,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
-    loc_var: &Located<Variable>,
+    loc_var: &Loc<Variable>,
 ) {
     let var = loc_var.value;
     let (error_type, _) = subs.var_to_error_type(var);
@@ -1437,6 +1504,24 @@ fn adjust_rank_content(
 
                 TagUnion(tags, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    // For performance reasons, we only keep one representation of empty tag unions
+                    // in subs. That representation exists at rank 0, which we don't always want to
+                    // reflect the whole tag union as, because doing so may over-generalize free
+                    // type variables.
+                    // Normally this is not a problem because of the loop below that maximizes the
+                    // rank from nested types in the union. But suppose we have the simple tag
+                    // union
+                    //   [ Z ]{}
+                    // there are no nested types in the tags, and the empty tag union is at rank 0,
+                    // so we promote the tag union to rank 0. Now if we introduce the presence
+                    // constraint
+                    //   [ Z ]{} += [ S a ]
+                    // we'll wind up with [ Z, S a ]{}, but it will be at rank 0, and "a" will get
+                    // over-generalized. Really, the empty tag union should be introduced at
+                    // whatever current group rank we're at, and so that's how we encode it here.
+                    if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_none() {
+                        rank = group_rank;
+                    }
 
                     for (_, index) in tags.iter_all() {
                         let slice = subs[index];
