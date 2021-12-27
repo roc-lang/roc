@@ -763,7 +763,7 @@ impl Drop for RocStr {
 /// Like a Rust `Result`, but following Roc's ABI instead of Rust's.
 /// (Using Rust's `Result` instead of this will not work properly with Roc code!)
 ///
-/// This can be converted to a Rust `Result` using `.into()`
+/// This can be converted to/from a Rust `Result` using `.into()`
 #[repr(C)]
 pub struct RocResult<T, E> {
     payload: RocResultPayload<T, E>,
@@ -818,6 +818,15 @@ impl<T, E> From<RocResult<T, E>> for Result<T, E> {
         mem::forget(roc_result);
 
         result
+    }
+}
+
+impl<T, E> From<Result<T, E>> for RocResult<T, E> {
+    fn from(result: Result<T, E>) -> Self {
+        match result {
+            Ok(payload) => RocResult::ok(payload),
+            Err(payload) => RocResult::err(payload),
+        }
     }
 }
 
