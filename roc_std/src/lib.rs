@@ -764,6 +764,42 @@ pub struct RocResult<T, E> {
     tag: RocResultTag,
 }
 
+impl<T, E> core::fmt::Debug for RocResult<T, E>
+where
+    T: core::fmt::Debug,
+    E: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.as_result_of_refs() {
+            Ok(payload) => write!(f, "RocOk({:?})", payload),
+            Err(payload) => write!(f, "RocErr({:?})", payload),
+        }
+    }
+}
+
+impl<T, E> PartialEq for RocResult<T, E>
+where
+    T: PartialEq,
+    E: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.as_result_of_refs() == other.as_result_of_refs()
+    }
+}
+
+impl<T, E> Clone for RocResult<T, E>
+where
+    T: Clone,
+    E: Clone,
+{
+    fn clone(&self) -> Self {
+        match self.as_result_of_refs() {
+            Ok(payload) => RocResult::ok(ManuallyDrop::into_inner(payload.clone())),
+            Err(payload) => RocResult::err(ManuallyDrop::into_inner(payload.clone())),
+        }
+    }
+}
+
 impl<T, E> RocResult<T, E> {
     pub fn ok(payload: T) -> Self {
         Self {
@@ -803,6 +839,17 @@ impl<T, E> RocResult<T, E> {
         core::mem::forget(self);
 
         unsafe { value.assume_init() }
+    }
+
+    fn as_result_of_refs(&self) -> Result<&ManuallyDrop<T>, &ManuallyDrop<E>> {
+        use RocResultTag::*;
+
+        unsafe {
+            match self.tag {
+                RocOk => Ok(&self.payload.ok),
+                RocErr => Err(&self.payload.err),
+            }
+        }
     }
 }
 
