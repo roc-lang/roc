@@ -826,9 +826,15 @@ impl<'a> CodeGenHelp<'a> {
         nullable_id: Option<TagIdIntType>,
     ) -> Stmt<'a> {
         let tailrec_loop = JoinPointId(self.create_symbol(ident_ids, "tailrec_loop"));
-        let a = self.create_symbol(ident_ids, "a");
-        let b = self.create_symbol(ident_ids, "b");
-        let operands = [a, b];
+        let is_non_recursive = matches!(union_layout, UnionLayout::NonRecursive(_));
+        let operands = if is_non_recursive {
+            [ARG_1, ARG_2]
+        } else {
+            [
+                self.create_symbol(ident_ids, "a"),
+                self.create_symbol(ident_ids, "b"),
+            ]
+        };
 
         let tag_id_layout = union_layout.tag_id_layout();
 
@@ -946,25 +952,29 @@ impl<'a> CodeGenHelp<'a> {
             )),
         ));
 
-        let loop_body = self.if_pointers_equal_return_true(
+        let compare_ptr_or_value = self.if_pointers_equal_return_true(
             ident_ids,
             operands,
             self.arena.alloc(compare_values),
         );
 
-        let loop_params = operands.iter().map(|arg| Param {
-            symbol: *arg,
-            borrow: true,
-            layout: Layout::Union(union_layout),
-        });
+        if is_non_recursive {
+            compare_ptr_or_value
+        } else {
+            let loop_params_iter = operands.iter().map(|arg| Param {
+                symbol: *arg,
+                borrow: true,
+                layout: Layout::Union(union_layout),
+            });
 
-        let loop_start = Stmt::Jump(tailrec_loop, self.arena.alloc([ARG_1, ARG_2]));
+            let loop_start = Stmt::Jump(tailrec_loop, self.arena.alloc([ARG_1, ARG_2]));
 
-        Stmt::Join {
-            id: tailrec_loop,
-            parameters: self.arena.alloc_slice_fill_iter(loop_params),
-            body: self.arena.alloc(loop_body),
-            remainder: self.arena.alloc(loop_start),
+            Stmt::Join {
+                id: tailrec_loop,
+                parameters: self.arena.alloc_slice_fill_iter(loop_params_iter),
+                body: self.arena.alloc(compare_ptr_or_value),
+                remainder: self.arena.alloc(loop_start),
+            }
         }
     }
 
