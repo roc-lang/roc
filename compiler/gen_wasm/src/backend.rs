@@ -830,7 +830,9 @@ impl<'a> WasmBackend<'a> {
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
             let id_offset = data_offset + data_size - data_alignment;
-            let id_align = Align::from(data_alignment);
+
+            let id_align = union_layout.tag_id_builtin().alignment_bytes(PTR_SIZE);
+            let id_align = Align::from(id_align);
 
             self.code_builder.get_local(local_id);
 
@@ -912,7 +914,9 @@ impl<'a> WasmBackend<'a> {
         if union_layout.stores_tag_id_as_data(PTR_SIZE) {
             let (data_size, data_alignment) = union_layout.data_size_and_alignment(PTR_SIZE);
             let id_offset = data_size - data_alignment;
-            let id_align = Align::from(data_alignment);
+
+            let id_align = union_layout.tag_id_builtin().alignment_bytes(PTR_SIZE);
+            let id_align = Align::from(id_align);
 
             self.storage
                 .load_symbols(&mut self.code_builder, &[structure]);

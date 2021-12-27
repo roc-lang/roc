@@ -246,14 +246,18 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
     let num_i64 = union_size / 8;
     let num_i8 = union_size % 8;
 
+    let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
     let i64_array_type = context.i64_type().array_type(num_i64).as_basic_type_enum();
 
-    if num_i8 == 0 {
-        // the object fits perfectly in some number of i64's
+    if num_i64 == 0 {
+        // The object fits perfectly in some number of i8s
+        context.struct_type(&[i8_array_type], false).into()
+    } else if num_i8 == 0 {
+        // The object fits perfectly in some number of i64s
         // (i.e. the size is a multiple of 8 bytes)
         context.struct_type(&[i64_array_type], false).into()
     } else {
-        // there are some trailing bytes at the end
+        // There are some trailing bytes at the end
         let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
 
         context
