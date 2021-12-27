@@ -2,6 +2,8 @@
 #![no_std]
 use core::convert::From;
 use core::ffi::c_void;
+use core::mem::ManuallyDrop;
+use core::ops::Drop;
 use core::{fmt, mem, ptr, slice};
 
 // A list of C functions that are being imported
@@ -756,10 +758,71 @@ impl Drop for RocStr {
 /// with Roc's Err = 0, Ok = 1 discriminant numbers.
 ///
 /// Using Rust's Result instead of this will not work properly with Roc code!
-#[repr(u64)]
-pub enum RocResult<Ok, Err> {
-    Err(Err),
-    Ok(Ok),
+#[repr(C)]
+pub struct RocResult<T, E> {
+    payload: RocResultPayload<T, E>,
+    tag: RocResultTag,
+}
+
+impl<T, E> RocResult<T, E> {
+    pub fn ok(payload: T) -> Self {
+        Self {
+            tag: RocResultTag::RocOk,
+            payload: RocResultPayload {
+                ok: ManuallyDrop::new(payload),
+            },
+        }
+    }
+
+    pub fn err(payload: E) -> Self {
+        Self {
+            tag: RocResultTag::RocErr,
+            payload: RocResultPayload {
+                err: ManuallyDrop::new(payload),
+            },
+        }
+    }
+}
+
+impl<T, E> From<RocResult<T, E>> for Result<T, E> {
+    fn from(mut roc_result: RocResult<T, E>) -> Self {
+        use RocResultTag::*;
+
+        // This seems to be the only way to successfully return the payload.
+        // It would be great if we could simplify this somehow and still
+        // get the borrow checker to accept it!
+        let payload_ptr = &mut roc_result.payload as *mut RocResultPayload<T, E>;
+
+        unsafe {
+            match roc_result.tag {
+                RocOk => Ok(ManuallyDrop::take(&mut (&mut *payload_ptr).ok)),
+                RocErr => Err(ManuallyDrop::take(&mut (&mut *payload_ptr).err)),
+            }
+        }
+    }
+}
+
+#[repr(u64)] // TODO change to u8 once Ayaz's PR has merged
+enum RocResultTag {
+    RocErr = 0,
+    RocOk = 1,
+}
+
+#[repr(C)]
+union RocResultPayload<T, E> {
+    ok: ManuallyDrop<T>,
+    err: ManuallyDrop<E>,
+}
+
+impl<T, E> Drop for RocResult<T, E> {
+    fn drop(&mut self) {
+        use RocResultTag::*;
+
+        match self.tag {
+            RocOk => unsafe { ManuallyDrop::drop(&mut self.payload.ok) },
+            RocErr => unsafe { ManuallyDrop::drop(&mut self.payload.err) },
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
