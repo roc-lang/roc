@@ -878,7 +878,7 @@ impl<T, E> From<Result<T, E>> for RocResult<T, E> {
     }
 }
 
-#[repr(u64)] // TODO change to u8 once Ayaz's PR has merged
+#[repr(u8)]
 #[derive(Clone, Copy)]
 enum RocResultTag {
     RocErr = 0,
