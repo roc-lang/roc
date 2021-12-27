@@ -978,6 +978,7 @@ impl<'a> CodeGenHelp<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn eq_tag_fields(
         &mut self,
         ident_ids: &mut IdentIds,
