@@ -3643,6 +3643,12 @@ dependencies = [
 [[package]]
 name = "roc_std"
 version = "0.1.0"
+dependencies = [
+ "indoc",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+]
 
 [[package]]
 name = "roc_test_utils"
