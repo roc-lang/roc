@@ -1,9 +1,8 @@
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_parse::parser::{Col, Row};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Position, Region};
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
@@ -489,9 +488,9 @@ fn to_bad_ident_expr_report<'b>(
     use roc_parse::ident::BadIdent::*;
 
     match bad_ident {
-        Start(_, _) | Space(_, _, _) => unreachable!("these are handled in the parser"),
-        WeirdDotAccess(row, col) | StrayDot(row, col) => {
-            let region = Region::from_row_col(row, col);
+        Start(_) | Space(_, _) => unreachable!("these are handled in the parser"),
+        WeirdDotAccess(pos) | StrayDot(pos) => {
+            let region = Region::from_pos(pos);
 
             alloc.stack(vec![
                 alloc.reflow(r"I trying to parse a record field access here:"),
@@ -506,7 +505,7 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
 
-        WeirdAccessor(_row, _col) => alloc.stack(vec![
+        WeirdAccessor(_pos) => alloc.stack(vec![
             alloc.reflow("I am very confused by this field access"),
             alloc.region(surroundings),
             alloc.concat(vec![
@@ -521,8 +520,8 @@ fn to_bad_ident_expr_report<'b>(
             ]),
         ]),
 
-        WeirdDotQualified(row, col) => {
-            let region = Region::from_row_col(row, col);
+        WeirdDotQualified(pos) => {
+            let region = Region::from_pos(pos);
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse a qualified name here:"),
@@ -536,8 +535,8 @@ fn to_bad_ident_expr_report<'b>(
                 ]),
             ])
         }
-        QualifiedTag(row, col) => {
-            let region = Region::from_row_col(row, col);
+        QualifiedTag(pos) => {
+            let region = Region::from_pos(pos);
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse a qualified name here:"),
@@ -552,9 +551,8 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
 
-        Underscore(row, col) => {
-            let region =
-                Region::from_rows_cols(surroundings.start_line, surroundings.start_col, row, col);
+        Underscore(pos) => {
+            let region = Region::new(surroundings.start(), pos);
             alloc.stack(vec![
                 alloc.reflow("Underscores are not allowed in identifier names:"),
                 alloc.region_with_subregion(surroundings, region),
@@ -564,11 +562,11 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
 
-        BadPrivateTag(row, col) => {
+        BadPrivateTag(pos) => {
             use BadIdentNext::*;
-            match what_is_next(alloc.src_lines, row, col) {
+            match what_is_next(alloc.src_lines, pos) {
                 LowercaseAccess(width) => {
-                    let region = Region::from_rows_cols(row, col, row, col + width);
+                    let region = Region::new(pos, pos.bump_column(width));
                     alloc.stack(vec![
                         alloc.reflow("I am very confused by this field access:"),
                         alloc.region_with_subregion(surroundings, region),
@@ -578,7 +576,7 @@ fn to_bad_ident_expr_report<'b>(
                     ])
                 }
                 UppercaseAccess(width) => {
-                    let region = Region::from_rows_cols(row, col, row, col + width);
+                    let region = Region::new(pos, pos.bump_column(width));
                     alloc.stack(vec![
                         alloc.reflow("I am very confused by this expression:"),
                         alloc.region_with_subregion(surroundings, region),
@@ -593,12 +591,8 @@ fn to_bad_ident_expr_report<'b>(
                     ])
                 }
                 Other(Some(c)) if c.is_lowercase() => {
-                    let region = Region::from_rows_cols(
-                        surroundings.start_line,
-                        surroundings.start_col + 1,
-                        row,
-                        col + 1,
-                    );
+                    let region =
+                        Region::new(surroundings.start().bump_column(1), pos.bump_column(1));
                     alloc.stack(vec![
                         alloc.reflow("I am trying to parse a private tag here:"),
                         alloc.region_with_subregion(surroundings, region),
@@ -629,9 +623,9 @@ fn to_bad_ident_pattern_report<'b>(
     use roc_parse::ident::BadIdent::*;
 
     match bad_ident {
-        Start(_, _) | Space(_, _, _) => unreachable!("these are handled in the parser"),
-        WeirdDotAccess(row, col) | StrayDot(row, col) => {
-            let region = Region::from_row_col(row, col);
+        Start(_) | Space(_, _) => unreachable!("these are handled in the parser"),
+        WeirdDotAccess(pos) | StrayDot(pos) => {
+            let region = Region::from_pos(pos);
 
             alloc.stack(vec![
                 alloc.reflow(r"I trying to parse a record field accessor here:"),
@@ -646,7 +640,7 @@ fn to_bad_ident_pattern_report<'b>(
             ])
         }
 
-        WeirdAccessor(_row, _col) => alloc.stack(vec![
+        WeirdAccessor(_pos) => alloc.stack(vec![
             alloc.reflow("I am very confused by this field access"),
             alloc.region(surroundings),
             alloc.concat(vec![
@@ -661,8 +655,8 @@ fn to_bad_ident_pattern_report<'b>(
             ]),
         ]),
 
-        WeirdDotQualified(row, col) => {
-            let region = Region::from_row_col(row, col);
+        WeirdDotQualified(pos) => {
+            let region = Region::from_pos(pos);
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse a qualified name here:"),
@@ -676,8 +670,8 @@ fn to_bad_ident_pattern_report<'b>(
                 ]),
             ])
         }
-        QualifiedTag(row, col) => {
-            let region = Region::from_row_col(row, col);
+        QualifiedTag(pos) => {
+            let region = Region::from_pos(pos);
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse a qualified name here:"),
@@ -692,8 +686,11 @@ fn to_bad_ident_pattern_report<'b>(
             ])
         }
 
-        Underscore(row, col) => {
-            let region = Region::from_row_col(row, col - 1);
+        Underscore(pos) => {
+            let region = Region::from_pos(Position {
+                line: pos.line,
+                column: pos.column - 1,
+            });
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse an identifier here:"),
@@ -718,9 +715,9 @@ enum BadIdentNext<'a> {
     Other(Option<char>),
 }
 
-fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> BadIdentNext<'a> {
-    let row_index = row as usize;
-    let col_index = col as usize;
+fn what_is_next<'a>(source_lines: &'a [&'a str], pos: Position) -> BadIdentNext<'a> {
+    let row_index = pos.line as usize;
+    let col_index = pos.column as usize;
     match source_lines.get(row_index) {
         None => BadIdentNext::Other(None),
         Some(line) => {
@@ -774,7 +771,7 @@ where
 fn report_shadowing<'b>(
     alloc: &'b RocDocAllocator<'b>,
     original_region: Region,
-    shadow: Located<Ident>,
+    shadow: Loc<Ident>,
 ) -> RocDocBuilder<'b> {
     let line = r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
 

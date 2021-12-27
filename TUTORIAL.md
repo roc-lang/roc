@@ -275,7 +275,7 @@ convention is to write `else if` on the same line.
 
 ## Records
 
-Currently our `addAndStringify` funcion takes two arguments. We can instead make
+Currently our `addAndStringify` function takes two arguments. We can instead make
 it take one argument like so:
 
 ```coffee
@@ -1053,7 +1053,7 @@ Let's take a closer look at the part of `Hello.roc` above `main`:
 
 ```coffee
 app "hello"
-    packages [ pf: "examples/cli/platform" ]
+    packages { pf: "examples/cli/platform" }
     imports [ pf.Stdout ]
     provides main to pf
 ```
@@ -1071,12 +1071,12 @@ without running it by running `roc build Hello.roc`.
 The remaining lines all involve the *platform* this application is built on:
 
 ```coffee
-packages [ pf: "examples/cli/platform" ]
+packages { pf: "examples/cli/platform" }
 imports [ pf.Stdout ]
 provides main to pf
 ```
 
-The `packages [ pf: "examples/cli/platform" ]` part says two things:
+The `packages { pf: "examples/cli/platform" }` part says two things:
 
 - We're going to be using a *package* (that is, a collection of modules) called `"examples/cli/platform"`
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
@@ -1099,7 +1099,7 @@ When we write `imports [ pf.Stdout ]`, it specifies that the `Stdout`
 module comes from the `pf` package.
 
 Since `pf` was the name we chose for the `examples/cli/platform` package
-(when we wrote `packages [ pf: "examples/cli/platform" ]`), this `imports` line
+(when we wrote `packages { pf: "examples/cli/platform" }`), this `imports` line
 tells the Roc compiler that when we call `Stdout.line`, it should look for that
 `line` function in the `Stdout` module of the `examples/cli/platform` package.
 

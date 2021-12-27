@@ -11,6 +11,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
+fn zig_executable() -> String {
+    match std::env::var("ROC_ZIG") {
+        Ok(path) => path,
+        Err(_) => "zig".into(),
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LinkType {
     // These numbers correspond to the --lib flag; if it's present
@@ -88,7 +95,7 @@ pub fn build_zig_host_native(
     shared_lib_path: Option<&Path>,
     _target_valgrind: bool,
 ) -> Output {
-    let mut command = Command::new("zig");
+    let mut command = Command::new(&zig_executable());
     command
         .env_clear()
         .env("PATH", env_path)
@@ -151,7 +158,10 @@ pub fn build_zig_host_native(
     use serde_json::Value;
 
     // Run `zig env` to find the location of zig's std/ directory
-    let zig_env_output = Command::new("zig").args(&["env"]).output().unwrap();
+    let zig_env_output = Command::new(&zig_executable())
+        .args(&["env"])
+        .output()
+        .unwrap();
 
     let zig_env_json = if zig_env_output.status.success() {
         std::str::from_utf8(&zig_env_output.stdout).unwrap_or_else(|utf8_err| {
@@ -188,7 +198,7 @@ pub fn build_zig_host_native(
     zig_compiler_rt_path.push("special");
     zig_compiler_rt_path.push("compiler_rt.zig");
 
-    let mut command = Command::new("zig");
+    let mut command = Command::new(&zig_executable());
     command
         .env_clear()
         .env("PATH", &env_path)
@@ -245,7 +255,7 @@ pub fn build_zig_host_wasm32(
     // we'd like to compile with `-target wasm32-wasi` but that is blocked on
     //
     // https://github.com/ziglang/zig/issues/9414
-    let mut command = Command::new("zig");
+    let mut command = Command::new(&zig_executable());
     command
         .env_clear()
         .env("PATH", env_path)
@@ -442,7 +452,7 @@ pub fn rebuild_host(
             _ => panic!("Unsupported architecture {:?}", target.architecture),
         };
 
-        validate_output("host.zig", "zig", output)
+        validate_output("host.zig", &zig_executable(), output)
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
@@ -646,7 +656,7 @@ fn link_linux(
 
     if let Architecture::X86_32(_) = target.architecture {
         return Ok((
-            Command::new("zig")
+            Command::new(&zig_executable())
                 .args(&["build-exe"])
                 .args(input_paths)
                 .args(&[
@@ -895,7 +905,7 @@ fn link_wasm32(
     let zig_str_path = find_zig_str_path();
     let wasi_libc_path = find_wasi_libc_path();
 
-    let child = Command::new("zig")
+    let child = Command::new(&zig_executable())
         // .env_clear()
         // .env("PATH", &env_path)
         .args(&["build-exe"])

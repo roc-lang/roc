@@ -2,9 +2,9 @@ use crate::env::Env;
 use crate::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, LambdaSet, Problem, RecordField, Type};
 
@@ -102,6 +102,134 @@ pub fn canonicalize_annotation(
     }
 }
 
+fn make_apply_symbol(
+    env: &mut Env,
+    region: Region,
+    scope: &mut Scope,
+    module_name: &str,
+    ident: &str,
+) -> Result<Symbol, Type> {
+    if module_name.is_empty() {
+        // Since module_name was empty, this is an unqualified type.
+        // Look it up in scope!
+        let ident: Ident = (*ident).into();
+
+        match scope.lookup(&ident, region) {
+            Ok(symbol) => Ok(symbol),
+            Err(problem) => {
+                env.problem(roc_problem::can::Problem::RuntimeError(problem));
+
+                Err(Type::Erroneous(Problem::UnrecognizedIdent(ident)))
+            }
+        }
+    } else {
+        match env.qualified_lookup(module_name, ident, region) {
+            Ok(symbol) => Ok(symbol),
+            Err(problem) => {
+                // Either the module wasn't imported, or
+                // it was imported but it doesn't expose this ident.
+                env.problem(roc_problem::can::Problem::RuntimeError(problem));
+
+                Err(Type::Erroneous(Problem::UnrecognizedIdent((*ident).into())))
+            }
+        }
+    }
+}
+
+pub fn find_alias_symbols(
+    module_id: ModuleId,
+    ident_ids: &mut IdentIds,
+    initial_annotation: &roc_parse::ast::TypeAnnotation,
+) -> Vec<Symbol> {
+    use roc_parse::ast::TypeAnnotation::*;
+
+    let mut result = Vec::new();
+
+    let mut stack = vec![initial_annotation];
+
+    while let Some(annotation) = stack.pop() {
+        match annotation {
+            Apply(_module_name, ident, arguments) => {
+                let ident: Ident = (*ident).into();
+                let ident_id = ident_ids.get_or_insert(&ident);
+
+                let symbol = Symbol::new(module_id, ident_id);
+                result.push(symbol);
+
+                for t in arguments.iter() {
+                    stack.push(&t.value);
+                }
+            }
+            Function(arguments, result) => {
+                for t in arguments.iter() {
+                    stack.push(&t.value);
+                }
+
+                stack.push(&result.value);
+            }
+            BoundVariable(_) => {}
+            As(actual, _, _) => {
+                stack.push(&actual.value);
+            }
+            Record { fields, ext } => {
+                let mut inner_stack = Vec::with_capacity(fields.items.len());
+
+                for field in fields.items.iter() {
+                    inner_stack.push(&field.value)
+                }
+
+                while let Some(assigned_field) = inner_stack.pop() {
+                    match assigned_field {
+                        AssignedField::RequiredValue(_, _, t)
+                        | AssignedField::OptionalValue(_, _, t) => {
+                            stack.push(&t.value);
+                        }
+                        AssignedField::LabelOnly(_) => {}
+                        AssignedField::SpaceBefore(inner, _)
+                        | AssignedField::SpaceAfter(inner, _) => inner_stack.push(inner),
+                        AssignedField::Malformed(_) => {}
+                    }
+                }
+
+                for t in ext.iter() {
+                    stack.push(&t.value);
+                }
+            }
+            TagUnion { ext, tags } => {
+                let mut inner_stack = Vec::with_capacity(tags.items.len());
+
+                for tag in tags.items.iter() {
+                    inner_stack.push(&tag.value)
+                }
+
+                while let Some(tag) = inner_stack.pop() {
+                    match tag {
+                        Tag::Global { args, .. } | Tag::Private { args, .. } => {
+                            for t in args.iter() {
+                                stack.push(&t.value);
+                            }
+                        }
+                        Tag::SpaceBefore(inner, _) | Tag::SpaceAfter(inner, _) => {
+                            inner_stack.push(inner)
+                        }
+                        Tag::Malformed(_) => {}
+                    }
+                }
+
+                for t in ext.iter() {
+                    stack.push(&t.value);
+                }
+            }
+            SpaceBefore(inner, _) | SpaceAfter(inner, _) => {
+                stack.push(inner);
+            }
+            Inferred | Wildcard | Malformed(_) => {}
+        }
+    }
+
+    result
+}
+
 #[allow(clippy::too_many_arguments)]
 fn can_annotation_help(
     env: &mut Env,
@@ -150,30 +278,9 @@ fn can_annotation_help(
             Type::Function(args, Box::new(closure), Box::new(ret))
         }
         Apply(module_name, ident, type_arguments) => {
-            let symbol = if module_name.is_empty() {
-                // Since module_name was empty, this is an unqualified type.
-                // Look it up in scope!
-                let ident: Ident = (*ident).into();
-
-                match scope.lookup(&ident, region) {
-                    Ok(symbol) => symbol,
-                    Err(problem) => {
-                        env.problem(roc_problem::can::Problem::RuntimeError(problem));
-
-                        return Type::Erroneous(Problem::UnrecognizedIdent(ident));
-                    }
-                }
-            } else {
-                match env.qualified_lookup(module_name, ident, region) {
-                    Ok(symbol) => symbol,
-                    Err(problem) => {
-                        // Either the module wasn't imported, or
-                        // it was imported but it doesn't expose this ident.
-                        env.problem(roc_problem::can::Problem::RuntimeError(problem));
-
-                        return Type::Erroneous(Problem::UnrecognizedIdent((*ident).into()));
-                    }
-                }
+            let symbol = match make_apply_symbol(env, region, scope, module_name, ident) {
+                Err(problem) => return problem,
+                Ok(symbol) => symbol,
             };
 
             let mut args = Vec::new();
@@ -311,14 +418,14 @@ fn can_annotation_help(
 
                             if let Some(var) = introduced_variables.var_by_name(&var_name) {
                                 vars.push((var_name.clone(), Type::Variable(*var)));
-                                lowercase_vars.push(Located::at(loc_var.region, (var_name, *var)));
+                                lowercase_vars.push(Loc::at(loc_var.region, (var_name, *var)));
                             } else {
                                 let var = var_store.fresh();
 
                                 introduced_variables.insert_named(var_name.clone(), var);
                                 vars.push((var_name.clone(), Type::Variable(var)));
 
-                                lowercase_vars.push(Located::at(loc_var.region, (var_name, var)));
+                                lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
                             }
                         }
                         _ => {
@@ -530,7 +637,7 @@ where
 #[allow(clippy::too_many_arguments)]
 fn can_assigned_fields<'a>(
     env: &mut Env,
-    fields: &&[Located<AssignedField<'a, TypeAnnotation<'a>>>],
+    fields: &&[Loc<AssignedField<'a, TypeAnnotation<'a>>>],
     region: Region,
     scope: &mut Scope,
     var_store: &mut VarStore,
@@ -640,7 +747,7 @@ fn can_assigned_fields<'a>(
 #[allow(clippy::too_many_arguments)]
 fn can_tags<'a>(
     env: &mut Env,
-    tags: &'a [Located<Tag<'a>>],
+    tags: &'a [Loc<Tag<'a>>],
     region: Region,
     scope: &mut Scope,
     var_store: &mut VarStore,

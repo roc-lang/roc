@@ -145,47 +145,33 @@ pub fn list_repeat<'a, 'ctx, 'env>(
 /// List.join : List (List elem) -> List elem
 pub fn list_join<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
     outer_list: BasicValueEnum<'ctx>,
-    outer_list_layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    match outer_list_layout {
-        Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::List(element_layout)))) => {
-            call_bitcode_fn_returns_list(
-                env,
-                &[
-                    pass_list_cc(env, outer_list),
-                    env.alignment_intvalue(element_layout),
-                    layout_width(env, element_layout),
-                ],
-                bitcode::LIST_JOIN,
-            )
-        }
-        _ => {
-            unreachable!("Invalid List layout for List.join {:?}", outer_list_layout);
-        }
-    }
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_cc(env, outer_list),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
+        ],
+        bitcode::LIST_JOIN,
+    )
 }
 
 /// List.reverse : List elem -> List elem
 pub fn list_reverse<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list: BasicValueEnum<'ctx>,
-    list_layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
-    let element_layout = match *list_layout {
-        Layout::Builtin(Builtin::List(elem_layout)) => *elem_layout,
-
-        _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
-    };
-
     call_bitcode_fn_returns_list(
         env,
         &[
             pass_list_cc(env, list),
-            env.alignment_intvalue(&element_layout),
-            layout_width(env, &element_layout),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
             pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_REVERSE,
@@ -196,38 +182,27 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
-    list_layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
     elem_index: IntValue<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    match list_layout {
-        Layout::Builtin(Builtin::List(elem_layout)) => {
-            let elem_type = basic_type_from_layout(env, elem_layout);
-            let ptr_type = elem_type.ptr_type(AddressSpace::Generic);
-            // Load the pointer to the array data
-            let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
+    let elem_type = basic_type_from_layout(env, element_layout);
+    let ptr_type = elem_type.ptr_type(AddressSpace::Generic);
+    // Load the pointer to the array data
+    let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
 
-            // Assume the bounds have already been checked earlier
-            // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
-            let elem_ptr = unsafe {
-                builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "list_get_element")
-            };
+    // Assume the bounds have already been checked earlier
+    // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
+    let elem_ptr =
+        unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "list_get_element") };
 
-            let result = load_roc_value(env, **elem_layout, elem_ptr, "list_get_load_element");
+    let result = load_roc_value(env, *element_layout, elem_ptr, "list_get_load_element");
 
-            increment_refcount_layout(env, parent, layout_ids, 1, result, elem_layout);
+    increment_refcount_layout(env, parent, layout_ids, 1, result, element_layout);
 
-            result
-        }
-        _ => {
-            unreachable!(
-                "Invalid List layout for ListGetUnsafe operation: {:?}",
-                list_layout
-            );
-        }
-    }
+    result
 }
 
 /// List.append : List elem, elem -> List elem
@@ -346,7 +321,7 @@ pub fn list_set<'a, 'ctx, 'env>(
     list: BasicValueEnum<'ctx>,
     index: IntValue<'ctx>,
     element: BasicValueEnum<'ctx>,
-    element_layout: &'a Layout<'a>,
+    element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
@@ -880,26 +855,20 @@ pub fn list_map4<'a, 'ctx, 'env>(
 /// List.concat : List elem, List elem -> List elem
 pub fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
     first_list: BasicValueEnum<'ctx>,
     second_list: BasicValueEnum<'ctx>,
-    list_layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    match list_layout {
-        Layout::Builtin(Builtin::List(elem_layout)) => call_bitcode_fn_returns_list(
-            env,
-            &[
-                pass_list_cc(env, first_list),
-                pass_list_cc(env, second_list),
-                env.alignment_intvalue(elem_layout),
-                layout_width(env, elem_layout),
-            ],
-            bitcode::LIST_CONCAT,
-        ),
-        _ => {
-            unreachable!("Invalid List layout for List.concat {:?}", list_layout);
-        }
-    }
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_cc(env, first_list),
+            pass_list_cc(env, second_list),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
+        ],
+        bitcode::LIST_CONCAT,
+    )
 }
 
 /// List.any : List elem, \(elem -> Bool) -> Bool

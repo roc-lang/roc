@@ -186,7 +186,7 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
-        use roc_parse::parser::State;
+        use roc_parse::state::State;
 
         let state = State::new(src.as_bytes());
 
@@ -1481,7 +1481,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn pattern_guard_mismatch() {
+    fn pattern_guard_mismatch_alias() {
         report_problem_as(
             indoc!(
                 r#"
@@ -1500,11 +1500,41 @@ mod test_reporting {
 
                 The first pattern is trying to match record values of type:
 
-                    { foo : [ True ]a }
+                    { foo : [ True ] }
 
                 But the expression between `when` and `is` has the type:
 
                     { foo : Num a }
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_guard_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 when { foo: "" } is
+                     { foo: True } -> 42
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st pattern in this `when` is causing a mismatch:
+
+                2│      { foo: True } -> 42
+                        ^^^^^^^^^^^^^
+
+                The first pattern is trying to match record values of type:
+
+                    { foo : [ True ] }
+
+                But the expression between `when` and `is` has the type:
+
+                    { foo : Str }
                 "#
             ),
         )
@@ -6048,9 +6078,9 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 app "test-base64"
-                    packages { base: "platform" }
-                    imports [base.Task, Base64 ]
-                    provides [ main, @Foo ] to base
+                    packages { pf: "platform" }
+                    imports [pf.Task, Base64 ]
+                    provides [ main, @Foo ] to pf
                 "#
             ),
             indoc!(
@@ -6059,8 +6089,8 @@ I need all branches in an `if` to have the same type!
 
                 I am partway through parsing a provides list, but I got stuck here:
 
-                3│      imports [base.Task, Base64 ]
-                4│      provides [ main, @Foo ] to base
+                3│      imports [pf.Task, Base64 ]
+                4│      provides [ main, @Foo ] to pf
                                          ^
 
                 I was expecting a type name, value name or function name next, like
@@ -6076,7 +6106,7 @@ I need all branches in an `if` to have the same type!
         report_header_problem_as(
             indoc!(
                 r#"
-                platform folkertdev/foo
+                platform "folkertdev/foo"
                     requires { main : Effect {} }
                     exposes []
                     packages {}
@@ -6096,7 +6126,7 @@ I need all branches in an `if` to have the same type!
 
                 I am partway through parsing a header, but I got stuck here:
 
-                1│  platform folkertdev/foo
+                1│  platform "folkertdev/foo"
                 2│      requires { main : Effect {} }
                                    ^
 
@@ -6116,7 +6146,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 interface Foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6144,7 +6174,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 interface foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6170,7 +6200,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 app foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(

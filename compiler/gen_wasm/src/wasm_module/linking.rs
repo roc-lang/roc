@@ -1,5 +1,6 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_reporting::internal_error;
 
 use super::sections::{update_section_size, write_custom_section_header};
 use super::serialize::{SerialBuffer, Serialize};
@@ -477,7 +478,7 @@ impl<'a> LinkingSection<'a> {
                 return syminfos;
             }
         }
-        panic!("Symbol table not found");
+        internal_error!("Symbol table not found");
     }
 }
 

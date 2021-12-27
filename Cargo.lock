@@ -459,7 +459,7 @@ name = "cli_utils"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "criterion",
+ "criterion 0.3.5 (git+https://github.com/Anton-4/criterion.rs)",
  "rlimit",
  "roc_cli",
  "roc_collections",
@@ -800,18 +800,44 @@ dependencies = [
 [[package]]
 name = "criterion"
 version = "0.3.5"
-source = "git+https://github.com/Anton-4/criterion.rs#3e46ad2b234e36928fb5234d36cf53b5837cbb87"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1604dafd25fba2fe2d5895a9da139f8dc9b319a5fe5354ca137cbbce4e178d10"
 dependencies = [
  "atty",
  "cast",
  "clap 2.33.3",
- "criterion-plot",
+ "criterion-plot 0.4.4",
  "csv",
  "itertools 0.10.1",
  "lazy_static",
  "num-traits",
  "oorandom",
- "plotters",
+ "plotters 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_cbor",
+ "serde_derive",
+ "serde_json",
+ "tinytemplate",
+ "walkdir",
+]
+
+[[package]]
+name = "criterion"
+version = "0.3.5"
+source = "git+https://github.com/Anton-4/criterion.rs#3e46ad2b234e36928fb5234d36cf53b5837cbb87"
+dependencies = [
+ "atty",
+ "cast",
+ "clap 2.33.3",
+ "criterion-plot 0.4.3",
+ "csv",
+ "itertools 0.10.1",
+ "lazy_static",
+ "num-traits",
+ "oorandom",
+ "plotters 0.3.1 (git+https://github.com/Anton-4/plotters)",
  "rayon",
  "regex",
  "serde",
@@ -829,6 +855,16 @@ source = "git+https://github.com/Anton-4/criterion.rs#3e46ad2b234e36928fb5234d36
 dependencies = [
  "cast",
  "itertools 0.9.0",
+]
+
+[[package]]
+name = "criterion-plot"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d00996de9f2f7559f7f4dc286073197f83e92256a59ed395f9aac01fe717da57"
+dependencies = [
+ "cast",
+ "itertools 0.10.1",
 ]
 
 [[package]]
@@ -1670,13 +1706,13 @@ dependencies = [
 name = "inkwell"
 version = "0.1.0"
 dependencies = [
- "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release8)",
+ "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1)",
 ]
 
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release8#14b78d96d2dbc95694e181be66e4cd53df3fc02f"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1#e15d665227b2acad4ca949820d80048e09f3f4e5"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1684,13 +1720,12 @@ dependencies = [
  "llvm-sys",
  "once_cell",
  "parking_lot",
- "regex",
 ]
 
 [[package]]
 name = "inkwell_internals"
-version = "0.3.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release8#14b78d96d2dbc95694e181be66e4cd53df3fc02f"
+version = "0.5.0"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1#e15d665227b2acad4ca949820d80048e09f3f4e5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2735,6 +2770,19 @@ checksum = "12295df4f294471248581bc09bef3c38a5e46f1e36d6a37353621a0c6c357e1f"
 [[package]]
 name = "plotters"
 version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a3fd9ec30b9749ce28cd91f255d569591cdf937fe280c312143e3c4bad6f2a"
+dependencies = [
+ "num-traits",
+ "plotters-backend",
+ "plotters-svg",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "plotters"
+version = "0.3.1"
 source = "git+https://github.com/Anton-4/plotters#d043988179b61db714ad60f678637ee145e363d3"
 dependencies = [
  "num-traits",
@@ -3148,6 +3196,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_types",
  "roc_unify",
  "snafu",
@@ -3219,7 +3268,7 @@ dependencies = [
  "clap 3.0.0-beta.5",
  "cli_utils",
  "const_format",
- "criterion",
+ "criterion 0.3.5 (git+https://github.com/Anton-4/criterion.rs)",
  "indoc",
  "inkwell 0.1.0",
  "libloading 0.7.1",
@@ -3375,6 +3424,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_test_utils",
+ "walkdir",
 ]
 
 [[package]]
@@ -3411,6 +3461,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_mono",
+ "roc_reporting",
  "roc_std",
  "target-lexicon",
 ]
@@ -3424,6 +3475,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_mono",
+ "roc_reporting",
  "roc_std",
 ]
 
@@ -3518,6 +3570,7 @@ name = "roc_parse"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "criterion 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "encode_unicode",
  "indoc",
  "pretty_assertions",

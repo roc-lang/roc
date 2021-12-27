@@ -1,5 +1,5 @@
-platform examples/cli
-    requires {}{ main : Task {} [] }
+platform "examples/cli"
+    requires {} { main : Task {} [] }
     exposes []
     packages {}
     imports [ Task.{ Task }, File.{ ReadErr } ]

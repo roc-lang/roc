@@ -513,7 +513,7 @@ impl RocStr {
     pub fn storage(&self) -> Option<Storage> {
         use core::cmp::Ordering::*;
 
-        if self.is_small_str() || self.length == 0 {
+        if self.is_small_str() {
             return None;
         }
 
@@ -666,7 +666,7 @@ impl RocStr {
 impl Default for RocStr {
     fn default() -> Self {
         Self {
-            length: 0,
+            length: isize::MIN as usize,
             elements: core::ptr::null_mut(),
         }
     }
@@ -699,7 +699,7 @@ impl Eq for RocStr {}
 
 impl Clone for RocStr {
     fn clone(&self) -> Self {
-        if self.is_small_str() || self.is_empty() {
+        if self.is_small_str() {
             Self {
                 elements: self.elements,
                 length: self.length,
@@ -736,7 +736,7 @@ impl Clone for RocStr {
 
 impl Drop for RocStr {
     fn drop(&mut self) {
-        if !self.is_small_str() && !self.is_empty() {
+        if !self.is_small_str() {
             let storage_ptr = self.get_storage_ptr_mut();
 
             unsafe {

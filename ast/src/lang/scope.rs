@@ -15,7 +15,7 @@ use roc_module::symbol::{
     get_module_ident_ids, get_module_ident_ids_mut, IdentIds, Interns, ModuleId, Symbol,
 };
 use roc_problem::can::RuntimeError;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::{
     builtin_aliases,
     solved_types::{BuiltinAlias, FreeVars, SolvedType},
@@ -205,7 +205,7 @@ impl Scope {
         match self.idents.get(ident) {
             Some((symbol, _)) => Ok(*symbol),
             None => Err(RuntimeError::LookupNotInScope(
-                Located {
+                Loc {
                     region,
                     value: ident.clone().into(),
                 },
@@ -228,10 +228,10 @@ impl Scope {
         exposed_ident_ids: &IdentIds,
         all_ident_ids: &mut IdentIds,
         region: Region,
-    ) -> Result<Symbol, (Region, Located<Ident>)> {
+    ) -> Result<Symbol, (Region, Loc<Ident>)> {
         match self.idents.get(&ident) {
             Some((_, original_region)) => {
-                let shadow = Located {
+                let shadow = Loc {
                     value: ident,
                     region,
                 };

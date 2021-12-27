@@ -10,6 +10,13 @@ pub mod wasm;
 #[cfg(feature = "gen-wasm")]
 pub mod wasm32_test_result;
 
+pub fn zig_executable() -> String {
+    match std::env::var("ROC_ZIG") {
+        Ok(path) => path,
+        Err(_) => "zig".into(),
+    }
+}
+
 /// Used in the with_larger_debug_stack() function, for tests that otherwise
 /// run out of stack space in debug builds (but don't in --release builds)
 #[allow(dead_code)]

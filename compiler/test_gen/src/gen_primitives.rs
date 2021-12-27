@@ -3137,3 +3137,24 @@ fn call_that_needs_closure_parameter() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn alias_defined_out_of_order() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main : Foo
+            main = "foo"
+
+            Foo : Bar
+            Bar : Str
+
+            "#
+        ),
+        RocStr::from_slice(b"foo"),
+        RocStr
+    );
+}

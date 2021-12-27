@@ -1,13 +1,13 @@
 use crate::def::Def;
-use crate::expr::{ClosureData, Expr::*};
-use crate::expr::{Expr, Field, Recursive, WhenBranch};
+use crate::expr::{self, ClosureData, Expr::*};
+use crate::expr::{Expr, Field, Recursive};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 
 macro_rules! macro_magic {
@@ -68,6 +68,20 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_TRIM => str_trim,
         STR_TRIM_LEFT => str_trim_left,
         STR_TRIM_RIGHT => str_trim_right,
+        STR_TO_DEC => str_to_num,
+        STR_TO_F64 => str_to_num,
+        STR_TO_F32 => str_to_num,
+        STR_TO_NAT => str_to_num,
+        STR_TO_U128 => str_to_num,
+        STR_TO_I128 => str_to_num,
+        STR_TO_U64 => str_to_num,
+        STR_TO_I64 => str_to_num,
+        STR_TO_U32 => str_to_num,
+        STR_TO_I32 => str_to_num,
+        STR_TO_U16 => str_to_num,
+        STR_TO_I16 => str_to_num,
+        STR_TO_U8 => str_to_num,
+        STR_TO_I8 => str_to_num,
         LIST_LEN => list_len,
         LIST_GET => list_get,
         LIST_SET => list_set,
@@ -99,6 +113,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_DROP_FIRST => list_drop_first,
+        LIST_DROP_IF => list_drop_if,
         LIST_DROP_LAST => list_drop_last,
         LIST_SWAP => list_swap,
         LIST_MAP_WITH_INDEX => list_map_with_index,
@@ -347,8 +362,8 @@ fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: None,
         expr_var: int_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -362,8 +377,8 @@ fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: None,
         expr_var: int_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -1231,8 +1246,8 @@ fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: Some(annotation),
         expr_var: int_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -1321,6 +1336,98 @@ fn str_trim_left(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Str.trimRight : Str -> Str
 fn str_trim_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrimRight, var_store)
+}
+
+/// Str.toNum : Str -> Result (Num *) [ InvalidNumStr ]*
+fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bool_var = var_store.fresh();
+    let str_var = var_store.fresh();
+    let num_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+    let record_var = var_store.fresh();
+
+    let errorcode_var = var_store.fresh();
+
+    // let arg_2 = RunLowLevel StrToNum arg_1
+    //
+    // if arg_2.errorcode then
+    //  Err InvalidNumStr
+    // else
+    //  Ok arg_2.value
+
+    let cont = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(RunLowLevel {
+                op: LowLevel::NumGt,
+                args: vec![
+                    (
+                        errorcode_var,
+                        // arg_3.b
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "b_errorcode".into(),
+                            field_var: errorcode_var,
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                    ),
+                    (errorcode_var, int(errorcode_var, Variable::UNSIGNED8, 0)),
+                ],
+                ret_var: bool_var,
+            }),
+            // overflow!
+            no_region(tag(
+                "Err",
+                vec![tag("InvalidNumStr", Vec::new(), var_store)],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // all is well
+            no_region(
+                // Ok arg_2.value
+                tag(
+                    "Ok",
+                    vec![
+                        // arg_3.a
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "a_value".into(),
+                            field_var: num_var,
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    let def = crate::def::Def {
+        loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_2)),
+        loc_expr: no_region(RunLowLevel {
+            op: LowLevel::StrToNum,
+            args: vec![(str_var, Var(Symbol::ARG_1))],
+            ret_var: record_var,
+        }),
+        expr_var: record_var,
+        pattern_vars: SendMap::default(),
+        annotation: None,
+    };
+
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 /// Str.repeat : Str, Nat -> Str
@@ -2376,6 +2483,7 @@ fn list_drop_at(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// List.dropFirst : List elem -> Result { first: elem, others : List elem } [ ListWasEmpty ]*
 fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let index_var = var_store.fresh();
@@ -2397,6 +2505,61 @@ fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+/// List.dropIf : List elem, (elem -> Bool) -> List elem
+fn list_drop_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let sym_list = Symbol::ARG_1;
+    let sym_predicate = Symbol::ARG_2;
+    let t_list = var_store.fresh();
+    let t_predicate = var_store.fresh();
+    let t_keep_predicate = var_store.fresh();
+    let t_elem = var_store.fresh();
+
+    // Defer to keepIf for implementation
+    // List.dropIf l p = List.keepIf l (\e -> Bool.not (p e))
+
+    let keep_predicate = Closure(ClosureData {
+        function_type: t_keep_predicate,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: Variable::BOOL,
+        name: Symbol::LIST_DROP_IF_PREDICATE,
+        recursive: Recursive::NotRecursive,
+        captured_symbols: vec![(sym_predicate, t_predicate)],
+        arguments: vec![(t_elem, no_region(Pattern::Identifier(Symbol::ARG_3)))],
+        loc_body: {
+            let should_drop = Call(
+                Box::new((
+                    t_predicate,
+                    no_region(Var(sym_predicate)),
+                    var_store.fresh(),
+                    Variable::BOOL,
+                )),
+                vec![(t_elem, no_region(Var(Symbol::ARG_3)))],
+                CalledVia::Space,
+            );
+            Box::new(no_region(RunLowLevel {
+                op: LowLevel::Not,
+                args: vec![(Variable::BOOL, should_drop)],
+                ret_var: Variable::BOOL,
+            }))
+        },
+    });
+
+    let body = RunLowLevel {
+        op: LowLevel::ListKeepIf,
+        args: vec![(t_list, Var(sym_list)), (t_keep_predicate, keep_predicate)],
+        ret_var: t_list,
+    };
+
+    defn(
+        symbol,
+        vec![(t_list, sym_list), (t_predicate, sym_predicate)],
+        var_store,
+        body,
+        t_list,
     )
 }
 
@@ -2985,7 +3148,7 @@ fn list_keep_errs(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListKeepErrs, var_store)
 }
 
-/// List.keepErrs: List before, (before -> Result * after) -> List after
+/// List.range: Int a, Int a -> List (Int a)
 fn list_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListRange, var_store)
 }
@@ -3143,8 +3306,8 @@ fn dict_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: None,
         expr_var: dict_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -3225,8 +3388,8 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let def = Def {
         annotation: None,
         expr_var: temp_record_var,
-        loc_expr: Located::at_zero(def_body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(temp_record)),
+        loc_expr: Loc::at_zero(def_body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(temp_record)),
         pattern_vars: Default::default(),
     };
 
@@ -3318,8 +3481,8 @@ fn set_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: None,
         expr_var: set_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -4001,7 +4164,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
@@ -4031,7 +4194,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
@@ -4098,7 +4261,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
@@ -4128,7 +4291,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
@@ -4171,7 +4334,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![(ret_var, no_region(Pattern::Identifier(Symbol::ARG_3)))],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_3)),
             guard: None,
@@ -4191,7 +4354,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![(var_store.fresh(), no_region(Pattern::Underscore))],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_2)),
             guard: None,
@@ -4241,7 +4404,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
@@ -4268,7 +4431,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
@@ -4318,7 +4481,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
@@ -4345,7 +4508,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
@@ -4407,7 +4570,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
@@ -4437,7 +4600,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
@@ -4464,8 +4627,8 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 #[inline(always)]
-fn no_region<T>(value: T) -> Located<T> {
-    Located {
+fn no_region<T>(value: T) -> Loc<T> {
+    Loc {
         region: Region::zero(),
         value,
     }
@@ -4480,7 +4643,7 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
         arguments: args
             .into_iter()
             .map(|expr| (var_store.fresh(), no_region(expr)))
-            .collect::<Vec<(Variable, Located<Expr>)>>(),
+            .collect::<Vec<(Variable, Loc<Expr>)>>(),
     }
 }
 
@@ -4507,11 +4670,11 @@ fn defn(
     let expr = defn_help(fn_name, args, var_store, body, ret_var);
 
     Def {
-        loc_pattern: Located {
+        loc_pattern: Loc {
             region: Region::zero(),
             value: Pattern::Identifier(fn_name),
         },
-        loc_expr: Located {
+        loc_expr: Loc {
             region: Region::zero(),
             value: expr,
         },

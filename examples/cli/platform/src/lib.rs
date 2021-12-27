@@ -2,7 +2,7 @@
 
 use core::alloc::Layout;
 use core::ffi::c_void;
-use core::mem::MaybeUninit;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use libc;
 use roc_std::{RocStr, RocList};
 use std::ffi::CStr;
@@ -122,13 +122,10 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) -> () {
+pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) {
     let bytes = line.as_slice();
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
-
     println!("{}", string);
-
-    ()
 }
 
 #[no_mangle]

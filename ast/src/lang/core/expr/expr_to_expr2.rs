@@ -6,7 +6,7 @@ use roc_collections::all::MutSet;
 use roc_module::symbol::Symbol;
 use roc_parse::{ast::Expr, pattern::PatternType};
 use roc_problem::can::{Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 
 use super::{expr2::Expr2, output::Output};
 use crate::canonicalization::canonicalize::{
@@ -29,7 +29,7 @@ use crate::{
 
 pub fn loc_expr_to_expr2<'a>(
     arena: &'a Bump,
-    loc_expr: Located<Expr<'a>>,
+    loc_expr: Loc<Expr<'a>>,
     env: &mut Env<'a>,
     scope: &mut Scope,
     region: Region,

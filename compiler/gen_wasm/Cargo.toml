@@ -12,3 +12,4 @@ roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
 roc_mono = { path = "../mono" }
 roc_std = { path = "../../roc_std" }
+roc_reporting = { path = "../../reporting" }
