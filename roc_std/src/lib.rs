@@ -754,10 +754,10 @@ impl Drop for RocStr {
     }
 }
 
-/// Like a Rust Result, but with Roc's fixed discriminant size of u64, and
-/// with Roc's Err = 0, Ok = 1 discriminant numbers.
+/// Like a Rust `Result`, but following Roc's ABI instead of Rust's.
+/// (Using Rust's `Result` instead of this will not work properly with Roc code!)
 ///
-/// Using Rust's Result instead of this will not work properly with Roc code!
+/// This can be converted to a Rust `Result` using `.into()`
 #[repr(C)]
 pub struct RocResult<T, E> {
     payload: RocResultPayload<T, E>,
@@ -782,6 +782,14 @@ impl<T, E> RocResult<T, E> {
             },
         }
     }
+
+    pub fn is_ok(&self) -> bool {
+        self.tag == RocResultTag::RocOk
+    }
+
+    pub fn is_err(&self) -> bool {
+        self.tag == RocResultTag::RocErr
+    }
 }
 
 impl<T, E> From<RocResult<T, E>> for Result<T, E> {
@@ -793,16 +801,22 @@ impl<T, E> From<RocResult<T, E>> for Result<T, E> {
         // get the borrow checker to accept it!
         let payload_ptr = &mut roc_result.payload as *mut RocResultPayload<T, E>;
 
-        unsafe {
+        let result = unsafe {
             match roc_result.tag {
                 RocOk => Ok(ManuallyDrop::take(&mut (&mut *payload_ptr).ok)),
                 RocErr => Err(ManuallyDrop::take(&mut (&mut *payload_ptr).err)),
             }
-        }
+        };
+
+        // This is necessary to prevent a double-free.
+        mem::forget(roc_result);
+
+        result
     }
 }
 
 #[repr(u64)] // TODO change to u8 once Ayaz's PR has merged
+#[derive(PartialEq, Eq)]
 enum RocResultTag {
     RocErr = 0,
     RocOk = 1,
