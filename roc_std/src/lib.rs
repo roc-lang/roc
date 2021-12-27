@@ -2,7 +2,7 @@
 #![no_std]
 use core::convert::From;
 use core::ffi::c_void;
-use core::mem::ManuallyDrop;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::{fmt, mem, ptr, slice};
 
@@ -784,34 +784,41 @@ impl<T, E> RocResult<T, E> {
     }
 
     pub fn is_ok(&self) -> bool {
-        self.tag == RocResultTag::RocOk
+        matches!(self.tag, RocResultTag::RocOk)
     }
 
     pub fn is_err(&self) -> bool {
-        self.tag == RocResultTag::RocErr
+        matches!(self.tag, RocResultTag::RocErr)
+    }
+
+    fn into_payload(mut self) -> RocResultPayload<T, E> {
+        let mut value = MaybeUninit::uninit();
+        let ref_mut_value = unsafe { &mut *value.as_mut_ptr() };
+
+        // move the value into our MaybeUninit memory
+        core::mem::swap(&mut self.payload, ref_mut_value);
+
+        // don't run the destructor on self; the `payload` has been moved out
+        // and replaced by uninitialized memory
+        core::mem::forget(self);
+
+        unsafe { value.assume_init() }
     }
 }
 
 impl<T, E> From<RocResult<T, E>> for Result<T, E> {
-    fn from(mut roc_result: RocResult<T, E>) -> Self {
+    fn from(roc_result: RocResult<T, E>) -> Self {
         use RocResultTag::*;
 
-        // This seems to be the only way to successfully return the payload.
-        // It would be great if we could simplify this somehow and still
-        // get the borrow checker to accept it!
-        let payload_ptr = &mut roc_result.payload as *mut RocResultPayload<T, E>;
+        let tag = roc_result.tag;
+        let payload = roc_result.into_payload();
 
-        let result = unsafe {
-            match roc_result.tag {
-                RocOk => Ok(ManuallyDrop::take(&mut (&mut *payload_ptr).ok)),
-                RocErr => Err(ManuallyDrop::take(&mut (&mut *payload_ptr).err)),
+        unsafe {
+            match tag {
+                RocOk => Ok(ManuallyDrop::into_inner(payload.ok)),
+                RocErr => Err(ManuallyDrop::into_inner(payload.err)),
             }
-        };
-
-        // This is necessary to prevent a double-free.
-        mem::forget(roc_result);
-
-        result
+        }
     }
 }
 
@@ -825,7 +832,7 @@ impl<T, E> From<Result<T, E>> for RocResult<T, E> {
 }
 
 #[repr(u64)] // TODO change to u8 once Ayaz's PR has merged
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Copy)]
 enum RocResultTag {
     RocErr = 0,
     RocOk = 1,
