@@ -2,6 +2,8 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use libloading::Library;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_collections::all::MutMap;
+use roc_gen_llvm::llvm::build::tag_pointer_tag_id_bits_and_mask;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
@@ -110,6 +112,44 @@ fn unroll_aliases<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Conten
         content = env.subs.get_content_without_compacting(*real);
     }
     content
+}
+
+fn get_tags_vars_and_variant<'a>(
+    env: &Env<'a, '_>,
+    tags: &UnionTags,
+    opt_rec_var: Option<Variable>,
+) -> (MutMap<TagName, std::vec::Vec<Variable>>, UnionVariant<'a>) {
+    let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = tags
+        .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
+        .map(|(a, b)| (a.clone(), b.to_vec()))
+        .collect();
+
+    let vars_of_tag: MutMap<_, _> = tags_vec.iter().cloned().collect();
+
+    let union_variant =
+        union_sorted_tags_help(env.arena, tags_vec, opt_rec_var, env.subs, env.ptr_bytes);
+
+    (vars_of_tag, union_variant)
+}
+
+fn expr_of_tag<'a>(
+    env: &Env<'a, 'a>,
+    ptr_to_data: *const u8,
+    tag_name: &TagName,
+    arg_layouts: &'a [Layout<'a>],
+    arg_vars: &[Variable],
+) -> Expr<'a> {
+    let tag_expr = tag_name_to_expr(env, tag_name);
+    let loc_tag_expr = &*env.arena.alloc(Loc::at_zero(tag_expr));
+
+    debug_assert_eq!(arg_layouts.len(), arg_vars.len());
+
+    // NOTE assumes the data bytes are the first bytes
+    let it = arg_vars.iter().copied().zip(arg_layouts.iter());
+    let output = sequence_of_expr(env, ptr_to_data, it);
+    let output = output.into_bump_slice();
+
+    Expr::Apply(loc_tag_expr, output, CalledVia::Space)
 }
 
 fn jit_to_ast_help<'a>(
@@ -257,16 +297,7 @@ fn jit_to_ast_help<'a>(
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     debug_assert_eq!(union_layouts.len(), tags.len());
 
-                    let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = tags
-                        .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
-                        .map(|(a, b)| (a.clone(), b.to_vec()))
-                        .collect();
-
-                    let tags_map: roc_collections::all::MutMap<_, _> =
-                        tags_vec.iter().cloned().collect();
-
-                    let union_variant =
-                        union_sorted_tags_help(env.arena, tags_vec, None, env.subs, env.ptr_bytes);
+                    let (vars_of_tag, union_variant) = get_tags_vars_and_variant(env, tags, None);
 
                     let size = layout.stack_size(env.ptr_bytes);
                     use roc_mono::layout::WrappedVariant::*;
@@ -308,21 +339,13 @@ fn jit_to_ast_help<'a>(
                                             let (tag_name, arg_layouts) =
                                                 &tags_and_layouts[tag_id as usize];
 
-                                            let tag_expr = tag_name_to_expr(env, tag_name);
-                                            let loc_tag_expr =
-                                                &*env.arena.alloc(Loc::at_zero(tag_expr));
-
-                                            let variables = &tags_map[tag_name];
-
-                                            debug_assert_eq!(arg_layouts.len(), variables.len());
-
-                                            // NOTE assumes the data bytes are the first bytes
-                                            let it =
-                                                variables.iter().copied().zip(arg_layouts.iter());
-                                            let output = sequence_of_expr(env, ptr, it);
-                                            let output = output.into_bump_slice();
-
-                                            Expr::Apply(loc_tag_expr, output, CalledVia::Space)
+                                            expr_of_tag(
+                                                env,
+                                                ptr,
+                                                tag_name,
+                                                arg_layouts,
+                                                &vars_of_tag[tag_name],
+                                            )
                                         }
                                     ))
                                 }
@@ -345,7 +368,7 @@ fn jit_to_ast_help<'a>(
                                             let loc_tag_expr =
                                                 &*env.arena.alloc(Loc::at_zero(tag_expr));
 
-                                            let variables = &tags_map[tag_name];
+                                            let variables = &vars_of_tag[tag_name];
 
                                             // because the arg_layouts include the tag ID, it is one longer
                                             debug_assert_eq!(
@@ -382,8 +405,57 @@ fn jit_to_ast_help<'a>(
                 other => unreachable!("Weird content for Union layout: {:?}", other),
             }
         }
-        Layout::Union(UnionLayout::Recursive(_))
-        | Layout::Union(UnionLayout::NullableWrapped { .. })
+        Layout::Union(UnionLayout::Recursive(union_layouts)) => match content {
+            Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
+                debug_assert_eq!(union_layouts.len(), tags.len());
+
+                let union_layout = UnionLayout::Recursive(union_layouts);
+                let (vars_of_tag, union_variant) =
+                    get_tags_vars_and_variant(env, tags, Some(*rec_var));
+
+                let size = layout.stack_size(env.ptr_bytes);
+                use roc_mono::layout::WrappedVariant::*;
+
+                match union_variant {
+                    UnionVariant::Wrapped(Recursive {
+                        sorted_tag_layouts: tags_and_layouts,
+                    }) => Ok(run_jit_function_dynamic_type!(
+                        lib,
+                        main_fn_name,
+                        size as usize,
+                        |ptr_to_data_ptr: *const u8| {
+                            let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.ptr_bytes);
+                            let (tag_id, ptr_to_data) = if tag_in_ptr {
+                                let masked_ptr_to_data = *(ptr_to_data_ptr as *const i64);
+                                let (tag_id_bits, tag_id_mask) =
+                                    tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
+                                let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
+
+                                // Clear the tag ID data from the pointer
+                                let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits)
+                                    << tag_id_bits)
+                                    as *const u8;
+                                (tag_id, ptr_to_data)
+                            } else {
+                                todo!()
+                            };
+
+                            let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
+                            expr_of_tag(
+                                env,
+                                ptr_to_data,
+                                tag_name,
+                                arg_layouts,
+                                &vars_of_tag[tag_name],
+                            )
+                        }
+                    )),
+                    _ => unreachable!("any other variant would have a different layout"),
+                }
+            }
+            _ => unreachable!("any other layout would have a different content"),
+        },
+        Layout::Union(UnionLayout::NullableWrapped { .. })
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
         | Layout::RecursivePointer => {

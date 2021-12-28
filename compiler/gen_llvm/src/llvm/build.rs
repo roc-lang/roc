@@ -1763,16 +1763,19 @@ fn tag_pointer_set_tag_id<'a, 'ctx, 'env>(
         .build_int_to_ptr(combined, pointer.get_type(), "to_ptr")
 }
 
+pub fn tag_pointer_tag_id_bits_and_mask(ptr_bytes: u32) -> (u64, u64) {
+    match ptr_bytes {
+        8 => (3, 0b0000_0111),
+        4 => (2, 0b0000_0011),
+        _ => unreachable!(),
+    }
+}
+
 pub fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let mask: u64 = match env.ptr_bytes {
-        8 => 0b0000_0111,
-        4 => 0b0000_0011,
-        _ => unreachable!(),
-    };
-
+    let (_, mask) = tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
     let ptr_int = env.ptr_int();
 
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
@@ -1790,11 +1793,7 @@ pub fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let ptr_int = env.ptr_int();
 
-    let tag_id_bits_mask = match env.ptr_bytes {
-        8 => 3,
-        4 => 2,
-        _ => unreachable!(),
-    };
+    let (tag_id_bits_mask, _) = tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
 
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
 

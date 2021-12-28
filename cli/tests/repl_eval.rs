@@ -643,6 +643,21 @@ mod repl_eval {
         )
     }
 
+    #[test]
+    fn recursive_tag_union_flat_variant() {
+        expect_success(
+            indoc!(
+                r#"
+                Expr : [ Sym Str, Add Expr Expr ]
+                s : Expr
+                s = Sym "levitating"
+                s
+                "#
+            ),
+            r#"Sym "levitating" : Expr"#,
+        )
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently
