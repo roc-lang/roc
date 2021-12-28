@@ -42,6 +42,8 @@ extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 const DEBUG: bool = true;
 
+var arena_stack = @import("ArenaStack.zig").init();
+
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     var ptr = @alignCast(Align, std.c.malloc(size));
 
