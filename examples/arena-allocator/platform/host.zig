@@ -151,9 +151,9 @@ fn stdin_read_help() !RocStr {
 }
 
 export fn roc_fx_arenaStart() callconv(.C) void {
-    // todo
+    arena_stack.push();
 }
 
 export fn roc_fx_arenaEnd() callconv(.C) void {
-    // todo
+    arena_stack.pop();
 }
