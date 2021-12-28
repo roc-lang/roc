@@ -204,11 +204,11 @@ macro_rules! int_intrinsic {
     ($name:literal) => {{
         let mut output = IntrinsicName::default();
 
-        output.options[4] = concat!($name, ".i8");
-        output.options[5] = concat!($name, ".i16");
-        output.options[6] = concat!($name, ".i32");
-        output.options[7] = concat!($name, ".i64");
-        output.options[8] = concat!($name, ".i128");
+        output.options[4] = concat!($name, ".u8");
+        output.options[5] = concat!($name, ".u16");
+        output.options[6] = concat!($name, ".u32");
+        output.options[7] = concat!($name, ".u64");
+        output.options[8] = concat!($name, ".u128");
         output.options[9] = concat!($name, ".i8");
         output.options[10] = concat!($name, ".i16");
         output.options[11] = concat!($name, ".i32");
