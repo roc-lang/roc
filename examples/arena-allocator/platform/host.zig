@@ -124,6 +124,7 @@ fn call_the_closure(closure_data_pointer: [*]u8) void {
 
     // The closure returns result, nothing interesting to do with it
     return;
+}
 
 export fn roc_fx_stdoutWrite(rocPath: str.RocStr) callconv(.C) void {
     const stdout = std.io.getStdOut().writer();
@@ -133,10 +134,21 @@ export fn roc_fx_stdoutWrite(rocPath: str.RocStr) callconv(.C) void {
     }
 }
 
-export fn roc_fx_stdinRead() callconv(.C) str.RocStr {
+pub export fn roc_fx_stdinRead() str.RocStr {
+    if (roc_fx_stdinRead_help()) |value| {
+        return value;
+    } else |err| {
+        return str.RocStr.empty();
+    }
+}
+
+fn roc_fx_stdinRead_help() !RocStr {
     const stdin = std.io.getStdIn().reader();
-    const data = (stdin.readUntilDelimiterOrEof(&line_buf, '\n') catch unreachable) orelse "";
-    return RocStr.fromSlice();
+    var buf: [128]u8 = undefined;
+
+    const line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
+
+    return str.RocStr.init(@ptrCast([*]const u8, line), line.len);
 }
 
 export fn roc_fx_arenaStart() callconv(.C) void {
