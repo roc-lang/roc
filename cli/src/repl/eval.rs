@@ -152,6 +152,26 @@ fn expr_of_tag<'a>(
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
 }
 
+/// Gets the tag ID of a union variant, assuming that the tag ID is stored alongside (after) the
+/// tag data. The caller is expected to check that the tag ID is indeed stored this way.
+fn tag_id_from_data(union_layout: UnionLayout, data_ptr: *const u8, ptr_bytes: u32) -> i64 {
+    let offset = union_layout.data_size_without_tag_id(ptr_bytes).unwrap();
+
+    unsafe {
+        match union_layout.tag_id_builtin() {
+            Builtin::Bool => *(data_ptr.add(offset as usize) as *const i8) as i64,
+            Builtin::Int(IntWidth::U8) => *(data_ptr.add(offset as usize) as *const i8) as i64,
+            Builtin::Int(IntWidth::U16) => *(data_ptr.add(offset as usize) as *const i16) as i64,
+            Builtin::Int(IntWidth::U64) => {
+                // used by non-recursive unions at the
+                // moment, remove if that is no longer the case
+                *(data_ptr.add(offset as usize) as *const i64) as i64
+            }
+            _ => unreachable!("invalid tag id layout"),
+        }
+    }
+}
+
 fn jit_to_ast_help<'a>(
     env: &Env<'a, 'a>,
     lib: Library,
@@ -313,27 +333,8 @@ fn jit_to_ast_help<'a>(
                                         size as usize,
                                         |ptr: *const u8| {
                                             // Because this is a `NonRecursive`, the tag ID is definitely after the data.
-                                            let offset = union_layout
-                                                .data_size_without_tag_id(env.ptr_bytes)
-                                                .unwrap();
-
-                                            let tag_id = match union_layout.tag_id_builtin() {
-                                                Builtin::Bool => {
-                                                    *(ptr.add(offset as usize) as *const i8) as i64
-                                                }
-                                                Builtin::Int(IntWidth::U8) => {
-                                                    *(ptr.add(offset as usize) as *const i8) as i64
-                                                }
-                                                Builtin::Int(IntWidth::U16) => {
-                                                    *(ptr.add(offset as usize) as *const i16) as i64
-                                                }
-                                                Builtin::Int(IntWidth::U64) => {
-                                                    // used by non-recursive unions at the
-                                                    // moment, remove if that is no longer the case
-                                                    *(ptr.add(offset as usize) as *const i64) as i64
-                                                }
-                                                _ => unreachable!("invalid tag id layout"),
-                                            };
+                                            let tag_id =
+                                                tag_id_from_data(union_layout, ptr, env.ptr_bytes);
 
                                             // use the tag ID as an index, to get its name and layout of any arguments
                                             let (tag_name, arg_layouts) =
@@ -426,6 +427,7 @@ fn jit_to_ast_help<'a>(
                         |ptr_to_data_ptr: *const u8| {
                             let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.ptr_bytes);
                             let (tag_id, ptr_to_data) = if tag_in_ptr {
+                                // TODO we should cast to a pointer the size of env.ptr_bytes
                                 let masked_ptr_to_data = *(ptr_to_data_ptr as *const i64);
                                 let (tag_id_bits, tag_id_mask) =
                                     tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
@@ -437,7 +439,11 @@ fn jit_to_ast_help<'a>(
                                     as *const u8;
                                 (tag_id, ptr_to_data)
                             } else {
-                                todo!()
+                                // TODO we should cast to a pointer the size of env.ptr_bytes
+                                let ptr_to_data = *(ptr_to_data_ptr as *const i64) as *const u8;
+                                let tag_id =
+                                    tag_id_from_data(union_layout, ptr_to_data, env.ptr_bytes);
+                                (tag_id, ptr_to_data)
                             };
 
                             let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];

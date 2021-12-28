@@ -658,6 +658,22 @@ mod repl_eval {
         )
     }
 
+    #[test]
+    fn large_recursive_tag_union_flat_variant() {
+        expect_success(
+            // > 7 variants so that to force tag storage alongside the data
+            indoc!(
+                r#"
+                Item : [ A Str, B Str, C Str, D Str, E Str, F Str, G Str, H Str, I Str, J Str, K Item ]
+                s : Item
+                s = H "woo"
+                s
+                "#
+            ),
+            r#"H "woo" : Item"#,
+        )
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently
