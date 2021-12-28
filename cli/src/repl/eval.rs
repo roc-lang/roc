@@ -116,6 +116,13 @@ fn unroll_aliases<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Conten
     content
 }
 
+fn unroll_recursion_var<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
+    while let Content::RecursionVar { structure, .. } = content {
+        content = env.subs.get_content_without_compacting(*structure);
+    }
+    content
+}
+
 fn get_tags_vars_and_variant<'a>(
     env: &Env<'a, '_>,
     tags: &UnionTags,
@@ -324,7 +331,8 @@ fn jit_to_ast_help<'a>(
                 }
             ))
         }
-        Layout::Union(UnionLayout::Recursive(_)) => {
+        Layout::Union(UnionLayout::Recursive(_))
+        | Layout::Union(UnionLayout::NonNullableUnwrapped(_)) => {
             let size = layout.stack_size(env.ptr_bytes);
             Ok(run_jit_function_dynamic_type!(
                 lib,
@@ -337,7 +345,6 @@ fn jit_to_ast_help<'a>(
         }
         Layout::Union(UnionLayout::NullableWrapped { .. })
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
-        | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
         | Layout::RecursivePointer => {
             todo!("add support for rendering recursive tag unions in the REPL")
         }
@@ -554,6 +561,33 @@ fn ptr_to_ast<'a>(
                 tag_name,
                 arg_layouts,
                 &vars_of_tag[tag_name],
+                when_recursive,
+            )
+        }
+        Layout::Union(UnionLayout::NonNullableUnwrapped(_)) => {
+            let (rec_var, tags) = match unroll_recursion_var(env, content) {
+                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
+                other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
+            };
+            debug_assert_eq!(tags.len(), 1);
+
+            let (vars_of_tag, union_variant) = get_tags_vars_and_variant(env, tags, Some(*rec_var));
+
+            let (tag_name, arg_layouts) = match union_variant {
+                UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
+                    tag_name, fields,
+                }) => (tag_name, fields),
+                _ => unreachable!("any other variant would have a different layout"),
+            };
+
+            let ptr_to_data = unsafe { *(ptr as *const i64) as *const u8 };
+
+            expr_of_tag(
+                env,
+                ptr_to_data,
+                &tag_name,
+                arg_layouts,
+                &vars_of_tag[&tag_name],
                 when_recursive,
             )
         }

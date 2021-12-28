@@ -720,6 +720,25 @@ mod repl_eval {
         )
     }
 
+    #[test]
+    fn non_nullable_unwrapped_tag_union() {
+        expect_success(
+            indoc!(
+                r#"
+                RoseTree a : [ Tree a (List (RoseTree a)) ]
+                e1 : RoseTree Str
+                e1 = Tree "e1" []
+                e2 : RoseTree Str
+                e2 = Tree "e2" []
+                combo : RoseTree Str
+                combo = Tree "combo" [e1, e2]
+                combo
+                "#
+            ),
+            r#"Tree "combo" [ Tree "e1" [], Tree "e2" [] ] : RoseTree Str"#,
+        )
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently
