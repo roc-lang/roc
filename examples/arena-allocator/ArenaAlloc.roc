@@ -14,7 +14,7 @@ main =
 
         result = getResult input
 
-        Terminal.write "Bytes: \(result)"
+        Terminal.write "Bytes: \(result)\n"
     )
 
 getResult : Str -> Str
@@ -27,4 +27,4 @@ addByte : Str, U8 -> Str
 addByte = \str, byte ->
     newStr = Num.toStr byte
 
-    "\(str),\(newStr)"
+    "\(str)\(newStr),"
