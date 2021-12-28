@@ -46,7 +46,14 @@ pub fn dispatch_low_level<'a>(
             return NotImplemented;
         }
         StrCountGraphemes => return BuiltinCall(bitcode::STR_COUNT_GRAPEHEME_CLUSTERS),
-        StrToNum => return NotImplemented, // choose builtin based on storage size
+        StrToNum => match ret_layout {
+            WasmLayout::Primitive(_, _) => return NotImplemented,
+            WasmLayout::StackMemory { size, .. } => {
+                // how do I decided Float vs. Int vs. Dec
+                // how do I find out if it's signed or unsigned
+                return BuiltinCall(bitcode::STR_TO_INT);
+            }
+        }, // choose builtin based on storage size
         StrFromInt => {
             // This does not get exposed in user space. We switched to NumToStr instead.
             // We can probably just leave this as NotImplemented. We may want remove this LowLevel.
