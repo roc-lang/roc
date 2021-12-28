@@ -182,6 +182,17 @@ fn tag_id_from_data(union_layout: UnionLayout, data_ptr: *const u8, ptr_bytes: u
     }
 }
 
+fn deref_ptr_of_ptr(ptr_of_ptr: *const u8, ptr_bytes: u32) -> *const u8 {
+    unsafe {
+        match ptr_bytes {
+            // Our LLVM codegen represents pointers as i32/i64s.
+            4 => *(ptr_of_ptr as *const i32) as *const u8,
+            8 => *(ptr_of_ptr as *const i64) as *const u8,
+            _ => unreachable!(),
+        }
+    }
+}
+
 /// Gets the tag ID of a union variant from its recursive pointer (that is, the pointer to the
 /// pointer to the data of the union variant). Returns
 ///   - the tag ID
@@ -193,17 +204,15 @@ fn tag_id_from_recursive_ptr(
 ) -> (i64, *const u8) {
     let tag_in_ptr = union_layout.stores_tag_id_in_pointer(ptr_bytes);
     if tag_in_ptr {
-        // TODO we should cast to a pointer the size of env.ptr_bytes
-        let masked_ptr_to_data = unsafe { *(rec_ptr as *const i64) };
+        let masked_ptr_to_data = deref_ptr_of_ptr(rec_ptr, ptr_bytes) as i64;
         let (tag_id_bits, tag_id_mask) = tag_pointer_tag_id_bits_and_mask(ptr_bytes);
         let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
 
         // Clear the tag ID data from the pointer
         let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits) << tag_id_bits) as *const u8;
-        (tag_id, ptr_to_data)
+        (tag_id as i64, ptr_to_data)
     } else {
-        // TODO we should cast to a pointer the size of env.ptr_bytes
-        let ptr_to_data = unsafe { *(rec_ptr as *const i64) as *const u8 };
+        let ptr_to_data = deref_ptr_of_ptr(rec_ptr, ptr_bytes);
         let tag_id = tag_id_from_data(union_layout, ptr_to_data, ptr_bytes);
         (tag_id, ptr_to_data)
     }
@@ -587,7 +596,7 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = unsafe { *(ptr as *const i64) as *const u8 };
+            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
 
             expr_of_tag(
                 env,
@@ -617,8 +626,7 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            // TODO we should cast to a pointer the size of env.ptr_bytes
-            let ptr_to_data = unsafe { *(ptr as *const i64) as *const u8 };
+            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
             if ptr_to_data.is_null() {
                 tag_name_to_expr(env, &nullable_name)
             } else {
@@ -649,8 +657,7 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            // TODO we should cast to a pointer the size of env.ptr_bytes
-            let ptr_to_data = unsafe { *(ptr as *const i64) as *const u8 };
+            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
             if ptr_to_data.is_null() {
                 tag_name_to_expr(env, &nullable_name)
             } else {
