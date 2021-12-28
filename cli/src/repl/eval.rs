@@ -138,6 +138,7 @@ fn expr_of_tag<'a>(
     tag_name: &TagName,
     arg_layouts: &'a [Layout<'a>],
     arg_vars: &[Variable],
+    when_recursive: WhenRecursive<'a>,
 ) -> Expr<'a> {
     let tag_expr = tag_name_to_expr(env, tag_name);
     let loc_tag_expr = &*env.arena.alloc(Loc::at_zero(tag_expr));
@@ -146,7 +147,7 @@ fn expr_of_tag<'a>(
 
     // NOTE assumes the data bytes are the first bytes
     let it = arg_vars.iter().copied().zip(arg_layouts.iter());
-    let output = sequence_of_expr(env, ptr_to_data, it);
+    let output = sequence_of_expr(env, ptr_to_data, it, when_recursive);
     let output = output.into_bump_slice();
 
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
@@ -346,6 +347,7 @@ fn jit_to_ast_help<'a>(
                                                 tag_name,
                                                 arg_layouts,
                                                 &vars_of_tag[tag_name],
+                                                WhenRecursive::Unreachable,
                                             )
                                         }
                                     ))
@@ -382,7 +384,12 @@ fn jit_to_ast_help<'a>(
 
                                             let it =
                                                 variables.iter().copied().zip(&arg_layouts[1..]);
-                                            let output = sequence_of_expr(env, ptr, it);
+                                            let output = sequence_of_expr(
+                                                env,
+                                                ptr,
+                                                it,
+                                                WhenRecursive::Loop(Layout::Union(union_layout)),
+                                            );
                                             let output = output.into_bump_slice();
 
                                             Expr::Apply(loc_tag_expr, output, CalledVia::Space)
@@ -406,61 +413,17 @@ fn jit_to_ast_help<'a>(
                 other => unreachable!("Weird content for Union layout: {:?}", other),
             }
         }
-        Layout::Union(UnionLayout::Recursive(union_layouts)) => match content {
-            Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
-                debug_assert_eq!(union_layouts.len(), tags.len());
-
-                let union_layout = UnionLayout::Recursive(union_layouts);
-                let (vars_of_tag, union_variant) =
-                    get_tags_vars_and_variant(env, tags, Some(*rec_var));
-
-                let size = layout.stack_size(env.ptr_bytes);
-                use roc_mono::layout::WrappedVariant::*;
-
-                match union_variant {
-                    UnionVariant::Wrapped(Recursive {
-                        sorted_tag_layouts: tags_and_layouts,
-                    }) => Ok(run_jit_function_dynamic_type!(
-                        lib,
-                        main_fn_name,
-                        size as usize,
-                        |ptr_to_data_ptr: *const u8| {
-                            let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.ptr_bytes);
-                            let (tag_id, ptr_to_data) = if tag_in_ptr {
-                                // TODO we should cast to a pointer the size of env.ptr_bytes
-                                let masked_ptr_to_data = *(ptr_to_data_ptr as *const i64);
-                                let (tag_id_bits, tag_id_mask) =
-                                    tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
-                                let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
-
-                                // Clear the tag ID data from the pointer
-                                let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits)
-                                    << tag_id_bits)
-                                    as *const u8;
-                                (tag_id, ptr_to_data)
-                            } else {
-                                // TODO we should cast to a pointer the size of env.ptr_bytes
-                                let ptr_to_data = *(ptr_to_data_ptr as *const i64) as *const u8;
-                                let tag_id =
-                                    tag_id_from_data(union_layout, ptr_to_data, env.ptr_bytes);
-                                (tag_id, ptr_to_data)
-                            };
-
-                            let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
-                            expr_of_tag(
-                                env,
-                                ptr_to_data,
-                                tag_name,
-                                arg_layouts,
-                                &vars_of_tag[tag_name],
-                            )
-                        }
-                    )),
-                    _ => unreachable!("any other variant would have a different layout"),
+        Layout::Union(UnionLayout::Recursive(_)) => {
+            let size = layout.stack_size(env.ptr_bytes);
+            Ok(run_jit_function_dynamic_type!(
+                lib,
+                main_fn_name,
+                size as usize,
+                |ptr: *const u8| {
+                    ptr_to_ast(env, ptr, layout, WhenRecursive::Loop(*layout), content)
                 }
-            }
-            _ => unreachable!("any other layout would have a different content"),
-        },
+            ))
+        }
         Layout::Union(UnionLayout::NullableWrapped { .. })
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
@@ -492,10 +455,19 @@ fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
     }
 }
 
+/// Represents the layout of `RecursivePointer`s in a tag union, when recursive
+/// tag unions are relevant.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WhenRecursive<'a> {
+    Unreachable,
+    Loop(Layout<'a>),
+}
+
 fn ptr_to_ast<'a>(
     env: &Env<'a, 'a>,
     ptr: *const u8,
     layout: &Layout<'a>,
+    when_recursive: WhenRecursive<'a>,
     content: &'a Content,
 ) -> Expr<'a> {
     macro_rules! helper {
@@ -576,6 +548,68 @@ fn ptr_to_ast<'a>(
                 );
             }
         },
+        Layout::RecursivePointer => {
+            match (content, when_recursive) {
+                (Content::RecursionVar {
+                    structure,
+                    opt_name: _,
+                }, WhenRecursive::Loop(union_layout)) => {
+                    let content = env.subs.get_content_without_compacting(*structure);
+                    ptr_to_ast(env, ptr, &union_layout, when_recursive, content)
+                }
+                other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
+            }
+        }
+        Layout::Union(UnionLayout::Recursive(union_layouts)) => match content {
+            Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
+                debug_assert_eq!(union_layouts.len(), tags.len());
+
+                let union_layout = UnionLayout::Recursive(union_layouts);
+                let (vars_of_tag, union_variant) =
+                    get_tags_vars_and_variant(env, tags, Some(*rec_var));
+
+                use roc_mono::layout::WrappedVariant::*;
+
+                match union_variant {
+                    UnionVariant::Wrapped(Recursive {
+                        sorted_tag_layouts: tags_and_layouts,
+                    }) => {
+                        let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.ptr_bytes);
+                        let (tag_id, ptr_to_data) = if tag_in_ptr {
+                            // TODO we should cast to a pointer the size of env.ptr_bytes
+                            let masked_ptr_to_data = unsafe { *(ptr as *const i64) };
+                            let (tag_id_bits, tag_id_mask) =
+                                tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
+                            let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
+
+                            // Clear the tag ID data from the pointer
+                            let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits)
+                                << tag_id_bits)
+                                as *const u8;
+                            (tag_id, ptr_to_data)
+                        } else {
+                            // TODO we should cast to a pointer the size of env.ptr_bytes
+                            let ptr_to_data = unsafe { *(ptr as *const i64) as *const u8 };
+                            let tag_id =
+                                tag_id_from_data(union_layout, ptr_to_data, env.ptr_bytes);
+                            (tag_id, ptr_to_data)
+                        };
+
+                        let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
+                        expr_of_tag(
+                            env,
+                            ptr_to_data,
+                            tag_name,
+                            arg_layouts,
+                            &vars_of_tag[tag_name],
+                            when_recursive,
+                        )
+                    }
+                    _ => unreachable!("any other variant would have a different layout"),
+                }
+            }
+            _ => unreachable!("any other layout would have a different content"),
+        }
         other => {
             todo!(
                 "TODO add support for rendering pointer to {:?} in the REPL",
@@ -618,7 +652,13 @@ fn list_to_ast<'a>(
         let offset_bytes = index * elem_size;
         let elem_ptr = unsafe { ptr.add(offset_bytes) };
         let loc_expr = &*arena.alloc(Loc {
-            value: ptr_to_ast(env, elem_ptr, elem_layout, elem_content),
+            value: ptr_to_ast(
+                env,
+                elem_ptr,
+                elem_layout,
+                WhenRecursive::Unreachable,
+                elem_content,
+            ),
             region: Region::zero(),
         });
 
@@ -644,11 +684,11 @@ fn single_tag_union_to_ast<'a>(
 
     let output = if field_layouts.len() == payload_vars.len() {
         let it = payload_vars.iter().copied().zip(field_layouts);
-        sequence_of_expr(env, ptr as *const u8, it).into_bump_slice()
+        sequence_of_expr(env, ptr as *const u8, it, WhenRecursive::Unreachable).into_bump_slice()
     } else if field_layouts.is_empty() && !payload_vars.is_empty() {
         // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
         let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
-        sequence_of_expr(env, ptr as *const u8, it).into_bump_slice()
+        sequence_of_expr(env, ptr as *const u8, it, WhenRecursive::Unreachable).into_bump_slice()
     } else {
         unreachable!()
     };
@@ -660,6 +700,7 @@ fn sequence_of_expr<'a, I>(
     env: &Env<'a, 'a>,
     ptr: *const u8,
     sequence: I,
+    when_recursive: WhenRecursive<'a>,
 ) -> Vec<'a, &'a Loc<Expr<'a>>>
 where
     I: Iterator<Item = (Variable, &'a Layout<'a>)>,
@@ -674,7 +715,7 @@ where
 
     for (var, layout) in sequence {
         let content = subs.get_content_without_compacting(var);
-        let expr = ptr_to_ast(env, field_ptr, layout, content);
+        let expr = ptr_to_ast(env, field_ptr, layout, when_recursive, content);
         let loc_expr = Loc::at_zero(expr);
 
         output.push(&*arena.alloc(loc_expr));
@@ -708,7 +749,13 @@ fn struct_to_ast<'a>(
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
 
         let loc_expr = &*arena.alloc(Loc {
-            value: ptr_to_ast(env, ptr, &Layout::Struct(field_layouts), inner_content),
+            value: ptr_to_ast(
+                env,
+                ptr,
+                &Layout::Struct(field_layouts),
+                WhenRecursive::Unreachable,
+                inner_content,
+            ),
             region: Region::zero(),
         });
 
@@ -735,7 +782,13 @@ fn struct_to_ast<'a>(
 
             let content = subs.get_content_without_compacting(var);
             let loc_expr = &*arena.alloc(Loc {
-                value: ptr_to_ast(env, field_ptr, field_layout, content),
+                value: ptr_to_ast(
+                    env,
+                    field_ptr,
+                    field_layout,
+                    WhenRecursive::Unreachable,
+                    content,
+                ),
                 region: Region::zero(),
             });
 

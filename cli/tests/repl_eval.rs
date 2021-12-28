@@ -674,6 +674,37 @@ mod repl_eval {
         )
     }
 
+    #[test]
+    fn recursive_tag_union_recursive_variant() {
+        expect_success(
+            indoc!(
+                r#"
+                Expr : [ Sym Str, Add Expr Expr ]
+                s : Expr
+                s = Add (Add (Sym "one") (Sym "two")) (Sym "four")
+                s
+                "#
+            ),
+            r#"Add (Add (Sym "one") (Sym "two")) (Sym "four") : Expr"#,
+        )
+    }
+
+    #[test]
+    fn large_recursive_tag_union_recursive_variant() {
+        expect_success(
+            // > 7 variants so that to force tag storage alongside the data
+            indoc!(
+                r#"
+                Item : [ A Str, B Str, C Str, D Str, E Str, F Str, G Str, H Str, I Str, J Str, K Item, L Item ]
+                s : Item
+                s = K (L (E "woo"))
+                s
+                "#
+            ),
+            r#"K (L (E "woo")) : Item"#,
+        )
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently
