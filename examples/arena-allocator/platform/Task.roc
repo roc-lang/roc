@@ -1,5 +1,5 @@
 interface Task
-    exposes [ Task, succeed, fail, await, map, onFail, attempt, useArenaAlloc ]
+    exposes [ Task, succeed, fail, await, map, onFail, attempt, fromResult, useArenaAlloc ]
     imports [ fx.Effect ]
 
 
@@ -14,6 +14,15 @@ succeed = \val ->
 fail : err -> Task * err
 fail = \val ->
     Effect.always (Err val)
+
+fromResult : Result a e -> Task a e
+fromResult = \result ->
+    when result is
+        Ok a ->
+            succeed a
+
+        Err e ->
+            fail e
 
 attempt : Task a b, (Result a b -> Task c d) -> Task c d
 attempt = \effect, transform ->
@@ -45,8 +54,16 @@ map = \effect, transform ->
 
 useArenaAlloc : Task a err -> Task a err
 useArenaAlloc = \task ->
-    {} <- await (Effect.after Effect.arenaStart succeed)
-    result <- attempt task
-    {} <- await (Effect.after Effect.arenaEnd succeed)
+    {} <- Task.await arenaStart
+    result <- Task.attempt task
+    {} <- Task.await arenaEnd
 
-    Effect.always result
+    Task.fromResult result
+
+arenaStart : Task {} *
+arenaStart =
+    Effect.after Effect.arenaStart Task.succeed
+
+arenaEnd : Task {} *
+arenaEnd =
+    Effect.after Effect.arenaEnd Task.succeed

@@ -9,8 +9,8 @@ app "arena-alloc"
 main : Task {} *
 main =
     Task.useArenaAlloc (
-        {} <- Terminal.write "Input: "
-        input <- Terminal.readLine
+        {} <- await (Terminal.write "Input: ")
+        input <- await Terminal.readLine
 
         result = getResult input
 
@@ -21,7 +21,7 @@ getResult : Str -> Str
 getResult = \str ->
     str
         |> Str.toUtf8
-        |> List.walk { start : "", step: addByte }
+        |> List.walk "" addByte
 
 addByte : Str, U8 -> Str
 addByte = \str, byte ->
