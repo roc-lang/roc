@@ -705,6 +705,21 @@ mod repl_eval {
         )
     }
 
+    #[test]
+    fn recursive_tag_union_into_flat_tag_union() {
+        expect_success(
+            indoc!(
+                r#"
+                Item : [ One [ A Str, B Str ], Deep Item ]
+                i : Item
+                i = Deep (One (A "woo"))
+                i
+                "#
+            ),
+            r#"Deep (One (A "woo")) : Item"#,
+        )
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently
