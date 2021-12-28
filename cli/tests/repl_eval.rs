@@ -178,6 +178,51 @@ mod repl_eval {
     }
 
     #[test]
+    fn newtype_of_big_data() {
+        expect_success(
+            indoc!(
+                r#"
+                Either a b : [ Left a, Right b ]
+                lefty : Either Str Str
+                lefty = Left "loosey"
+                A lefty
+                "#
+            ),
+            r#"A (Left "loosey") : [ A (Either Str Str) ]*"#,
+        )
+    }
+
+    #[test]
+    fn newtype_nested() {
+        expect_success(
+            indoc!(
+                r#"
+                Either a b : [ Left a, Right b ]
+                lefty : Either Str Str
+                lefty = Left "loosey"
+                A (B (C lefty))
+                "#
+            ),
+            r#"A (B (C (Left "loosey"))) : [ A [ B [ C (Either Str Str) ]* ]* ]*"#,
+        )
+    }
+
+    #[test]
+    fn newtype_of_big_of_newtype() {
+        expect_success(
+            indoc!(
+                r#"
+                Big a : [ Big a [ Wrapper [ Newtype a ] ] ]
+                big : Big Str
+                big = Big "s" (Wrapper (Newtype "t"))
+                A big
+                "#
+            ),
+            r#"A (Big "s" (Wrapper (Newtype "t"))) : [ A (Big Str) ]*"#,
+        )
+    }
+
+    #[test]
     fn tag_with_arguments() {
         expect_success("True 1", "True 1 : [ True (Num *) ]*");
 

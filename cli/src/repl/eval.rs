@@ -38,10 +38,10 @@ pub unsafe fn jit_to_ast<'a>(
     lib: Library,
     main_fn_name: &str,
     layout: ProcLayout<'a>,
-    content: &Content,
-    interns: &Interns,
+    content: &'a Content,
+    interns: &'a Interns,
     home: ModuleId,
-    subs: &Subs,
+    subs: &'a Subs,
     ptr_bytes: u32,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let env = Env {
@@ -64,14 +64,64 @@ pub unsafe fn jit_to_ast<'a>(
     }
 }
 
-fn jit_to_ast_help<'a>(
+// Unrolls tag unions that are newtypes (i.e. are singleton variants with one type argument).
+// This is sometimes important in synchronizing `Content`s with `Layout`s, since `Layout`s will
+// always unwrap newtypes and use the content of the underlying type.
+fn unroll_newtypes<'a>(
+    env: &Env<'a, 'a>,
+    mut content: &'a Content,
+) -> (Vec<'a, &'a TagName>, &'a Content) {
+    let mut newtype_tags = Vec::with_capacity_in(1, env.arena);
+    loop {
+        match content {
+            Content::Structure(FlatType::TagUnion(tags, _))
+                if tags.is_newtype_wrapper(env.subs) =>
+            {
+                let (tag_name, vars): (&TagName, &[Variable]) = tags
+                    .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
+                    .next()
+                    .unwrap();
+                newtype_tags.push(tag_name);
+                let var = vars[0];
+                content = env.subs.get_content_without_compacting(var);
+            }
+            _ => return (newtype_tags, content),
+        }
+    }
+}
+
+fn apply_newtypes<'a>(
     env: &Env<'a, '_>,
+    newtype_tags: Vec<'a, &'a TagName>,
+    mut expr: Expr<'a>,
+) -> Expr<'a> {
+    for tag_name in newtype_tags.into_iter().rev() {
+        let tag_expr = tag_name_to_expr(env, tag_name);
+        let loc_tag_expr = &*env.arena.alloc(Loc::at_zero(tag_expr));
+        let loc_arg_expr = &*env.arena.alloc(Loc::at_zero(expr));
+        let loc_arg_exprs = env.arena.alloc_slice_copy(&[loc_arg_expr]);
+        expr = Expr::Apply(loc_tag_expr, loc_arg_exprs, CalledVia::Space);
+    }
+    expr
+}
+
+fn unroll_aliases<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
+    while let Content::Alias(_, _, real) = content {
+        content = env.subs.get_content_without_compacting(*real);
+    }
+    content
+}
+
+fn jit_to_ast_help<'a>(
+    env: &Env<'a, 'a>,
     lib: Library,
     main_fn_name: &str,
     layout: &Layout<'a>,
-    content: &Content,
+    content: &'a Content,
 ) -> Result<Expr<'a>, ToAstProblem> {
-    match layout {
+    let (newtype_tags, content) = unroll_newtypes(env, content);
+    let content = unroll_aliases(env, content);
+    let result = match layout {
         Layout::Builtin(Builtin::Bool) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
             bool_to_ast(env, num, content)
         })),
@@ -346,7 +396,8 @@ fn jit_to_ast_help<'a>(
             &lambda_set.runtime_representation(),
             content,
         ),
-    }
+    };
+    result.map(|e| apply_newtypes(env, newtype_tags, e))
 }
 
 fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
@@ -364,10 +415,10 @@ fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
 }
 
 fn ptr_to_ast<'a>(
-    env: &Env<'a, '_>,
+    env: &Env<'a, 'a>,
     ptr: *const u8,
     layout: &Layout<'a>,
-    content: &Content,
+    content: &'a Content,
 ) -> Expr<'a> {
     macro_rules! helper {
         ($ty:ty) => {{
@@ -377,7 +428,8 @@ fn ptr_to_ast<'a>(
         }};
     }
 
-    match layout {
+    let (newtype_tags, content) = unroll_newtypes(env, content);
+    let expr = match layout {
         Layout::Builtin(Builtin::Bool) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
@@ -452,11 +504,12 @@ fn ptr_to_ast<'a>(
                 other
             );
         }
-    }
+    };
+    apply_newtypes(env, newtype_tags, expr)
 }
 
 fn list_to_ast<'a>(
-    env: &Env<'a, '_>,
+    env: &Env<'a, 'a>,
     ptr: *const u8,
     len: usize,
     elem_layout: &Layout<'a>,
@@ -500,7 +553,7 @@ fn list_to_ast<'a>(
 }
 
 fn single_tag_union_to_ast<'a>(
-    env: &Env<'a, '_>,
+    env: &Env<'a, 'a>,
     ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
     tag_name: &TagName,
@@ -526,7 +579,7 @@ fn single_tag_union_to_ast<'a>(
 }
 
 fn sequence_of_expr<'a, I>(
-    env: &Env<'a, '_>,
+    env: &Env<'a, 'a>,
     ptr: *const u8,
     sequence: I,
 ) -> Vec<'a, &'a Loc<Expr<'a>>>
@@ -556,7 +609,7 @@ where
 }
 
 fn struct_to_ast<'a>(
-    env: &Env<'a, '_>,
+    env: &Env<'a, 'a>,
     ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
     record_fields: RecordFields,
