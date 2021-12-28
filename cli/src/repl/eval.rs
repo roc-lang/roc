@@ -332,7 +332,8 @@ fn jit_to_ast_help<'a>(
             ))
         }
         Layout::Union(UnionLayout::Recursive(_))
-        | Layout::Union(UnionLayout::NonNullableUnwrapped(_)) => {
+        | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
+        | Layout::Union(UnionLayout::NullableUnwrapped { .. }) => {
             let size = layout.stack_size(env.ptr_bytes);
             Ok(run_jit_function_dynamic_type!(
                 lib,
@@ -343,9 +344,7 @@ fn jit_to_ast_help<'a>(
                 }
             ))
         }
-        Layout::Union(UnionLayout::NullableWrapped { .. })
-        | Layout::Union(UnionLayout::NullableUnwrapped { .. })
-        | Layout::RecursivePointer => {
+        Layout::Union(UnionLayout::NullableWrapped { .. }) | Layout::RecursivePointer => {
             todo!("add support for rendering recursive tag unions in the REPL")
         }
         Layout::LambdaSet(lambda_set) => jit_to_ast_help(
@@ -590,6 +589,40 @@ fn ptr_to_ast<'a>(
                 &vars_of_tag[&tag_name],
                 when_recursive,
             )
+        }
+        Layout::Union(UnionLayout::NullableUnwrapped { .. }) => {
+            let (rec_var, tags) = match unroll_recursion_var(env, content) {
+                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
+                other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
+            };
+            debug_assert!(tags.len() <= 2);
+
+            let (vars_of_tag, union_variant) = get_tags_vars_and_variant(env, tags, Some(*rec_var));
+
+            let (nullable_name, other_name, other_arg_layouts) = match union_variant {
+                UnionVariant::Wrapped(WrappedVariant::NullableUnwrapped {
+                    nullable_id: _,
+                    nullable_name,
+                    other_name,
+                    other_fields,
+                }) => (nullable_name, other_name, other_fields),
+                _ => unreachable!("any other variant would have a different layout"),
+            };
+
+            // TODO we should cast to a pointer the size of env.ptr_bytes
+            let ptr_to_data = unsafe { *(ptr as *const i64) as *const u8 };
+            if ptr_to_data.is_null() {
+                tag_name_to_expr(env, &nullable_name)
+            } else {
+                expr_of_tag(
+                    env,
+                    ptr_to_data,
+                    &other_name,
+                    other_arg_layouts,
+                    &vars_of_tag[&other_name],
+                    when_recursive,
+                )
+            }
         }
         other => {
             todo!(

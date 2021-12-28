@@ -739,6 +739,25 @@ mod repl_eval {
         )
     }
 
+    #[test]
+    fn nullable_unwrapped_tag_union() {
+        expect_success(
+            indoc!(
+                r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                c1 : LinkedList Str
+                c1 = Cons "Red" Nil
+                c2 : LinkedList Str
+                c2 = Cons "Yellow" c1
+                c3 : LinkedList Str
+                c3 = Cons "Green" c2
+                c3
+                "#
+            ),
+            r#"Cons "Green" (Cons "Yellow" (Cons "Red" Nil)) : LinkedList Str"#,
+        )
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently
