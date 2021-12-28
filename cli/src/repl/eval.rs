@@ -182,6 +182,33 @@ fn tag_id_from_data(union_layout: UnionLayout, data_ptr: *const u8, ptr_bytes: u
     }
 }
 
+/// Gets the tag ID of a union variant from its recursive pointer (that is, the pointer to the
+/// pointer to the data of the union variant). Returns
+///   - the tag ID
+///   - the pointer to the data of the union variant, unmasked if the pointer held the tag ID
+fn tag_id_from_recursive_ptr(
+    union_layout: UnionLayout,
+    rec_ptr: *const u8,
+    ptr_bytes: u32,
+) -> (i64, *const u8) {
+    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(ptr_bytes);
+    if tag_in_ptr {
+        // TODO we should cast to a pointer the size of env.ptr_bytes
+        let masked_ptr_to_data = unsafe { *(rec_ptr as *const i64) };
+        let (tag_id_bits, tag_id_mask) = tag_pointer_tag_id_bits_and_mask(ptr_bytes);
+        let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
+
+        // Clear the tag ID data from the pointer
+        let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits) << tag_id_bits) as *const u8;
+        (tag_id, ptr_to_data)
+    } else {
+        // TODO we should cast to a pointer the size of env.ptr_bytes
+        let ptr_to_data = unsafe { *(rec_ptr as *const i64) as *const u8 };
+        let tag_id = tag_id_from_data(union_layout, ptr_to_data, ptr_bytes);
+        (tag_id, ptr_to_data)
+    }
+}
+
 fn jit_to_ast_help<'a>(
     env: &Env<'a, 'a>,
     lib: Library,
@@ -515,14 +542,13 @@ fn ptr_to_ast<'a>(
                 WhenRecursive::Unreachable,
             )
         }
-        Layout::Union(UnionLayout::Recursive(union_layouts)) => {
+        Layout::Union(union_layout @ UnionLayout::Recursive(union_layouts)) => {
             let (rec_var, tags) = match content {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 _ => unreachable!("any other content would have a different layout"),
             };
             debug_assert_eq!(union_layouts.len(), tags.len());
 
-            let union_layout = UnionLayout::Recursive(union_layouts);
             let (vars_of_tag, union_variant) =
                 get_tags_vars_and_variant(env, tags, Some(*rec_var));
 
@@ -533,26 +559,7 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.ptr_bytes);
-            let (tag_id, ptr_to_data) = if tag_in_ptr {
-                // TODO we should cast to a pointer the size of env.ptr_bytes
-                let masked_ptr_to_data = unsafe { *(ptr as *const i64) };
-                let (tag_id_bits, tag_id_mask) =
-                    tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
-                let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
-
-                // Clear the tag ID data from the pointer
-                let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits)
-                    << tag_id_bits)
-                    as *const u8;
-                (tag_id, ptr_to_data)
-            } else {
-                // TODO we should cast to a pointer the size of env.ptr_bytes
-                let ptr_to_data = unsafe { *(ptr as *const i64) as *const u8 };
-                let tag_id =
-                    tag_id_from_data(union_layout, ptr_to_data, env.ptr_bytes);
-                (tag_id, ptr_to_data)
-            };
+            let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.ptr_bytes);
 
             let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
             expr_of_tag(
@@ -647,26 +654,7 @@ fn ptr_to_ast<'a>(
             if ptr_to_data.is_null() {
                 tag_name_to_expr(env, &nullable_name)
             } else {
-                let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.ptr_bytes);
-                let (tag_id, ptr_to_data) = if tag_in_ptr {
-                    // TODO we should cast to a pointer the size of env.ptr_bytes
-                    let masked_ptr_to_data = unsafe { *(ptr as *const i64) };
-                    let (tag_id_bits, tag_id_mask) =
-                        tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
-                    let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
-
-                    // Clear the tag ID data from the pointer
-                    let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits)
-                        << tag_id_bits)
-                        as *const u8;
-                    (tag_id, ptr_to_data)
-                } else {
-                    // TODO we should cast to a pointer the size of env.ptr_bytes
-                    let ptr_to_data = unsafe { *(ptr as *const i64) as *const u8 };
-                    let tag_id =
-                        tag_id_from_data(*union_layout, ptr_to_data, env.ptr_bytes);
-                    (tag_id, ptr_to_data)
-                };
+                let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.ptr_bytes);
 
                 let tag_id = if tag_id > nullable_id.into() { tag_id - 1 } else { tag_id };
 
