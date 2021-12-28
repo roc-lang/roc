@@ -1,10 +1,6 @@
 const std = @import("std");
 const str = @import("str");
 const RocStr = str.RocStr;
-const testing = std.testing;
-const expectEqual = testing.expectEqual;
-const expect = testing.expect;
-const maxInt = std.math.maxInt;
 
 comptime {
     // This is a workaround for https://github.com/ziglang/zig/issues/8218
@@ -23,31 +19,38 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed([*]u8) void; //main
-//extern fn roc__mainForHost_1_exposed_generic([*]u8) void;
-extern fn roc__mainForHost_size() i64; //main size
-extern fn roc__mainForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void; //call fx
-extern fn roc__mainForHost_1_Fx_size() i64; //size fx
-extern fn roc__mainForHost_1_Fx_result_size() i64; //size fx result
+usingnamespace struct {
+    extern fn roc__mainForHost_1_exposed(output: [*]u8) void;
+    pub const roc_main = roc__mainForHost_1_exposed;
+
+    extern fn roc__mainForHost_size() i64;
+    pub const roc_main_size = roc__mainForHost_size;
+
+    extern fn roc__mainForHost_1_Fx_caller(flags: *const u8, closure_data: [*]u8, output: [*]u8) void;
+    pub const call_fx = roc__mainForHost_1_Fx_caller;
+
+    extern fn roc__mainForHost_1_Fx_size() i64;
+    pub const fx_size = roc__mainForHost_1_Fx_size;
+
+    extern fn roc__mainForHost_1_Fx_result_size() i64;
+    pub const fx_result_size = roc__mainForHost_1_Fx_result_size;
+};
 
 const Align = 2 * @alignOf(usize);
-extern fn malloc(size: usize) callconv(.C) ?*align(Align) c_void;
-extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*c_void;
-extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 const DEBUG: bool = true;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
+    var ptr = @alignCast(Align, std.c.malloc(size));
+
     if (DEBUG) {
-        var ptr = malloc(size);
         const stdout = std.io.getStdOut().writer();
         stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
-        return ptr;
-    } else {
-        return malloc(size);
     }
+
+    return ptr;
 }
 
 export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
@@ -56,7 +59,7 @@ export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignmen
         stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
     }
 
-    return realloc(@alignCast(Align, @ptrCast([*]u8, c_ptr)), new_size);
+    return std.c.realloc(@alignCast(Align, @ptrCast([*]u8, c_ptr)), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
@@ -65,7 +68,7 @@ export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
         stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
     }
 
-    free(@alignCast(Align, @ptrCast([*]u8, c_ptr)));
+    std.c.free(@alignCast(Align, @ptrCast([*]u8, c_ptr)));
 }
 
 export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
@@ -90,7 +93,7 @@ const Unit = extern struct {};
 pub export fn main() callconv(.C) u8 {
     const allocator = std.heap.page_allocator;
 
-    const size = @intCast(usize, roc__mainForHost_size());
+    const size = @intCast(usize, roc_main_size());
     const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
@@ -98,7 +101,7 @@ pub export fn main() callconv(.C) u8 {
         allocator.free(raw_output);
     }
 
-    roc__mainForHost_1_exposed(output);
+    roc_main(output);
 
     const closure_data_pointer = @ptrCast([*]u8, output);
 
@@ -110,17 +113,15 @@ pub export fn main() callconv(.C) u8 {
 fn call_the_closure(closure_data_pointer: [*]u8) void {
     const allocator = std.heap.page_allocator;
 
-    const size = roc__mainForHost_1_Fx_result_size();
-    const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
+    const size = @intCast(usize, fx_result_size());
+    const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), size, .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
-    defer {
-        allocator.free(raw_output);
-    }
+    defer allocator.free(raw_output);
 
     const flags: u8 = 0;
 
-    roc__mainForHost_1_Fx_caller(&flags, closure_data_pointer, output);
+    call_fx(&flags, closure_data_pointer, output);
 
     // The closure returns result, nothing interesting to do with it
     return;
@@ -135,20 +136,16 @@ export fn roc_fx_stdoutWrite(rocPath: str.RocStr) callconv(.C) void {
 }
 
 pub export fn roc_fx_stdinRead() str.RocStr {
-    if (roc_fx_stdinRead_help()) |value| {
-        return value;
-    } else |err| {
-        return str.RocStr.empty();
-    }
+    return stdin_read_help() catch RocStr.empty();
 }
 
-fn roc_fx_stdinRead_help() !RocStr {
+fn stdin_read_help() !RocStr {
     const stdin = std.io.getStdIn().reader();
     var buf: [128]u8 = undefined;
 
     const line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
 
-    return str.RocStr.init(@ptrCast([*]const u8, line), line.len);
+    return RocStr.init(@ptrCast([*]const u8, line), line.len);
 }
 
 export fn roc_fx_arenaStart() callconv(.C) void {
