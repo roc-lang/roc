@@ -69,7 +69,7 @@ fn check_type_alias(
 
             let name_start = annot.region.start();
             let name_region =
-                Region::between(name_start, name_start.bump_column(tag_name.len() as u16));
+                Region::between(name_start, name_start.bump_column(tag_name.len() as u32));
 
             let header = AliasHeader {
                 name: Loc::at(name_region, tag_name),
@@ -85,7 +85,7 @@ fn check_type_alias(
     }
 }
 
-fn parse_type_alias_after_as<'a>(min_indent: u16) -> impl Parser<'a, AliasHeader<'a>, EType<'a>> {
+fn parse_type_alias_after_as<'a>(min_indent: u32) -> impl Parser<'a, AliasHeader<'a>, EType<'a>> {
     move |arena, state| {
         space0_before_e(
             term(min_indent),
