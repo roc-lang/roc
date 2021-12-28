@@ -9,7 +9,9 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
-use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant};
+use roc_mono::layout::{
+    union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant, WrappedVariant,
+};
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
@@ -473,94 +475,87 @@ fn ptr_to_ast<'a>(
         Layout::Union(UnionLayout::NonRecursive(union_layouts)) => {
             let union_layout = UnionLayout::NonRecursive(union_layouts);
 
-            match content {
-                Content::Structure(FlatType::TagUnion(tags, _)) => {
-                    debug_assert_eq!(union_layouts.len(), tags.len());
-
-                    let (vars_of_tag, union_variant) = get_tags_vars_and_variant(env, tags, None);
-
-                    use roc_mono::layout::WrappedVariant::*;
-                    match union_variant {
-                        UnionVariant::Wrapped(variant) => {
-                            match variant {
-                                NonRecursive {
-                                    sorted_tag_layouts: tags_and_layouts,
-                                } => {
-                                    // Because this is a `NonRecursive`, the tag ID is definitely after the data.
-                                    let tag_id =
-                                        tag_id_from_data(union_layout, ptr, env.ptr_bytes);
-
-                                    // use the tag ID as an index, to get its name and layout of any arguments
-                                    let (tag_name, arg_layouts) =
-                                        &tags_and_layouts[tag_id as usize];
-
-                                    expr_of_tag(
-                                        env,
-                                        ptr,
-                                        tag_name,
-                                        arg_layouts,
-                                        &vars_of_tag[tag_name],
-                                        WhenRecursive::Unreachable,
-                                    )
-                                }
-                                other => unreachable!("This layout tag union layout is nonrecursive but the variant isn't; found variant {:?}", other),
-                            }
-                        }
-                        _ => unreachable!("any other variant would have a different layout"),
-                    }
-                }
+            let tags = match content {
+                Content::Structure(FlatType::TagUnion(tags, _)) => tags,
                 other => unreachable!("Weird content for nonrecursive Union layout: {:?}", other),
-            }
+            };
+
+            debug_assert_eq!(union_layouts.len(), tags.len());
+
+            let (vars_of_tag, union_variant) = get_tags_vars_and_variant(env, tags, None);
+
+            let tags_and_layouts = match union_variant {
+                UnionVariant::Wrapped(WrappedVariant::NonRecursive {
+                    sorted_tag_layouts
+                }) => sorted_tag_layouts,
+                other => unreachable!("This layout tag union layout is nonrecursive but the variant isn't; found variant {:?}", other),
+            };
+
+            // Because this is a `NonRecursive`, the tag ID is definitely after the data.
+            let tag_id =
+                tag_id_from_data(union_layout, ptr, env.ptr_bytes);
+
+            // use the tag ID as an index, to get its name and layout of any arguments
+            let (tag_name, arg_layouts) =
+                &tags_and_layouts[tag_id as usize];
+
+            expr_of_tag(
+                env,
+                ptr,
+                tag_name,
+                arg_layouts,
+                &vars_of_tag[tag_name],
+                WhenRecursive::Unreachable,
+            )
         }
-        Layout::Union(UnionLayout::Recursive(union_layouts)) => match content {
-            Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
-                debug_assert_eq!(union_layouts.len(), tags.len());
+        Layout::Union(UnionLayout::Recursive(union_layouts)) => {
+            let (rec_var, tags) = match content {
+                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
+                _ => unreachable!("any other content would have a different layout"),
+            };
+            debug_assert_eq!(union_layouts.len(), tags.len());
 
-                let union_layout = UnionLayout::Recursive(union_layouts);
-                let (vars_of_tag, union_variant) =
-                    get_tags_vars_and_variant(env, tags, Some(*rec_var));
+            let union_layout = UnionLayout::Recursive(union_layouts);
+            let (vars_of_tag, union_variant) =
+                get_tags_vars_and_variant(env, tags, Some(*rec_var));
 
-                use roc_mono::layout::WrappedVariant::*;
+            let tags_and_layouts = match union_variant {
+                UnionVariant::Wrapped(WrappedVariant::Recursive {
+                    sorted_tag_layouts
+                }) => sorted_tag_layouts,
+                _ => unreachable!("any other variant would have a different layout"),
+            };
 
-                match union_variant {
-                    UnionVariant::Wrapped(Recursive {
-                        sorted_tag_layouts: tags_and_layouts,
-                    }) => {
-                        let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.ptr_bytes);
-                        let (tag_id, ptr_to_data) = if tag_in_ptr {
-                            // TODO we should cast to a pointer the size of env.ptr_bytes
-                            let masked_ptr_to_data = unsafe { *(ptr as *const i64) };
-                            let (tag_id_bits, tag_id_mask) =
-                                tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
-                            let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
+            let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.ptr_bytes);
+            let (tag_id, ptr_to_data) = if tag_in_ptr {
+                // TODO we should cast to a pointer the size of env.ptr_bytes
+                let masked_ptr_to_data = unsafe { *(ptr as *const i64) };
+                let (tag_id_bits, tag_id_mask) =
+                    tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
+                let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
 
-                            // Clear the tag ID data from the pointer
-                            let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits)
-                                << tag_id_bits)
-                                as *const u8;
-                            (tag_id, ptr_to_data)
-                        } else {
-                            // TODO we should cast to a pointer the size of env.ptr_bytes
-                            let ptr_to_data = unsafe { *(ptr as *const i64) as *const u8 };
-                            let tag_id =
-                                tag_id_from_data(union_layout, ptr_to_data, env.ptr_bytes);
-                            (tag_id, ptr_to_data)
-                        };
+                // Clear the tag ID data from the pointer
+                let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits)
+                    << tag_id_bits)
+                    as *const u8;
+                (tag_id, ptr_to_data)
+            } else {
+                // TODO we should cast to a pointer the size of env.ptr_bytes
+                let ptr_to_data = unsafe { *(ptr as *const i64) as *const u8 };
+                let tag_id =
+                    tag_id_from_data(union_layout, ptr_to_data, env.ptr_bytes);
+                (tag_id, ptr_to_data)
+            };
 
-                        let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
-                        expr_of_tag(
-                            env,
-                            ptr_to_data,
-                            tag_name,
-                            arg_layouts,
-                            &vars_of_tag[tag_name],
-                            when_recursive,
-                        )
-                    }
-                    _ => unreachable!("any other variant would have a different layout"),
-                }
-            }
-            _ => unreachable!("any other layout would have a different content"),
+            let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
+            expr_of_tag(
+                env,
+                ptr_to_data,
+                tag_name,
+                arg_layouts,
+                &vars_of_tag[tag_name],
+                when_recursive,
+            )
         }
         other => {
             todo!(
