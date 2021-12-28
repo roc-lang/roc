@@ -758,6 +758,53 @@ mod repl_eval {
         )
     }
 
+    #[test]
+    fn nullable_wrapped_tag_union() {
+        expect_success(
+            indoc!(
+                r#"
+                Container a : [ Empty, Whole a, Halved (Container a) (Container a) ]
+
+                meats : Container Str
+                meats = Halved (Whole "Brisket") (Whole "Ribs")
+
+                sides : Container Str
+                sides = Halved (Whole "Coleslaw") Empty
+
+                bbqPlate : Container Str
+                bbqPlate = Halved meats sides
+
+                bbqPlate
+                "#
+            ),
+            r#"Halved (Halved (Whole "Brisket") (Whole "Ribs")) (Halved (Whole "Coleslaw") Empty) : Container Str"#,
+        )
+    }
+
+    #[test]
+    fn large_nullable_wrapped_tag_union() {
+        // > 7 non-empty variants so that to force tag storage alongside the data
+        expect_success(
+            indoc!(
+                r#"
+                Cont a : [ Empty, S1 a, S2 a, S3 a, S4 a, S5 a, S6 a, S7 a, Tup (Cont a) (Cont a) ]
+
+                fst : Cont Str
+                fst = Tup (S1 "S1") (S2 "S2")
+
+                snd : Cont Str
+                snd = Tup (S5 "S5") Empty
+
+                tup : Cont Str
+                tup = Tup fst snd
+
+                tup
+                "#
+            ),
+            r#"Tup (Tup (S1 "S1") (S2 "S2")) (Tup (S5 "S5") Empty) : Cont Str"#,
+        )
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently
