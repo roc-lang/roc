@@ -1243,3 +1243,22 @@ fn tag_must_be_its_own_type() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn recursive_tag_union_into_flat_tag_union() {
+    // Comprehensive test for correctness in cli/tests/repl_eval
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Item : [ Shallow [ L Str, R Str ], Deep Item ]
+            i : Item
+            i = Deep (Shallow (R "woo"))
+            i
+            "#
+        ),
+        0,
+        usize,
+        |_| 0
+    )
+}

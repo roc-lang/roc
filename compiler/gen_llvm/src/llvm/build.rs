@@ -1394,6 +1394,18 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
             );
 
             field_vals.push(ptr);
+        } else if matches!(
+            tag_field_layout,
+            Layout::Union(UnionLayout::NonRecursive(_))
+        ) {
+            debug_assert!(val.is_pointer_value());
+
+            // We store non-recursive unions without any indirection.
+            let reified = env
+                .builder
+                .build_load(val.into_pointer_value(), "load_non_recursive");
+
+            field_vals.push(reified);
         } else {
             // this check fails for recursive tag unions, but can be helpful while debugging
             // debug_assert_eq!(tag_field_layout, val_layout);
