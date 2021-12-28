@@ -588,8 +588,7 @@ fn append_body_definition<'a>(
             Some((
                 before_ann_spaces,
                 Def::Alias {
-                    name,
-                    vars,
+                    header,
                     ann: ann_type,
                 },
             )) => {
@@ -598,9 +597,9 @@ fn append_body_definition<'a>(
                 //   UserId x = UserId 42
                 // We optimistically parsed the first line as an alias; we now turn it
                 // into an annotation.
-                let loc_name = arena.alloc(name.map(|x| Pattern::GlobalTag(x)));
-                let ann_pattern = Pattern::Apply(loc_name, vars);
-                let vars_region = Region::across_all(vars.iter().map(|v| &v.region));
+                let loc_name = arena.alloc(header.name.map(|x| Pattern::GlobalTag(x)));
+                let ann_pattern = Pattern::Apply(loc_name, header.vars);
+                let vars_region = Region::across_all(header.vars.iter().map(|v| &v.region));
                 let region_ann_pattern = Region::span_across(&loc_name.region, &vars_region);
                 let loc_ann_pattern = Loc::at(region_ann_pattern, ann_pattern);
 
