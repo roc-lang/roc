@@ -584,6 +584,20 @@ mod repl_eval {
         );
     }
 
+    #[test]
+    fn multiline_input() {
+        expect_success(
+            indoc!(
+                r#"
+                a : Str
+                a = "123"
+                a
+                "#
+            ),
+            r#""123" : Str"#,
+        )
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently
