@@ -503,53 +503,13 @@ fn ptr_to_ast<'a>(
                                         WhenRecursive::Unreachable,
                                     )
                                 }
-                                Recursive {
-                                    sorted_tag_layouts: tags_and_layouts,
-                                } => {
-                                    // Because this is a `Wrapped`, the first 8 bytes encode the tag ID
-                                    let tag_id = unsafe { *(ptr as *const i64) };
-
-                                    // use the tag ID as an index, to get its name and layout of any arguments
-                                    let (tag_name, arg_layouts) =
-                                        &tags_and_layouts[tag_id as usize];
-
-                                    let tag_expr = tag_name_to_expr(env, tag_name);
-                                    let loc_tag_expr =
-                                        &*env.arena.alloc(Loc::at_zero(tag_expr));
-
-                                    let variables = &vars_of_tag[tag_name];
-
-                                    // because the arg_layouts include the tag ID, it is one longer
-                                    debug_assert_eq!(
-                                        arg_layouts.len() - 1,
-                                        variables.len()
-                                    );
-
-                                    // skip forward to the start of the first element, ignoring the tag id
-                                    let ptr = unsafe { ptr.offset(8) };
-
-                                    let it =
-                                        variables.iter().copied().zip(&arg_layouts[1..]);
-                                    let output = sequence_of_expr(
-                                        env,
-                                        ptr,
-                                        it,
-                                        WhenRecursive::Loop(Layout::Union(union_layout)),
-                                    );
-                                    let output = output.into_bump_slice();
-
-                                    Expr::Apply(loc_tag_expr, output, CalledVia::Space)
-                                }
-                                _ => todo!(),
+                                other => unreachable!("This layout tag union layout is nonrecursive but the variant isn't; found variant {:?}", other),
                             }
                         }
                         _ => unreachable!("any other variant would have a different layout"),
                     }
                 }
-                Content::Structure(FlatType::RecursiveTagUnion(_, _, _)) => {
-                    todo!("print recursive tag unions in the REPL")
-                }
-                other => unreachable!("Weird content for Union layout: {:?}", other),
+                other => unreachable!("Weird content for nonrecursive Union layout: {:?}", other),
             }
         }
         Layout::Union(UnionLayout::Recursive(union_layouts)) => match content {
