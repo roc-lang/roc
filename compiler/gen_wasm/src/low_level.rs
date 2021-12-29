@@ -1,6 +1,7 @@
 use roc_builtins::bitcode::{self, FloatWidth};
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::Symbol;
+use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_reporting::internal_error;
 
 use crate::layout::{StackMemoryFormat::*, WasmLayout};
@@ -20,6 +21,7 @@ pub fn dispatch_low_level<'a>(
     lowlevel: LowLevel,
     args: &[Symbol],
     ret_layout: &WasmLayout,
+    mono_layout: &Layout<'a>,
 ) -> LowlevelBuildResult {
     use LowlevelBuildResult::*;
 
@@ -46,14 +48,23 @@ pub fn dispatch_low_level<'a>(
             return NotImplemented;
         }
         StrCountGraphemes => return BuiltinCall(bitcode::STR_COUNT_GRAPEHEME_CLUSTERS),
-        StrToNum => match ret_layout {
-            WasmLayout::Primitive(_, _) => return NotImplemented,
-            WasmLayout::StackMemory { size, .. } => {
-                // how do I decided Float vs. Int vs. Dec
-                // how do I find out if it's signed or unsigned
-                return BuiltinCall(bitcode::STR_TO_INT);
+        StrToNum => {
+            if let Layout::Union(UnionLayout::NonRecursive(union_layout)) = mono_layout {
+                // match on the return layout to figure out which zig builtin we need
+                let intrinsic = match union_layout[1][0] {
+                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                    Layout::Builtin(Builtin::Float(float_width)) => {
+                        &bitcode::STR_TO_FLOAT[float_width]
+                    }
+                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                    rest => internal_error!("Unexpected builtin {:?} for StrToNum", rest),
+                };
+
+                return BuiltinCall(intrinsic);
+            } else {
+                internal_error!("Unexpected mono layout {:?} for StrToNum", mono_layout);
             }
-        }, // choose builtin based on storage size
+        } // choose builtin based on storage size
         StrFromInt => {
             // This does not get exposed in user space. We switched to NumToStr instead.
             // We can probably just leave this as NotImplemented. We may want remove this LowLevel.

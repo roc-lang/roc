@@ -597,6 +597,7 @@ impl<'a> WasmBackend<'a> {
                             arguments,
                             *sym,
                             wasm_layout,
+                            layout,
                             storage,
                         );
                     }
@@ -634,7 +635,7 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 CallType::LowLevel { op: lowlevel, .. } => {
-                    self.build_low_level(*lowlevel, arguments, *sym, wasm_layout, storage)
+                    self.build_low_level(*lowlevel, arguments, *sym, wasm_layout, layout, storage)
                 }
 
                 x => todo!("call type {:?}", x),
@@ -1069,14 +1070,20 @@ impl<'a> WasmBackend<'a> {
         arguments: &'a [Symbol],
         return_sym: Symbol,
         return_layout: WasmLayout,
+        mono_layout: &Layout<'a>,
         storage: &StoredValue,
     ) {
         use LowLevel::*;
 
         match lowlevel {
-            Eq | NotEq => {
-                self.build_eq_or_neq(lowlevel, arguments, return_sym, return_layout, storage)
-            }
+            Eq | NotEq => self.build_eq_or_neq(
+                lowlevel,
+                arguments,
+                return_sym,
+                return_layout,
+                mono_layout,
+                storage,
+            ),
             PtrCast => {
                 // Don't want Zig calling convention when casting pointers.
                 self.storage.load_symbols(&mut self.code_builder, arguments);
@@ -1102,6 +1109,7 @@ impl<'a> WasmBackend<'a> {
                     lowlevel,
                     arguments,
                     &return_layout,
+                    mono_layout,
                 );
 
                 // Handle the result
@@ -1125,6 +1133,7 @@ impl<'a> WasmBackend<'a> {
         arguments: &'a [Symbol],
         return_sym: Symbol,
         return_layout: WasmLayout,
+        mono_layout: &Layout<'a>,
         storage: &StoredValue,
     ) {
         let arg_layout = self.storage.symbol_layouts[&arguments[0]];
@@ -1137,7 +1146,7 @@ impl<'a> WasmBackend<'a> {
         match arg_layout {
             Layout::Builtin(
                 Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
-            ) => self.build_eq_or_neq_number(lowlevel, arguments, return_layout),
+            ) => self.build_eq_or_neq_number(lowlevel, arguments, return_layout, mono_layout),
 
             Layout::Builtin(Builtin::Str) => {
                 let (param_types, ret_type) = self.storage.load_symbols_for_call(
@@ -1192,6 +1201,7 @@ impl<'a> WasmBackend<'a> {
         lowlevel: LowLevel,
         arguments: &'a [Symbol],
         return_layout: WasmLayout,
+        mono_layout: &Layout<'a>,
     ) {
         use StoredValue::*;
         match self.storage.get(&arguments[0]).to_owned() {
@@ -1223,7 +1233,13 @@ impl<'a> WasmBackend<'a> {
                     ..
                 } = self.storage.get(&arguments[1]).to_owned()
                 {
-                    self.build_eq_num128(format, [location0, location1], arguments, return_layout);
+                    self.build_eq_num128(
+                        format,
+                        [location0, location1],
+                        arguments,
+                        return_layout,
+                        mono_layout,
+                    );
                     if matches!(lowlevel, LowLevel::NotEq) {
                         self.code_builder.i32_eqz();
                     }
@@ -1238,6 +1254,7 @@ impl<'a> WasmBackend<'a> {
         locations: [StackMemoryLocation; 2],
         arguments: &'a [Symbol],
         return_layout: WasmLayout,
+        mono_layout: &Layout<'a>,
     ) {
         match format {
             StackMemoryFormat::Decimal => {
@@ -1250,6 +1267,7 @@ impl<'a> WasmBackend<'a> {
                     LowLevel::NumIsFinite,
                     &first,
                     &return_layout,
+                    mono_layout,
                 );
                 dispatch_low_level(
                     &mut self.code_builder,
@@ -1257,6 +1275,7 @@ impl<'a> WasmBackend<'a> {
                     LowLevel::NumIsFinite,
                     &second,
                     &return_layout,
+                    mono_layout,
                 );
                 self.code_builder.i32_and();
 
