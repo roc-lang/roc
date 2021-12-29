@@ -5308,24 +5308,24 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            if let Layout::Struct(struct_layout) = layout {
-                // match on the return layout to figure out which zig builtin we need
-                let intrinsic = match struct_layout[0] {
-                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
-                    Layout::Builtin(Builtin::Float(float_width)) => {
-                        &bitcode::STR_TO_FLOAT[float_width]
-                    }
-                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
-                    _ => unreachable!(),
-                };
+            let number_layout = match layout {
+                Layout::Union(UnionLayout::NonRecursive(tags)) => tags[1][0],
+                Layout::Struct(fields) => fields[0], // TODO: why is it sometimes a struct?
+                _ => unreachable!(),
+            };
 
-                let string =
-                    complex_bitcast(env.builder, string, env.str_list_c_abi().into(), "to_utf8");
+            // match on the return layout to figure out which zig builtin we need
+            let intrinsic = match number_layout {
+                Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                Layout::Builtin(Builtin::Float(float_width)) => &bitcode::STR_TO_FLOAT[float_width],
+                Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                _ => unreachable!(),
+            };
 
-                call_bitcode_fn(env, &[string], intrinsic)
-            } else {
-                unreachable!()
-            }
+            let string =
+                complex_bitcast(env.builder, string, env.str_list_c_abi().into(), "to_utf8");
+
+            call_bitcode_fn(env, &[string], intrinsic)
         }
         StrFromInt => {
             // Str.fromInt : Int -> Str
