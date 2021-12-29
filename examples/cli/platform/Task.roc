@@ -59,3 +59,16 @@ map = \effect, transform ->
 
                 Err err ->
                     Task.fail err
+
+
+mapFail : Task ok a, (a -> b) -> Task ok b
+mapFail = \effect, transform ->
+    Effect.after
+        effect
+        \result ->
+            when result is
+                Ok a ->
+                    Task.succeed a
+
+                Err err ->
+                    Task.fail (transform err)

@@ -4,12 +4,11 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use libc;
-use roc_std::{RocStr, RocList};
+use roc_std::{RocStr, RocList, RocResult};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::io::{self, Read, BufReader};
 use std::fs::File;
-use std::mem::ManuallyDrop;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
@@ -128,21 +127,38 @@ pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) {
     println!("{}", string);
 }
 
+#[repr(C)]
+struct ReadErr {
+    path: RocStr,
+    // errno: i32, // needed once OpenErr is in the mix
+    tag: ReadErrTag,
+}
+
+#[repr(C, u64)] // TODO this will be a u8 after Ayaz's PR merges
+struct ReadErrTag {
+    ////// THESE MUST BE ALPHABETIZED!!! //////
+    FileBusy=0,
+    FileWasDir,
+    IllegalByteSequence,
+    InvalidSeek,
+}
+
 #[no_mangle]
-pub extern "C" fn roc_fx_readAllBytes(path: ManuallyDrop<RocStr>) -> (RocList<u8>, i32) {
+pub extern "C" fn roc_fx_readAllBytes(path: ManuallyDrop<RocStr>) -> RocResult<RocList<u8>, ReadErr> {
+    println!("in roc_fx_readAllBytes({})", path.as_str());
     let result = read_bytes(path.as_str());
 
     match result {
         Ok(list) => {
             println!("Read this list of bytes: {:?}", list);
 
-            (list, 0)
+            RocFileResult { answer: list, error: u8::MAX }
         },
         Err(err) => {
             println!("Error reading file: {:?}", err);
 
             // TODO give a more helpful error
-            (RocList::default(), -1)
+            RocFileResult { answer: RocList::default(), error: 1 }
         }
     }
 }

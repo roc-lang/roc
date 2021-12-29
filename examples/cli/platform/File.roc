@@ -98,13 +98,10 @@ readBytesInfallible = \path ->
 
 readBytes : Path -> Task (List U8) [ ReadBytes ReadErr ]*
 readBytes = \path ->
-    Task.succeed [] # TODO FIXME
-    # Effect.readAllBytes path
-    #     |> Task.mapFail ReadBytes
-    # Effect.after (Effect.readAllBytes path) \result ->
-    #     when result is
-    #         Ok bytes -> Task.succeed bytes
-    #         Err err -> Task.fail (ReadBytes err)
+    Effect.after (Effect.readAllBytes path) \result ->
+        when result is
+            Ok answer -> Task.succeed answer
+            Err readErr -> Task.fail (ReadBytes readErr)
 
 
 writeUtf8 : Path, Str -> Task {} [ WriteUtf8 WriteErr ]*
