@@ -300,8 +300,15 @@ where
 
     let mut refcounts = Vec::with_capacity(num_refcounts);
     for i in 0..num_refcounts {
-        let rc_encoded = refcount_ptrs[i].get().deref(memory).unwrap().get();
-        let rc = (rc_encoded - i32::MIN + 1) as u32;
+        let rc_ptr = refcount_ptrs[i].get();
+        let rc = if rc_ptr.offset() == 0 {
+            // RC pointer has been set to null, which means the value has been freed.
+            // In tests, we simply represent this as zero refcount.
+            0
+        } else {
+            let rc_encoded = rc_ptr.deref(memory).unwrap().get();
+            (rc_encoded - i32::MIN + 1) as u32
+        };
         refcounts.push(rc);
     }
     Ok(refcounts)
