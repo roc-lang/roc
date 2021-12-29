@@ -1,8 +1,9 @@
+use core::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use tempfile::{tempdir, TempDir};
-use wasmer::Memory;
+use wasmer::{Memory, WasmPtr};
 
 use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use crate::helpers::wasm32_test_result::Wasm32TestResult;
@@ -36,11 +37,11 @@ fn promote_expr_to_module(src: &str) -> String {
 }
 
 #[allow(dead_code)]
-pub fn helper_wasm<'a, T: Wasm32TestResult>(
+pub fn compile_and_load<'a, T: Wasm32TestResult>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
-    _result_type_dummy: PhantomData<T>,
+    _test_wrapper_type_info: PhantomData<T>,
 ) -> wasmer::Instance {
     use std::path::{Path, PathBuf};
 
@@ -178,9 +179,10 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
             //
             // It seems that it will not write out an export you didn't explicitly specify,
             // even if it's a dependency of another export!
-            // In our case we always export main and test_wrapper so that's OK.
             "--export",
             "test_wrapper",
+            "--export",
+            "init_refcount_test",
             "--export",
             "#UserApp_main_1",
         ];
@@ -225,7 +227,7 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, phantom);
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -254,6 +256,55 @@ where
             Ok(output)
         }
     }
+}
+
+#[allow(dead_code)]
+pub fn assert_wasm_refcounts_help<T>(
+    src: &str,
+    phantom: PhantomData<T>,
+    num_refcounts: usize,
+) -> Result<Vec<u32>, String>
+where
+    T: FromWasm32Memory + Wasm32TestResult,
+{
+    let arena = bumpalo::Bump::new();
+
+    // NOTE the stdlib must be in the arena; just taking a reference will segfault
+    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
+
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
+
+    let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
+
+    let init_refcount_test = instance.exports.get_function("init_refcount_test").unwrap();
+    let init_result = init_refcount_test.call(&[wasmer::Value::I32(num_refcounts as i32)]);
+    let refcount_array_addr = match init_result {
+        Err(e) => return Err(format!("{:?}", e)),
+        Ok(result) => match result[0] {
+            wasmer::Value::I32(a) => a,
+            _ => panic!(),
+        },
+    };
+    // An array of refcount pointers
+    let refcount_ptr_array: WasmPtr<WasmPtr<i32>, wasmer::Array> =
+        WasmPtr::new(refcount_array_addr as u32);
+    let refcount_ptrs: &[Cell<WasmPtr<i32>>] = refcount_ptr_array
+        .deref(memory, 0, num_refcounts as u32)
+        .unwrap();
+
+    let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
+    match test_wrapper.call(&[]) {
+        Err(e) => return Err(format!("{:?}", e)),
+        Ok(_) => {}
+    }
+
+    let mut refcounts = Vec::with_capacity(num_refcounts);
+    for i in 0..num_refcounts {
+        let rc_encoded = refcount_ptrs[i].get().deref(memory).unwrap().get();
+        let rc = (rc_encoded - i32::MIN + 1) as u32;
+        refcounts.push(rc);
+    }
+    Ok(refcounts)
 }
 
 /// Print out hex bytes of the test result, and a few words on either side
@@ -330,7 +381,32 @@ pub fn identity<T>(value: T) -> T {
     value
 }
 
+#[allow(unused_macros)]
+macro_rules! assert_refcounts {
+    ($src: expr, $ty: ty, $expected_refcounts: expr) => {
+        // Same as above, except with an additional transformation argument.
+        {
+            let phantom = std::marker::PhantomData;
+            let num_refcounts = $expected_refcounts.len();
+            let result = $crate::helpers::wasm::assert_wasm_refcounts_help::<$ty>(
+                $src,
+                phantom,
+                num_refcounts,
+            );
+            match result {
+                Err(msg) => panic!("{:?}", msg),
+                Ok(actual_refcounts) => {
+                    assert_eq!(&actual_refcounts, $expected_refcounts)
+                }
+            }
+        }
+    };
+}
+
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
+
+#[allow(unused_imports)]
+pub(crate) use assert_refcounts;
