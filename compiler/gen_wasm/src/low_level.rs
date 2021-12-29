@@ -49,22 +49,21 @@ pub fn dispatch_low_level<'a>(
         }
         StrCountGraphemes => return BuiltinCall(bitcode::STR_COUNT_GRAPEHEME_CLUSTERS),
         StrToNum => {
-            if let Layout::Union(UnionLayout::NonRecursive(union_layout)) = mono_layout {
-                // match on the return layout to figure out which zig builtin we need
-                let intrinsic = match union_layout[1][0] {
-                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
-                    Layout::Builtin(Builtin::Float(float_width)) => {
-                        &bitcode::STR_TO_FLOAT[float_width]
-                    }
-                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
-                    rest => internal_error!("Unexpected builtin {:?} for StrToNum", rest),
-                };
+            let number_layout = match mono_layout {
+                Layout::Union(UnionLayout::NonRecursive(tags)) => tags[1][0],
+                Layout::Struct(fields) => fields[0], // TODO: why is it sometimes a struct?
+                _ => internal_error!("Unexpected mono layout {:?} for StrToNum", mono_layout),
+            };
+            // match on the return layout to figure out which zig builtin we need
+            let intrinsic = match number_layout {
+                Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                Layout::Builtin(Builtin::Float(float_width)) => &bitcode::STR_TO_FLOAT[float_width],
+                Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                rest => internal_error!("Unexpected builtin {:?} for StrToNum", rest),
+            };
 
-                return BuiltinCall(intrinsic);
-            } else {
-                internal_error!("Unexpected mono layout {:?} for StrToNum", mono_layout);
-            }
-        } // choose builtin based on storage size
+            return BuiltinCall(intrinsic);
+        }
         StrFromInt => {
             // This does not get exposed in user space. We switched to NumToStr instead.
             // We can probably just leave this as NotImplemented. We may want remove this LowLevel.
