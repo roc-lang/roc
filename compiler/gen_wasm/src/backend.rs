@@ -4,7 +4,7 @@ use code_builder::Align;
 use roc_builtins::bitcode::{self, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::ident::Ident;
-use roc_module::low_level::LowLevel;
+use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, REFCOUNT_MAX};
 use roc_mono::ir::{
@@ -591,7 +591,9 @@ impl<'a> WasmBackend<'a> {
             }) => match call_type {
                 CallType::ByName { name: func_sym, .. } => {
                     // If this function is just a lowlevel wrapper, then inline it
-                    if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
+                    if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
+                        LowLevelWrapperType::from_symbol(*func_sym)
+                    {
                         return self.build_low_level(
                             lowlevel,
                             arguments,
