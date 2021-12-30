@@ -32,7 +32,8 @@ pub fn path_to_roc_binary() -> PathBuf {
             .or_else(|| {
                 env::current_exe().ok().map(|mut path| {
                     path.pop();
-                    if path.ends_with("deps") { path.pop();
+                    if path.ends_with("deps") {
+                        path.pop();
                     }
                     path
                 })

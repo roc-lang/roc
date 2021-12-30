@@ -2,15 +2,20 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use libloading::Library;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_collections::all::MutMap;
+use roc_gen_llvm::llvm::build::tag_pointer_tag_id_bits_and_mask;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
-use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant};
+use roc_mono::layout::{
+    union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant, WrappedVariant,
+};
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
+use std::cmp::{max_by_key, min_by_key};
 
 struct Env<'a, 'env> {
     arena: &'a Bump,
@@ -38,10 +43,10 @@ pub unsafe fn jit_to_ast<'a>(
     lib: Library,
     main_fn_name: &str,
     layout: ProcLayout<'a>,
-    content: &Content,
-    interns: &Interns,
+    content: &'a Content,
+    interns: &'a Interns,
     home: ModuleId,
-    subs: &Subs,
+    subs: &'a Subs,
     ptr_bytes: u32,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let env = Env {
@@ -64,14 +69,166 @@ pub unsafe fn jit_to_ast<'a>(
     }
 }
 
-fn jit_to_ast_help<'a>(
+// Unrolls tag unions that are newtypes (i.e. are singleton variants with one type argument).
+// This is sometimes important in synchronizing `Content`s with `Layout`s, since `Layout`s will
+// always unwrap newtypes and use the content of the underlying type.
+fn unroll_newtypes<'a>(
+    env: &Env<'a, 'a>,
+    mut content: &'a Content,
+) -> (Vec<'a, &'a TagName>, &'a Content) {
+    let mut newtype_tags = Vec::with_capacity_in(1, env.arena);
+    loop {
+        match content {
+            Content::Structure(FlatType::TagUnion(tags, _))
+                if tags.is_newtype_wrapper(env.subs) =>
+            {
+                let (tag_name, vars): (&TagName, &[Variable]) = tags
+                    .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
+                    .next()
+                    .unwrap();
+                newtype_tags.push(tag_name);
+                let var = vars[0];
+                content = env.subs.get_content_without_compacting(var);
+            }
+            _ => return (newtype_tags, content),
+        }
+    }
+}
+
+fn apply_newtypes<'a>(
     env: &Env<'a, '_>,
+    newtype_tags: Vec<'a, &'a TagName>,
+    mut expr: Expr<'a>,
+) -> Expr<'a> {
+    for tag_name in newtype_tags.into_iter().rev() {
+        let tag_expr = tag_name_to_expr(env, tag_name);
+        let loc_tag_expr = &*env.arena.alloc(Loc::at_zero(tag_expr));
+        let loc_arg_expr = &*env.arena.alloc(Loc::at_zero(expr));
+        let loc_arg_exprs = env.arena.alloc_slice_copy(&[loc_arg_expr]);
+        expr = Expr::Apply(loc_tag_expr, loc_arg_exprs, CalledVia::Space);
+    }
+    expr
+}
+
+fn unroll_aliases<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
+    while let Content::Alias(_, _, real) = content {
+        content = env.subs.get_content_without_compacting(*real);
+    }
+    content
+}
+
+fn unroll_recursion_var<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
+    while let Content::RecursionVar { structure, .. } = content {
+        content = env.subs.get_content_without_compacting(*structure);
+    }
+    content
+}
+
+fn get_tags_vars_and_variant<'a>(
+    env: &Env<'a, '_>,
+    tags: &UnionTags,
+    opt_rec_var: Option<Variable>,
+) -> (MutMap<TagName, std::vec::Vec<Variable>>, UnionVariant<'a>) {
+    let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = tags
+        .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
+        .map(|(a, b)| (a.clone(), b.to_vec()))
+        .collect();
+
+    let vars_of_tag: MutMap<_, _> = tags_vec.iter().cloned().collect();
+
+    let union_variant =
+        union_sorted_tags_help(env.arena, tags_vec, opt_rec_var, env.subs, env.ptr_bytes);
+
+    (vars_of_tag, union_variant)
+}
+
+fn expr_of_tag<'a>(
+    env: &Env<'a, 'a>,
+    ptr_to_data: *const u8,
+    tag_name: &TagName,
+    arg_layouts: &'a [Layout<'a>],
+    arg_vars: &[Variable],
+    when_recursive: WhenRecursive<'a>,
+) -> Expr<'a> {
+    let tag_expr = tag_name_to_expr(env, tag_name);
+    let loc_tag_expr = &*env.arena.alloc(Loc::at_zero(tag_expr));
+
+    debug_assert_eq!(arg_layouts.len(), arg_vars.len());
+
+    // NOTE assumes the data bytes are the first bytes
+    let it = arg_vars.iter().copied().zip(arg_layouts.iter());
+    let output = sequence_of_expr(env, ptr_to_data, it, when_recursive);
+    let output = output.into_bump_slice();
+
+    Expr::Apply(loc_tag_expr, output, CalledVia::Space)
+}
+
+/// Gets the tag ID of a union variant, assuming that the tag ID is stored alongside (after) the
+/// tag data. The caller is expected to check that the tag ID is indeed stored this way.
+fn tag_id_from_data(union_layout: UnionLayout, data_ptr: *const u8, ptr_bytes: u32) -> i64 {
+    let offset = union_layout.data_size_without_tag_id(ptr_bytes).unwrap();
+
+    unsafe {
+        match union_layout.tag_id_builtin() {
+            Builtin::Bool => *(data_ptr.add(offset as usize) as *const i8) as i64,
+            Builtin::Int(IntWidth::U8) => *(data_ptr.add(offset as usize) as *const i8) as i64,
+            Builtin::Int(IntWidth::U16) => *(data_ptr.add(offset as usize) as *const i16) as i64,
+            Builtin::Int(IntWidth::U64) => {
+                // used by non-recursive unions at the
+                // moment, remove if that is no longer the case
+                *(data_ptr.add(offset as usize) as *const i64) as i64
+            }
+            _ => unreachable!("invalid tag id layout"),
+        }
+    }
+}
+
+fn deref_ptr_of_ptr(ptr_of_ptr: *const u8, ptr_bytes: u32) -> *const u8 {
+    unsafe {
+        match ptr_bytes {
+            // Our LLVM codegen represents pointers as i32/i64s.
+            4 => *(ptr_of_ptr as *const i32) as *const u8,
+            8 => *(ptr_of_ptr as *const i64) as *const u8,
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// Gets the tag ID of a union variant from its recursive pointer (that is, the pointer to the
+/// pointer to the data of the union variant). Returns
+///   - the tag ID
+///   - the pointer to the data of the union variant, unmasked if the pointer held the tag ID
+fn tag_id_from_recursive_ptr(
+    union_layout: UnionLayout,
+    rec_ptr: *const u8,
+    ptr_bytes: u32,
+) -> (i64, *const u8) {
+    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(ptr_bytes);
+    if tag_in_ptr {
+        let masked_ptr_to_data = deref_ptr_of_ptr(rec_ptr, ptr_bytes) as i64;
+        let (tag_id_bits, tag_id_mask) = tag_pointer_tag_id_bits_and_mask(ptr_bytes);
+        let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
+
+        // Clear the tag ID data from the pointer
+        let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits) << tag_id_bits) as *const u8;
+        (tag_id as i64, ptr_to_data)
+    } else {
+        let ptr_to_data = deref_ptr_of_ptr(rec_ptr, ptr_bytes);
+        let tag_id = tag_id_from_data(union_layout, ptr_to_data, ptr_bytes);
+        (tag_id, ptr_to_data)
+    }
+}
+
+fn jit_to_ast_help<'a>(
+    env: &Env<'a, 'a>,
     lib: Library,
     main_fn_name: &str,
     layout: &Layout<'a>,
-    content: &Content,
+    content: &'a Content,
 ) -> Result<Expr<'a>, ToAstProblem> {
-    match layout {
+    let (newtype_tags, content) = unroll_newtypes(env, content);
+    let content = unroll_aliases(env, content);
+    let result = match layout {
         Layout::Builtin(Builtin::Bool) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
             bool_to_ast(env, num, content)
         })),
@@ -200,144 +357,33 @@ fn jit_to_ast_help<'a>(
                 |bytes: *const u8| { ptr_to_ast(bytes as *const u8) }
             )
         }
-        Layout::Union(UnionLayout::NonRecursive(union_layouts)) => {
-            let union_layout = UnionLayout::NonRecursive(union_layouts);
-
-            match content {
-                Content::Structure(FlatType::TagUnion(tags, _)) => {
-                    debug_assert_eq!(union_layouts.len(), tags.len());
-
-                    let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = tags
-                        .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
-                        .map(|(a, b)| (a.clone(), b.to_vec()))
-                        .collect();
-
-                    let tags_map: roc_collections::all::MutMap<_, _> =
-                        tags_vec.iter().cloned().collect();
-
-                    let union_variant =
-                        union_sorted_tags_help(env.arena, tags_vec, None, env.subs, env.ptr_bytes);
-
-                    let size = layout.stack_size(env.ptr_bytes);
-                    use roc_mono::layout::WrappedVariant::*;
-                    match union_variant {
-                        UnionVariant::Wrapped(variant) => {
-                            match variant {
-                                NonRecursive {
-                                    sorted_tag_layouts: tags_and_layouts,
-                                } => {
-                                    Ok(run_jit_function_dynamic_type!(
-                                        lib,
-                                        main_fn_name,
-                                        size as usize,
-                                        |ptr: *const u8| {
-                                            // Because this is a `NonRecursive`, the tag ID is definitely after the data.
-                                            let offset = union_layout
-                                                .data_size_without_tag_id(env.ptr_bytes)
-                                                .unwrap();
-
-                                            let tag_id = match union_layout.tag_id_builtin() {
-                                                Builtin::Bool => {
-                                                    *(ptr.add(offset as usize) as *const i8) as i64
-                                                }
-                                                Builtin::Int(IntWidth::U8) => {
-                                                    *(ptr.add(offset as usize) as *const i8) as i64
-                                                }
-                                                Builtin::Int(IntWidth::U16) => {
-                                                    *(ptr.add(offset as usize) as *const i16) as i64
-                                                }
-                                                Builtin::Int(IntWidth::U64) => {
-                                                    // used by non-recursive unions at the
-                                                    // moment, remove if that is no longer the case
-                                                    *(ptr.add(offset as usize) as *const i64) as i64
-                                                }
-                                                _ => unreachable!("invalid tag id layout"),
-                                            };
-
-                                            // use the tag ID as an index, to get its name and layout of any arguments
-                                            let (tag_name, arg_layouts) =
-                                                &tags_and_layouts[tag_id as usize];
-
-                                            let tag_expr = tag_name_to_expr(env, tag_name);
-                                            let loc_tag_expr =
-                                                &*env.arena.alloc(Loc::at_zero(tag_expr));
-
-                                            let variables = &tags_map[tag_name];
-
-                                            debug_assert_eq!(arg_layouts.len(), variables.len());
-
-                                            // NOTE assumes the data bytes are the first bytes
-                                            let it =
-                                                variables.iter().copied().zip(arg_layouts.iter());
-                                            let output = sequence_of_expr(env, ptr, it);
-                                            let output = output.into_bump_slice();
-
-                                            Expr::Apply(loc_tag_expr, output, CalledVia::Space)
-                                        }
-                                    ))
-                                }
-                                Recursive {
-                                    sorted_tag_layouts: tags_and_layouts,
-                                } => {
-                                    Ok(run_jit_function_dynamic_type!(
-                                        lib,
-                                        main_fn_name,
-                                        size as usize,
-                                        |ptr: *const u8| {
-                                            // Because this is a `Wrapped`, the first 8 bytes encode the tag ID
-                                            let tag_id = *(ptr as *const i64);
-
-                                            // use the tag ID as an index, to get its name and layout of any arguments
-                                            let (tag_name, arg_layouts) =
-                                                &tags_and_layouts[tag_id as usize];
-
-                                            let tag_expr = tag_name_to_expr(env, tag_name);
-                                            let loc_tag_expr =
-                                                &*env.arena.alloc(Loc::at_zero(tag_expr));
-
-                                            let variables = &tags_map[tag_name];
-
-                                            // because the arg_layouts include the tag ID, it is one longer
-                                            debug_assert_eq!(
-                                                arg_layouts.len() - 1,
-                                                variables.len()
-                                            );
-
-                                            // skip forward to the start of the first element, ignoring the tag id
-                                            let ptr = ptr.offset(8);
-
-                                            let it =
-                                                variables.iter().copied().zip(&arg_layouts[1..]);
-                                            let output = sequence_of_expr(env, ptr, it);
-                                            let output = output.into_bump_slice();
-
-                                            Expr::Apply(loc_tag_expr, output, CalledVia::Space)
-                                        }
-                                    ))
-                                }
-                                _ => todo!(),
-                            }
-                        }
-                        _ => unreachable!("any other variant would have a different layout"),
-                    }
+        Layout::Union(UnionLayout::NonRecursive(_)) => {
+            let size = layout.stack_size(env.ptr_bytes);
+            Ok(run_jit_function_dynamic_type!(
+                lib,
+                main_fn_name,
+                size as usize,
+                |ptr: *const u8| {
+                    ptr_to_ast(env, ptr, layout, WhenRecursive::Unreachable, content)
                 }
-                Content::Structure(FlatType::RecursiveTagUnion(_, _, _)) => {
-                    todo!("print recursive tag unions in the REPL")
-                }
-                Content::Alias(_, _, actual) => {
-                    let content = env.subs.get_content_without_compacting(*actual);
-
-                    jit_to_ast_help(env, lib, main_fn_name, layout, content)
-                }
-                other => unreachable!("Weird content for Union layout: {:?}", other),
-            }
+            ))
         }
         Layout::Union(UnionLayout::Recursive(_))
-        | Layout::Union(UnionLayout::NullableWrapped { .. })
-        | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
-        | Layout::RecursivePointer => {
-            todo!("add support for rendering recursive tag unions in the REPL")
+        | Layout::Union(UnionLayout::NullableUnwrapped { .. })
+        | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
+            let size = layout.stack_size(env.ptr_bytes);
+            Ok(run_jit_function_dynamic_type!(
+                lib,
+                main_fn_name,
+                size as usize,
+                |ptr: *const u8| {
+                    ptr_to_ast(env, ptr, layout, WhenRecursive::Loop(*layout), content)
+                }
+            ))
+        }
+        Layout::RecursivePointer => {
+            unreachable!("RecursivePointers can only be inside structures")
         }
         Layout::LambdaSet(lambda_set) => jit_to_ast_help(
             env,
@@ -346,7 +392,8 @@ fn jit_to_ast_help<'a>(
             &lambda_set.runtime_representation(),
             content,
         ),
-    }
+    };
+    result.map(|e| apply_newtypes(env, newtype_tags, e))
 }
 
 fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
@@ -363,11 +410,20 @@ fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
     }
 }
 
+/// Represents the layout of `RecursivePointer`s in a tag union, when recursive
+/// tag unions are relevant.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WhenRecursive<'a> {
+    Unreachable,
+    Loop(Layout<'a>),
+}
+
 fn ptr_to_ast<'a>(
-    env: &Env<'a, '_>,
+    env: &Env<'a, 'a>,
     ptr: *const u8,
     layout: &Layout<'a>,
-    content: &Content,
+    when_recursive: WhenRecursive<'a>,
+    content: &'a Content,
 ) -> Expr<'a> {
     macro_rules! helper {
         ($ty:ty) => {{
@@ -377,7 +433,9 @@ fn ptr_to_ast<'a>(
         }};
     }
 
-    match layout {
+    let (newtype_tags, content) = unroll_newtypes(env, content);
+    let content = unroll_aliases(env, content);
+    let expr = match layout {
         Layout::Builtin(Builtin::Bool) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
@@ -446,17 +504,191 @@ fn ptr_to_ast<'a>(
                 );
             }
         },
+        Layout::RecursivePointer => {
+            match (content, when_recursive) {
+                (Content::RecursionVar {
+                    structure,
+                    opt_name: _,
+                }, WhenRecursive::Loop(union_layout)) => {
+                    let content = env.subs.get_content_without_compacting(*structure);
+                    ptr_to_ast(env, ptr, &union_layout, when_recursive, content)
+                }
+                other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
+            }
+        }
+        Layout::Union(UnionLayout::NonRecursive(union_layouts)) => {
+            let union_layout = UnionLayout::NonRecursive(union_layouts);
+
+            let tags = match content {
+                Content::Structure(FlatType::TagUnion(tags, _)) => tags,
+                other => unreachable!("Weird content for nonrecursive Union layout: {:?}", other),
+            };
+
+            debug_assert_eq!(union_layouts.len(), tags.len());
+
+            let (vars_of_tag, union_variant) = get_tags_vars_and_variant(env, tags, None);
+
+            let tags_and_layouts = match union_variant {
+                UnionVariant::Wrapped(WrappedVariant::NonRecursive {
+                    sorted_tag_layouts
+                }) => sorted_tag_layouts,
+                other => unreachable!("This layout tag union layout is nonrecursive but the variant isn't; found variant {:?}", other),
+            };
+
+            // Because this is a `NonRecursive`, the tag ID is definitely after the data.
+            let tag_id =
+                tag_id_from_data(union_layout, ptr, env.ptr_bytes);
+
+            // use the tag ID as an index, to get its name and layout of any arguments
+            let (tag_name, arg_layouts) =
+                &tags_and_layouts[tag_id as usize];
+
+            expr_of_tag(
+                env,
+                ptr,
+                tag_name,
+                arg_layouts,
+                &vars_of_tag[tag_name],
+                WhenRecursive::Unreachable,
+            )
+        }
+        Layout::Union(union_layout @ UnionLayout::Recursive(union_layouts)) => {
+            let (rec_var, tags) = match content {
+                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
+                _ => unreachable!("any other content would have a different layout"),
+            };
+            debug_assert_eq!(union_layouts.len(), tags.len());
+
+            let (vars_of_tag, union_variant) =
+                get_tags_vars_and_variant(env, tags, Some(*rec_var));
+
+            let tags_and_layouts = match union_variant {
+                UnionVariant::Wrapped(WrappedVariant::Recursive {
+                    sorted_tag_layouts
+                }) => sorted_tag_layouts,
+                _ => unreachable!("any other variant would have a different layout"),
+            };
+
+            let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.ptr_bytes);
+
+            let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
+            expr_of_tag(
+                env,
+                ptr_to_data,
+                tag_name,
+                arg_layouts,
+                &vars_of_tag[tag_name],
+                when_recursive,
+            )
+        }
+        Layout::Union(UnionLayout::NonNullableUnwrapped(_)) => {
+            let (rec_var, tags) = match unroll_recursion_var(env, content) {
+                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
+                other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
+            };
+            debug_assert_eq!(tags.len(), 1);
+
+            let (vars_of_tag, union_variant) = get_tags_vars_and_variant(env, tags, Some(*rec_var));
+
+            let (tag_name, arg_layouts) = match union_variant {
+                UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
+                    tag_name, fields,
+                }) => (tag_name, fields),
+                _ => unreachable!("any other variant would have a different layout"),
+            };
+
+            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
+
+            expr_of_tag(
+                env,
+                ptr_to_data,
+                &tag_name,
+                arg_layouts,
+                &vars_of_tag[&tag_name],
+                when_recursive,
+            )
+        }
+        Layout::Union(UnionLayout::NullableUnwrapped { .. }) => {
+            let (rec_var, tags) = match unroll_recursion_var(env, content) {
+                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
+                other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
+            };
+            debug_assert!(tags.len() <= 2);
+
+            let (vars_of_tag, union_variant) = get_tags_vars_and_variant(env, tags, Some(*rec_var));
+
+            let (nullable_name, other_name, other_arg_layouts) = match union_variant {
+                UnionVariant::Wrapped(WrappedVariant::NullableUnwrapped {
+                    nullable_id: _,
+                    nullable_name,
+                    other_name,
+                    other_fields,
+                }) => (nullable_name, other_name, other_fields),
+                _ => unreachable!("any other variant would have a different layout"),
+            };
+
+            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
+            if ptr_to_data.is_null() {
+                tag_name_to_expr(env, &nullable_name)
+            } else {
+                expr_of_tag(
+                    env,
+                    ptr_to_data,
+                    &other_name,
+                    other_arg_layouts,
+                    &vars_of_tag[&other_name],
+                    when_recursive,
+                )
+            }
+        }
+        Layout::Union(union_layout @ UnionLayout::NullableWrapped { .. }) => {
+            let (rec_var, tags) = match unroll_recursion_var(env, content) {
+                Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
+                other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
+            };
+
+            let (vars_of_tag, union_variant) = get_tags_vars_and_variant(env, tags, Some(*rec_var));
+
+            let (nullable_id, nullable_name, tags_and_layouts) = match union_variant {
+                UnionVariant::Wrapped(WrappedVariant::NullableWrapped {
+                    nullable_id,
+                    nullable_name,
+                    sorted_tag_layouts,
+                }) => (nullable_id, nullable_name, sorted_tag_layouts),
+                _ => unreachable!("any other variant would have a different layout"),
+            };
+
+            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
+            if ptr_to_data.is_null() {
+                tag_name_to_expr(env, &nullable_name)
+            } else {
+                let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.ptr_bytes);
+
+                let tag_id = if tag_id > nullable_id.into() { tag_id - 1 } else { tag_id };
+
+                let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
+                expr_of_tag(
+                    env,
+                    ptr_to_data,
+                    tag_name,
+                    arg_layouts,
+                    &vars_of_tag[tag_name],
+                    when_recursive,
+                )
+            }
+        }
         other => {
             todo!(
                 "TODO add support for rendering pointer to {:?} in the REPL",
                 other
             );
         }
-    }
+    };
+    apply_newtypes(env, newtype_tags, expr)
 }
 
 fn list_to_ast<'a>(
-    env: &Env<'a, '_>,
+    env: &Env<'a, 'a>,
     ptr: *const u8,
     len: usize,
     elem_layout: &Layout<'a>,
@@ -487,7 +719,13 @@ fn list_to_ast<'a>(
         let offset_bytes = index * elem_size;
         let elem_ptr = unsafe { ptr.add(offset_bytes) };
         let loc_expr = &*arena.alloc(Loc {
-            value: ptr_to_ast(env, elem_ptr, elem_layout, elem_content),
+            value: ptr_to_ast(
+                env,
+                elem_ptr,
+                elem_layout,
+                WhenRecursive::Unreachable,
+                elem_content,
+            ),
             region: Region::zero(),
         });
 
@@ -500,7 +738,7 @@ fn list_to_ast<'a>(
 }
 
 fn single_tag_union_to_ast<'a>(
-    env: &Env<'a, '_>,
+    env: &Env<'a, 'a>,
     ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
     tag_name: &TagName,
@@ -513,11 +751,11 @@ fn single_tag_union_to_ast<'a>(
 
     let output = if field_layouts.len() == payload_vars.len() {
         let it = payload_vars.iter().copied().zip(field_layouts);
-        sequence_of_expr(env, ptr as *const u8, it).into_bump_slice()
+        sequence_of_expr(env, ptr as *const u8, it, WhenRecursive::Unreachable).into_bump_slice()
     } else if field_layouts.is_empty() && !payload_vars.is_empty() {
         // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
         let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
-        sequence_of_expr(env, ptr as *const u8, it).into_bump_slice()
+        sequence_of_expr(env, ptr as *const u8, it, WhenRecursive::Unreachable).into_bump_slice()
     } else {
         unreachable!()
     };
@@ -526,9 +764,10 @@ fn single_tag_union_to_ast<'a>(
 }
 
 fn sequence_of_expr<'a, I>(
-    env: &Env<'a, '_>,
+    env: &Env<'a, 'a>,
     ptr: *const u8,
     sequence: I,
+    when_recursive: WhenRecursive<'a>,
 ) -> Vec<'a, &'a Loc<Expr<'a>>>
 where
     I: Iterator<Item = (Variable, &'a Layout<'a>)>,
@@ -543,7 +782,7 @@ where
 
     for (var, layout) in sequence {
         let content = subs.get_content_without_compacting(var);
-        let expr = ptr_to_ast(env, field_ptr, layout, content);
+        let expr = ptr_to_ast(env, field_ptr, layout, when_recursive, content);
         let loc_expr = Loc::at_zero(expr);
 
         output.push(&*arena.alloc(loc_expr));
@@ -556,7 +795,7 @@ where
 }
 
 fn struct_to_ast<'a>(
-    env: &Env<'a, '_>,
+    env: &Env<'a, 'a>,
     ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
     record_fields: RecordFields,
@@ -577,7 +816,13 @@ fn struct_to_ast<'a>(
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
 
         let loc_expr = &*arena.alloc(Loc {
-            value: ptr_to_ast(env, ptr, &Layout::Struct(field_layouts), inner_content),
+            value: ptr_to_ast(
+                env,
+                ptr,
+                &Layout::Struct(field_layouts),
+                WhenRecursive::Unreachable,
+                inner_content,
+            ),
             region: Region::zero(),
         });
 
@@ -604,7 +849,13 @@ fn struct_to_ast<'a>(
 
             let content = subs.get_content_without_compacting(var);
             let loc_expr = &*arena.alloc(Loc {
-                value: ptr_to_ast(env, field_ptr, field_layout, content),
+                value: ptr_to_ast(
+                    env,
+                    field_ptr,
+                    field_layout,
+                    WhenRecursive::Unreachable,
+                    content,
+                ),
                 region: Region::zero(),
             });
 
@@ -1035,31 +1286,4 @@ fn str_slice_to_ast<'a>(_arena: &'a Bump, string: &'a str) -> Expr<'a> {
     } else {
         Expr::Str(StrLiteral::PlainLine(string))
     }
-}
-
-// TODO this is currently nighly-only: use the implementation in std once it's stabilized
-pub fn max_by<T, F: FnOnce(&T, &T) -> std::cmp::Ordering>(v1: T, v2: T, compare: F) -> T {
-    use std::cmp::Ordering;
-
-    match compare(&v1, &v2) {
-        Ordering::Less | Ordering::Equal => v2,
-        Ordering::Greater => v1,
-    }
-}
-
-pub fn min_by<T, F: FnOnce(&T, &T) -> std::cmp::Ordering>(v1: T, v2: T, compare: F) -> T {
-    use std::cmp::Ordering;
-
-    match compare(&v1, &v2) {
-        Ordering::Less | Ordering::Equal => v1,
-        Ordering::Greater => v2,
-    }
-}
-
-pub fn max_by_key<T, F: FnMut(&T) -> K, K: Ord>(v1: T, v2: T, mut f: F) -> T {
-    max_by(v1, v2, |v1, v2| f(v1).cmp(&f(v2)))
-}
-
-pub fn min_by_key<T, F: FnMut(&T) -> K, K: Ord>(v1: T, v2: T, mut f: F) -> T {
-    min_by(v1, v2, |v1, v2| f(v1).cmp(&f(v2)))
 }
