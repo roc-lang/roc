@@ -1170,7 +1170,7 @@ impl ModifyRc {
                 .append(";"),
             Inc(symbol, n) => alloc
                 .text("inc ")
-                .append(alloc.text(format!("{}", n)))
+                .append(alloc.text(format!("{} ", n)))
                 .append(symbol_to_doc(alloc, symbol))
                 .append(";"),
             Dec(symbol) => alloc
