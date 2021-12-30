@@ -9,22 +9,35 @@ use roc_std::{RocList, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-wasm"))]
-fn list_of_same_str() {
+fn str_inc() {
     assert_refcounts!(
         indoc!(
             r#"
-                a = "A long enough string"
-                b = "to be heap-allocated"
-                c = Str.joinWith [a, b] " "
+                s = Str.concat "A long enough string " "to be heap-allocated"
 
-                [c, c, c]
+                [s, s, s]
             "#
         ),
         RocList<RocStr>,
         &[
-            1, // [a,b] (TODO: list decrement. This should be zero!)
-            3, // c
+            3, // s
             1  // result
         ]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn str_dealloc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+
+                Str.isEmpty s
+            "#
+        ),
+        bool,
+        &[0]
     );
 }
