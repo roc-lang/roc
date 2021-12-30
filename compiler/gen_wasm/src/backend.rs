@@ -678,17 +678,13 @@ impl<'a> WasmBackend<'a> {
             }
 
             Expr::Array { elems, elem_layout } => {
-                if let StoredValue::StackMemory {
-                    location,
-                    alignment_bytes,
-                    ..
-                } = storage
-                {
+                if let StoredValue::StackMemory { location, .. } = storage {
                     let size = elem_layout.stack_size(PTR_SIZE) * (elems.len() as u32);
 
                     // Allocate heap space and store its address in a local variable
                     let heap_local_id = self.storage.create_anonymous_local(PTR_TYPE);
-                    self.allocate_with_refcount(Some(size), *alignment_bytes, 1);
+                    let heap_alignment = elem_layout.alignment_bytes(PTR_SIZE);
+                    self.allocate_with_refcount(Some(size), heap_alignment, 1);
                     self.code_builder.set_local(heap_local_id);
 
                     let (stack_local_id, stack_offset) =
