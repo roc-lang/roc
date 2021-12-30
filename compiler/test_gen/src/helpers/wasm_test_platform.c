@@ -88,20 +88,23 @@ void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
 
 void roc_dealloc(void *ptr, unsigned int alignment)
 {
-    // Null out the entry in the test array to indicate that it was freed
-    // Then even if malloc reuses the space, everything still works
-    size_t *rc_ptr = alloc_ptr_to_rc_ptr(ptr, alignment);
-    int i = 0;
-    for (; i < rc_pointers_index; ++i)
+    if (rc_pointers)
     {
-        if (rc_pointers[i] == rc_ptr)
+        // Null out the entry in the test array to indicate that it was freed
+        // Then even if malloc reuses the space, everything still works
+        size_t *rc_ptr = alloc_ptr_to_rc_ptr(ptr, alignment);
+        int i = 0;
+        for (; i < rc_pointers_index; ++i)
         {
-            rc_pointers[i] = NULL;
-            break;
+            if (rc_pointers[i] == rc_ptr)
+            {
+                rc_pointers[i] = NULL;
+                break;
+            }
         }
+        int was_found = i < rc_pointers_index;
+        ASSERT(was_found);
     }
-    int was_found = i < rc_pointers_index;
-    ASSERT(was_found);
 
 #if ENABLE_PRINTF
     printf("roc_dealloc deallocated %p with alignment %zd\n", ptr, alignment);
