@@ -231,17 +231,10 @@ fn jit_to_ast_help<'a>(
                                         main_fn_name,
                                         size as usize,
                                         |ptr: *const u8| {
-                                            // Because this is a `Wrapped`, the first 8 bytes encode the tag ID
-                                            let offset = tags_and_layouts
-                                                .iter()
-                                                .map(|(_, fields)| {
-                                                    fields
-                                                        .iter()
-                                                        .map(|l| l.stack_size(env.ptr_bytes))
-                                                        .sum()
-                                                })
-                                                .max()
-                                                .unwrap_or(0);
+                                            // Because this is a `NonRecursive`, the tag ID is definitely after the data.
+                                            let offset = union_layout
+                                                .data_size_without_tag_id(env.ptr_bytes)
+                                                .unwrap();
 
                                             let tag_id = match union_layout.tag_id_builtin() {
                                                 Builtin::Bool => {

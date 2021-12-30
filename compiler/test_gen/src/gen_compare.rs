@@ -373,6 +373,39 @@ fn eq_linked_list_false() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn eq_linked_list_long() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                prependOnes = \n, tail ->
+                    if n == 0 then
+                        tail
+                    else
+                        prependOnes (n-1) (Cons 1 tail)
+
+                main =
+                    n = 100_000
+
+                    x : LinkedList I64
+                    x = prependOnes n (Cons 999 Nil)
+
+                    y : LinkedList I64
+                    y = prependOnes n (Cons 123 Nil)
+
+                    y == x
+                "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_nullable_expr() {
     assert_evals_to!(

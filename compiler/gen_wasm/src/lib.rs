@@ -8,7 +8,7 @@ use bumpalo::{self, collections::Vec, Bump};
 
 use roc_builtins::bitcode::IntWidth;
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::low_level::LowLevel;
+use roc_module::low_level::LowLevelWrapperType;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
@@ -62,7 +62,10 @@ pub fn build_module_help<'a>(
     // and filter out procs we're going to inline
     let mut fn_index: u32 = 0;
     for ((sym, layout), proc) in procedures.into_iter() {
-        if LowLevel::from_inlined_wrapper(sym).is_some() {
+        if matches!(
+            LowLevelWrapperType::from_symbol(sym),
+            LowLevelWrapperType::CanBeReplacedBy(_)
+        ) {
             continue;
         }
         procs.push(proc);

@@ -110,6 +110,8 @@ mod test_parse {
         fail/type_double_comma.expr,
         pass/add_var_with_spaces.expr,
         pass/add_with_spaces.expr,
+        pass/annotated_record_destructure.expr,
+        pass/annotated_tag_destructure.expr,
         pass/apply_global_tag.expr,
         pass/apply_parenthetical_global_tag_args.expr,
         pass/apply_private_tag.expr,

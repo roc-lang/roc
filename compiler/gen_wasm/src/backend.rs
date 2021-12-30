@@ -4,7 +4,7 @@ use code_builder::Align;
 use roc_builtins::bitcode::{self, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::ident::Ident;
-use roc_module::low_level::LowLevel;
+use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, REFCOUNT_MAX};
 use roc_mono::ir::{
@@ -591,7 +591,9 @@ impl<'a> WasmBackend<'a> {
             }) => match call_type {
                 CallType::ByName { name: func_sym, .. } => {
                     // If this function is just a lowlevel wrapper, then inline it
-                    if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
+                    if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
+                        LowLevelWrapperType::from_symbol(*func_sym)
+                    {
                         return self.build_low_level(
                             lowlevel,
                             arguments,
@@ -830,7 +832,9 @@ impl<'a> WasmBackend<'a> {
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
             let id_offset = data_offset + data_size - data_alignment;
-            let id_align = Align::from(data_alignment);
+
+            let id_align = union_layout.tag_id_builtin().alignment_bytes(PTR_SIZE);
+            let id_align = Align::from(id_align);
 
             self.code_builder.get_local(local_id);
 
@@ -912,7 +916,9 @@ impl<'a> WasmBackend<'a> {
         if union_layout.stores_tag_id_as_data(PTR_SIZE) {
             let (data_size, data_alignment) = union_layout.data_size_and_alignment(PTR_SIZE);
             let id_offset = data_size - data_alignment;
-            let id_align = Align::from(data_alignment);
+
+            let id_align = union_layout.tag_id_builtin().alignment_bytes(PTR_SIZE);
+            let id_align = Align::from(id_align);
 
             self.storage
                 .load_symbols(&mut self.code_builder, &[structure]);
@@ -956,7 +962,17 @@ impl<'a> WasmBackend<'a> {
             NonRecursive(tags) => tags[tag_index],
             Recursive(tags) => tags[tag_index],
             NonNullableUnwrapped(layouts) => *layouts,
-            NullableWrapped { other_tags, .. } => other_tags[tag_index],
+            NullableWrapped {
+                other_tags,
+                nullable_id,
+            } => {
+                let index = if tag_index > *nullable_id as usize {
+                    tag_index - 1
+                } else {
+                    tag_index
+                };
+                other_tags[index]
+            }
             NullableUnwrapped { other_fields, .. } => *other_fields,
         };
 

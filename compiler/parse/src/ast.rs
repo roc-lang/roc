@@ -226,6 +226,12 @@ pub struct PrecedenceConflict<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AliasHeader<'a> {
+    pub name: Loc<&'a str>,
+    pub vars: &'a [Loc<Pattern<'a>>],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns
     // are allowed in annotations.
@@ -236,8 +242,7 @@ pub enum Def<'a> {
     ///
     /// Foo : Bar Baz
     Alias {
-        name: Loc<&'a str>,
-        vars: &'a [Loc<Pattern<'a>>],
+        header: AliasHeader<'a>,
         ann: Loc<TypeAnnotation<'a>>,
     },
 
@@ -265,6 +270,17 @@ pub enum Def<'a> {
     NotYetImplemented(&'static str),
 }
 
+impl<'a> Def<'a> {
+    pub fn unroll_spaces_before(&self) -> (&'a [CommentOrNewline<'a>], &Def) {
+        let (spaces, def): (&'a [_], &Def) = match self {
+            Def::SpaceBefore(def, spaces) => (spaces, def),
+            def => (&[], def),
+        };
+        debug_assert!(!matches!(def, Def::SpaceBefore(_, _)));
+        (spaces, def)
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
     /// A function. The types of its arguments, then the type of its return value.
@@ -280,7 +296,7 @@ pub enum TypeAnnotation<'a> {
     As(
         &'a Loc<TypeAnnotation<'a>>,
         &'a [CommentOrNewline<'a>],
-        &'a Loc<TypeAnnotation<'a>>,
+        AliasHeader<'a>,
     ),
 
     Record {

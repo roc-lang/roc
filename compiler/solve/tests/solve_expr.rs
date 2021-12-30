@@ -2981,20 +2981,20 @@ mod solve_expr {
         );
     }
 
-    // #[test]
-    // fn let_tag_pattern_with_annotation() {
-    //     infer_eq_without_problem(
-    //         indoc!(
-    //             r#"
-    //                 UserId x : [ UserId I64 ]
-    //                 UserId x = UserId 42
+    #[test]
+    fn let_tag_pattern_with_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                     UserId x : [ UserId I64 ]
+                     UserId x = UserId 42
 
-    //                 x
-    //             "#
-    //         ),
-    //         "I64",
-    //     );
-    // }
+                     x
+                 "#
+            ),
+            "I64",
+        );
+    }
 
     #[test]
     fn typecheck_record_linked_list_map() {
