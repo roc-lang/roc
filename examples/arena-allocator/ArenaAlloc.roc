@@ -5,7 +5,6 @@ app "arena-alloc"
     imports [ pf.Task.{ Task, await }, pf.Terminal ]
     provides [ main ] to pf
 
-# This runs in a loop
 main : Task {} *
 main =
     Task.useArenaAlloc (

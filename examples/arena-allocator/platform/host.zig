@@ -1,6 +1,7 @@
 const std = @import("std");
 const str = @import("str");
 const RocStr = str.RocStr;
+const ArenaStack = @import("ArenaStack.zig");
 
 comptime {
     // This is a workaround for https://github.com/ziglang/zig/issues/8218
@@ -36,41 +37,21 @@ usingnamespace struct {
     pub const fx_result_size = roc__mainForHost_1_Fx_result_size;
 };
 
-const Align = 2 * @alignOf(usize);
 extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
-const DEBUG: bool = true;
-
-var arena_stack = @import("ArenaStack.zig").init();
+var arena_stack: ArenaStack = undefined;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
-    var ptr = @alignCast(Align, std.c.malloc(size));
-
-    if (DEBUG) {
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
-    }
-
-    return ptr;
+    return arena_stack.alloc(size, alignment);
 }
 
 export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
-    if (DEBUG) {
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
-    }
-
-    return std.c.realloc(@alignCast(Align, @ptrCast([*]u8, c_ptr)), new_size);
+    return arena_stack.realloc(c_ptr, new_size, old_size, alignment);
 }
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
-    if (DEBUG) {
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
-    }
-
-    std.c.free(@alignCast(Align, @ptrCast([*]u8, c_ptr)));
+    arena_stack.dealloc(c_ptr, alignment);
 }
 
 export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
@@ -90,24 +71,25 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
     return memset(dst, value, size);
 }
 
-const Unit = extern struct {};
+//const Unit = extern struct {};
 
 pub export fn main() callconv(.C) u8 {
     const allocator = std.heap.page_allocator;
 
     const size = @intCast(usize, roc_main_size());
-    const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
+
+    const raw_output = allocator
+        .allocAdvanced(u8, @alignOf(u64), size, .at_least)
+        catch unreachable;
+    defer allocator.free(raw_output);
     var output = @ptrCast([*]u8, raw_output);
 
-    defer {
-        allocator.free(raw_output);
-    }
+    arena_stack = ArenaStack.init(allocator);
+    defer arena_stack.deinit();
 
     roc_main(output);
 
-    const closure_data_pointer = @ptrCast([*]u8, output);
-
-    call_the_closure(closure_data_pointer);
+    call_the_closure(output);
 
     return 0;
 }
