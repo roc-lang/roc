@@ -41,3 +41,79 @@ fn str_dealloc() {
         &[0]
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn list_int_inc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                list = [0x111, 0x222, 0x333]
+                [list, list, list]
+            "#
+        ),
+        RocList<RocList<i64>>,
+        &[
+            3, // list
+            1  // result
+        ]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn list_int_dealloc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                list = [0x111, 0x222, 0x333]
+                List.len [list, list, list]
+            "#
+        ),
+        usize,
+        &[
+            0, // list
+            0  // result
+        ]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn list_str_inc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                list = [s, s, s]
+                [list, list]
+            "#
+        ),
+        RocList<RocList<RocStr>>,
+        &[
+            6, // s
+            2, // list
+            1  // result
+        ]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn list_str_dealloc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                list = [s, s, s]
+                List.len [list, list]
+            "#
+        ),
+        usize,
+        &[
+            0, // s
+            0, // list
+            0  // result
+        ]
+    );
+}
