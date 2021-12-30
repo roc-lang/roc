@@ -1044,12 +1044,11 @@ impl<'a> WasmBackend<'a> {
 
         // Save the allocation address to a temporary local variable
         let local_id = self.storage.create_anonymous_local(ValueType::I32);
-        self.code_builder.set_local(local_id);
+        self.code_builder.tee_local(local_id);
 
         // Write the initial refcount
         let refcount_offset = extra_bytes - PTR_SIZE;
         let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
-        self.code_builder.get_local(local_id);
         self.code_builder.i32_const(encoded_refcount);
         self.code_builder.i32_store(Align::Bytes4, refcount_offset);
 
