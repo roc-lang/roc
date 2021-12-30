@@ -6,7 +6,7 @@ platform "examples/arena-allocator"
     provides [ mainForHost ]
     effects fx.Effect
         {
-            arenaStart : Effect {},
+            arenaStart : Effect U8,
             arenaEnd : Effect {},
             stdinRead : Effect Str,
             stdoutWrite : Str -> Effect {},

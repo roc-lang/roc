@@ -132,8 +132,9 @@ fn stdin_read_help() !RocStr {
     return RocStr.init(@ptrCast([*]const u8, line), line.len);
 }
 
-export fn roc_fx_arenaStart() callconv(.C) void {
+export fn roc_fx_arenaStart() callconv(.C) u8 {
     arena_stack.push();
+    return 0;
 }
 
 export fn roc_fx_arenaEnd() callconv(.C) void {

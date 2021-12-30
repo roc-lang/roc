@@ -52,15 +52,16 @@ map = \effect, transform ->
             Ok a -> Task.succeed (transform a)
             Err err -> Task.fail err
 
-useArenaAlloc : Task a err -> Task a err
+useArenaAlloc : (U8 -> Task a err) -> Task a err
 useArenaAlloc = \task ->
-    {} <- Task.await arenaStart
-    result <- Task.attempt task
+    # `n` is used to prevent `task` from running before `arenaStart`
+    n <- Task.await arenaStart
+    result <- Task.attempt (task n)
     {} <- Task.await arenaEnd
 
     Task.fromResult result
 
-arenaStart : Task {} *
+arenaStart : Task U8 *
 arenaStart =
     Effect.after Effect.arenaStart Task.succeed
 

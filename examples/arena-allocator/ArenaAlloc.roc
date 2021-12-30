@@ -7,7 +7,7 @@ app "arena-alloc"
 
 main : Task {} *
 main =
-    Task.useArenaAlloc (
+    Task.useArenaAlloc (\_ ->
         {} <- await (Terminal.write "Input: ")
         input <- await Terminal.readLine
 
