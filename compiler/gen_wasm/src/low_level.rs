@@ -69,14 +69,11 @@ pub fn dispatch_low_level<'a>(
 
         // List
         ListLen => {
-            if let StoredValue::StackMemory { location, .. } = storage.get(&args[0]) {
-                let (local_id, offset) = location.local_and_offset(storage.stack_frame_pointer);
-
-                code_builder.get_local(local_id);
-                code_builder.i32_load(Align::Bytes4, offset + 4);
-            } else {
-                internal_error!("Unexpected storage for {:?}", args[0]);
-            };
+            // List structure has already been loaded as i64 (Zig calling convention)
+            // We want the second (more significant) 32 bits. Shift and convert to i32.
+            code_builder.i64_const(32);
+            code_builder.i64_shr_u();
+            code_builder.i32_wrap_i64();
         }
 
         ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
