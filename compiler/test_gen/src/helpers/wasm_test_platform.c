@@ -35,7 +35,7 @@ size_t **init_refcount_test(size_t max_allocs)
         abort();
 #endif
 
-size_t *data_ptr_to_rc_ptr(void *ptr, unsigned int alignment)
+size_t *alloc_ptr_to_rc_ptr(void *ptr, unsigned int alignment)
 {
     size_t alloc_addr = (size_t)ptr;
     size_t rc_addr = alloc_addr + alignment - sizeof(size_t);
@@ -53,7 +53,7 @@ void *roc_alloc(size_t size, unsigned int alignment)
         ASSERT(alignment >= sizeof(size_t));
         ASSERT(rc_pointers_index < rc_pointers_len);
 
-        size_t *rc_ptr = data_ptr_to_rc_ptr(allocated, alignment);
+        size_t *rc_ptr = alloc_ptr_to_rc_ptr(allocated, alignment);
         rc_pointers[rc_pointers_index] = rc_ptr;
         rc_pointers_index++;
     }
@@ -66,7 +66,7 @@ void *roc_alloc(size_t size, unsigned int alignment)
     }
     else
     {
-        printf("roc_alloc allocated %d bytes at %p\n", size, allocated);
+        printf("roc_alloc allocated %d bytes with alignment %d at %p\n", size, alignment, allocated);
     }
 #endif
     return allocated;
@@ -88,9 +88,9 @@ void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
 
 void roc_dealloc(void *ptr, unsigned int alignment)
 {
-    // Null out the entry in the test array to signal that it was freed
+    // Null out the entry in the test array to indicate that it was freed
     // Then even if malloc reuses the space, everything still works
-    size_t *rc_ptr = data_ptr_to_rc_ptr(ptr, alignment);
+    size_t *rc_ptr = alloc_ptr_to_rc_ptr(ptr, alignment);
     int i = 0;
     for (; i < rc_pointers_index; ++i)
     {
