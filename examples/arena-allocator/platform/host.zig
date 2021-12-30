@@ -71,8 +71,6 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
     return memset(dst, value, size);
 }
 
-//const Unit = extern struct {};
-
 pub export fn main() callconv(.C) u8 {
     const allocator = std.heap.page_allocator;
 

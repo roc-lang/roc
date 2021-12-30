@@ -7,7 +7,7 @@ const ArenaStack = @This();
 allocator: *Allocator,
 items: ArrayList(ArenaAllocator),
 
-const DEBUG = true;
+const DEBUG = false;
 
 fn debug_info(comptime format: []const u8, args: anytype) void {
     if (DEBUG) {
