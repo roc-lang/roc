@@ -201,8 +201,8 @@ fn run_linker(
         "#UserApp_main_1",
     ];
 
-    // For some reason, this makes linking ~3x slower
     if matches!(test_type, TestType::Refcount) {
+        // If we always export this, tests run ~2.5x slower! Not sure why.
         args.extend_from_slice(&["--export", "init_refcount_test"]);
     }
 
