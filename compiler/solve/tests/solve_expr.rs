@@ -1327,7 +1327,7 @@ mod solve_expr {
                     \Foo -> 42
                 "#
             ),
-            "[ Foo ]* -> Num *",
+            "[ Foo ] -> Num *",
         );
     }
 
@@ -1339,7 +1339,7 @@ mod solve_expr {
                     \@Foo -> 42
                 "#
             ),
-            "[ @Foo ]* -> Num *",
+            "[ @Foo ] -> Num *",
         );
     }
 
@@ -1419,7 +1419,7 @@ mod solve_expr {
                     \Foo x -> Foo x
                 "#
             ),
-            "[ Foo a ]* -> [ Foo a ]*",
+            "[ Foo a ] -> [ Foo a ]*",
         );
     }
 
@@ -1431,7 +1431,7 @@ mod solve_expr {
                     \Foo x _ -> Foo x "y"
                 "#
             ),
-            "[ Foo a * ]* -> [ Foo a Str ]*",
+            "[ Foo a * ] -> [ Foo a Str ]*",
         );
     }
 
@@ -4907,6 +4907,19 @@ mod solve_expr {
                  "#
             ),
             "{ x : [ Blue, Red ], y ? Num a }* -> Num a",
+        )
+    }
+
+    #[test]
+    // Issue #2299
+    fn infer_union_argument_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \UserId id -> id + 1
+                 "#
+            ),
+            "[ UserId (Num a) ] -> Num a",
         )
     }
 }

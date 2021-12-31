@@ -77,7 +77,7 @@ fn constrain_untyped_args(
             loc_pattern.region,
             pattern_expected,
             &mut pattern_state,
-            false,
+            true,
         );
 
         vars.push(*pattern_var);
