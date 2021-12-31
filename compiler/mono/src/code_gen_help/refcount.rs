@@ -4,7 +4,7 @@ use roc_module::symbol::{IdentIds, Symbol};
 
 use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Param, Stmt, UpdateModeId,
+    BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
 };
 use crate::layout::{Builtin, Layout, UnionLayout};
 
@@ -17,6 +17,77 @@ const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
 
 const ARG_1: Symbol = Symbol::ARG_1;
 const ARG_2: Symbol = Symbol::ARG_2;
+
+pub fn refcount_stmt<'a>(
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+    layout: Layout<'a>,
+    modify: &ModifyRc,
+    following: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let arena = root.arena;
+
+    match modify {
+        ModifyRc::Inc(structure, amount) => {
+            let layout_isize = root.layout_isize;
+
+            // Define a constant for the amount to increment
+            let amount_sym = root.create_symbol(ident_ids, "amount");
+            let amount_expr = Expr::Literal(Literal::Int(*amount as i128));
+            let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, layout_isize, next);
+
+            // Call helper proc, passing the Roc structure and constant amount
+            let call_result_empty = root.create_symbol(ident_ids, "call_result_empty");
+            let call_expr = root
+                .call_specialized_op(
+                    ident_ids,
+                    ctx,
+                    layout,
+                    arena.alloc([*structure, amount_sym]),
+                )
+                .unwrap();
+
+            let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
+            amount_stmt(arena.alloc(call_stmt))
+        }
+
+        ModifyRc::Dec(structure) => {
+            // Call helper proc, passing the Roc structure
+            let call_result_empty = root.create_symbol(ident_ids, "call_result_empty");
+            let call_expr = root
+                .call_specialized_op(ident_ids, ctx, layout, arena.alloc([*structure]))
+                .unwrap();
+
+            Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following)
+        }
+
+        ModifyRc::DecRef(structure) => {
+            // No generated procs for DecRef, just lowlevel ops
+            let rc_ptr_sym = root.create_symbol(ident_ids, "rc_ptr");
+
+            // Pass the refcount pointer to the lowlevel call (see utils.zig)
+            let call_result_empty = root.create_symbol(ident_ids, "call_result_empty");
+            let call_expr = Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::RefCountDec,
+                    update_mode: UpdateModeId::BACKEND_DUMMY,
+                },
+                arguments: arena.alloc([rc_ptr_sym]),
+            });
+            let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
+
+            // FIXME: `structure` is a pointer to the stack, not the heap!
+            rc_ptr_from_data_ptr(
+                root,
+                ident_ids,
+                *structure,
+                rc_ptr_sym,
+                arena.alloc(call_stmt),
+            )
+        }
+    }
+}
 
 pub fn refcount_generic<'a>(
     root: &mut CodeGenHelp<'a>,
