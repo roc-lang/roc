@@ -37,8 +37,10 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-pub enum BuildType {
+pub enum TestType {
+    /// Test that some Roc code evaluates to the right result
     Evaluate,
+    /// Test that some Roc values have the right refcount
     Refcount,
 }
 
@@ -48,7 +50,7 @@ pub fn compile_and_load<'a, T: Wasm32TestResult>(
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
     _test_wrapper_type_info: PhantomData<T>,
-    build_type: BuildType,
+    test_type: TestType,
 ) -> wasmer::Instance {
     let app_module_bytes = compile_roc_to_wasm_bytes(arena, src, stdlib, _test_wrapper_type_info);
 
@@ -60,7 +62,7 @@ pub fn compile_and_load<'a, T: Wasm32TestResult>(
         None
     };
 
-    let final_bytes = run_linker(app_module_bytes, maybe_src_hash, build_type);
+    let final_bytes = run_linker(app_module_bytes, maybe_src_hash, test_type);
 
     load_bytes_into_runtime(final_bytes)
 }
@@ -139,7 +141,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
 fn run_linker(
     app_module_bytes: Vec<u8>,
     maybe_src_hash: Option<u64>,
-    build_type: BuildType,
+    test_type: TestType,
 ) -> Vec<u8> {
     let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
     let debug_dir: String; // persistent directory for debugging
@@ -192,7 +194,7 @@ fn run_linker(
     ];
 
     // For some reason, this makes linking ~3x slower
-    if matches!(build_type, BuildType::Refcount) {
+    if matches!(test_type, TestType::Refcount) {
         args.extend_from_slice(&["--export", "init_refcount_test"]);
     }
 
@@ -243,7 +245,7 @@ where
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
     let instance =
-        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, BuildType::Evaluate);
+        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, TestType::Evaluate);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -289,7 +291,7 @@ where
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
     let instance =
-        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, BuildType::Refcount);
+        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, TestType::Refcount);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
