@@ -2,6 +2,7 @@ use core::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
+use std::path::{Path, PathBuf};
 use tempfile::{tempdir, TempDir};
 use wasmer::{Memory, WasmPtr};
 
@@ -36,15 +37,54 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
+pub enum TestType {
+    /// Test that some Roc code evaluates to the right result
+    Evaluate,
+    /// Test that some Roc values have the right refcount
+    Refcount,
+}
+
 #[allow(dead_code)]
 pub fn compile_and_load<'a, T: Wasm32TestResult>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
     _test_wrapper_type_info: PhantomData<T>,
+    test_type: TestType,
 ) -> wasmer::Instance {
-    use std::path::{Path, PathBuf};
+    let (app_module_bytes, needs_linking) =
+        compile_roc_to_wasm_bytes(arena, src, stdlib, _test_wrapper_type_info);
 
+    let keep_test_binary = DEBUG_LOG_SETTINGS.keep_test_binary;
+    let build_dir_hash = if keep_test_binary {
+        // Keep the output files for debugging, in a directory with a hash in the name
+        Some(src_hash(src))
+    } else {
+        // Use a temporary build directory for linking, then delete it
+        None
+    };
+
+    let final_bytes = if needs_linking || keep_test_binary {
+        run_linker(app_module_bytes, build_dir_hash, test_type)
+    } else {
+        app_module_bytes
+    };
+
+    load_bytes_into_runtime(final_bytes)
+}
+
+fn src_hash(src: &str) -> u64 {
+    let mut hash_state = DefaultHasher::new();
+    src.hash(&mut hash_state);
+    hash_state.finish()
+}
+
+fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
+    arena: &'a bumpalo::Bump,
+    src: &str,
+    stdlib: &'a roc_builtins::std::StdLib,
+    _test_wrapper_type_info: PhantomData<T>,
+) -> (Vec<u8>, bool) {
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -83,29 +123,6 @@ pub fn compile_and_load<'a, T: Wasm32TestResult>(
         ..
     } = loaded;
 
-    // You can comment and uncomment this block out to get more useful information
-    // while you're working on the wasm backend!
-    {
-        // println!("=========== Procedures ==========");
-        // if PRETTY_PRINT_IR_SYMBOLS {
-        //     println!("");
-        //     for proc in procedures.values() {
-        //         println!("{}", proc.to_pretty(200));
-        //     }
-        // } else {
-        //     println!("{:?}", procedures.values());
-        // }
-        // println!("=================================\n");
-
-        // println!("=========== Interns    ==========");
-        // println!("{:?}", interns);
-        // println!("=================================\n");
-
-        // println!("=========== Exposed    ==========");
-        // println!("{:?}", exposed_to_host);
-        // println!("=================================\n");
-    }
-
     debug_assert_eq!(exposed_to_host.len(), 1);
 
     let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
@@ -121,91 +138,99 @@ pub fn compile_and_load<'a, T: Wasm32TestResult>(
 
     T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
 
-    let mut module_bytes = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize_mut(&mut module_bytes);
+    let needs_linking = !wasm_module.import.entries.is_empty();
 
-    // now, do wasmer stuff
+    let mut app_module_bytes = std::vec::Vec::with_capacity(4096);
+    wasm_module.serialize_mut(&mut app_module_bytes);
 
-    use wasmer::{Instance, Module, Store};
+    (app_module_bytes, needs_linking)
+}
 
-    let store = Store::default();
+fn run_linker(
+    app_module_bytes: Vec<u8>,
+    build_dir_hash: Option<u64>,
+    test_type: TestType,
+) -> Vec<u8> {
+    let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
+    let debug_dir: String; // persistent directory for debugging
 
-    let wasmer_module = {
-        let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
-        let debug_dir: String; // persistent directory for debugging
-
-        let wasm_build_dir: &Path = if DEBUG_LOG_SETTINGS.keep_test_binary {
-            // Directory name based on a hash of the Roc source
-            let mut hash_state = DefaultHasher::new();
-            src.hash(&mut hash_state);
-            let src_hash = hash_state.finish();
-            debug_dir = format!("/tmp/roc/gen_wasm/{:016x}", src_hash);
-            std::fs::create_dir_all(&debug_dir).unwrap();
-            println!(
-                "Debug commands:\n\twasm-objdump -dx {}/app.o\n\twasm-objdump -dx {}/final.wasm",
-                &debug_dir, &debug_dir,
-            );
-            Path::new(&debug_dir)
-        } else {
-            tmp_dir = tempdir().unwrap();
-            tmp_dir.path()
-        };
-
-        let final_wasm_file = wasm_build_dir.join("final.wasm");
-        let app_o_file = wasm_build_dir.join("app.o");
-        let test_out_dir = std::env::var(OUT_DIR_VAR).unwrap();
-        let test_platform_o = format!("{}/{}.o", test_out_dir, PLATFORM_FILENAME);
-        let libc_a_file = std::env::var(LIBC_PATH_VAR).unwrap();
-        let compiler_rt_o_file = std::env::var(COMPILER_RT_PATH_VAR).unwrap();
-
-        // write the module to a file so the linker can access it
-        std::fs::write(&app_o_file, &module_bytes).unwrap();
-
-        let args = &[
-            "wasm-ld",
-            // input files
-            app_o_file.to_str().unwrap(),
-            bitcode::BUILTINS_WASM32_OBJ_PATH,
-            &test_platform_o,
-            &libc_a_file,
-            &compiler_rt_o_file,
-            // output
-            "-o",
-            final_wasm_file.to_str().unwrap(),
-            // we don't define `_start`
-            "--no-entry",
-            // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
-            // But if you specify both exports, you get all the dependencies.
-            //
-            // It seems that it will not write out an export you didn't explicitly specify,
-            // even if it's a dependency of another export!
-            "--export",
-            "test_wrapper",
-            "--export",
-            "init_refcount_test",
-            "--export",
-            "#UserApp_main_1",
-        ];
-
-        let linker_output = std::process::Command::new(&crate::helpers::zig_executable())
-            .args(args)
-            .output()
-            .unwrap();
-
-        if !linker_output.status.success() {
-            print!("\nLINKER FAILED\n");
-            for arg in args {
-                print!("{} ", arg);
-            }
-            println!("\n{}", std::str::from_utf8(&linker_output.stdout).unwrap());
-            println!("{}", std::str::from_utf8(&linker_output.stderr).unwrap());
-        }
-
-        Module::from_file(&store, &final_wasm_file).unwrap()
+    let wasm_build_dir: &Path = if let Some(src_hash) = build_dir_hash {
+        debug_dir = format!("/tmp/roc/gen_wasm/{:016x}", src_hash);
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        println!(
+            "Debug commands:\n\twasm-objdump -dx {}/app.o\n\twasm-objdump -dx {}/final.wasm",
+            &debug_dir, &debug_dir,
+        );
+        Path::new(&debug_dir)
+    } else {
+        tmp_dir = tempdir().unwrap();
+        tmp_dir.path()
     };
 
-    // First, we create the `WasiEnv`
+    let final_wasm_file = wasm_build_dir.join("final.wasm");
+    let app_o_file = wasm_build_dir.join("app.o");
+    let test_out_dir = std::env::var(OUT_DIR_VAR).unwrap();
+    let test_platform_o = format!("{}/{}.o", test_out_dir, PLATFORM_FILENAME);
+    let libc_a_file = std::env::var(LIBC_PATH_VAR).unwrap();
+    let compiler_rt_o_file = std::env::var(COMPILER_RT_PATH_VAR).unwrap();
+
+    // write the module to a file so the linker can access it
+    std::fs::write(&app_o_file, &app_module_bytes).unwrap();
+
+    let mut args = vec![
+        "wasm-ld",
+        // input files
+        app_o_file.to_str().unwrap(),
+        bitcode::BUILTINS_WASM32_OBJ_PATH,
+        &test_platform_o,
+        &libc_a_file,
+        &compiler_rt_o_file,
+        // output
+        "-o",
+        final_wasm_file.to_str().unwrap(),
+        // we don't define `_start`
+        "--no-entry",
+        // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
+        // But if you specify both exports, you get all the dependencies.
+        //
+        // It seems that it will not write out an export you didn't explicitly specify,
+        // even if it's a dependency of another export!
+        "--export",
+        "test_wrapper",
+        "--export",
+        "#UserApp_main_1",
+    ];
+
+    if matches!(test_type, TestType::Refcount) {
+        // If we always export this, tests run ~2.5x slower! Not sure why.
+        args.extend_from_slice(&["--export", "init_refcount_test"]);
+    }
+
+    let linker_output = std::process::Command::new(&crate::helpers::zig_executable())
+        .args(&args)
+        .output()
+        .unwrap();
+
+    if !linker_output.status.success() {
+        print!("\nLINKER FAILED\n");
+        for arg in args {
+            print!("{} ", arg);
+        }
+        println!("\n{}", std::str::from_utf8(&linker_output.stdout).unwrap());
+        println!("{}", std::str::from_utf8(&linker_output.stderr).unwrap());
+    }
+
+    std::fs::read(final_wasm_file).unwrap()
+}
+
+fn load_bytes_into_runtime(bytes: Vec<u8>) -> wasmer::Instance {
+    use wasmer::{Module, Store};
     use wasmer_wasi::WasiState;
+
+    let store = Store::default();
+    let wasmer_module = Module::new(&store, &bytes).unwrap();
+
+    // First, we create the `WasiEnv`
     let mut wasi_env = WasiState::new("hello").finalize().unwrap();
 
     // Then, we get the import object related to our WASI
@@ -214,7 +239,7 @@ pub fn compile_and_load<'a, T: Wasm32TestResult>(
         .import_object(&wasmer_module)
         .unwrap_or_else(|_| wasmer::imports!());
 
-    Instance::new(&wasmer_module, &import_object).unwrap()
+    wasmer::Instance::new(&wasmer_module, &import_object).unwrap()
 }
 
 #[allow(dead_code)]
@@ -227,7 +252,8 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
+    let instance =
+        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, TestType::Evaluate);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -272,7 +298,8 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
+    let instance =
+        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, TestType::Refcount);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
