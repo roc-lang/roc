@@ -833,10 +833,21 @@ enum OtherTags2 {
 }
 
 fn maybe_mark_tag_union_recursive(subs: &mut Subs, tag_union_var: Variable) {
-    while let Err((recursive, _chain)) = subs.occurs(tag_union_var) {
+    'outer: while let Err((recursive, chain)) = subs.occurs(tag_union_var) {
         let description = subs.get(recursive);
         if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = description.content {
             subs.mark_tag_union_recursive(recursive, tags, ext_var);
+        } else {
+            // walk the chain till we find a tag union
+            for v in &chain[..chain.len() - 1] {
+                let description = subs.get(*v);
+                if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = description.content {
+                    subs.mark_tag_union_recursive(*v, tags, ext_var);
+                    continue 'outer;
+                }
+            }
+
+            panic!("recursive loop does not contain a tag union")
         }
     }
 }
