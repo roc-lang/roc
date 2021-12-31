@@ -677,11 +677,21 @@ impl From<&str> for RocStr {
 impl fmt::Debug for RocStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // RocStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
-        f.debug_struct("RocStr")
-            .field("is_small_str", &self.is_small_str())
-            .field("storage", &self.storage())
-            .field("elements", &self.as_str())
-            .finish()
+
+        match core::str::from_utf8(self.as_slice()) {
+            Ok(string) => f
+                .debug_struct("RocStr")
+                .field("is_small_str", &self.is_small_str())
+                .field("storage", &self.storage())
+                .field("string_contents", &string)
+                .finish(),
+            Err(_) => f
+                .debug_struct("RocStr")
+                .field("is_small_str", &self.is_small_str())
+                .field("storage", &self.storage())
+                .field("byte_contents", &self.as_slice())
+                .finish(),
+        }
     }
 }
 
