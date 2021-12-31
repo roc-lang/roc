@@ -1991,26 +1991,6 @@ fn pattern_shadowing() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = "TODO non-exhaustive pattern")]
-fn non_exhaustive_pattern_let() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            x : Result (Int a) (Float b)
-            x = Ok 4
-
-            (Ok y) = x
-
-            y
-            "#
-        ),
-        0,
-        i64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 #[should_panic(expected = "")]
 fn unsupported_pattern_str_interp() {
