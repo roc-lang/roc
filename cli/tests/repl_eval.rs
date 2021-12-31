@@ -805,6 +805,14 @@ mod repl_eval {
         )
     }
 
+    #[test]
+    fn issue_2300() {
+        expect_success(
+            r#"\Email str -> str == """#,
+            r#"<function> : [ Email Str ] -> Bool"#,
+        )
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently

@@ -3468,9 +3468,11 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
     let call_result = {
+        let last_block = builder.get_insert_block().unwrap();
+
         let roc_wrapper_function = make_exception_catcher(env, roc_function, return_layout);
 
-        builder.position_at_end(entry);
+        builder.position_at_end(last_block);
 
         call_roc_function(
             env,
