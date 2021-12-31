@@ -680,7 +680,7 @@ impl fmt::Debug for RocStr {
         f.debug_struct("RocStr")
             .field("is_small_str", &self.is_small_str())
             .field("storage", &self.storage())
-            .field("elements", &self.as_slice())
+            .field("elements", &self.as_str())
             .finish()
     }
 }
