@@ -30,13 +30,13 @@ pub fn deinit(self: ArenaStack) void {
 }
 
 pub fn push(self: *ArenaStack) void {
-    debug_info("push:    {d}\n", .{self.items.items.len});
+    std.io.getStdOut().writer().print("[push]\n", .{}) catch unreachable;
 
     self.items.append(ArenaAllocator.init(self.allocator)) catch unreachable;
 }
 
 pub fn pop(self: *ArenaStack) void {
-    debug_info("pop:     {d}\n", .{self.items.items.len});
+    std.io.getStdOut().writer().print("[pop]\n", .{}) catch unreachable;
 
     self.items.items[self.items.items.len - 1].deinit();
     self.items.shrinkRetainingCapacity(self.items.items.len - 1);

@@ -384,6 +384,14 @@ mod cli_run {
                 use_valgrind: true,
             }
         },
+        arena_allocator:"arena-allocator" => Example {
+            filename: "ArenaAlloc.roc",
+            executable_filename: "arena-alloc",
+            stdin: &["abcdefgh\n"],
+            input_file: None,
+            expected_ending: "Bytes: 97,98,99,100,101,102,103,104,\n[pop]\n",
+            use_valgrind: true,
+        },
     }
 
     macro_rules! benchmarks {
