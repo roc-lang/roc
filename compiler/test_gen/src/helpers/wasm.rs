@@ -52,17 +52,23 @@ pub fn compile_and_load<'a, T: Wasm32TestResult>(
     _test_wrapper_type_info: PhantomData<T>,
     test_type: TestType,
 ) -> wasmer::Instance {
-    let app_module_bytes = compile_roc_to_wasm_bytes(arena, src, stdlib, _test_wrapper_type_info);
+    let (app_module_bytes, needs_linking) =
+        compile_roc_to_wasm_bytes(arena, src, stdlib, _test_wrapper_type_info);
 
-    let maybe_src_hash = if DEBUG_LOG_SETTINGS.keep_test_binary {
+    let keep_test_binary = DEBUG_LOG_SETTINGS.keep_test_binary;
+    let build_dir_hash = if keep_test_binary {
         // Keep the output files for debugging, in a directory with a hash in the name
         Some(src_hash(src))
     } else {
-        // Use a temporary for linking, then delete it
+        // Use a temporary build directory for linking, then delete it
         None
     };
 
-    let final_bytes = run_linker(app_module_bytes, maybe_src_hash, test_type);
+    let final_bytes = if needs_linking || keep_test_binary {
+        run_linker(app_module_bytes, build_dir_hash, test_type)
+    } else {
+        app_module_bytes
+    };
 
     load_bytes_into_runtime(final_bytes)
 }
@@ -78,7 +84,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
     _test_wrapper_type_info: PhantomData<T>,
-) -> Vec<u8> {
+) -> (Vec<u8>, bool) {
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -132,21 +138,23 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
 
     T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
 
+    let needs_linking = !wasm_module.import.entries.is_empty();
+
     let mut app_module_bytes = std::vec::Vec::with_capacity(4096);
     wasm_module.serialize_mut(&mut app_module_bytes);
 
-    app_module_bytes
+    (app_module_bytes, needs_linking)
 }
 
 fn run_linker(
     app_module_bytes: Vec<u8>,
-    maybe_src_hash: Option<u64>,
+    build_dir_hash: Option<u64>,
     test_type: TestType,
 ) -> Vec<u8> {
     let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
     let debug_dir: String; // persistent directory for debugging
 
-    let wasm_build_dir: &Path = if let Some(src_hash) = maybe_src_hash {
+    let wasm_build_dir: &Path = if let Some(src_hash) = build_dir_hash {
         debug_dir = format!("/tmp/roc/gen_wasm/{:016x}", src_hash);
         std::fs::create_dir_all(&debug_dir).unwrap();
         println!(
