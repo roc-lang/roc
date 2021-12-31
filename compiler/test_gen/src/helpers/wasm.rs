@@ -36,12 +36,18 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
+pub enum BuildType {
+    Evaluate,
+    Refcount,
+}
+
 #[allow(dead_code)]
 pub fn compile_and_load<'a, T: Wasm32TestResult>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
     _test_wrapper_type_info: PhantomData<T>,
+    build_type: BuildType,
 ) -> wasmer::Instance {
     use std::path::{Path, PathBuf};
 
@@ -161,7 +167,7 @@ pub fn compile_and_load<'a, T: Wasm32TestResult>(
         // write the module to a file so the linker can access it
         std::fs::write(&app_o_file, &module_bytes).unwrap();
 
-        let args = &[
+        let mut args = vec![
             "wasm-ld",
             // input files
             app_o_file.to_str().unwrap(),
@@ -182,13 +188,16 @@ pub fn compile_and_load<'a, T: Wasm32TestResult>(
             "--export",
             "test_wrapper",
             "--export",
-            "init_refcount_test",
-            "--export",
             "#UserApp_main_1",
         ];
 
+        // For some reason, this makes linking ~3x slower
+        if matches!(build_type, BuildType::Refcount) {
+            args.extend_from_slice(&["--export", "init_refcount_test"]);
+        }
+
         let linker_output = std::process::Command::new(&crate::helpers::zig_executable())
-            .args(args)
+            .args(&args)
             .output()
             .unwrap();
 
@@ -227,7 +236,8 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
+    let instance =
+        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, BuildType::Evaluate);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -272,7 +282,8 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
+    let instance =
+        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, BuildType::Refcount);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
