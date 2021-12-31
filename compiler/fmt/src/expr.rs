@@ -6,7 +6,7 @@ use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
-    AssignedField, Base, Collection, CommentOrNewline, Expr, Pattern, WhenBranch,
+    AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_region::all::Loc;
@@ -514,10 +514,15 @@ fn fmt_when<'a, 'buf>(
         let patterns = &branch.patterns;
         let expr = &branch.value;
         let (first_pattern, rest) = patterns.split_first().unwrap();
-        let is_multiline = if rest.is_empty() {
-            false
+        let is_multiline = if let Some((last_pattern, inner_patterns)) = rest.split_last() {
+            !first_pattern.value.extract_spaces().after.is_empty()
+                || !last_pattern.value.extract_spaces().before.is_empty()
+                || inner_patterns.iter().any(|p| {
+                    let spaces = p.value.extract_spaces();
+                    !spaces.before.is_empty() || !spaces.after.is_empty()
+                })
         } else {
-            patterns.iter().any(|p| p.is_multiline())
+            false
         };
 
         fmt_pattern(

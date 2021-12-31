@@ -856,6 +856,7 @@ macro_rules! impl_extract_spaces {
 }
 
 impl_extract_spaces!(Expr);
+impl_extract_spaces!(Pattern);
 impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 
