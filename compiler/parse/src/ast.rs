@@ -791,6 +791,10 @@ impl<'a> Expr<'a> {
             value: self,
         }
     }
+
+    pub fn is_tag(&self) -> bool {
+        matches!(self, Expr::GlobalTag(_) | Expr::PrivateTag(_))
+    }
 }
 
 macro_rules! impl_extract_spaces {
