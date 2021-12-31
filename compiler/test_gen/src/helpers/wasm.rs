@@ -115,29 +115,6 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
         ..
     } = loaded;
 
-    // You can comment and uncomment this block out to get more useful information
-    // while you're working on the wasm backend!
-    {
-        // println!("=========== Procedures ==========");
-        // if PRETTY_PRINT_IR_SYMBOLS {
-        //     println!("");
-        //     for proc in procedures.values() {
-        //         println!("{}", proc.to_pretty(200));
-        //     }
-        // } else {
-        //     println!("{:?}", procedures.values());
-        // }
-        // println!("=================================\n");
-
-        // println!("=========== Interns    ==========");
-        // println!("{:?}", interns);
-        // println!("=================================\n");
-
-        // println!("=========== Exposed    ==========");
-        // println!("{:?}", exposed_to_host);
-        // println!("=================================\n");
-    }
-
     debug_assert_eq!(exposed_to_host.len(), 1);
 
     let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
