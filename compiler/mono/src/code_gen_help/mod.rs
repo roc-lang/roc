@@ -148,12 +148,14 @@ impl<'a> CodeGenHelp<'a> {
 
                 // Call helper proc, passing the Roc structure and constant amount
                 let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
-                let call_expr = self.call_specialized_op(
-                    ident_ids,
-                    &mut ctx,
-                    layout,
-                    arena.alloc([*structure, amount_sym]),
-                );
+                let call_expr = self
+                    .call_specialized_op(
+                        ident_ids,
+                        &mut ctx,
+                        layout,
+                        arena.alloc([*structure, amount_sym]),
+                    )
+                    .unwrap();
                 let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
                 let rc_stmt = arena.alloc(amount_stmt(arena.alloc(call_stmt)));
 
@@ -163,12 +165,9 @@ impl<'a> CodeGenHelp<'a> {
             ModifyRc::Dec(structure) => {
                 // Call helper proc, passing the Roc structure
                 let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
-                let call_expr = self.call_specialized_op(
-                    ident_ids,
-                    &mut ctx,
-                    layout,
-                    arena.alloc([*structure]),
-                );
+                let call_expr = self
+                    .call_specialized_op(ident_ids, &mut ctx, layout, arena.alloc([*structure]))
+                    .unwrap();
 
                 let rc_stmt = arena.alloc(Stmt::Let(
                     call_result_empty,
@@ -195,7 +194,8 @@ impl<'a> CodeGenHelp<'a> {
                 });
                 let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
 
-                let rc_stmt = arena.alloc(refcount::rc_ptr_from_struct(
+                // FIXME: `structure` is a pointer to the stack, not the heap!
+                let rc_stmt = arena.alloc(refcount::rc_ptr_from_data_ptr(
                     self,
                     ident_ids,
                     *structure,
@@ -222,7 +222,9 @@ impl<'a> CodeGenHelp<'a> {
             op: HelperOp::Eq,
         };
 
-        let expr = self.call_specialized_op(ident_ids, &mut ctx, *layout, arguments);
+        let expr = self
+            .call_specialized_op(ident_ids, &mut ctx, *layout, arguments)
+            .unwrap();
 
         (expr, ctx.new_linker_data)
     }
@@ -238,8 +240,8 @@ impl<'a> CodeGenHelp<'a> {
         ident_ids: &mut IdentIds,
         ctx: &mut Context<'a>,
         called_layout: Layout<'a>,
-        arguments: &[Symbol],
-    ) -> Expr<'a> {
+        arguments: &'a [Symbol],
+    ) -> Option<Expr<'a>> {
         use HelperOp::*;
 
         debug_assert!(self.debug_recursion_depth < 10);
@@ -263,23 +265,25 @@ impl<'a> CodeGenHelp<'a> {
                 }
             };
 
-            Expr::Call(Call {
+            Some(Expr::Call(Call {
                 call_type: CallType::ByName {
                     name: proc_name,
                     ret_layout,
                     arg_layouts,
                     specialization_id: CallSpecId::BACKEND_DUMMY,
                 },
-                arguments: self.arena.alloc_slice_copy(arguments),
-            })
-        } else {
-            Expr::Call(Call {
+                arguments,
+            }))
+        } else if ctx.op == HelperOp::Eq {
+            Some(Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::Eq,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: self.arena.alloc_slice_copy(arguments),
-            })
+                arguments,
+            }))
+        } else {
+            None
         }
     }
 
