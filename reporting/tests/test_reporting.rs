@@ -1662,7 +1662,7 @@ mod test_reporting {
 
                 But you are trying to use it as:
 
-                    [ Foo a ]b
+                    [ Foo a ]
                 "#
             ),
         )
@@ -2481,20 +2481,26 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This pattern does not cover all the possibilities:
+                This expression is used in an unexpected way:
 
                 5│  (Left y) = x
-                     ^^^^^^
+                               ^
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Right _
+                    [ Left I64, Right Bool ]
 
-                I would have to crash if I saw one of those! You can use a binding to
-                deconstruct a value if there is only ONE possibility. Use a `when` to
-                account for all possibilities.
+                But you are trying to use it as:
+
+                    [ Left a ]
+
+                Tip: Seems like a tag typo. Maybe `Right` should be `Left`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -6980,6 +6986,46 @@ I need all branches in an `if` to have the same type!
                                                                         ^
 
                 All type arguments must be lowercase.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn mismatched_single_tag_arg() {
+        report_problem_as(
+            indoc!(
+                r#"
+                isEmpty =
+                    \email ->
+                        Email str = email
+                        Str.isEmpty str
+
+                isEmpty (Name "boo")
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `isEmpty` is not what I expect:
+
+                6│  isEmpty (Name "boo")
+                             ^^^^^^^^^^
+
+                This `Name` global tag application has the type:
+
+                    [ Name Str ]a
+
+                But `isEmpty` needs the 1st argument to be:
+
+                    [ Email Str ]
+
+                Tip: Seems like a tag typo. Maybe `Name` should be `Email`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )

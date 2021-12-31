@@ -4922,4 +4922,17 @@ mod solve_expr {
             "[ UserId (Num a) ] -> Num a",
         )
     }
+
+    fn infer_union_def_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \email ->
+                    Email str = email
+                    Str.isEmpty str
+                 "#
+            ),
+            "[ Email Str ] -> Bool",
+        )
+    }
 }
