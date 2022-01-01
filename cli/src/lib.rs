@@ -9,14 +9,17 @@ use roc_load::file::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use std::env;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::process;
 use std::process::Command;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
 
 pub mod build;
+mod format;
 pub mod repl;
+pub use format::format;
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_REPL: &str = "repl";
@@ -24,6 +27,7 @@ pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
 pub const CMD_CHECK: &str = "check";
 pub const CMD_VERSION: &str = "version";
+pub const CMD_FORMAT: &str = "format";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
@@ -35,6 +39,7 @@ pub const FLAG_LINK: &str = "roc-linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const FLAG_VALGRIND: &str = "valgrind";
 pub const ROC_FILE: &str = "ROC_FILE";
+pub const ROC_DIR: &str = "ROC_DIR";
 pub const BACKEND: &str = "BACKEND";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
@@ -110,6 +115,14 @@ pub fn build_app<'a>() -> App<'a> {
         )
         .subcommand(App::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
+        )
+        .subcommand(App::new(CMD_FORMAT)
+            .about("Format Roc code")
+            .arg(
+                Arg::new(DIRECTORY_OR_FILES)
+                    .index(1)
+                    .multiple_values(true)
+                    .required(false))
         )
         .subcommand(App::new(CMD_VERSION)
             .about("Print version information")

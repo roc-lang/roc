@@ -59,7 +59,7 @@ pub enum Attribute {
     UnderlineEnd { underline_end: UnderlineEnd },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Attributes {
     pub all: Vec<Attribute>,
 }
@@ -115,11 +115,5 @@ impl Attributes {
         ensure!(old_len != new_len, CaretNotFound { node_id });
 
         Ok(())
-    }
-}
-
-impl Default for Attributes {
-    fn default() -> Self {
-        Attributes { all: Vec::new() }
     }
 }

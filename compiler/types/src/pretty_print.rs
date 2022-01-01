@@ -4,7 +4,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
-static WILDCARD: &str = "*";
+pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
 static EMPTY_TAG_UNION: &str = "[]";
 
@@ -199,7 +199,7 @@ fn find_names_needed(
         }
         Alias(_symbol, args, _actual) => {
             // only find names for named parameters!
-            for var_index in args.variables().into_iter().take(args.len()) {
+            for var_index in args.into_iter().take(args.len()) {
                 let var = subs[var_index];
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
@@ -309,7 +309,6 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                     debug_assert_eq!(args.len(), 1);
 
                     let arg_var_index = args
-                        .variables()
                         .into_iter()
                         .next()
                         .expect("Num was not applied to a type argument!");
@@ -337,7 +336,7 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                 _ => write_parens!(write_parens, buf, {
                     write_symbol(env, *symbol, buf);
 
-                    for var_index in args.variables() {
+                    for var_index in args.into_iter() {
                         let var = subs[var_index];
                         buf.push(' ');
                         write_content(
@@ -505,24 +504,14 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
     use crate::subs::FlatType::*;
 
     match flat_type {
-        Apply(symbol, args) => write_apply(
-            env,
-            *symbol,
-            subs.get_subs_slice(*args.as_subs_slice()),
-            subs,
-            buf,
-            parens,
-        ),
+        Apply(symbol, args) => {
+            write_apply(env, *symbol, subs.get_subs_slice(*args), subs, buf, parens)
+        }
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, _closure, ret) => write_fn(
-            env,
-            subs.get_subs_slice(*args.as_subs_slice()),
-            *ret,
-            subs,
-            buf,
-            parens,
-        ),
+        Func(args, _closure, ret) => {
+            write_fn(env, subs.get_subs_slice(*args), *ret, subs, buf, parens)
+        }
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 
@@ -530,7 +519,8 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
             let RecordStructure {
                 fields: sorted_fields,
                 ext,
-            } = gather_fields(subs, *fields, *ext_var);
+            } = gather_fields(subs, *fields, *ext_var)
+                .expect("Something ended up weird in this record type");
             let ext_var = ext;
 
             if fields.is_empty() {
@@ -641,7 +631,7 @@ pub fn chase_ext_tag_union<'a>(
         Content::Structure(TagUnion(tags, ext_var)) => {
             for (name_index, slice_index) in tags.iter_all() {
                 let subs_slice = subs[slice_index];
-                let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+                let slice = subs.get_subs_slice(subs_slice);
                 let tag_name = subs[name_index].clone();
 
                 fields.push((tag_name, slice.to_vec()));
@@ -653,7 +643,7 @@ pub fn chase_ext_tag_union<'a>(
         Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
             for (name_index, slice_index) in tags.iter_all() {
                 let subs_slice = subs[slice_index];
-                let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+                let slice = subs.get_subs_slice(subs_slice);
                 let tag_name = subs[name_index].clone();
 
                 fields.push((tag_name, slice.to_vec()));

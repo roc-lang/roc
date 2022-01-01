@@ -58,9 +58,9 @@ mod insert_doc_syntax_highlighting {
 
     pub const HELLO_WORLD: &str = r#"
 app "test-app"
-    packages { base: "platform" }
+    packages { pf: "platform" }
     imports []
-    provides [ main ] to base
+    provides [ main ] to pf
 
 main = "Hello, world!"
 
@@ -175,8 +175,8 @@ main = "Hello, world!"
     #[test]
     fn call_builtin() {
         expect_html_def(
-            r#"myVal = Str.fromInt 1234"#,
-            "<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-value\">Str.fromInt</span><span class=\"syntax-blank\"> </span><span class=\"syntax-number\">1234</span>\n\n",
+            r#"myVal = Num.toStr 1234"#,
+            "<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-value\">Num.toStr</span><span class=\"syntax-blank\"> </span><span class=\"syntax-number\">1234</span>\n\n",
         );
     }
 

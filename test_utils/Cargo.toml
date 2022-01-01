@@ -1,0 +1,12 @@
+[package]
+name = "roc_test_utils"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2018"
+description = "Utility functions used all over the code base."
+
+[dependencies]
+pretty_assertions = "1.0.0"
+
+[dev-dependencies]

@@ -1,7 +1,7 @@
 use crate::{ir::DestructType, layout::TagIdIntType};
 use roc_collections::all::{Index, MutMap};
 use roc_module::ident::{Lowercase, TagName};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 
 use self::Pattern::*;
@@ -162,7 +162,7 @@ pub enum Guard {
 
 pub fn check(
     region: Region,
-    patterns: &[(Located<crate::ir::Pattern>, Guard)],
+    patterns: &[(Loc<crate::ir::Pattern>, Guard)],
     context: Context,
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
@@ -178,7 +178,7 @@ pub fn check(
 pub fn check_patterns<'a>(
     region: Region,
     context: Context,
-    patterns: &[(Located<crate::ir::Pattern<'a>>, Guard)],
+    patterns: &[(Loc<crate::ir::Pattern<'a>>, Guard)],
     errors: &mut Vec<Error>,
 ) {
     match to_nonredundant_rows(region, patterns) {
@@ -311,7 +311,7 @@ fn recover_ctor(
 /// INVARIANT: Produces a list of rows where (forall row. length row == 1)
 fn to_nonredundant_rows(
     overall_region: Region,
-    patterns: &[(Located<crate::ir::Pattern>, Guard)],
+    patterns: &[(Loc<crate::ir::Pattern>, Guard)],
 ) -> Result<Vec<Vec<Pattern>>, Error> {
     let mut checked_rows = Vec::with_capacity(patterns.len());
 

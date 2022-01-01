@@ -1,7 +1,7 @@
 app "hello-swift"
-    packages { base: "platform" }
+    packages { pf: "platform" }
     imports []
-    provides [ main ] to base
+    provides [ main ] to pf
 
 main =
     host = "Swift"

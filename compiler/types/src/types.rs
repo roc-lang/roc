@@ -7,7 +7,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use std::fmt;
 
 pub const TYPE_NUM: &str = "Num";
@@ -169,6 +169,11 @@ pub enum Type {
     Record(SendMap<Lowercase, RecordField<Type>>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
     FunctionOrTagUnion(TagName, Symbol, Box<Type>),
+    /// A function name that is used in our defunctionalization algorithm
+    ClosureTag {
+        name: Symbol,
+        ext: Variable,
+    },
     Alias {
         symbol: Symbol,
         type_arguments: Vec<(Lowercase, Type)>,
@@ -378,6 +383,15 @@ impl fmt::Debug for Type {
                     }
                 }
             }
+            Type::ClosureTag { name, ext } => {
+                write!(f, "ClosureTag(")?;
+
+                name.fmt(f)?;
+                write!(f, ", ")?;
+                ext.fmt(f)?;
+
+                write!(f, ")")
+            }
             Type::RecursiveTagUnion(rec, tags, ext) => {
                 write!(f, "[")?;
 
@@ -462,7 +476,7 @@ impl Type {
         use Type::*;
 
         match self {
-            Variable(v) => {
+            ClosureTag { ext: v, .. } | Variable(v) => {
                 if let Some(replacement) = substitutions.get(v) {
                     *self = replacement.clone();
                 }
@@ -590,7 +604,7 @@ impl Type {
                     arg.substitute_alias(rep_symbol, actual);
                 }
             }
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
     }
 
@@ -627,7 +641,7 @@ impl Type {
             }
             Apply(symbol, _) if *symbol == rep_symbol => true,
             Apply(_, args) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => false,
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
         }
     }
 
@@ -635,7 +649,7 @@ impl Type {
         use Type::*;
 
         match self {
-            Variable(v) => *v == rep_variable,
+            ClosureTag { ext: v, .. } | Variable(v) => *v == rep_variable,
             Function(args, closure, ret) => {
                 ret.contains_variable(rep_variable)
                     || closure.contains_variable(rep_variable)
@@ -758,7 +772,7 @@ impl Type {
 
                     // TODO substitute further in args
                     for (
-                        Located {
+                        Loc {
                             value: (lowercase, placeholder),
                             ..
                         },
@@ -819,7 +833,7 @@ impl Type {
                     }
                 }
             }
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
     }
 }
@@ -872,7 +886,7 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
             accum.insert(*symbol);
             args.iter().for_each(|arg| symbols_help(arg, accum));
         }
-        EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
+        EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
     }
 }
 
@@ -882,7 +896,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
 
-        Variable(v) => {
+        ClosureTag { ext: v, .. } | Variable(v) => {
             accum.insert(*v);
         }
 
@@ -979,7 +993,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
 
-        Variable(v) => {
+        ClosureTag { ext: v, .. } | Variable(v) => {
             accum.type_variables.insert(*v);
         }
 
@@ -1095,9 +1109,28 @@ pub enum PReason {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationSource {
-    TypedIfBranch { index: Index, num_branches: usize },
-    TypedWhenBranch { index: Index },
-    TypedBody { region: Region },
+    TypedIfBranch {
+        index: Index,
+        num_branches: usize,
+        region: Region,
+    },
+    TypedWhenBranch {
+        index: Index,
+        region: Region,
+    },
+    TypedBody {
+        region: Region,
+    },
+}
+
+impl AnnotationSource {
+    pub fn region(&self) -> Region {
+        match self {
+            &Self::TypedIfBranch { region, .. }
+            | &Self::TypedWhenBranch { region, .. }
+            | &Self::TypedBody { region, .. } => region,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1194,7 +1227,7 @@ pub enum PatternCategory {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Alias {
     pub region: Region,
-    pub type_variables: Vec<Located<(Lowercase, Variable)>>,
+    pub type_variables: Vec<Loc<(Lowercase, Variable)>>,
 
     /// lambda set variables, e.g. the one annotating the arrow in
     /// a |c|-> b
@@ -1211,7 +1244,7 @@ pub enum Problem {
     CircularType(Symbol, Box<ErrorType>, Region),
     CyclicAlias(Symbol, Region, Vec<Symbol>),
     UnrecognizedIdent(Ident),
-    Shadowed(Region, Located<Ident>),
+    Shadowed(Region, Loc<Ident>),
     BadTypeArguments {
         symbol: Symbol,
         region: Region,
@@ -1241,7 +1274,7 @@ pub enum ErrorType {
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
-    Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
+    Alias(Symbol, Vec<ErrorType>, Box<ErrorType>),
     Error,
 }
 
@@ -1257,6 +1290,50 @@ impl ErrorType {
         match self {
             ErrorType::Alias(_, _, real) => real.unwrap_alias(),
             real => real,
+        }
+    }
+
+    /// Adds all named type variables used in the type to a set.
+    pub fn add_names(&self, taken: &mut MutSet<Lowercase>) {
+        use ErrorType::*;
+        match self {
+            Infinite => {}
+            Type(_, ts) => ts.iter().for_each(|t| t.add_names(taken)),
+            FlexVar(v) => {
+                taken.insert(v.clone());
+            }
+            RigidVar(v) => {
+                taken.insert(v.clone());
+            }
+            Record(fields, ext) => {
+                fields
+                    .iter()
+                    .for_each(|(_, t)| t.as_inner().add_names(taken));
+                ext.add_names(taken);
+            }
+            TagUnion(tags, ext) => {
+                tags.iter()
+                    .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
+                ext.add_names(taken);
+            }
+            RecursiveTagUnion(t, tags, ext) => {
+                t.add_names(taken);
+                tags.iter()
+                    .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
+                ext.add_names(taken);
+            }
+            Function(args, capt, ret) => {
+                args.iter().for_each(|t| t.add_names(taken));
+                capt.add_names(taken);
+                ret.add_names(taken);
+            }
+            Alias(_, ts, t) => {
+                ts.iter().for_each(|t| {
+                    t.add_names(taken);
+                });
+                t.add_names(taken);
+            }
+            Error => {}
         }
     }
 }
@@ -1303,7 +1380,7 @@ fn write_error_type_help(
         Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
             debug_assert!(arguments.len() == 1);
 
-            let argument = arguments.remove(0).1;
+            let argument = arguments.remove(0);
 
             match argument {
                 Type(Symbol::NUM_INTEGER, _) => {
@@ -1421,7 +1498,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
         Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
             debug_assert!(arguments.len() == 1);
 
-            let argument = arguments.remove(0).1;
+            let argument = arguments.remove(0);
 
             match argument {
                 Type(Symbol::NUM_INTEGER, _) => {
@@ -1456,7 +1533,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             for arg in arguments {
                 buf.push(' ');
 
-                write_debug_error_type_help(arg.1, buf, Parens::InTypeParam);
+                write_debug_error_type_help(arg, buf, Parens::InTypeParam);
             }
 
             // useful for debugging
@@ -1577,6 +1654,18 @@ pub enum TypeExt {
     RigidOpen(Lowercase),
 }
 
+impl TypeExt {
+    pub fn add_names(&self, taken: &mut MutSet<Lowercase>) {
+        use TypeExt::*;
+        match self {
+            Closed => {}
+            FlexOpen(n) | RigidOpen(n) => {
+                taken.insert(n.clone());
+            }
+        }
+    }
+}
+
 fn write_type_ext(ext: TypeExt, buf: &mut String) {
     use TypeExt::*;
     match ext {
@@ -1612,14 +1701,20 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct RecordFieldsError;
+
 pub fn gather_fields_unsorted_iter(
     subs: &Subs,
     other_fields: RecordFields,
     mut var: Variable,
-) -> (
-    impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + '_,
-    Variable,
-) {
+) -> Result<
+    (
+        impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + '_,
+        Variable,
+    ),
+    RecordFieldsError,
+> {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
@@ -1644,7 +1739,7 @@ pub fn gather_fields_unsorted_iter(
             // TODO investigate apparently this one pops up in the reporting tests!
             RigidVar(_) => break,
 
-            other => unreachable!("something weird ended up in a record type: {:?}", other),
+            _ => return Err(RecordFieldsError),
         }
     }
 
@@ -1660,11 +1755,15 @@ pub fn gather_fields_unsorted_iter(
             (field_name, record_field)
         });
 
-    (it, var)
+    Ok((it, var))
 }
 
-pub fn gather_fields(subs: &Subs, other_fields: RecordFields, var: Variable) -> RecordStructure {
-    let (it, ext) = gather_fields_unsorted_iter(subs, other_fields, var);
+pub fn gather_fields(
+    subs: &Subs,
+    other_fields: RecordFields,
+    var: Variable,
+) -> Result<RecordStructure, RecordFieldsError> {
+    let (it, ext) = gather_fields_unsorted_iter(subs, other_fields, var)?;
 
     let mut result: Vec<_> = it
         .map(|(ref_label, field)| (ref_label.clone(), field))
@@ -1672,10 +1771,10 @@ pub fn gather_fields(subs: &Subs, other_fields: RecordFields, var: Variable) -> 
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    RecordStructure {
+    Ok(RecordStructure {
         fields: result,
         ext,
-    }
+    })
 }
 
 pub fn gather_tags_unsorted_iter(
@@ -1751,7 +1850,7 @@ pub fn gather_tags_slices(
     let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
 
     let mut result: Vec<_> = it
-        .map(|(ref_label, field)| (ref_label.clone(), field))
+        .map(|(ref_label, field): (_, VariableSubsSlice)| (ref_label.clone(), field))
         .collect();
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -1763,11 +1862,8 @@ pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUn
     let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
 
     let mut result: Vec<_> = it
-        .map(|(ref_label, field)| {
-            (
-                ref_label.clone(),
-                subs.get_subs_slice(*field.as_subs_slice()),
-            )
+        .map(|(ref_label, field): (_, VariableSubsSlice)| {
+            (ref_label.clone(), subs.get_subs_slice(field))
         })
         .collect();
 

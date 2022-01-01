@@ -17,7 +17,8 @@ roc_problem = { path = "../compiler/problem" }
 roc_types = { path = "../compiler/types" }
 roc_unify = { path = "../compiler/unify"}
 roc_load = { path = "../compiler/load" }
-arraystring = "0.3.0"
+roc_reporting = { path = "../reporting" }
+arrayvec = "0.7.2"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 libc = "0.2.106"
 page_size = "0.4.2"

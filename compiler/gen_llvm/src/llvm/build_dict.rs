@@ -3,7 +3,8 @@ use crate::llvm::bitcode::{
     build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
-    complex_bitcast, load_symbol, load_symbol_and_layout, Env, RocFunctionCall, Scope,
+    complex_bitcast, load_roc_value, load_symbol, load_symbol_and_layout, Env, RocFunctionCall,
+    Scope,
 };
 use crate::llvm::build_list::{layout_width, pass_as_opaque};
 use crate::llvm::convert::{basic_type_from_layout, zig_dict_type, zig_list_type};
@@ -26,7 +27,9 @@ impl Alignment {
         let value_align = value.alignment_bytes(ptr_bytes);
 
         let mut bits = key_align.max(value_align) as u8;
-        debug_assert!(bits == 4 || bits == 8 || bits == 16);
+
+        // alignment must be a power of 2
+        debug_assert!(bits.is_power_of_two());
 
         let value_before_key_flag = 0b1000_0000;
 
@@ -64,7 +67,6 @@ pub fn dict_len<'a, 'ctx, 'env>(
                 .build_int_cast(length_i64.into_int_value(), env.ptr_int(), "to_usize")
                 .into()
         }
-        Layout::Builtin(Builtin::EmptyDict) => env.ptr_int().const_zero().into(),
         _ => unreachable!("Invalid layout given to Dict.len : {:?}", dict_layout),
     }
 }
@@ -811,7 +813,7 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
                 .build_bitcast(value_ptr, value_type, "load_opaque")
                 .into_pointer_value();
 
-            let val_arg = env.builder.build_load(value_cast, "load_opaque");
+            let val_arg = load_roc_value(env, *layout, value_cast, "load_opaque");
 
             let result =
                 crate::llvm::build_hash::generic_hash(env, layout_ids, seed_arg, val_arg, layout);

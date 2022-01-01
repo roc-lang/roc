@@ -110,7 +110,7 @@ pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.extend(arguments.iter().copied());
             result.insert(*symbol);
         }
-        Reset(x) => {
+        Reset { symbol: x, .. } => {
             result.insert(*x);
         }
 
@@ -151,8 +151,7 @@ pub type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
 struct Context<'a> {
     arena: &'a Bump,
     vars: VarMap,
-    jp_live_vars: JPLiveVarMap,      // map: join point => live variables
-    local_context: LocalContext<'a>, // we use it to store the join point declarations
+    jp_live_vars: JPLiveVarMap, // map: join point => live variables
     param_map: &'a ParamMap<'a>,
 }
 
@@ -244,7 +243,6 @@ impl<'a> Context<'a> {
             arena,
             vars,
             jp_live_vars: MutMap::default(),
-            local_context: LocalContext::default(),
             param_map,
         }
     }
@@ -468,12 +466,8 @@ impl<'a> Context<'a> {
             HigherOrder(HigherOrderLowLevel {
                 op,
                 closure_env_layout,
-                specialization_id,
                 update_mode,
-                arg_layouts,
-                ret_layout,
-                function_name,
-                function_env,
+                passed_function,
                 ..
             }) => {
                 // setup
@@ -483,16 +477,14 @@ impl<'a> Context<'a> {
                     ($borrows:expr) => {
                         Expr::Call(crate::ir::Call {
                             call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
+                                let mut passed_function = *passed_function;
+                                passed_function.owns_captured_environment = true;
+
                                 let higher_order = HigherOrderLowLevel {
                                     op: *op,
                                     closure_env_layout: *closure_env_layout,
-                                    function_owns_closure_data: true,
-                                    specialization_id: *specialization_id,
                                     update_mode: *update_mode,
-                                    function_name: *function_name,
-                                    function_env: *function_env,
-                                    arg_layouts,
-                                    ret_layout: *ret_layout,
+                                    passed_function,
                                 };
 
                                 CallType::HigherOrder(self.arena.alloc(higher_order))
@@ -521,11 +513,14 @@ impl<'a> Context<'a> {
                 const CLOSURE_DATA: bool = BORROWED;
 
                 let function_layout = ProcLayout {
-                    arguments: arg_layouts,
-                    result: *ret_layout,
+                    arguments: passed_function.argument_layouts,
+                    result: passed_function.return_layout,
                 };
 
-                let function_ps = match self.param_map.get_symbol(*function_name, function_layout) {
+                let function_ps = match self
+                    .param_map
+                    .get_symbol(passed_function.name, function_layout)
+                {
                     Some(function_ps) => function_ps,
                     None => unreachable!(),
                 };
@@ -761,7 +756,7 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
+            EmptyArray | Literal(_) | Reset { .. } | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated
                 // function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))
@@ -779,7 +774,7 @@ impl<'a> Context<'a> {
         // must this value be consumed?
         let consume = consume_expr(&self.vars, expr);
 
-        let reset = matches!(expr, Expr::Reset(_));
+        let reset = matches!(expr, Expr::Reset { .. });
 
         self.update_var_info_help(symbol, layout, persistent, consume, reset)
     }
@@ -959,7 +954,6 @@ impl<'a> Context<'a> {
                 };
                 // TODO use borrow signature here?
                 let ps = self.param_map.get_join_point(*j);
-                // let ps = self.local_context.join_points.get(j).unwrap().0;
 
                 let b = self.add_inc_before(xs, ps, stmt, j_live_vars);
 
@@ -1015,11 +1009,6 @@ impl<'a> Context<'a> {
             RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct LocalContext<'a> {
-    join_points: MutMap<JoinPointId, (&'a [Param<'a>], &'a Stmt<'a>)>,
 }
 
 pub fn collect_stmt(

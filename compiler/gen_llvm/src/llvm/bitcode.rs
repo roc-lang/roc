@@ -1,6 +1,8 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
-use crate::llvm::build::{struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX};
+use crate::llvm::build::{
+    load_roc_value, struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX,
+};
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
@@ -44,12 +46,15 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> CallSiteValue<'ctx> {
+    let it = args.iter().map(|x| (*x).into());
+    let arguments = bumpalo::collections::Vec::from_iter_in(it, env.arena);
+
     let fn_val = env
         .module
         .get_function(fn_name)
         .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
 
-    let call = env.builder.build_call(fn_val, args, "call_builtin");
+    let call = env.builder.build_call(fn_val, &arguments, "call_builtin");
 
     call.set_call_convention(fn_val.get_call_conventions());
     call
@@ -506,8 +511,9 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
                 .build_bitcast(value_ptr2, value_type, "load_opaque")
                 .into_pointer_value();
 
-            let value1 = env.builder.build_load(value_cast1, "load_opaque");
-            let value2 = env.builder.build_load(value_cast2, "load_opaque");
+            // load_roc_value(env, *element_layout, elem_ptr, "get_elem")
+            let value1 = load_roc_value(env, *layout, value_cast1, "load_opaque");
+            let value2 = load_roc_value(env, *layout, value_cast2, "load_opaque");
 
             let result =
                 crate::llvm::compare::generic_eq(env, layout_ids, value1, value2, layout, layout);
@@ -592,7 +598,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             let value1 = env.builder.build_load(value_cast1, "load_opaque");
             let value2 = env.builder.build_load(value_cast2, "load_opaque");
 
-            let default = [value1, value2];
+            let default = [value1.into(), value2.into()];
 
             let arguments_cast = match closure_data_layout.runtime_representation() {
                 Layout::Struct(&[]) => {
@@ -610,7 +616,9 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
 
                     let closure_data = env.builder.build_load(closure_cast, "load_opaque");
 
-                    env.arena.alloc([value1, value2, closure_data]) as &[_]
+                    env.arena
+                        .alloc([value1.into(), value2.into(), closure_data.into()])
+                        as &[_]
                 }
             };
 

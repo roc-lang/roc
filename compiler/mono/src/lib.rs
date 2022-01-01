@@ -4,9 +4,11 @@
 
 pub mod alias_analysis;
 pub mod borrow;
+pub mod code_gen_help;
 pub mod inc_dec;
 pub mod ir;
 pub mod layout;
+pub mod layout_soa;
 pub mod low_level;
 pub mod reset_reuse;
 pub mod tail_recursion;

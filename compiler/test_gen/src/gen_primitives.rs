@@ -996,7 +996,7 @@ fn annotation_without_body() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn simple_closure() {
     assert_evals_to!(
         indoc!(
@@ -1991,26 +1991,6 @@ fn pattern_shadowing() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = "TODO non-exhaustive pattern")]
-fn non_exhaustive_pattern_let() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            x : Result (Int a) (Float b)
-            x = Ok 4
-
-            (Ok y) = x
-
-            y
-            "#
-        ),
-        0,
-        i64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 #[should_panic(expected = "")]
 fn unsupported_pattern_str_interp() {
@@ -2602,7 +2582,7 @@ fn hit_unresolved_type_variable() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn pattern_match_empty_record() {
     assert_evals_to!(
         indoc!(
@@ -3134,6 +3114,27 @@ fn call_that_needs_closure_parameter() {
             "#
         ),
         RocStr::from_slice(b"FAIL"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn alias_defined_out_of_order() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main : Foo
+            main = "foo"
+
+            Foo : Bar
+            Bar : Str
+
+            "#
+        ),
+        RocStr::from_slice(b"foo"),
         RocStr
     );
 }

@@ -3,7 +3,7 @@ use crate::types::{Problem, RecordField, Type};
 use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
@@ -130,6 +130,11 @@ impl SolvedType {
                     ext: Box::new(solved_ext),
                 }
             }
+            ClosureTag { name, ext } => {
+                let solved_ext = Self::from_type(solved_subs, &Type::Variable(*ext));
+                let solved_tags = vec![(TagName::Closure(*name), vec![])];
+                SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
+            }
             TagUnion(tags, box_ext) => {
                 let solved_ext = Self::from_type(solved_subs, box_ext);
                 let mut solved_tags = Vec::with_capacity(tags.len());
@@ -229,7 +234,7 @@ impl SolvedType {
         }
     }
 
-    pub fn from_var(subs: &Subs, var: Variable) -> Self {
+    fn from_var(subs: &Subs, var: Variable) -> Self {
         let mut seen = RecursionVars::default();
         Self::from_var_help(subs, &mut seen, var)
     }
@@ -254,16 +259,17 @@ impl SolvedType {
             Alias(symbol, args, actual_var) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for (name_index, var_index) in args.named_type_arguments() {
+                for var_index in args.named_type_arguments() {
                     let arg_var = subs[var_index];
 
-                    new_args.push((
-                        subs[name_index].clone(),
-                        Self::from_var_help(subs, recursion_vars, arg_var),
-                    ));
+                    let node = Self::from_var_help(subs, recursion_vars, arg_var);
+
+                    // NOTE we fake the lowercase here: the user will never get to see it anyway
+                    new_args.push((Lowercase::default(), node));
                 }
 
                 let mut solved_lambda_sets = Vec::with_capacity(0);
+
                 for var_index in args.unnamed_type_arguments() {
                     let var = subs[var_index];
 
@@ -293,7 +299,7 @@ impl SolvedType {
             Apply(symbol, args) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in subs.get_subs_slice(*args.as_subs_slice()) {
+                for var in subs.get_subs_slice(*args) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
@@ -302,7 +308,7 @@ impl SolvedType {
             Func(args, closure, ret) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in subs.get_subs_slice(*args.as_subs_slice()) {
+                for var in subs.get_subs_slice(*args) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
@@ -393,7 +399,7 @@ impl SolvedType {
 #[derive(Clone, Debug)]
 pub struct BuiltinAlias {
     pub region: Region,
-    pub vars: Vec<Located<Lowercase>>,
+    pub vars: Vec<Loc<Lowercase>>,
     pub typ: SolvedType,
 }
 

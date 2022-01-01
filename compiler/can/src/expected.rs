@@ -1,11 +1,11 @@
 use crate::pattern::Pattern;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::types::{AnnotationSource, PReason, Reason};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expected<T> {
     NoExpectation(T),
-    FromAnnotation(Located<Pattern>, usize, AnnotationSource, T),
+    FromAnnotation(Loc<Pattern>, usize, AnnotationSource, T),
     ForReason(Reason, T, Region),
 }
 

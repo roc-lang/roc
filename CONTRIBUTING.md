@@ -23,6 +23,7 @@ Earthly may temporarily use a lot of disk space, up to 90 GB. This disk space is
 - It's a good idea to open a work-in-progress pull request as you begin working on something. This way, others can see that you're working on it, which avoids duplicate effort, and others can give feedback sooner rather than later if they notice a problem in the direction things are going. Be sure to include "WIP" in the title of the PR as long as it's not ready for review!
 - Make sure to create a branch on the roc repository for your changes. Our CI can not be run on forks.
 - Create an issue if the purpose of a struct/field/type/function/... is not immediately clear from its name or nearby comments.
+- You can find good first issues [here](https://github.com/rtfeldman/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
 
 ## Can we do better?
 

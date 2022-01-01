@@ -230,18 +230,6 @@ fn from_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            []
-                |> Set.fromList
-                |> Set.toList
-            "#
-        ),
-        RocList::default(),
-        RocList<i64>
-    );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
             empty : List I64
             empty = []
 
@@ -252,5 +240,41 @@ fn from_list() {
         ),
         RocList::default(),
         RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn from_list_void() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            []
+                |> Set.fromList
+                |> Set.toList
+            "#
+        ),
+        RocList::default(),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn from_list_result() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Result Str {}
+            x = Ok "foo"
+
+            [ x ]
+                |> Set.fromList
+                |> Set.toList
+                |> List.len
+            "#
+        ),
+        1,
+        i64
     );
 }

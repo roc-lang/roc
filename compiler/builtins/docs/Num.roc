@@ -2,90 +2,91 @@ interface Num
     exposes
         [
             Num,
-            Int,
-            Float,
-            Natural,
-            Nat,
-            Decimal,
-            Dec,
-            Integer,
-            FloatingPoint,
-            I128,
-            U128,
-            I64,
-            U64,
-            I32,
-            U32,
-            I16,
-            U16,
-            I8,
-            U8,
-            F64,
-            F32,
-            maxInt,
-            minInt,
-            maxFloat,
-            minFloat,
-            abs,
-            neg,
-            add,
-            sub,
-            mul,
-            isLt,
-            isLte,
-            isGt,
-            isGte,
-            toFloat,
-            sin,
-            cos,
-            tan,
-            isZero,
-            isEven,
-            isOdd,
-            isPositive,
-            isNegative,
-            rem,
-            div,
-            divFloor,
-            modInt,
-            modFloat,
-            sqrt,
-            log,
-            round,
-            compare,
-            pow,
-            ceiling,
-            powInt,
-            floor,
-            addWrap,
-            addChecked,
-            atan,
-            acos,
-            Signed128,
-            Signed64,
-            Signed32,
-            Signed16,
-            Signed8,
-            Unsigned128,
-            Unsigned64,
-            Unsigned32,
-            Unsigned16,
-            Unsigned8,
             Binary64,
             Binary32,
+            Dec,
+            Decimal,
+            Float,
+            FloatingPoint,
+            F32,
+            F64,
+            I8,
+            I16,
+            I32,
+            I64,
+            I128,
+            Int,
+            Integer,
+            Nat,
+            Natural,
+            Signed8,
+            Signed16,
+            Signed32,
+            Signed64,
+            Signed128,
+            U8,
+            U16,
+            U32,
+            U64,
+            U128,
+            Unsigned8,
+            Unsigned16,
+            Unsigned32,
+            Unsigned64,
+            Unsigned128,
+            abs,
+            acos,
+            add,
+            addChecked,
+            addWrap,
+            atan,
             bitwiseAnd,
-            bitwiseXor,
             bitwiseOr,
+            bitwiseXor,
+            ceiling,
+            compare,
+            cos,
+            div,
+            divFloor,
+            floor,
+            intCast,
+            isEven,
+            isGt,
+            isGte,
+            isLt,
+            isLte,
+            isMultipleOf,
+            isNegative,
+            isOdd,
+            isPositive,
+            isZero,
+            log,
+            maxFloat,
+            maxI128,
+            maxInt,
+            minFloat,
+            minInt,
+            modInt,
+            modFloat,
+            mul,
+            mulChecked,
+            mulWrap,
+            neg,
+            pow,
+            powInt,
+            rem,
+            round,
             shiftLeftBy,
             shiftRightBy,
             shiftRightZfBy,
-            subWrap,
+            sin,
+            sub,
             subChecked,
-            mulWrap,
-            mulChecked,
-            intCast,
-            maxI128,
-            isMultipleOf
+            subWrap,
+            sqrt,
+            tan,
+            toFloat,
+            toStr
         ]
     imports []
 
@@ -620,13 +621,13 @@ toStr : Num * -> Str
 ## Examples:
 ##
 ## In some countries (e.g. USA and UK), a comma is used to separate thousands:
-## >>> Num.format 1_000_000 { base: Decimal, wholeSep: { mark: ",", places: 3 } }
+## >>> Num.format 1_000_000 { pf: Decimal, wholeSep: { mark: ",", places: 3 } }
 ##
 ## Sometimes when rendering bits, it's nice to group them into groups of 4:
-## >>> Num.format 1_000_000 { base: Binary, wholeSep: { mark: " ", places: 4 } }
+## >>> Num.format 1_000_000 { pf: Binary, wholeSep: { mark: " ", places: 4 } }
 ##
 ## It's also common to render hexadecimal in groups of 2:
-## >>> Num.format 1_000_000 { base: Hexadecimal, wholeSep: { mark: " ", places: 2 } }
+## >>> Num.format 1_000_000 { pf: Hexadecimal, wholeSep: { mark: " ", places: 2 } }
 format :
     Num *,
     {
@@ -823,15 +824,15 @@ maxF32 : F32
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
 minF32 : F32
 
-## The highest supported #F64 value you can have, which is approximately 1.8 × 10^308.
+## The highest supported #Dec value you can have, which is precisely 170_141_183_460_469_231_731.687303715884105727.
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
 maxDec : Dec
 
-## The lowest supported #F64 value you can have, which is approximately -1.8 × 10^308.
+## The lowest supported #Dec value you can have, which is precisely -170_141_183_460_469_231_731.687303715884105728.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
-maxDec : Dec
+minDec : Dec
 
 ## Constants
 

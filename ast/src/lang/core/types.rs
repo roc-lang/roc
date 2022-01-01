@@ -5,7 +5,7 @@
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::types::{Problem, RecordField};
 use roc_types::{subs::Variable, types::ErrorType};
 
@@ -56,7 +56,7 @@ pub enum Problem2 {
     CircularType(Symbol, NodeId<ErrorType>), // 12B = 8B + 4B
     CyclicAlias(Symbol, PoolVec<Symbol>),    // 20B = 8B + 12B
     UnrecognizedIdent(PoolStr),              // 8B
-    Shadowed(Located<PoolStr>),
+    Shadowed(Loc<PoolStr>),
     BadTypeArguments {
         symbol: Symbol,  // 8B
         type_got: u8,    // 1B
@@ -329,6 +329,8 @@ pub fn to_type2<'a>(
     annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) -> Type2 {
+    use roc_parse::ast::AliasHeader;
+    use roc_parse::ast::Pattern;
     use roc_parse::ast::TypeAnnotation::*;
 
     match annotation {
@@ -450,127 +452,123 @@ pub fn to_type2<'a>(
 
             Type2::TagUnion(tag_types, ext_type)
         }
-        As(loc_inner, _spaces, loc_as) => {
-            // e.g. `{ x : Int, y : Int } as Point }`
-            match loc_as.value {
-                Apply(module_name, ident, loc_vars) if module_name.is_empty() => {
-                    let symbol = match scope.introduce(
-                        ident.into(),
-                        &env.exposed_ident_ids,
-                        &mut env.ident_ids,
-                        region,
-                    ) {
-                        Ok(symbol) => symbol,
+        As(
+            loc_inner,
+            _spaces,
+            AliasHeader {
+                name,
+                vars: loc_vars,
+            },
+        ) => {
+            // e.g. `{ x : Int, y : Int } as Point`
+            let symbol = match scope.introduce(
+                name.value.into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                region,
+            ) {
+                Ok(symbol) => symbol,
 
-                        Err((_original_region, _shadow)) => {
-                            // let problem = Problem2::Shadowed(original_region, shadow.clone());
+                Err((_original_region, _shadow)) => {
+                    // let problem = Problem2::Shadowed(original_region, shadow.clone());
 
-                            // env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
-                            //     original_region,
-                            //     shadow,
-                            // });
+                    // env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
+                    //     original_region,
+                    //     shadow,
+                    // });
 
-                            // return Type2::Erroneous(problem);
-                            todo!();
-                        }
-                    };
-
-                    let inner_type = to_type2(env, scope, references, &loc_inner.value, region);
-                    let vars = PoolVec::with_capacity(loc_vars.len() as u32, env.pool);
-
-                    let lowercase_vars = PoolVec::with_capacity(loc_vars.len() as u32, env.pool);
-
-                    for ((loc_var, named_id), var_id) in loc_vars
-                        .iter()
-                        .zip(lowercase_vars.iter_node_ids())
-                        .zip(vars.iter_node_ids())
-                    {
-                        match loc_var.value {
-                            BoundVariable(ident) => {
-                                let var_name = Lowercase::from(ident);
-
-                                if let Some(var) = references.named.get(&var_name) {
-                                    let poolstr = PoolStr::new(var_name.as_str(), env.pool);
-
-                                    let type_id = env.pool.add(Type2::Variable(*var));
-                                    env.pool[var_id] = (poolstr.shallow_clone(), type_id);
-
-                                    env.pool[named_id] = (poolstr, *var);
-                                    env.set_region(named_id, loc_var.region);
-                                } else {
-                                    let var = env.var_store.fresh();
-
-                                    references.named.insert(var_name.clone(), var);
-                                    let poolstr = PoolStr::new(var_name.as_str(), env.pool);
-
-                                    let type_id = env.pool.add(Type2::Variable(var));
-                                    env.pool[var_id] = (poolstr.shallow_clone(), type_id);
-
-                                    env.pool[named_id] = (poolstr, var);
-                                    env.set_region(named_id, loc_var.region);
-                                }
-                            }
-                            _ => {
-                                // If anything other than a lowercase identifier
-                                // appears here, the whole annotation is invalid.
-                                return Type2::Erroneous(Problem2::CanonicalizationProblem);
-                            }
-                        }
-                    }
-
-                    let alias_actual = inner_type;
-                    // TODO instantiate recursive tag union
-                    //                    let alias_actual = if let Type2::TagUnion(tags, ext) = inner_type {
-                    //                        let rec_var = env.var_store.fresh();
-                    //
-                    //                        let mut new_tags = Vec::with_capacity(tags.len());
-                    //                        for (tag_name, args) in tags {
-                    //                            let mut new_args = Vec::with_capacity(args.len());
-                    //                            for arg in args {
-                    //                                let mut new_arg = arg.clone();
-                    //                                new_arg.substitute_alias(symbol, &Type2::Variable(rec_var));
-                    //                                new_args.push(new_arg);
-                    //                            }
-                    //                            new_tags.push((tag_name.clone(), new_args));
-                    //                        }
-                    //                        Type2::RecursiveTagUnion(rec_var, new_tags, ext)
-                    //                    } else {
-                    //                        inner_type
-                    //                    };
-
-                    let mut hidden_variables = MutSet::default();
-                    hidden_variables.extend(alias_actual.variables(env.pool));
-
-                    for (_, var) in lowercase_vars.iter(env.pool) {
-                        hidden_variables.remove(var);
-                    }
-
-                    let alias_actual_id = env.pool.add(alias_actual);
-                    scope.add_alias(env.pool, symbol, lowercase_vars, alias_actual_id);
-
-                    let alias = scope.lookup_alias(symbol).unwrap();
-                    // local_aliases.insert(symbol, alias.clone());
-
-                    // TODO host-exposed
-                    //                    if vars.is_empty() && env.home == symbol.module_id() {
-                    //                        let actual_var = env.var_store.fresh();
-                    //                        rigids.host_exposed.insert(symbol, actual_var);
-                    //                        Type::HostExposedAlias {
-                    //                            name: symbol,
-                    //                            arguments: vars,
-                    //                            actual: Box::new(alias.typ.clone()),
-                    //                            actual_var,
-                    //                        }
-                    //                    } else {
-                    //                        Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
-                    //                    }
-                    Type2::AsAlias(symbol, vars, alias.actual)
+                    // return Type2::Erroneous(problem);
+                    todo!();
                 }
-                _ => {
-                    // This is a syntactically invalid type alias.
-                    Type2::Erroneous(Problem2::CanonicalizationProblem)
+            };
+
+            let inner_type = to_type2(env, scope, references, &loc_inner.value, region);
+            let vars = PoolVec::with_capacity(loc_vars.len() as u32, env.pool);
+
+            let lowercase_vars = PoolVec::with_capacity(loc_vars.len() as u32, env.pool);
+
+            for ((loc_var, named_id), var_id) in loc_vars
+                .iter()
+                .zip(lowercase_vars.iter_node_ids())
+                .zip(vars.iter_node_ids())
+            {
+                let var = match loc_var.value {
+                    Pattern::Identifier(name) if name.chars().next().unwrap().is_lowercase() => {
+                        name
+                    }
+                    _ => unreachable!("I thought this was validated during parsing"),
+                };
+                let var_name = Lowercase::from(var);
+
+                if let Some(var) = references.named.get(&var_name) {
+                    let poolstr = PoolStr::new(var_name.as_str(), env.pool);
+
+                    let type_id = env.pool.add(Type2::Variable(*var));
+                    env.pool[var_id] = (poolstr.shallow_clone(), type_id);
+
+                    env.pool[named_id] = (poolstr, *var);
+                    env.set_region(named_id, loc_var.region);
+                } else {
+                    let var = env.var_store.fresh();
+
+                    references.named.insert(var_name.clone(), var);
+                    let poolstr = PoolStr::new(var_name.as_str(), env.pool);
+
+                    let type_id = env.pool.add(Type2::Variable(var));
+                    env.pool[var_id] = (poolstr.shallow_clone(), type_id);
+
+                    env.pool[named_id] = (poolstr, var);
+                    env.set_region(named_id, loc_var.region);
                 }
             }
+
+            let alias_actual = inner_type;
+            // TODO instantiate recursive tag union
+            //                    let alias_actual = if let Type2::TagUnion(tags, ext) = inner_type {
+            //                        let rec_var = env.var_store.fresh();
+            //
+            //                        let mut new_tags = Vec::with_capacity(tags.len());
+            //                        for (tag_name, args) in tags {
+            //                            let mut new_args = Vec::with_capacity(args.len());
+            //                            for arg in args {
+            //                                let mut new_arg = arg.clone();
+            //                                new_arg.substitute_alias(symbol, &Type2::Variable(rec_var));
+            //                                new_args.push(new_arg);
+            //                            }
+            //                            new_tags.push((tag_name.clone(), new_args));
+            //                        }
+            //                        Type2::RecursiveTagUnion(rec_var, new_tags, ext)
+            //                    } else {
+            //                        inner_type
+            //                    };
+
+            let mut hidden_variables = MutSet::default();
+            hidden_variables.extend(alias_actual.variables(env.pool));
+
+            for (_, var) in lowercase_vars.iter(env.pool) {
+                hidden_variables.remove(var);
+            }
+
+            let alias_actual_id = env.pool.add(alias_actual);
+            scope.add_alias(env.pool, symbol, lowercase_vars, alias_actual_id);
+
+            let alias = scope.lookup_alias(symbol).unwrap();
+            // local_aliases.insert(symbol, alias.clone());
+
+            // TODO host-exposed
+            //                    if vars.is_empty() && env.home == symbol.module_id() {
+            //                        let actual_var = env.var_store.fresh();
+            //                        rigids.host_exposed.insert(symbol, actual_var);
+            //                        Type::HostExposedAlias {
+            //                            name: symbol,
+            //                            arguments: vars,
+            //                            actual: Box::new(alias.typ.clone()),
+            //                            actual_var,
+            //                        }
+            //                    } else {
+            //                        Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
+            //                    }
+            Type2::AsAlias(symbol, vars, alias.actual)
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
             to_type2(env, scope, references, nested, region)
@@ -584,7 +582,7 @@ fn can_assigned_fields<'a>(
     env: &mut Env,
     scope: &mut Scope,
     rigids: &mut References,
-    fields: &&[Located<roc_parse::ast::AssignedField<'a, roc_parse::ast::TypeAnnotation<'a>>>],
+    fields: &&[Loc<roc_parse::ast::AssignedField<'a, roc_parse::ast::TypeAnnotation<'a>>>],
     region: Region,
 ) -> MutMap<Lowercase, RecordField<Type2>> {
     use roc_parse::ast::AssignedField::*;
@@ -672,7 +670,7 @@ fn can_tags<'a>(
     env: &mut Env,
     scope: &mut Scope,
     rigids: &mut References,
-    tags: &'a [Located<roc_parse::ast::Tag<'a>>],
+    tags: &'a [Loc<roc_parse::ast::Tag<'a>>],
     region: Region,
 ) -> Vec<(TagName, PoolVec<Type2>)> {
     use roc_parse::ast::Tag;
@@ -758,7 +756,7 @@ fn to_type_apply<'a>(
     rigids: &mut References,
     module_name: &str,
     ident: &str,
-    type_arguments: &[Located<roc_parse::ast::TypeAnnotation<'a>>],
+    type_arguments: &[Loc<roc_parse::ast::TypeAnnotation<'a>>],
     region: Region,
 ) -> TypeApply {
     let symbol = if module_name.is_empty() {
