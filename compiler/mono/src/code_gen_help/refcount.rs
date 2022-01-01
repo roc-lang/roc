@@ -63,28 +63,22 @@ pub fn refcount_stmt<'a>(
         }
 
         ModifyRc::DecRef(structure) => {
-            // No generated procs for DecRef, just lowlevel ops
-            let rc_ptr_sym = root.create_symbol(ident_ids, "rc_ptr");
-
-            // Pass the refcount pointer to the lowlevel call (see utils.zig)
-            let call_result_empty = root.create_symbol(ident_ids, "call_result_empty");
-            let call_expr = Expr::Call(Call {
-                call_type: CallType::LowLevel {
-                    op: LowLevel::RefCountDec,
-                    update_mode: UpdateModeId::BACKEND_DUMMY,
-                },
-                arguments: arena.alloc([rc_ptr_sym]),
-            });
-            let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
-
-            // FIXME: `structure` is a pointer to the stack, not the heap!
-            rc_ptr_from_data_ptr(
-                root,
-                ident_ids,
-                *structure,
-                rc_ptr_sym,
-                arena.alloc(call_stmt),
-            )
+            if matches!(layout, Layout::Builtin(Builtin::Str)) {
+                ctx.op = HelperOp::Dec;
+                refcount_stmt(root, ident_ids, ctx, layout, modify, following)
+            } else if let HelperOp::DecRef(jp_decref) = ctx.op {
+                // Inline the body of the equivalent Dec function, without iterating fields,
+                // and replacing all return statements with jumps to the `following` statement.
+                let rc_stmt = refcount_generic(root, ident_ids, ctx, layout);
+                Stmt::Join {
+                    id: jp_decref,
+                    parameters: &[],
+                    body: following,
+                    remainder: root.arena.alloc(rc_stmt),
+                }
+            } else {
+                unreachable!()
+            }
         }
     }
 }
@@ -129,10 +123,18 @@ pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
     }
 }
 
-fn return_unit<'a>(root: &CodeGenHelp<'a>, ident_ids: &mut IdentIds) -> Stmt<'a> {
-    let unit = root.create_symbol(ident_ids, "unit");
-    let ret_stmt = root.arena.alloc(Stmt::Ret(unit));
-    Stmt::Let(unit, Expr::Struct(&[]), LAYOUT_UNIT, ret_stmt)
+fn rc_return_stmt<'a>(
+    root: &CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+) -> Stmt<'a> {
+    if let HelperOp::DecRef(jp_decref) = ctx.op {
+        Stmt::Jump(jp_decref, &[])
+    } else {
+        let unit = root.create_symbol(ident_ids, "unit");
+        let ret_stmt = root.arena.alloc(Stmt::Ret(unit));
+        Stmt::Let(unit, Expr::Struct(&[]), LAYOUT_UNIT, ret_stmt)
+    }
 }
 
 fn refcount_args<'a>(root: &CodeGenHelp<'a>, ctx: &Context<'a>, structure: Symbol) -> &'a [Symbol] {
@@ -230,7 +232,7 @@ fn modify_refcount<'a>(
             Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following)
         }
 
-        HelperOp::Dec | HelperOp::DecRef => {
+        HelperOp::Dec | HelperOp::DecRef(_) => {
             let alignment_sym = root.create_symbol(ident_ids, "alignment");
             let alignment_expr = Expr::Literal(Literal::Int(alignment as i128));
             let alignment_stmt = |next| Stmt::Let(alignment_sym, alignment_expr, LAYOUT_U32, next);
@@ -302,7 +304,7 @@ fn refcount_str<'a>(
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
     let alignment = root.ptr_size;
 
-    let ret_unit_stmt = return_unit(root, ident_ids);
+    let ret_unit_stmt = rc_return_stmt(root, ident_ids, ctx);
     let mod_rc_stmt = modify_refcount(
         root,
         ident_ids,
@@ -333,7 +335,7 @@ fn refcount_str<'a>(
         branches: root.arena.alloc([(1, BranchInfo::None, then_branch)]),
         default_branch: (
             BranchInfo::None,
-            root.arena.alloc(return_unit(root, ident_ids)),
+            root.arena.alloc(rc_return_stmt(root, ident_ids, ctx)),
         ),
         ret_layout: LAYOUT_UNIT,
     };
@@ -404,7 +406,7 @@ fn refcount_list<'a>(
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
     let alignment = layout.alignment_bytes(root.ptr_size);
 
-    let modify_elems = if elem_layout.is_refcounted() {
+    let modify_elems = if elem_layout.is_refcounted() && !matches!(ctx.op, HelperOp::DecRef(_)) {
         refcount_list_elems(
             root,
             ident_ids,
@@ -416,8 +418,9 @@ fn refcount_list<'a>(
             elements,
         )
     } else {
-        return_unit(root, ident_ids)
+        rc_return_stmt(root, ident_ids, ctx)
     };
+
     let modify_list = modify_refcount(
         root,
         ident_ids,
@@ -426,6 +429,7 @@ fn refcount_list<'a>(
         alignment,
         arena.alloc(modify_elems),
     );
+
     let modify_list_and_elems = elements_stmt(arena.alloc(
         //
         rc_ptr_from_data_ptr(root, ident_ids, elements, rc_ptr, arena.alloc(modify_list)),
@@ -440,7 +444,7 @@ fn refcount_list<'a>(
         cond_layout: LAYOUT_BOOL,
         branches: root
             .arena
-            .alloc([(1, BranchInfo::None, return_unit(root, ident_ids))]),
+            .alloc([(1, BranchInfo::None, rc_return_stmt(root, ident_ids, ctx))]),
         default_branch: (BranchInfo::None, root.arena.alloc(modify_list_and_elems)),
         ret_layout: LAYOUT_UNIT,
     };
@@ -565,7 +569,7 @@ fn refcount_list_elems<'a>(
         ret_layout,
         branches: root
             .arena
-            .alloc([(1, BranchInfo::None, return_unit(root, ident_ids))]),
+            .alloc([(1, BranchInfo::None, rc_return_stmt(root, ident_ids, ctx))]),
         default_branch: (
             BranchInfo::None,
             arena.alloc(box_stmt(arena.alloc(
@@ -620,7 +624,7 @@ fn refcount_struct<'a>(
     ctx: &mut Context<'a>,
     field_layouts: &'a [Layout<'a>],
 ) -> Stmt<'a> {
-    let mut stmt = return_unit(root, ident_ids);
+    let mut stmt = rc_return_stmt(root, ident_ids, ctx);
 
     for (i, field_layout) in field_layouts.iter().enumerate().rev() {
         if field_layout.contains_refcounted() {
