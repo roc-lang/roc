@@ -4923,6 +4923,7 @@ mod solve_expr {
         )
     }
 
+    #[test]
     fn infer_union_def_position() {
         infer_eq_without_problem(
             indoc!(
