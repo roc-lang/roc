@@ -6,7 +6,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 use crate::ir::{
-    Call, CallSpecId, CallType, Expr, HostExposedLayouts, ModifyRc, Proc, ProcLayout,
+    Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
     SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{Builtin, Layout, UnionLayout};
@@ -28,18 +28,8 @@ pub const REFCOUNT_MAX: usize = 0;
 enum HelperOp {
     Inc,
     Dec,
-    DecRef,
+    DecRef(JoinPointId),
     Eq,
-}
-
-impl From<&ModifyRc> for HelperOp {
-    fn from(modify: &ModifyRc) -> Self {
-        match modify {
-            ModifyRc::Inc(..) => Self::Inc,
-            ModifyRc::Dec(_) => Self::Dec,
-            ModifyRc::DecRef(_) => Self::DecRef,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -129,14 +119,23 @@ impl<'a> CodeGenHelp<'a> {
             return (following, Vec::new_in(self.arena));
         }
 
+        let op = match modify {
+            ModifyRc::Inc(..) => HelperOp::Inc,
+            ModifyRc::Dec(_) => HelperOp::Dec,
+            ModifyRc::DecRef(_) => {
+                let jp_decref = JoinPointId(self.create_symbol(ident_ids, "jp_decref"));
+                HelperOp::DecRef(jp_decref)
+            }
+        };
+
         let mut ctx = Context {
             new_linker_data: Vec::new_in(self.arena),
             recursive_union: None,
-            op: HelperOp::from(modify),
+            op,
         };
 
         let rc_stmt = refcount::refcount_stmt(self, ident_ids, &mut ctx, layout, modify, following);
-        (self.arena.alloc(rc_stmt), ctx.new_linker_data)
+        (rc_stmt, ctx.new_linker_data)
     }
 
     /// Replace a generic `Lowlevel::Eq` call with a specialized helper proc.
@@ -190,7 +189,7 @@ impl<'a> CodeGenHelp<'a> {
 
             let (ret_layout, arg_layouts): (&'a Layout<'a>, &'a [Layout<'a>]) = {
                 match ctx.op {
-                    Dec | DecRef => (&LAYOUT_UNIT, self.arena.alloc([layout])),
+                    Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([layout])),
                     Inc => (&LAYOUT_UNIT, self.arena.alloc([layout, self.layout_isize])),
                     Eq => (&LAYOUT_BOOL, self.arena.alloc([layout, layout])),
                 }
@@ -250,9 +249,9 @@ impl<'a> CodeGenHelp<'a> {
 
         // Recursively generate the body of the Proc and sub-procs
         let (ret_layout, body) = match ctx.op {
-            Inc | Dec | DecRef => (
+            Inc | Dec | DecRef(_) => (
                 LAYOUT_UNIT,
-                refcount::refcount_generic(self, ident_ids, ctx, layout),
+                refcount::refcount_generic(self, ident_ids, ctx, layout, Symbol::ARG_1),
             ),
             Eq => (
                 LAYOUT_BOOL,
@@ -267,7 +266,7 @@ impl<'a> CodeGenHelp<'a> {
                     let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([roc_value, inc_amount])
                 }
-                Dec | DecRef => self.arena.alloc([roc_value]),
+                Dec | DecRef(_) => self.arena.alloc([roc_value]),
                 Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
             }
         };
@@ -310,7 +309,7 @@ impl<'a> CodeGenHelp<'a> {
                 arguments: self.arena.alloc([*layout]),
                 result: LAYOUT_UNIT,
             },
-            HelperOp::DecRef => unreachable!("No generated Proc for DecRef"),
+            HelperOp::DecRef(_) => unreachable!("No generated Proc for DecRef"),
             HelperOp::Eq => ProcLayout {
                 arguments: self.arena.alloc([*layout, *layout]),
                 result: LAYOUT_BOOL,
@@ -358,7 +357,7 @@ fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
             // Str type can use either Zig functions or generated IR, since it's not generic.
             // Eq uses a Zig function, refcount uses generated IR.
             // Both are fine, they were just developed at different times.
-            matches!(op, HelperOp::Inc | HelperOp::Dec | HelperOp::DecRef)
+            matches!(op, HelperOp::Inc | HelperOp::Dec | HelperOp::DecRef(_))
         }
 
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_)) => true,
