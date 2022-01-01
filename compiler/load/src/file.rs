@@ -2411,7 +2411,8 @@ fn load_pkg_config<'a>(
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
-                    fail.map_problem(SyntaxError::Header).into_parse_problem(filename),
+                    fail.map_problem(SyntaxError::Header)
+                        .into_parse_problem(filename),
                 )),
             }
         }
@@ -2654,7 +2655,8 @@ fn parse_header<'a>(
             module_timing,
         )),
         Err(fail) => Err(LoadingProblem::ParsingFailed(
-            fail.map_problem(SyntaxError::Header).into_parse_problem(filename),
+            fail.map_problem(SyntaxError::Header)
+                .into_parse_problem(filename),
         )),
     }
 }
@@ -3706,10 +3708,9 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let parsed_defs = match module_defs().parse(arena, parse_state) {
         Ok((_, success, _state)) => success,
         Err((_, fail, state)) => {
-            return Err(LoadingProblem::ParsingFailed(fail.into_parse_problem(
-                header.module_path,
-                &state,
-            )));
+            return Err(LoadingProblem::ParsingFailed(
+                fail.into_parse_problem(header.module_path, &state),
+            ));
         }
     };
 

@@ -226,10 +226,7 @@ pub fn bad_input_to_syntax_error<'a>(bad_input: BadInputError, pos: Position) ->
 }
 
 impl<'a, T> SourceError<'a, T> {
-    pub fn new(
-        problem: T,
-        state: &State<'a>,
-    ) -> Self {
+    pub fn new(problem: T, state: &State<'a>) -> Self {
         Self {
             problem,
             bytes: state.original_bytes(),
@@ -242,11 +239,8 @@ impl<'a, T> SourceError<'a, T> {
             bytes: self.bytes,
         }
     }
-    
-    pub fn into_parse_problem(
-        self,
-        filename: std::path::PathBuf,
-    ) -> ParseProblem<'a, T> {
+
+    pub fn into_parse_problem(self, filename: std::path::PathBuf) -> ParseProblem<'a, T> {
         ParseProblem {
             pos: Position::default(),
             problem: self.problem,

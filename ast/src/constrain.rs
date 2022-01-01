@@ -1985,7 +1985,7 @@ pub mod test_constrain {
         ident::Lowercase,
         symbol::{IdentIds, Interns, ModuleIds, Symbol},
     };
-    use roc_parse::parser::{SyntaxError, SourceError};
+    use roc_parse::parser::{SourceError, SyntaxError};
     use roc_region::all::Region;
     use roc_types::{
         pretty_print::{content_to_string, name_all_type_vars},

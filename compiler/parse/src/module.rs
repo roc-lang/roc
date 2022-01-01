@@ -8,7 +8,7 @@ use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, specialize, word1, word2, EEffects, EExposes, EHeader, EImports, EPackages,
-    EProvides, ERequires, ETypedIdent, Parser, SyntaxError, SourceError,
+    EProvides, ERequires, ETypedIdent, Parser, SourceError, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal;
