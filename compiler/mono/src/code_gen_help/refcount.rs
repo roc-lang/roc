@@ -120,10 +120,13 @@ pub fn refcount_generic<'a>(
 // In the short term, it helps us to skip refcounting and let it leak, so we can make
 // progress incrementally. Kept in sync with generate_procs using assertions.
 pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
-    matches!(
-        layout,
-        Layout::Builtin(Builtin::Str | Builtin::List(_)) | Layout::Struct(_)
-    )
+    match layout {
+        Layout::Builtin(Builtin::Dict(..) | Builtin::Set(_)) => false,
+        Layout::Builtin(Builtin::List(elem_layout)) => is_rc_implemented_yet(elem_layout),
+        Layout::Builtin(_) => true,
+        Layout::Struct(fields) => fields.iter().all(is_rc_implemented_yet),
+        _ => false,
+    }
 }
 
 fn return_unit<'a>(root: &CodeGenHelp<'a>, ident_ids: &mut IdentIds) -> Stmt<'a> {
