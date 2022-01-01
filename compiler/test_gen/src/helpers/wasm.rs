@@ -420,23 +420,18 @@ macro_rules! assert_refcounts {
     // We need the result type to generate the test_wrapper, even though we ignore the value!
     // We can't just call `main` with no args, because some tests return structs, via pointer arg!
     // Also we need to know how much stack space to reserve for the struct.
-    ($src: expr, $ty: ty, $expected_refcounts: expr) => {
-        {
-            let phantom = std::marker::PhantomData;
-            let num_refcounts = $expected_refcounts.len();
-            let result = $crate::helpers::wasm::assert_wasm_refcounts_help::<$ty>(
-                $src,
-                phantom,
-                num_refcounts,
-            );
-            match result {
-                Err(msg) => panic!("{:?}", msg),
-                Ok(actual_refcounts) => {
-                    assert_eq!(&actual_refcounts, $expected_refcounts)
-                }
+    ($src: expr, $ty: ty, $expected_refcounts: expr) => {{
+        let phantom = std::marker::PhantomData;
+        let num_refcounts = $expected_refcounts.len();
+        let result =
+            $crate::helpers::wasm::assert_wasm_refcounts_help::<$ty>($src, phantom, num_refcounts);
+        match result {
+            Err(msg) => panic!("{:?}", msg),
+            Ok(actual_refcounts) => {
+                assert_eq!(&actual_refcounts, $expected_refcounts)
             }
         }
-    };
+    }};
 }
 
 #[allow(unused_imports)]

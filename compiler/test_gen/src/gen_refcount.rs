@@ -117,3 +117,36 @@ fn list_str_dealloc() {
         ]
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn struct_inc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                r1 = { a: 123, b: s, c: s }
+                { y: r1, z: r1 }
+            "#
+        ),
+        [(i64, RocStr, RocStr); 2],
+        &[4] // s
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn struct_dealloc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+            s = Str.concat "A long enough string " "to be heap-allocated"
+            r1 = { a: 123, b: s, c: s }
+            r2 = { x: 456, y: r1, z: r1 }
+            r2.x
+    "#
+        ),
+        i64,
+        &[0] // s
+    );
+}

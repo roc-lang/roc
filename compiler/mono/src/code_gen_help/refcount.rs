@@ -107,7 +107,7 @@ pub fn refcount_generic<'a>(
             refcount_list(root, ident_ids, ctx, &layout, elem_layout)
         }
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_)) => rc_todo(),
-        Layout::Struct(_) => rc_todo(),
+        Layout::Struct(field_layouts) => refcount_struct(root, ident_ids, ctx, field_layouts),
         Layout::Union(_) => rc_todo(),
         Layout::LambdaSet(_) => {
             unreachable!("Refcounting on LambdaSet is invalid. Should be a Union at runtime.")
@@ -120,7 +120,10 @@ pub fn refcount_generic<'a>(
 // In the short term, it helps us to skip refcounting and let it leak, so we can make
 // progress incrementally. Kept in sync with generate_procs using assertions.
 pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
-    matches!(layout, Layout::Builtin(Builtin::Str | Builtin::List(_)))
+    matches!(
+        layout,
+        Layout::Builtin(Builtin::Str | Builtin::List(_)) | Layout::Struct(_)
+    )
 }
 
 fn return_unit<'a>(root: &CodeGenHelp<'a>, ident_ids: &mut IdentIds) -> Stmt<'a> {
@@ -606,4 +609,44 @@ fn refcount_list_elems<'a>(
             )),
         )),
     ))
+}
+
+fn refcount_struct<'a>(
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+    field_layouts: &'a [Layout<'a>],
+) -> Stmt<'a> {
+    println!("refcount_struct");
+
+    let mut stmt = return_unit(root, ident_ids);
+
+    for (i, field_layout) in field_layouts.iter().enumerate().rev() {
+        if field_layout.contains_refcounted() {
+            let field_val = root.create_symbol(ident_ids, &format!("field_val_{}", i));
+            let field_val_expr = Expr::StructAtIndex {
+                index: i as u64,
+                field_layouts,
+                structure: ARG_1,
+            };
+            let field_val_stmt = |next| Stmt::Let(field_val, field_val_expr, *field_layout, next);
+
+            let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{}", i));
+            let mod_args = refcount_args(root, ctx, field_val);
+            let mod_expr = root
+                .call_specialized_op(ident_ids, ctx, *field_layout, mod_args)
+                .unwrap();
+            let mod_stmt = |next| Stmt::Let(mod_unit, mod_expr, LAYOUT_UNIT, next);
+
+            stmt = field_val_stmt(root.arena.alloc(
+                //
+                mod_stmt(root.arena.alloc(
+                    //
+                    stmt,
+                )),
+            ))
+        }
+    }
+
+    stmt
 }
