@@ -250,7 +250,7 @@ impl<'a> CodeGenHelp<'a> {
         let (ret_layout, body) = match ctx.op {
             Inc | Dec | DecRef(_) => (
                 LAYOUT_UNIT,
-                refcount::refcount_generic(self, ident_ids, ctx, layout),
+                refcount::refcount_generic(self, ident_ids, ctx, layout, Symbol::ARG_1),
             ),
             Eq => (
                 LAYOUT_BOOL,

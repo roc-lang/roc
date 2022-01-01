@@ -15,9 +15,6 @@ const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
 const LAYOUT_PTR: Layout = Layout::RecursivePointer;
 const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
 
-const ARG_1: Symbol = Symbol::ARG_1;
-const ARG_2: Symbol = Symbol::ARG_2;
-
 pub fn refcount_stmt<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
@@ -69,7 +66,7 @@ pub fn refcount_stmt<'a>(
             } else if let HelperOp::DecRef(jp_decref) = ctx.op {
                 // Inline the body of the equivalent Dec function, without iterating fields,
                 // and replacing all return statements with jumps to the `following` statement.
-                let rc_stmt = refcount_generic(root, ident_ids, ctx, layout);
+                let rc_stmt = refcount_generic(root, ident_ids, ctx, layout, *structure);
                 Stmt::Join {
                     id: jp_decref,
                     parameters: &[],
@@ -88,6 +85,7 @@ pub fn refcount_generic<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
     layout: Layout<'a>,
+    structure: Symbol,
 ) -> Stmt<'a> {
     debug_assert!(is_rc_implemented_yet(&layout));
     let rc_todo = || todo!("Please update is_rc_implemented_yet for `{:?}`", layout);
@@ -98,10 +96,10 @@ pub fn refcount_generic<'a>(
         }
         Layout::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx),
         Layout::Builtin(Builtin::List(elem_layout)) => {
-            refcount_list(root, ident_ids, ctx, &layout, elem_layout)
+            refcount_list(root, ident_ids, ctx, &layout, elem_layout, structure)
         }
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_)) => rc_todo(),
-        Layout::Struct(field_layouts) => refcount_struct(root, ident_ids, ctx, field_layouts),
+        Layout::Struct(field_layouts) => refcount_struct(root, ident_ids, ctx, field_layouts, structure),
         Layout::Union(_) => rc_todo(),
         Layout::LambdaSet(_) => {
             unreachable!("Refcounting on LambdaSet is invalid. Should be a Union at runtime.")
@@ -140,7 +138,7 @@ fn rc_return_stmt<'a>(
 fn refcount_args<'a>(root: &CodeGenHelp<'a>, ctx: &Context<'a>, structure: Symbol) -> &'a [Symbol] {
     if ctx.op == HelperOp::Inc {
         // second argument is always `amount`, passed down through the call stack
-        root.arena.alloc([structure, ARG_2])
+        root.arena.alloc([structure, Symbol::ARG_2])
     } else {
         root.arena.alloc([structure])
     }
@@ -227,7 +225,7 @@ fn modify_refcount<'a>(
                     op: LowLevel::RefCountInc,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([rc_ptr, ARG_2]),
+                arguments: root.arena.alloc([rc_ptr, Symbol::ARG_2]),
             });
             Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following)
         }
@@ -262,7 +260,7 @@ fn refcount_str<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
 ) -> Stmt<'a> {
-    let string = ARG_1;
+    let string = Symbol::ARG_1;
     let layout_isize = root.layout_isize;
 
     // Get the string length as a signed int
@@ -359,6 +357,7 @@ fn refcount_list<'a>(
     ctx: &mut Context<'a>,
     layout: &Layout,
     elem_layout: &'a Layout,
+    structure: Symbol
 ) -> Stmt<'a> {
     let layout_isize = root.layout_isize;
     let arena = root.arena;
@@ -372,7 +371,7 @@ fn refcount_list<'a>(
     //
 
     let len = root.create_symbol(ident_ids, "len");
-    let len_stmt = |next| let_lowlevel(arena, layout_isize, len, ListLen, &[ARG_1], next);
+    let len_stmt = |next| let_lowlevel(arena, layout_isize, len, ListLen, &[structure], next);
 
     // Zero
     let zero = root.create_symbol(ident_ids, "zero");
@@ -395,7 +394,7 @@ fn refcount_list<'a>(
     let elements_expr = Expr::StructAtIndex {
         index: 0,
         field_layouts: arena.alloc([box_layout, layout_isize]),
-        structure: ARG_1,
+        structure,
     };
     let elements_stmt = |next| Stmt::Let(elements, elements_expr, box_layout, next);
 
@@ -623,6 +622,7 @@ fn refcount_struct<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
     field_layouts: &'a [Layout<'a>],
+    structure: Symbol,
 ) -> Stmt<'a> {
     let mut stmt = rc_return_stmt(root, ident_ids, ctx);
 
@@ -632,7 +632,7 @@ fn refcount_struct<'a>(
             let field_val_expr = Expr::StructAtIndex {
                 index: i as u64,
                 field_layouts,
-                structure: ARG_1,
+                structure,
             };
             let field_val_stmt = |next| Stmt::Let(field_val, field_val_expr, *field_layout, next);
 
