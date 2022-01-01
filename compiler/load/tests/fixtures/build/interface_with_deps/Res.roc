@@ -1,17 +1,16 @@
 interface Res
-    exposes [ Res, withDefault, map, andThen, ConsList ]
+    exposes [ Res, withDefault, map, listMap, andThen, ConsList ]
     imports []
 
 Res ok err : [ Ok ok, Err err ]
 
 ConsList a : [ Cons a (ConsList a), Nil ]
 
-# TODO FIXME for some reason, exposing this causes a stack overflow
-# listMap : ConsList a, (a -> b) -> ConsList b
-# listMap = \list, f ->
-    # when list is
-        # Nil -> Nil
-        # Cons x xs -> Cons (f x) (listMap xs f)
+listMap : ConsList a, (a -> b) -> ConsList b
+listMap = \list, f ->
+  when list is
+    Nil -> Nil
+    Cons x xs -> Cons (f x) (listMap xs f)
 
 map : Res a err, (a -> b) -> Res b err
 map = \result, transform ->

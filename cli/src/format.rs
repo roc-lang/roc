@@ -7,19 +7,20 @@ use roc_fmt::module::fmt_module;
 use roc_fmt::Buf;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::ast::{
-    AssignedField, Collection, Expr, Pattern, StrLiteral, StrSegment, Tag, TypeAnnotation,
-    WhenBranch,
+    AliasHeader, AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag,
+    TypeAnnotation, WhenBranch,
 };
 use roc_parse::header::{
-    AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
+    PackageName, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
 };
 use roc_parse::{
     ast::{Def, Module},
     module::{self, module_defs},
-    parser::{Parser, State, SyntaxError},
+    parser::{Parser, SyntaxError},
+    state::State,
 };
-use roc_region::all::Located;
+use roc_region::all::Loc;
 use roc_reporting::{internal_error, user_error};
 
 pub fn format(files: std::vec::Vec<PathBuf>) {
@@ -105,7 +106,7 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
 #[derive(Debug, PartialEq)]
 struct Ast<'a> {
     module: Module<'a>,
-    defs: Vec<'a, Located<Def<'a>>>,
+    defs: Vec<'a, Loc<Def<'a>>>,
 }
 
 fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
@@ -228,13 +229,19 @@ impl<'a> RemoveSpaces<'a> for &'a str {
     }
 }
 
-impl<'a, T: RemoveSpaces<'a> + Copy> RemoveSpaces<'a> for ExposesEntry<'a, T> {
+impl<'a, T: RemoveSpaces<'a> + Copy> RemoveSpaces<'a> for Spaced<'a, T> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            ExposesEntry::Exposed(a) => ExposesEntry::Exposed(a.remove_spaces(arena)),
-            ExposesEntry::SpaceBefore(a, _) => a.remove_spaces(arena),
-            ExposesEntry::SpaceAfter(a, _) => a.remove_spaces(arena),
+            Spaced::Item(a) => Spaced::Item(a.remove_spaces(arena)),
+            Spaced::SpaceBefore(a, _) => a.remove_spaces(arena),
+            Spaced::SpaceAfter(a, _) => a.remove_spaces(arena),
         }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ExposedName<'a> {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
     }
 }
 
@@ -261,18 +268,10 @@ impl<'a> RemoveSpaces<'a> for To<'a> {
 
 impl<'a> RemoveSpaces<'a> for TypedIdent<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match *self {
-            TypedIdent::Entry {
-                ident,
-                spaces_before_colon: _,
-                ann,
-            } => TypedIdent::Entry {
-                ident: ident.remove_spaces(arena),
-                spaces_before_colon: &[],
-                ann: ann.remove_spaces(arena),
-            },
-            TypedIdent::SpaceBefore(a, _) => a.remove_spaces(arena),
-            TypedIdent::SpaceAfter(a, _) => a.remove_spaces(arena),
+        TypedIdent {
+            ident: self.ident.remove_spaces(arena),
+            spaces_before_colon: &[],
+            ann: self.ann.remove_spaces(arena),
         }
     }
 }
@@ -287,38 +286,17 @@ impl<'a> RemoveSpaces<'a> for PlatformRequires<'a> {
 }
 
 impl<'a> RemoveSpaces<'a> for PlatformRigid<'a> {
-    fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match *self {
-            PlatformRigid::Entry { rigid, alias } => PlatformRigid::Entry { rigid, alias },
-            PlatformRigid::SpaceBefore(a, _) => a.remove_spaces(arena),
-            PlatformRigid::SpaceAfter(a, _) => a.remove_spaces(arena),
-        }
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
     }
 }
 
 impl<'a> RemoveSpaces<'a> for PackageEntry<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match *self {
-            PackageEntry::Entry {
-                shorthand,
-                spaces_after_shorthand: _,
-                package_or_path,
-            } => PackageEntry::Entry {
-                shorthand,
-                spaces_after_shorthand: &[],
-                package_or_path: package_or_path.remove_spaces(arena),
-            },
-            PackageEntry::SpaceBefore(a, _) => a.remove_spaces(arena),
-            PackageEntry::SpaceAfter(a, _) => a.remove_spaces(arena),
-        }
-    }
-}
-
-impl<'a> RemoveSpaces<'a> for PackageOrPath<'a> {
-    fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match *self {
-            PackageOrPath::Package(a, b) => PackageOrPath::Package(a, b),
-            PackageOrPath::Path(p) => PackageOrPath::Path(p.remove_spaces(arena)),
+        PackageEntry {
+            shorthand: self.shorthand,
+            spaces_after_shorthand: &[],
+            package_name: self.package_name.remove_spaces(arena),
         }
     }
 }
@@ -328,8 +306,6 @@ impl<'a> RemoveSpaces<'a> for ImportsEntry<'a> {
         match *self {
             ImportsEntry::Module(a, b) => ImportsEntry::Module(a, b.remove_spaces(arena)),
             ImportsEntry::Package(a, b, c) => ImportsEntry::Package(a, b, c.remove_spaces(arena)),
-            ImportsEntry::SpaceBefore(a, _) => a.remove_spaces(arena),
-            ImportsEntry::SpaceAfter(a, _) => a.remove_spaces(arena),
         }
     }
 }
@@ -340,10 +316,10 @@ impl<'a, T: RemoveSpaces<'a>> RemoveSpaces<'a> for Option<T> {
     }
 }
 
-impl<'a, T: RemoveSpaces<'a> + std::fmt::Debug> RemoveSpaces<'a> for Located<T> {
+impl<'a, T: RemoveSpaces<'a> + std::fmt::Debug> RemoveSpaces<'a> for Loc<T> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         let res = self.value.remove_spaces(arena);
-        Located::new(0, 0, 0, 0, res)
+        Loc::new(0, 0, 0, 0, res)
     }
 }
 
@@ -398,9 +374,14 @@ impl<'a> RemoveSpaces<'a> for Def<'a> {
             Def::Annotation(a, b) => {
                 Def::Annotation(a.remove_spaces(arena), b.remove_spaces(arena))
             }
-            Def::Alias { name, vars, ann } => Def::Alias {
-                name: name.remove_spaces(arena),
-                vars: vars.remove_spaces(arena),
+            Def::Alias {
+                header: AliasHeader { name, vars },
+                ann,
+            } => Def::Alias {
+                header: AliasHeader {
+                    name: name.remove_spaces(arena),
+                    vars: vars.remove_spaces(arena),
+                },
                 ann: ann.remove_spaces(arena),
             },
             Def::Body(a, b) => Def::Body(
@@ -600,11 +581,9 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
             ),
             TypeAnnotation::Apply(a, b, c) => TypeAnnotation::Apply(a, b, c.remove_spaces(arena)),
             TypeAnnotation::BoundVariable(a) => TypeAnnotation::BoundVariable(a),
-            TypeAnnotation::As(a, _, c) => TypeAnnotation::As(
-                arena.alloc(a.remove_spaces(arena)),
-                &[],
-                arena.alloc(c.remove_spaces(arena)),
-            ),
+            TypeAnnotation::As(a, _, c) => {
+                TypeAnnotation::As(arena.alloc(a.remove_spaces(arena)), &[], c)
+            }
             TypeAnnotation::Record { fields, ext } => TypeAnnotation::Record {
                 fields: fields.remove_spaces(arena),
                 ext: ext.remove_spaces(arena),

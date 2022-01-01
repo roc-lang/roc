@@ -804,7 +804,9 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     env.builder.position_at_end(block);
     env.builder
         .set_current_debug_location(env.context, di_location);
-    let call = env.builder.build_call(function, &[tag1, tag2], "tag_eq");
+    let call = env
+        .builder
+        .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
 
     call.set_call_convention(FAST_CALL_CONV);
 

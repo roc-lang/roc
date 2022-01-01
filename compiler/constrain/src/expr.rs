@@ -12,18 +12,17 @@ use roc_can::pattern::Pattern;
 use roc_collections::all::{ImMap, Index, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
-use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Category, PReason, Reason, RecordField};
+use roc_types::types::{AnnotationSource, Category, PReason, Reason, RecordField};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
 pub struct Info {
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
-    pub def_types: SendMap<Symbol, Located<Type>>,
+    pub def_types: SendMap<Symbol, Loc<Type>>,
 }
 
 impl Info {
@@ -57,7 +56,7 @@ pub struct Env {
 
 fn constrain_untyped_args(
     env: &Env,
-    arguments: &[(Variable, Located<Pattern>)],
+    arguments: &[(Variable, Loc<Pattern>)],
     closure_type: Type,
     return_type: Type,
 ) -> (Vec<Variable>, PatternState, Type) {
@@ -78,6 +77,7 @@ fn constrain_untyped_args(
             loc_pattern.region,
             pattern_expected,
             &mut pattern_state,
+            true,
         );
 
         vars.push(*pattern_var);
@@ -604,7 +604,7 @@ pub fn constrain_expr(
                             FromAnnotation(
                                 name.clone(),
                                 *arity,
-                                TypedWhenBranch {
+                                AnnotationSource::TypedWhenBranch {
                                     index: Index::zero_based(index),
                                     region: ann_source.region(),
                                 },
@@ -1040,6 +1040,7 @@ fn constrain_when_branch(
             loc_pattern.region,
             pattern_expected.clone(),
             &mut state,
+            true,
         );
     }
 
@@ -1080,7 +1081,7 @@ fn constrain_when_branch(
     }
 }
 
-fn constrain_field(env: &Env, field_var: Variable, loc_expr: &Located<Expr>) -> (Type, Constraint) {
+fn constrain_field(env: &Env, field_var: Variable, loc_expr: &Loc<Expr>) -> (Type, Constraint) {
     let field_type = Variable(field_var);
     let field_expected = NoExpectation(field_type.clone());
     let constraint = constrain_expr(env, loc_expr.region, &loc_expr.value, field_expected);
@@ -1128,11 +1129,7 @@ pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
     constraint
 }
 
-fn constrain_def_pattern(
-    env: &Env,
-    loc_pattern: &Located<Pattern>,
-    expr_type: Type,
-) -> PatternState {
+fn constrain_def_pattern(env: &Env, loc_pattern: &Loc<Pattern>, expr_type: Type) -> PatternState {
     let pattern_expected = PExpected::NoExpectation(expr_type);
 
     let mut state = PatternState {
@@ -1147,6 +1144,7 @@ fn constrain_def_pattern(
         loc_pattern.region,
         pattern_expected,
         &mut state,
+        true,
     );
 
     state
@@ -1267,6 +1265,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 loc_pattern.region,
                                 pattern_expected,
                                 &mut state,
+                                false,
                             );
                         }
 
@@ -1449,8 +1448,8 @@ fn instantiate_rigids(
     introduced_vars: &IntroducedVariables,
     new_rigids: &mut Vec<Variable>,
     ftv: &mut ImMap<Lowercase, Variable>, // rigids defined before the current annotation
-    loc_pattern: &Located<Pattern>,
-    headers: &mut SendMap<Symbol, Located<Type>>,
+    loc_pattern: &Loc<Pattern>,
+    headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> Type {
     let mut annotation = annotation.clone();
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
@@ -1473,7 +1472,7 @@ fn instantiate_rigids(
 
     if let Some(new_headers) = crate::pattern::headers_from_annotation(
         &loc_pattern.value,
-        &Located::at(loc_pattern.region, annotation.clone()),
+        &Loc::at(loc_pattern.region, annotation.clone()),
     ) {
         for (symbol, loc_type) in new_headers {
             for var in loc_type.value.variables() {
@@ -1634,6 +1633,7 @@ pub fn rec_defs_help(
                                     loc_pattern.region,
                                     pattern_expected,
                                     &mut state,
+                                    false,
                                 );
                             }
 
@@ -1770,7 +1770,7 @@ fn constrain_field_update(
     var: Variable,
     region: Region,
     field: Lowercase,
-    loc_expr: &Located<Expr>,
+    loc_expr: &Loc<Expr>,
 ) -> (Variable, Type, Constraint) {
     let field_type = Type::Variable(var);
     let reason = Reason::RecordUpdateValue(field);

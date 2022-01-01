@@ -3,7 +3,7 @@ use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::gen_refcount::RefcountProcGenerator;
+use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 use roc_reporting::internal_error;
@@ -256,8 +256,8 @@ pub struct Backend64Bit<
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    refcount_proc_gen: RefcountProcGenerator<'a>,
-    refcount_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
+    helper_proc_gen: CodeGenHelp<'a>,
+    helper_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
     buf: Vec<'a, u8>,
     relocs: Vec<'a, Relocation>,
     proc_name: Option<String>,
@@ -308,8 +308,8 @@ pub fn new_backend_64bit<
         phantom_cc: PhantomData,
         env,
         interns,
-        refcount_proc_gen: RefcountProcGenerator::new(env.arena, IntWidth::I64, env.module_id),
-        refcount_proc_symbols: bumpalo::vec![in env.arena],
+        helper_proc_gen: CodeGenHelp::new(env.arena, IntWidth::I64, env.module_id),
+        helper_proc_symbols: bumpalo::vec![in env.arena],
         proc_name: None,
         is_self_recursive: None,
         buf: bumpalo::vec![in env.arena],
@@ -346,19 +346,17 @@ impl<
     fn interns(&self) -> &Interns {
         self.interns
     }
-    fn env_interns_refcount_mut(
-        &mut self,
-    ) -> (&Env<'a>, &mut Interns, &mut RefcountProcGenerator<'a>) {
-        (self.env, self.interns, &mut self.refcount_proc_gen)
+    fn env_interns_helpers_mut(&mut self) -> (&Env<'a>, &mut Interns, &mut CodeGenHelp<'a>) {
+        (self.env, self.interns, &mut self.helper_proc_gen)
     }
-    fn refcount_proc_gen_mut(&mut self) -> &mut RefcountProcGenerator<'a> {
-        &mut self.refcount_proc_gen
+    fn helper_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a> {
+        &mut self.helper_proc_gen
     }
-    fn refcount_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)> {
-        &mut self.refcount_proc_symbols
+    fn helper_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)> {
+        &mut self.helper_proc_symbols
     }
-    fn refcount_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)> {
-        &self.refcount_proc_symbols
+    fn helper_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)> {
+        &self.helper_proc_symbols
     }
 
     fn reset(&mut self, name: String, is_self_recursive: SelfRecursive) {
@@ -383,7 +381,7 @@ impl<
         self.float_used_regs.clear();
         self.float_free_regs
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
-        self.refcount_proc_symbols.clear();
+        self.helper_proc_symbols.clear();
     }
 
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)> {
@@ -572,7 +570,7 @@ impl<
             Layout::Builtin(Builtin::Str) => {
                 if CC::returns_via_arg_pointer(ret_layout) {
                     // This will happen on windows, return via pointer here.
-                    unimplemented!("FnCall: Returning strings via pointer not yet implemented");
+                    todo!("FnCall: Returning strings via pointer");
                 } else {
                     let offset = self.claim_stack_size(16);
                     self.symbol_storage_map.insert(
@@ -590,10 +588,7 @@ impl<
             Layout::Struct([]) => {
                 // Nothing needs to be done to load a returned empty struct.
             }
-            x => unimplemented!(
-                "FnCall: receiving return type, {:?}, is not yet implemented",
-                x
-            ),
+            x => todo!("FnCall: receiving return type, {:?}", x),
         }
     }
 
@@ -637,10 +632,7 @@ impl<
                     self.buf[jne_location + i] = *byte;
                 }
             } else {
-                unimplemented!(
-                    "Switch: branch info, {:?}, is not yet implemented",
-                    branch_info
-                );
+                todo!("Switch: branch info, {:?}", branch_info);
             }
         }
         let (branch_info, stmt) = default_branch;
@@ -658,10 +650,7 @@ impl<
                 );
             }
         } else {
-            unimplemented!(
-                "Switch: branch info, {:?}, is not yet implemented",
-                branch_info
-            );
+            todo!("Switch: branch info, {:?}", branch_info);
         }
     }
 
@@ -803,7 +792,7 @@ impl<
                 let src_reg = self.load_to_float_reg(src);
                 ASM::abs_freg64_freg64(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
             }
-            x => unimplemented!("NumAbs: layout, {:?}, not implemented yet", x),
+            x => todo!("NumAbs: layout, {:?}", x),
         }
     }
 
@@ -821,7 +810,7 @@ impl<
                 let src2_reg = self.load_to_float_reg(src2);
                 ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            x => unimplemented!("NumAdd: layout, {:?}, not implemented yet", x),
+            x => todo!("NumAdd: layout, {:?}", x),
         }
     }
 
@@ -833,7 +822,7 @@ impl<
                 let src2_reg = self.load_to_general_reg(src2);
                 ASM::imul_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            x => unimplemented!("NumMul: layout, {:?}, not implemented yet", x),
+            x => todo!("NumMul: layout, {:?}", x),
         }
     }
 
@@ -844,7 +833,7 @@ impl<
                 let src_reg = self.load_to_general_reg(src);
                 ASM::neg_reg64_reg64(&mut self.buf, dst_reg, src_reg);
             }
-            x => unimplemented!("NumNeg: layout, {:?}, not implemented yet", x),
+            x => todo!("NumNeg: layout, {:?}", x),
         }
     }
 
@@ -856,7 +845,7 @@ impl<
                 let src2_reg = self.load_to_general_reg(src2);
                 ASM::sub_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            x => unimplemented!("NumSub: layout, {:?}, not implemented yet", x),
+            x => todo!("NumSub: layout, {:?}", x),
         }
     }
 
@@ -868,7 +857,7 @@ impl<
                 let src2_reg = self.load_to_general_reg(src2);
                 ASM::eq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            x => unimplemented!("NumEq: layout, {:?}, not implemented yet", x),
+            x => todo!("NumEq: layout, {:?}", x),
         }
     }
 
@@ -880,7 +869,7 @@ impl<
                 let src2_reg = self.load_to_general_reg(src2);
                 ASM::neq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            x => unimplemented!("NumNeq: layout, {:?}, not implemented yet", x),
+            x => todo!("NumNeq: layout, {:?}", x),
         }
     }
 
@@ -898,7 +887,7 @@ impl<
                 let src2_reg = self.load_to_general_reg(src2);
                 ASM::lt_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            x => unimplemented!("NumLt: layout, {:?}, not implemented yet", x),
+            x => todo!("NumLt: layout, {:?}", x),
         }
     }
 
@@ -953,11 +942,7 @@ impl<
                 let src_reg = self.load_to_float_reg(src);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
             }
-            (a, r) => unimplemented!(
-                "NumToFloat: layout, arg {:?}, ret {:?}, not implemented yet",
-                a,
-                r
-            ),
+            (a, r) => todo!("NumToFloat: layout, arg {:?}, ret {:?}", a, r),
         }
     }
 
@@ -975,15 +960,17 @@ impl<
                 let src2_reg = self.load_to_general_reg(src2);
                 ASM::gte_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            x => unimplemented!("NumGte: layout, {:?}, not implemented yet", x),
+            x => todo!("NumGte: layout, {:?}", x),
         }
     }
 
-    fn build_refcount_getptr(&mut self, dst: &Symbol, src: &Symbol) {
+    fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
+        // We may not strictly need an instruction here.
+        // What's important is to load the value, and for src and dest to have different Layouts.
+        // This is used for pointer math in refcounting and for pointer equality
         let dst_reg = self.claim_general_reg(dst);
         let src_reg = self.load_to_general_reg(src);
-        // The refcount pointer is the value before the pointer.
-        ASM::sub_reg64_reg64_imm32(&mut self.buf, dst_reg, src_reg, PTR_SIZE as i32);
+        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
@@ -1115,7 +1102,7 @@ impl<
                 ASM::mov_reg64_imm64(&mut self.buf, reg, num);
                 ASM::mov_base32_reg64(&mut self.buf, offset + 8, reg);
             }
-            x => unimplemented!("loading literal, {:?}, is not yet implemented", x),
+            x => todo!("loading literal, {:?}", x),
         }
     }
 
@@ -1236,7 +1223,7 @@ impl<
                 Layout::Builtin(Builtin::Str) => {
                     if self.symbol_storage_map.contains_key(&Symbol::RET_POINTER) {
                         // This will happen on windows, return via pointer here.
-                        unimplemented!("Returning strings via pointer not yet implemented");
+                        todo!("Returning strings via pointer");
                     } else {
                         ASM::mov_reg64_base32(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *offset);
                         ASM::mov_reg64_base32(
@@ -1259,12 +1246,9 @@ impl<
                         CC::return_struct(&mut self.buf, offset, size, field_layouts, ret_reg);
                     }
                 }
-                x => unimplemented!(
-                    "returning symbol with layout, {:?}, is not yet implemented",
-                    x
-                ),
+                x => todo!("returning symbol with layout, {:?}", x),
             },
-            Some(x) => unimplemented!("returning symbol storage, {:?}, is not yet implemented", x),
+            Some(x) => todo!("returning symbol storage, {:?}", x),
             None if layout == &Layout::Struct(&[]) => {
                 // Empty struct is not defined and does nothing.
             }
@@ -1596,10 +1580,7 @@ impl<
                     internal_error!("unknown struct: {:?}", sym);
                 }
             }
-            x => unimplemented!(
-                "copying data to the stack with layout, {:?}, not implemented yet",
-                x
-            ),
+            x => todo!("copying data to the stack with layout, {:?}", x),
         }
     }
 

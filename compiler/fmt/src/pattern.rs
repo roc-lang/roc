@@ -3,11 +3,16 @@ use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt};
 use crate::Buf;
 use roc_parse::ast::{Base, Pattern};
 
-pub fn fmt_pattern<'a>(buf: &mut Buf<'a>, pattern: &'a Pattern<'a>, indent: u16, parens: Parens) {
+pub fn fmt_pattern<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    pattern: &'a Pattern<'a>,
+    indent: u16,
+    parens: Parens,
+) {
     pattern.format_with_options(buf, parens, Newlines::No, indent);
 }
 
-impl<'a> Formattable<'a> for Pattern<'a> {
+impl<'a> Formattable for Pattern<'a> {
     fn is_multiline(&self) -> bool {
         // Theory: a pattern should only be multiline when it contains a comment
         match self {
@@ -37,9 +42,9 @@ impl<'a> Formattable<'a> for Pattern<'a> {
         }
     }
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut Buf<'a>,
+        buf: &mut Buf<'buf>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -68,7 +73,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 loc_pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
 
                 for loc_arg in loc_arg_patterns.iter() {
-                    buf.push(' ');
+                    buf.spaces(1);
                     loc_arg.format_with_options(buf, Parens::InApply, Newlines::No, indent);
                 }
 
@@ -78,7 +83,8 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             }
             RecordDestructure(loc_patterns) => {
                 buf.indent(indent);
-                buf.push_str("{ ");
+                buf.push_str("{");
+                buf.spaces(1);
 
                 let mut it = loc_patterns.iter().peekable();
 
@@ -86,7 +92,8 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                     loc_pattern.format(buf, indent);
 
                     if it.peek().is_some() {
-                        buf.push_str(", ");
+                        buf.push_str(",");
+                        buf.spaces(1);
                     }
                 }
 
@@ -96,14 +103,16 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             RequiredField(name, loc_pattern) => {
                 buf.indent(indent);
                 buf.push_str(name);
-                buf.push_str(": ");
+                buf.push_str(":");
+                buf.spaces(1);
                 loc_pattern.format(buf, indent);
             }
 
             OptionalField(name, loc_pattern) => {
                 buf.indent(indent);
                 buf.push_str(name);
-                buf.push_str(" ? ");
+                buf.push_str(" ?");
+                buf.spaces(1);
                 loc_pattern.format(buf, indent);
             }
 

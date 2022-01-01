@@ -15,8 +15,8 @@ use crate::llvm::build_list::{
     list_single, list_sort_with, list_sublist, list_swap,
 };
 use crate::llvm::build_str::{
-    empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
-    str_from_utf8, str_from_utf8_range, str_join_with, str_number_of_bytes, str_repeat, str_split,
+    str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
+    str_from_utf8_range, str_join_with, str_number_of_bytes, str_repeat, str_split,
     str_starts_with, str_starts_with_code_point, str_to_utf8, str_trim, str_trim_left,
     str_trim_right,
 };
@@ -39,11 +39,13 @@ use inkwell::debug_info::{
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
-use inkwell::types::{BasicType, BasicTypeEnum, FunctionType, IntType, StructType};
+use inkwell::types::{
+    BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType, StructType,
+};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue, InstructionOpcode,
-    InstructionValue, IntValue, PointerValue, StructValue,
+    BasicMetadataValueEnum, BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue,
+    InstructionOpcode, InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -60,6 +62,7 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
+use roc_reporting::internal_error;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -226,10 +229,11 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
             .get_function(intrinsic_name)
             .unwrap_or_else(|| panic!("Unrecognized intrinsic function: {}", intrinsic_name));
 
-        let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), self.arena);
+        let mut arg_vals: Vec<BasicMetadataValueEnum> =
+            Vec::with_capacity_in(args.len(), self.arena);
 
         for arg in args.iter() {
-            arg_vals.push(*arg);
+            arg_vals.push((*arg).into());
         }
 
         let call = self
@@ -775,118 +779,109 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
-            if str_literal.is_empty() {
-                empty_str(env)
-            } else {
-                let ctx = env.context;
-                let builder = env.builder;
-                let number_of_chars = str_literal.len() as u64;
+            let ctx = env.context;
+            let builder = env.builder;
+            let number_of_chars = str_literal.len() as u64;
 
-                let str_type = super::convert::zig_str_type(env);
+            let str_type = super::convert::zig_str_type(env);
 
-                if str_literal.len() < env.small_str_bytes() as usize {
-                    // TODO support big endian systems
+            if str_literal.len() < env.small_str_bytes() as usize {
+                // TODO support big endian systems
 
-                    let array_alloca = builder.build_array_alloca(
-                        ctx.i8_type(),
-                        ctx.i8_type().const_int(env.small_str_bytes() as u64, false),
-                        "alloca_small_str",
-                    );
+                let array_alloca = builder.build_array_alloca(
+                    ctx.i8_type(),
+                    ctx.i8_type().const_int(env.small_str_bytes() as u64, false),
+                    "alloca_small_str",
+                );
 
-                    // Zero out all the bytes. If we don't do this, then
-                    // small strings would have uninitialized bytes, which could
-                    // cause string equality checks to fail randomly.
-                    //
-                    // We're running memset over *all* the bytes, even though
-                    // the final one is about to be manually overridden, on
-                    // the theory that LLVM will optimize the memset call
-                    // into two instructions to move appropriately-sized
-                    // zero integers into the appropriate locations instead
-                    // of doing any iteration.
-                    //
-                    // TODO: look at the compiled output to verify this theory!
-                    env.call_memset(
+                // Zero out all the bytes. If we don't do this, then
+                // small strings would have uninitialized bytes, which could
+                // cause string equality checks to fail randomly.
+                //
+                // We're running memset over *all* the bytes, even though
+                // the final one is about to be manually overridden, on
+                // the theory that LLVM will optimize the memset call
+                // into two instructions to move appropriately-sized
+                // zero integers into the appropriate locations instead
+                // of doing any iteration.
+                //
+                // TODO: look at the compiled output to verify this theory!
+                env.call_memset(
+                    array_alloca,
+                    ctx.i8_type().const_zero(),
+                    env.ptr_int().const_int(env.small_str_bytes() as u64, false),
+                );
+
+                let final_byte = (str_literal.len() as u8) | 0b1000_0000;
+
+                let final_byte_ptr = unsafe {
+                    builder.build_in_bounds_gep(
                         array_alloca,
-                        ctx.i8_type().const_zero(),
-                        env.ptr_int().const_int(env.small_str_bytes() as u64, false),
-                    );
-
-                    let final_byte = (str_literal.len() as u8) | 0b1000_0000;
-
-                    let final_byte_ptr = unsafe {
-                        builder.build_in_bounds_gep(
-                            array_alloca,
-                            &[ctx
-                                .i8_type()
-                                .const_int(env.small_str_bytes() as u64 - 1, false)],
-                            "str_literal_final_byte",
-                        )
-                    };
-
-                    builder.build_store(
-                        final_byte_ptr,
-                        ctx.i8_type().const_int(final_byte as u64, false),
-                    );
-
-                    // Copy the elements from the list literal into the array
-                    for (index, character) in str_literal.as_bytes().iter().enumerate() {
-                        let val = env
-                            .context
+                        &[ctx
                             .i8_type()
-                            .const_int(*character as u64, false)
-                            .as_basic_value_enum();
-                        let index_val = ctx.i64_type().const_int(index as u64, false);
-                        let elem_ptr = unsafe {
-                            builder.build_in_bounds_gep(array_alloca, &[index_val], "index")
-                        };
-
-                        builder.build_store(elem_ptr, val);
-                    }
-
-                    builder.build_load(
-                        builder
-                            .build_bitcast(
-                                array_alloca,
-                                str_type.ptr_type(AddressSpace::Generic),
-                                "cast_collection",
-                            )
-                            .into_pointer_value(),
-                        "small_str_array",
+                            .const_int(env.small_str_bytes() as u64 - 1, false)],
+                        "str_literal_final_byte",
                     )
-                } else {
-                    let ptr = define_global_str_literal_ptr(env, *str_literal);
-                    let number_of_elements = env.ptr_int().const_int(number_of_chars, false);
+                };
 
-                    let struct_type = str_type;
+                builder.build_store(
+                    final_byte_ptr,
+                    ctx.i8_type().const_int(final_byte as u64, false),
+                );
 
-                    let mut struct_val;
+                // Copy the elements from the list literal into the array
+                for (index, character) in str_literal.as_bytes().iter().enumerate() {
+                    let val = env
+                        .context
+                        .i8_type()
+                        .const_int(*character as u64, false)
+                        .as_basic_value_enum();
+                    let index_val = ctx.i64_type().const_int(index as u64, false);
+                    let elem_ptr =
+                        unsafe { builder.build_in_bounds_gep(array_alloca, &[index_val], "index") };
 
-                    // Store the pointer
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_type.get_undef(),
-                            ptr,
-                            Builtin::WRAPPER_PTR,
-                            "insert_ptr_str_literal",
-                        )
-                        .unwrap();
-
-                    // Store the length
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_val,
-                            number_of_elements,
-                            Builtin::WRAPPER_LEN,
-                            "insert_len",
-                        )
-                        .unwrap();
-
-                    builder.build_bitcast(
-                        struct_val.into_struct_value(),
-                        str_type,
-                        "cast_collection",
-                    )
+                    builder.build_store(elem_ptr, val);
                 }
+
+                builder.build_load(
+                    builder
+                        .build_bitcast(
+                            array_alloca,
+                            str_type.ptr_type(AddressSpace::Generic),
+                            "cast_collection",
+                        )
+                        .into_pointer_value(),
+                    "small_str_array",
+                )
+            } else {
+                let ptr = define_global_str_literal_ptr(env, *str_literal);
+                let number_of_elements = env.ptr_int().const_int(number_of_chars, false);
+
+                let struct_type = str_type;
+
+                let mut struct_val;
+
+                // Store the pointer
+                struct_val = builder
+                    .build_insert_value(
+                        struct_type.get_undef(),
+                        ptr,
+                        Builtin::WRAPPER_PTR,
+                        "insert_ptr_str_literal",
+                    )
+                    .unwrap();
+
+                // Store the length
+                struct_val = builder
+                    .build_insert_value(
+                        struct_val,
+                        number_of_elements,
+                        Builtin::WRAPPER_LEN,
+                        "insert_len",
+                    )
+                    .unwrap();
+
+                builder.build_bitcast(struct_val.into_struct_value(), str_type, "cast_collection")
             }
         }
     }
@@ -1399,6 +1394,18 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
             );
 
             field_vals.push(ptr);
+        } else if matches!(
+            tag_field_layout,
+            Layout::Union(UnionLayout::NonRecursive(_))
+        ) {
+            debug_assert!(val.is_pointer_value());
+
+            // We store non-recursive unions without any indirection.
+            let reified = env
+                .builder
+                .build_load(val.into_pointer_value(), "load_non_recursive");
+
+            field_vals.push(reified);
         } else {
             // this check fails for recursive tag unions, but can be helpful while debugging
             // debug_assert_eq!(tag_field_layout, val_layout);
@@ -1754,8 +1761,8 @@ fn tag_pointer_set_tag_id<'a, 'ctx, 'env>(
     tag_id: u8,
     pointer: PointerValue<'ctx>,
 ) -> PointerValue<'ctx> {
-    // we only have 3 bits, so can encode only 0..7
-    debug_assert!(tag_id < 8);
+    // we only have 3 bits, so can encode only 0..7 (or on 32-bit targets, 2 bits to encode 0..3)
+    debug_assert!((tag_id as u32) < env.ptr_bytes);
 
     let ptr_int = env.ptr_int();
 
@@ -1768,16 +1775,19 @@ fn tag_pointer_set_tag_id<'a, 'ctx, 'env>(
         .build_int_to_ptr(combined, pointer.get_type(), "to_ptr")
 }
 
+pub fn tag_pointer_tag_id_bits_and_mask(ptr_bytes: u32) -> (u64, u64) {
+    match ptr_bytes {
+        8 => (3, 0b0000_0111),
+        4 => (2, 0b0000_0011),
+        _ => unreachable!(),
+    }
+}
+
 pub fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let mask: u64 = match env.ptr_bytes {
-        8 => 0b0000_0111,
-        4 => 0b0000_0011,
-        _ => unreachable!(),
-    };
-
+    let (_, mask) = tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
     let ptr_int = env.ptr_int();
 
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
@@ -1795,11 +1805,7 @@ pub fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let ptr_int = env.ptr_int();
 
-    let tag_id_bits_mask = match env.ptr_bytes {
-        8 => 3,
-        4 => 2,
-        _ => unreachable!(),
-    };
+    let (tag_id_bits_mask, _) = tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
 
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
 
@@ -2212,6 +2218,24 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     refcount_ptr.set_refcount(env, initial_refcount);
 
     data_ptr
+}
+
+macro_rules! dict_key_value_layout {
+    ($dict_layout:expr) => {
+        match $dict_layout {
+            Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => (key_layout, value_layout),
+            _ => unreachable!("invalid dict layout"),
+        }
+    };
+}
+
+macro_rules! list_element_layout {
+    ($list_layout:expr) => {
+        match $list_layout {
+            Layout::Builtin(Builtin::List(list_layout)) => *list_layout,
+            _ => unreachable!("invalid list layout"),
+        }
+    };
 }
 
 fn list_literal<'a, 'ctx, 'env>(
@@ -3287,7 +3311,9 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
             let output_type = return_type.ptr_type(AddressSpace::Generic);
             argument_types.push(output_type.into());
 
-            env.context.void_type().fn_type(&argument_types, false)
+            env.context
+                .void_type()
+                .fn_type(&function_arguments(env, &argument_types), false)
         }
     };
 
@@ -3392,7 +3418,9 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     let c_function_type = {
         let output_type = return_type.ptr_type(AddressSpace::Generic);
         argument_types.push(output_type.into());
-        env.context.void_type().fn_type(&argument_types, false)
+        env.context
+            .void_type()
+            .fn_type(&function_arguments(env, &argument_types), false)
     };
 
     let c_function = add_func(
@@ -3440,9 +3468,11 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
     let call_result = {
+        let last_block = builder.get_insert_block().unwrap();
+
         let roc_wrapper_function = make_exception_catcher(env, roc_function, return_layout);
 
-        builder.position_at_end(entry);
+        builder.position_at_end(last_block);
 
         call_roc_function(
             env,
@@ -3536,12 +3566,17 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     let cc_return = to_cc_return(env, &return_layout);
 
     let c_function_type = match cc_return {
-        CCReturn::Void => env.context.void_type().fn_type(&argument_types, false),
-        CCReturn::Return => return_type.fn_type(&argument_types, false),
+        CCReturn::Void => env
+            .context
+            .void_type()
+            .fn_type(&function_arguments(env, &argument_types), false),
+        CCReturn::Return => return_type.fn_type(&function_arguments(env, &argument_types), false),
         CCReturn::ByPointer => {
             let output_type = return_type.ptr_type(AddressSpace::Generic);
             argument_types.push(output_type.into());
-            env.context.void_type().fn_type(&argument_types, false)
+            env.context
+                .void_type()
+                .fn_type(&function_arguments(env, &argument_types), false)
         }
     };
 
@@ -3902,7 +3937,8 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     // argument_types.push(wrapper_return_type.ptr_type(AddressSpace::Generic).into());
 
     // let wrapper_function_type = env.context.void_type().fn_type(&argument_types, false);
-    let wrapper_function_type = wrapper_return_type.fn_type(&argument_types, false);
+    let wrapper_function_type =
+        wrapper_return_type.fn_type(&function_arguments(env, &argument_types), false);
 
     // Add main to the module.
     let wrapper_function = add_func(
@@ -4134,11 +4170,13 @@ fn build_proc_header<'a, 'ctx, 'env>(
     }
 
     let fn_type = match RocReturn::from_layout(env, &proc.ret_layout) {
-        RocReturn::Return => ret_type.fn_type(&arg_basic_types, false),
+        RocReturn::Return => ret_type.fn_type(&function_arguments(env, &arg_basic_types), false),
         RocReturn::ByPointer => {
             // println!( "{:?}  will return void instead of {:?}", symbol, proc.ret_layout);
             arg_basic_types.push(ret_type.ptr_type(AddressSpace::Generic).into());
-            env.context.void_type().fn_type(&arg_basic_types, false)
+            env.context
+                .void_type()
+                .fn_type(&function_arguments(env, &arg_basic_types), false)
         }
     };
 
@@ -4542,7 +4580,8 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
     match RocReturn::from_layout(env, result_layout) {
         RocReturn::ByPointer if !pass_by_pointer => {
             // WARNING this is a hack!!
-            let mut arguments = Vec::from_iter_in(arguments.iter().copied(), env.arena);
+            let it = arguments.iter().map(|x| (*x).into());
+            let mut arguments = Vec::from_iter_in(it, env.arena);
             arguments.pop();
 
             let result_type = basic_type_from_layout(env, result_layout);
@@ -4563,7 +4602,8 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             env.builder.build_load(result_alloca, "load_result")
         }
         RocReturn::ByPointer => {
-            let mut arguments = Vec::from_iter_in(arguments.iter().copied(), env.arena);
+            let it = arguments.iter().map(|x| (*x).into());
+            let mut arguments = Vec::from_iter_in(it, env.arena);
 
             let result_type = basic_type_from_layout(env, result_layout);
             let result_alloca = tag_alloca(env, result_type, "result_value");
@@ -4592,7 +4632,10 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
                 roc_function.get_type().get_param_types().len(),
                 arguments.len()
             );
-            let call = env.builder.build_call(roc_function, arguments, "call");
+            let it = arguments.iter().map(|x| (*x).into());
+            let arguments = Vec::from_iter_in(it, env.arena);
+
+            let call = env.builder.build_call(roc_function, &arguments, "call");
 
             // roc functions should have the fast calling convention
             debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
@@ -5272,6 +5315,31 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_ends_with(env, scope, args[0], args[1])
         }
+        StrToNum => {
+            // Str.toNum : Str -> Result (Num *) {}
+            debug_assert_eq!(args.len(), 1);
+
+            let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            if let Layout::Struct(struct_layout) = layout {
+                // match on the return layout to figure out which zig builtin we need
+                let intrinsic = match struct_layout[0] {
+                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                    Layout::Builtin(Builtin::Float(float_width)) => {
+                        &bitcode::STR_TO_FLOAT[float_width]
+                    }
+                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                    _ => unreachable!(),
+                };
+
+                let string =
+                    complex_bitcast(env.builder, string, env.str_list_c_abi().into(), "to_utf8");
+
+                call_bitcode_fn(env, &[string], intrinsic)
+            } else {
+                unreachable!()
+            }
+        }
         StrFromInt => {
             // Str.fromInt : Int -> Str
             debug_assert_eq!(args.len(), 1);
@@ -5398,7 +5466,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_reverse(env, list, list_layout, update_mode)
+            let element_layout = list_element_layout!(list_layout);
+
+            list_reverse(env, list, element_layout, update_mode)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -5407,7 +5477,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let second_list = load_symbol(scope, &args[1]);
 
-            list_concat(env, parent, first_list, second_list, list_layout)
+            let element_layout = list_element_layout!(list_layout);
+
+            list_concat(env, first_list, second_list, element_layout)
         }
         ListContains => {
             // List.contains : List elem, elem -> Bool
@@ -5452,17 +5524,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             let index_1 = load_symbol(scope, &args[1]);
             let index_2 = load_symbol(scope, &args[2]);
 
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => list_swap(
-                    env,
-                    original_wrapper,
-                    index_1.into_int_value(),
-                    index_2.into_int_value(),
-                    element_layout,
-                    update_mode,
-                ),
-                _ => unreachable!("Invalid layout {:?} in List.swap", list_layout),
-            }
+            let element_layout = list_element_layout!(list_layout);
+            list_swap(
+                env,
+                original_wrapper,
+                index_1.into_int_value(),
+                index_2.into_int_value(),
+                element_layout,
+                update_mode,
+            )
         }
         ListSublist => {
             // List.sublist : List elem, { start : Nat, len : Nat } -> List elem
@@ -5477,17 +5547,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             let start = load_symbol(scope, &args[1]);
             let len = load_symbol(scope, &args[2]);
 
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => list_sublist(
-                    env,
-                    layout_ids,
-                    original_wrapper,
-                    start.into_int_value(),
-                    len.into_int_value(),
-                    element_layout,
-                ),
-                _ => unreachable!("Invalid layout {:?} in List.sublist", list_layout),
-            }
+            let element_layout = list_element_layout!(list_layout);
+            list_sublist(
+                env,
+                layout_ids,
+                original_wrapper,
+                start.into_int_value(),
+                len.into_int_value(),
+                element_layout,
+            )
         }
         ListDropAt => {
             // List.dropAt : List elem, Nat -> List elem
@@ -5498,16 +5566,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let count = load_symbol(scope, &args[1]);
 
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => list_drop_at(
-                    env,
-                    layout_ids,
-                    original_wrapper,
-                    count.into_int_value(),
-                    element_layout,
-                ),
-                _ => unreachable!("Invalid layout {:?} in List.dropAt", list_layout),
-            }
+            let element_layout = list_element_layout!(list_layout);
+            list_drop_at(
+                env,
+                layout_ids,
+                original_wrapper,
+                count.into_int_value(),
+                element_layout,
+            )
         }
         ListPrepend => {
             // List.prepend : List elem, elem -> List elem
@@ -5524,7 +5590,44 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, outer_list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_join(env, parent, list, outer_list_layout)
+            let inner_list_layout = list_element_layout!(outer_list_layout);
+            let element_layout = list_element_layout!(inner_list_layout);
+
+            list_join(env, list, element_layout)
+        }
+        ListGetUnsafe => {
+            // List.get : List elem, Nat -> [ Ok elem, OutOfBounds ]*
+            debug_assert_eq!(args.len(), 2);
+
+            let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let wrapper_struct = wrapper_struct.into_struct_value();
+            let elem_index = load_symbol(scope, &args[1]).into_int_value();
+
+            let element_layout = list_element_layout!(list_layout);
+
+            list_get_unsafe(
+                env,
+                layout_ids,
+                parent,
+                element_layout,
+                elem_index,
+                wrapper_struct,
+            )
+        }
+        ListSet => {
+            let list = load_symbol(scope, &args[0]);
+            let index = load_symbol(scope, &args[1]);
+            let (element, element_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            list_set(
+                env,
+                layout_ids,
+                list,
+                index.into_int_value(),
+                element,
+                element_layout,
+                update_mode,
+            )
         }
         NumToStr => {
             // Num.toStr : Num a -> Str
@@ -5559,9 +5662,13 @@ fn run_low_level<'a, 'ctx, 'env>(
                             let int_type = convert::int_type_from_int_width(env, *int_width);
                             build_int_unary_op(env, arg.into_int_value(), int_type, op)
                         }
-                        Float(float_width) => {
-                            build_float_unary_op(env, arg.into_float_value(), op, *float_width)
-                        }
+                        Float(float_width) => build_float_unary_op(
+                            env,
+                            layout,
+                            arg.into_float_value(),
+                            op,
+                            *float_width,
+                        ),
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
                         }
@@ -5807,41 +5914,6 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(bool_val)
         }
-        ListGetUnsafe => {
-            // List.get : List elem, Nat -> [ Ok elem, OutOfBounds ]*
-            debug_assert_eq!(args.len(), 2);
-
-            let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
-            let wrapper_struct = wrapper_struct.into_struct_value();
-            let elem_index = load_symbol(scope, &args[1]).into_int_value();
-
-            list_get_unsafe(
-                env,
-                layout_ids,
-                parent,
-                list_layout,
-                elem_index,
-                wrapper_struct,
-            )
-        }
-        ListSet => {
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (index, _) = load_symbol_and_layout(scope, &args[1]);
-            let (element, _) = load_symbol_and_layout(scope, &args[2]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => list_set(
-                    env,
-                    layout_ids,
-                    list,
-                    index.into_int_value(),
-                    element,
-                    element_layout,
-                    update_mode,
-                ),
-                _ => unreachable!("invalid dict layout"),
-            }
-        }
         Hash => {
             debug_assert_eq!(args.len(), 2);
             let seed = load_symbol(scope, &args[0]);
@@ -5871,64 +5943,44 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
+            let key = load_symbol(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(_, value_layout)) => {
-                    dict_remove(env, layout_ids, dict, key, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_remove(env, layout_ids, dict, key, key_layout, value_layout)
         }
         DictContains => {
             debug_assert_eq!(args.len(), 2);
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
+            let key = load_symbol(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(_, value_layout)) => {
-                    dict_contains(env, layout_ids, dict, key, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_contains(env, layout_ids, dict, key, key_layout, value_layout)
         }
         DictGetUnsafe => {
             debug_assert_eq!(args.len(), 2);
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
+            let key = load_symbol(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(_, value_layout)) => {
-                    dict_get(env, layout_ids, dict, key, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_get(env, layout_ids, dict, key, key_layout, value_layout)
         }
         DictKeys => {
             debug_assert_eq!(args.len(), 1);
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    dict_keys(env, layout_ids, dict, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_keys(env, layout_ids, dict, key_layout, value_layout)
         }
         DictValues => {
             debug_assert_eq!(args.len(), 1);
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    dict_values(env, layout_ids, dict, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_values(env, layout_ids, dict, key_layout, value_layout)
         }
         DictUnion => {
             debug_assert_eq!(args.len(), 2);
@@ -5936,12 +5988,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    dict_union(env, layout_ids, dict1, dict2, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_union(env, layout_ids, dict1, dict2, key_layout, value_layout)
         }
         DictDifference => {
             debug_assert_eq!(args.len(), 2);
@@ -5949,12 +5997,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    dict_difference(env, layout_ids, dict1, dict2, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_difference(env, layout_ids, dict1, dict2, key_layout, value_layout)
         }
         DictIntersection => {
             debug_assert_eq!(args.len(), 2);
@@ -5962,24 +6006,16 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    dict_intersection(env, layout_ids, dict1, dict2, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_intersection(env, layout_ids, dict1, dict2, key_layout, value_layout)
         }
         SetFromList => {
             debug_assert_eq!(args.len(), 1);
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            match list_layout {
-                Layout::Builtin(Builtin::List(key_layout)) => {
-                    set_from_list(env, layout_ids, list, key_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let key_layout = list_element_layout!(list_layout);
+            set_from_list(env, layout_ids, list, key_layout)
         }
         ExpectTrue => {
             debug_assert_eq!(args.len(), 1);
@@ -6043,8 +6079,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             unreachable!("these are higher order, and are handled elsewhere")
         }
 
-        RefCountGetPtr | RefCountInc | RefCountDec => {
-            unreachable!("LLVM backend does not use lowlevels for refcounting");
+        PtrCast | RefCountInc | RefCountDec => {
+            unreachable!("Not used in LLVM backend: {:?}", op);
         }
     }
 }
@@ -6135,6 +6171,14 @@ fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) 
     }
 }
 
+fn function_arguments<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    arguments: &[BasicTypeEnum<'ctx>],
+) -> Vec<'a, BasicMetadataTypeEnum<'ctx>> {
+    let it = arguments.iter().map(|x| (*x).into());
+    Vec::from_iter_in(it, env.arena)
+}
+
 fn build_foreign_symbol<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &mut Scope<'a, 'ctx>,
@@ -6189,17 +6233,25 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
             }
 
             let cc_type = match cc_return {
-                CCReturn::Void => env.context.void_type().fn_type(&cc_argument_types, false),
+                CCReturn::Void => env
+                    .context
+                    .void_type()
+                    .fn_type(&function_arguments(env, &cc_argument_types), false),
                 CCReturn::ByPointer => {
                     cc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
-                    env.context.void_type().fn_type(&cc_argument_types, false)
+                    env.context
+                        .void_type()
+                        .fn_type(&function_arguments(env, &cc_argument_types), false)
                 }
-                CCReturn::Return => return_type.fn_type(&cc_argument_types, false),
+                CCReturn::Return => {
+                    return_type.fn_type(&function_arguments(env, &cc_argument_types), false)
+                }
             };
 
             let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
 
-            let fastcc_type = return_type.fn_type(&fastcc_argument_types, false);
+            let fastcc_type =
+                return_type.fn_type(&function_arguments(env, &fastcc_argument_types), false);
 
             let fastcc_function = add_func(
                 env.module,
@@ -6220,14 +6272,14 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                 let mut cc_arguments =
                     Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
 
-                for (param, cc_type) in fastcc_parameters.into_iter().zip(cc_argument_types.iter())
-                {
+                let it = fastcc_parameters.into_iter().zip(cc_argument_types.iter());
+                for (param, cc_type) in it {
                     if param.get_type() == *cc_type {
-                        cc_arguments.push(param);
+                        cc_arguments.push(param.into());
                     } else {
                         let as_cc_type =
                             complex_bitcast(env.builder, param, *cc_type, "to_cc_type");
-                        cc_arguments.push(as_cc_type);
+                        cc_arguments.push(as_cc_type.into());
                     }
                 }
 
@@ -6482,17 +6534,6 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
         {
             use roc_mono::layout::Builtin::*;
 
-            let float_binop = |float_width| {
-                build_float_binop(
-                    env,
-                    parent,
-                    float_width,
-                    lhs_arg.into_float_value(),
-                    rhs_arg.into_float_value(),
-                    op,
-                )
-            };
-
             match lhs_builtin {
                 Int(int_width) => build_int_binop(
                     env,
@@ -6503,7 +6544,14 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
                     op,
                 ),
 
-                Float(float_width) => float_binop(*float_width),
+                Float(float_width) => build_float_binop(
+                    env,
+                    parent,
+                    *float_width,
+                    lhs_arg.into_float_value(),
+                    rhs_arg.into_float_value(),
+                    op,
+                ),
 
                 Decimal => {
                     build_dec_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
@@ -6922,9 +6970,10 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
 
 fn build_float_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
     arg: FloatValue<'ctx>,
     op: LowLevel,
-    float_width: FloatWidth,
+    float_width: FloatWidth, // arg width
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
 
@@ -6936,7 +6985,35 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumAbs => env.call_intrinsic(&LLVM_FABS[float_width], &[arg.into()]),
         NumSqrtUnchecked => env.call_intrinsic(&LLVM_SQRT[float_width], &[arg.into()]),
         NumLogUnchecked => env.call_intrinsic(&LLVM_LOG[float_width], &[arg.into()]),
-        NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */
+        NumToFloat => {
+            let return_width = match layout {
+                Layout::Builtin(Builtin::Float(return_width)) => *return_width,
+                _ => internal_error!("Layout for returning is not Float : {:?}", layout),
+            };
+            match (float_width, return_width) {
+                (FloatWidth::F32, FloatWidth::F32) => arg.into(),
+                (FloatWidth::F32, FloatWidth::F64) => bd.build_cast(
+                    InstructionOpcode::FPExt,
+                    arg,
+                    env.context.f64_type(),
+                    "f32_to_f64",
+                ),
+                (FloatWidth::F64, FloatWidth::F32) => bd.build_cast(
+                    InstructionOpcode::FPTrunc,
+                    arg,
+                    env.context.f32_type(),
+                    "f64_to_f32",
+                ),
+                (FloatWidth::F64, FloatWidth::F64) => arg.into(),
+                (FloatWidth::F128, FloatWidth::F128) => arg.into(),
+                (FloatWidth::F128, _) => {
+                    unimplemented!("I cannot handle F128 with Num.toFloat yet")
+                }
+                (_, FloatWidth::F128) => {
+                    unimplemented!("I cannot handle F128 with Num.toFloat yet")
+                }
+            }
+        }
         NumCeiling => env.builder.build_cast(
             InstructionOpcode::FPToSI,
             env.call_intrinsic(&LLVM_CEILING[float_width], &[arg.into()]),

@@ -1,5 +1,5 @@
-platform examples/add
-    requires {}{ main : I64 -> I64 }
+platform "examples/add"
+    requires {} { main : I64 -> I64 }
     exposes []
     packages {}
     imports []

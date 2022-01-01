@@ -601,6 +601,14 @@ mod cli_run {
                 expected_ending: "",
                 use_valgrind: true,
             },
+            issue2279 => Example {
+                filename: "Issue2279.roc",
+                executable_filename: "issue2279",
+                stdin: &[],
+                input_file: None,
+                expected_ending: "Hello, world!\n",
+                use_valgrind: true,
+            },
             quicksort_app => Example {
                 filename: "QuicksortApp.roc",
                 executable_filename: "quicksortapp",

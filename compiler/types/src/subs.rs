@@ -1265,6 +1265,48 @@ impl Subs {
         occurs(self, &ImSet::default(), var)
     }
 
+    pub fn mark_tag_union_recursive(
+        &mut self,
+        recursive: Variable,
+        tags: UnionTags,
+        ext_var: Variable,
+    ) {
+        let description = self.get(recursive);
+
+        let rec_var = self.fresh_unnamed_flex_var();
+        self.set_rank(rec_var, description.rank);
+        self.set_content(
+            rec_var,
+            Content::RecursionVar {
+                opt_name: None,
+                structure: recursive,
+            },
+        );
+
+        let new_variable_slices = SubsSlice::reserve_variable_slices(self, tags.len());
+
+        let it = new_variable_slices.indices().zip(tags.iter_all());
+        for (variable_slice_index, (_, slice_index)) in it {
+            let slice = self[slice_index];
+
+            let new_variables = VariableSubsSlice::reserve_into_subs(self, slice.len());
+            for (target_index, var_index) in new_variables.indices().zip(slice) {
+                let var = self[var_index];
+                self.variables[target_index] = self.explicit_substitute(recursive, rec_var, var);
+            }
+
+            self.variable_slices[variable_slice_index] = new_variables;
+        }
+
+        let new_ext_var = self.explicit_substitute(recursive, rec_var, ext_var);
+
+        let new_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
+
+        let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
+
+        self.set_content(recursive, Content::Structure(flat_type));
+    }
+
     pub fn explicit_substitute(
         &mut self,
         from: Variable,
@@ -1968,7 +2010,8 @@ impl RecordFields {
         subs: &'a Subs,
         ext: Variable,
     ) -> impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a {
-        let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext);
+        let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext)
+            .expect("Something weird ended up in a record type");
 
         it
     }
@@ -2003,7 +2046,8 @@ impl RecordFields {
                 ext,
             )
         } else {
-            let record_structure = crate::types::gather_fields(subs, *self, ext);
+            let record_structure = crate::types::gather_fields(subs, *self, ext)
+                .expect("Something ended up weird in this record type");
 
             (
                 Box::new(record_structure.fields.into_iter()),

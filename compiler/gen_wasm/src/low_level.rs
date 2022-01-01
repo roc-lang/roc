@@ -5,19 +5,20 @@ use roc_reporting::internal_error;
 
 use crate::layout::{StackMemoryFormat::*, WasmLayout};
 use crate::storage::{Storage, StoredValue};
-use crate::wasm_module::{CodeBuilder, ValueType::*};
+use crate::wasm_module::{Align, CodeBuilder, ValueType::*};
 
+#[derive(Debug)]
 pub enum LowlevelBuildResult {
     Done,
     BuiltinCall(&'static str),
     NotImplemented,
 }
 
-pub fn decode_low_level<'a>(
+pub fn dispatch_low_level<'a>(
     code_builder: &mut CodeBuilder<'a>,
     storage: &mut Storage<'a>,
     lowlevel: LowLevel,
-    args: &'a [Symbol],
+    args: &[Symbol],
     ret_layout: &WasmLayout,
 ) -> LowlevelBuildResult {
     use LowlevelBuildResult::*;
@@ -26,8 +27,9 @@ pub fn decode_low_level<'a>(
         || internal_error!("Invalid return layout for {:?}: {:?}", lowlevel, ret_layout);
 
     match lowlevel {
+        // Str
         StrConcat => return BuiltinCall(bitcode::STR_CONCAT),
-        StrJoinWith => return NotImplemented, // needs Array
+        StrJoinWith => return BuiltinCall(bitcode::STR_JOIN_WITH),
         StrIsEmpty => {
             code_builder.i64_const(i64::MIN);
             code_builder.i64_eq();
@@ -35,24 +37,46 @@ pub fn decode_low_level<'a>(
         StrStartsWith => return BuiltinCall(bitcode::STR_STARTS_WITH),
         StrStartsWithCodePt => return BuiltinCall(bitcode::STR_STARTS_WITH_CODE_PT),
         StrEndsWith => return BuiltinCall(bitcode::STR_ENDS_WITH),
-        StrSplit => return NotImplemented,          // needs Array
-        StrCountGraphemes => return NotImplemented, // test needs Array
-        StrFromInt => return NotImplemented,        // choose builtin based on storage size
-        StrFromUtf8 => return NotImplemented,       // needs Array
-        StrTrimLeft => return BuiltinCall(bitcode::STR_TRIM_LEFT),
-        StrTrimRight => return BuiltinCall(bitcode::STR_TRIM_RIGHT),
-        StrFromUtf8Range => return NotImplemented, // needs Array
-        StrToUtf8 => return NotImplemented,        // needs Array
-        StrRepeat => return BuiltinCall(bitcode::STR_REPEAT),
+        StrSplit => {
+            // Roughly we need to:
+            // 1. count segments
+            // 2. make a new pointer
+            // 3. split that pointer in place
+            // see: build_str.rs line 31
+            return NotImplemented;
+        }
+        StrCountGraphemes => return BuiltinCall(bitcode::STR_COUNT_GRAPEHEME_CLUSTERS),
+        StrToNum => return NotImplemented, // choose builtin based on storage size
+        StrFromInt => {
+            // This does not get exposed in user space. We switched to NumToStr instead.
+            // We can probably just leave this as NotImplemented. We may want remove this LowLevel.
+            // see: https://github.com/rtfeldman/roc/pull/2108
+            return NotImplemented;
+        }
         StrFromFloat => {
             // linker errors for __ashlti3, __fixunsdfti, __multi3, __udivti3, __umodti3
             // https://gcc.gnu.org/onlinedocs/gccint/Integer-library-routines.html
             // https://gcc.gnu.org/onlinedocs/gccint/Soft-float-library-routines.html
             return NotImplemented;
         }
+        StrFromUtf8 => return BuiltinCall(bitcode::STR_FROM_UTF8),
+        StrTrimLeft => return BuiltinCall(bitcode::STR_TRIM_LEFT),
+        StrTrimRight => return BuiltinCall(bitcode::STR_TRIM_RIGHT),
+        StrFromUtf8Range => return BuiltinCall(bitcode::STR_FROM_UTF8_RANGE), // refcounting errors
+        StrToUtf8 => return BuiltinCall(bitcode::STR_TO_UTF8),                // refcounting errors
+        StrRepeat => return BuiltinCall(bitcode::STR_REPEAT),
         StrTrim => return BuiltinCall(bitcode::STR_TRIM),
 
-        ListLen | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
+        // List
+        ListLen => {
+            // List structure has already been loaded as i64 (Zig calling convention)
+            // We want the second (more significant) 32 bits. Shift and convert to i32.
+            code_builder.i64_const(32);
+            code_builder.i64_shr_u();
+            code_builder.i32_wrap_i64();
+        }
+
+        ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
         | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap | ListMap2
         | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk | ListWalkUntil
         | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith | ListSublist
@@ -62,6 +86,7 @@ pub fn decode_low_level<'a>(
             return NotImplemented;
         }
 
+        // Num
         NumAdd => match ret_layout {
             WasmLayout::Primitive(value_type, _) => match value_type {
                 I32 => code_builder.i32_add(),
@@ -80,8 +105,6 @@ pub fn decode_low_level<'a>(
             WasmLayout::Primitive(value_type, size) => match value_type {
                 I32 => {
                     code_builder.i32_add();
-                    // TODO: is *deliberate* wrapping really in the spirit of things?
-                    // The point of choosing NumAddWrap is to go fast by skipping checks, but we're making it slower.
                     wrap_i32(code_builder, *size);
                 }
                 I64 => code_builder.i64_add(),
@@ -346,27 +369,56 @@ pub fn decode_low_level<'a>(
             },
             WasmLayout::StackMemory { .. } => return NotImplemented,
         },
-        NumIsFinite => match ret_layout {
-            WasmLayout::Primitive(value_type, _) => match value_type {
-                I32 => code_builder.i32_const(1),
-                I64 => code_builder.i32_const(1),
-                F32 => {
-                    code_builder.i32_reinterpret_f32();
-                    code_builder.i32_const(0x7f800000);
-                    code_builder.i32_and();
-                    code_builder.i32_const(0x7f800000);
-                    code_builder.i32_ne();
+        NumIsFinite => {
+            use StoredValue::*;
+            match storage.get(&args[0]) {
+                VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+                    match value_type {
+                        I32 | I64 => code_builder.i32_const(1), // always true for integers
+                        F32 => {
+                            code_builder.i32_reinterpret_f32();
+                            code_builder.i32_const(0x7f80_0000);
+                            code_builder.i32_and();
+                            code_builder.i32_const(0x7f80_0000);
+                            code_builder.i32_ne();
+                        }
+                        F64 => {
+                            code_builder.i64_reinterpret_f64();
+                            code_builder.i64_const(0x7ff0_0000_0000_0000);
+                            code_builder.i64_and();
+                            code_builder.i64_const(0x7ff0_0000_0000_0000);
+                            code_builder.i64_ne();
+                        }
+                    }
                 }
-                F64 => {
-                    code_builder.i64_reinterpret_f64();
-                    code_builder.i64_const(0x7ff0000000000000);
-                    code_builder.i64_and();
-                    code_builder.i64_const(0x7ff0000000000000);
-                    code_builder.i64_ne();
+                StackMemory {
+                    format, location, ..
+                } => {
+                    let (local_id, offset) = location.local_and_offset(storage.stack_frame_pointer);
+
+                    match format {
+                        Int128 => code_builder.i32_const(1),
+                        Float128 => {
+                            code_builder.get_local(local_id);
+                            code_builder.i64_load(Align::Bytes4, offset + 8);
+                            code_builder.i64_const(0x7fff_0000_0000_0000);
+                            code_builder.i64_and();
+                            code_builder.i64_const(0x7fff_0000_0000_0000);
+                            code_builder.i64_ne();
+                        }
+                        Decimal => {
+                            code_builder.get_local(local_id);
+                            code_builder.i64_load(Align::Bytes4, offset + 8);
+                            code_builder.i64_const(0x7100_0000_0000_0000);
+                            code_builder.i64_and();
+                            code_builder.i64_const(0x7100_0000_0000_0000);
+                            code_builder.i64_ne();
+                        }
+                        DataStructure => return NotImplemented,
+                    }
                 }
-            },
-            WasmLayout::StackMemory { .. } => return NotImplemented,
-        },
+            }
+        }
         NumAtan => {
             let width = float_width_from_layout(ret_layout);
             return BuiltinCall(&bitcode::NUM_ATAN[width]);
@@ -467,37 +519,15 @@ pub fn decode_low_level<'a>(
                 WasmLayout::StackMemory { .. } => return NotImplemented,
             }
         }
-        Eq => match storage.get(&args[0]) {
-            StoredValue::VirtualMachineStack { value_type, .. }
-            | StoredValue::Local { value_type, .. } => match value_type {
-                I32 => code_builder.i32_eq(),
-                I64 => code_builder.i64_eq(),
-                F32 => code_builder.f32_eq(),
-                F64 => code_builder.f64_eq(),
-            },
-            StoredValue::StackMemory { .. } => return NotImplemented,
-        },
-        NotEq => match storage.get(&args[0]) {
-            StoredValue::VirtualMachineStack { value_type, .. }
-            | StoredValue::Local { value_type, .. } => match value_type {
-                I32 => code_builder.i32_ne(),
-                I64 => code_builder.i64_ne(),
-                F32 => code_builder.f32_ne(),
-                F64 => code_builder.f64_ne(),
-            },
-            StoredValue::StackMemory { .. } => return NotImplemented,
-        },
         And => code_builder.i32_and(),
         Or => code_builder.i32_or(),
         Not => code_builder.i32_eqz(),
-        Hash => return NotImplemented,
         ExpectTrue => return NotImplemented,
-        RefCountGetPtr => {
-            code_builder.i32_const(4);
-            code_builder.i32_sub();
-        }
         RefCountInc => return BuiltinCall(bitcode::UTILS_INCREF),
         RefCountDec => return BuiltinCall(bitcode::UTILS_DECREF),
+        Eq | NotEq | Hash | PtrCast => {
+            internal_error!("{:?} should be handled in backend.rs", lowlevel)
+        }
     }
     Done
 }

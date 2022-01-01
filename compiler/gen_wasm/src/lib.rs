@@ -8,9 +8,9 @@ use bumpalo::{self, collections::Vec, Bump};
 
 use roc_builtins::bitcode::IntWidth;
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::low_level::LowLevel;
+use roc_module::low_level::LowLevelWrapperType;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::gen_refcount::RefcountProcGenerator;
+use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 use roc_reporting::internal_error;
@@ -26,7 +26,7 @@ const PTR_TYPE: ValueType = ValueType::I32;
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
 pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
 pub const MEMORY_NAME: &str = "memory";
-pub const BUILTINS_IMPORT_MODULE_NAME: &str = "builtins";
+pub const BUILTINS_IMPORT_MODULE_NAME: &str = "env";
 pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 
 pub struct Env<'a> {
@@ -62,7 +62,10 @@ pub fn build_module_help<'a>(
     // and filter out procs we're going to inline
     let mut fn_index: u32 = 0;
     for ((sym, layout), proc) in procedures.into_iter() {
-        if LowLevel::from_inlined_wrapper(sym).is_some() {
+        if matches!(
+            LowLevelWrapperType::from_symbol(sym),
+            LowLevelWrapperType::CanBeReplacedBy(_)
+        ) {
             continue;
         }
         procs.push(proc);
@@ -94,14 +97,14 @@ pub fn build_module_help<'a>(
         proc_symbols,
         linker_symbols,
         exports,
-        RefcountProcGenerator::new(env.arena, IntWidth::I32, env.module_id),
+        CodeGenHelp::new(env.arena, IntWidth::I32, env.module_id),
     );
 
-    if false {
+    if DEBUG_LOG_SETTINGS.user_procs_ir {
         println!("## procs");
         for proc in procs.iter() {
             println!("{}", proc.to_pretty(200));
-            println!("{:#?}", proc);
+            // println!("{:#?}", proc);
         }
     }
 
@@ -110,21 +113,21 @@ pub fn build_module_help<'a>(
         backend.build_proc(proc);
     }
 
-    // Generate IR for refcounting procs
-    let refcount_procs = backend.generate_refcount_procs();
+    // Generate specialized helpers for refcounting & equality
+    let helper_procs = backend.generate_helpers();
 
     backend.register_symbol_debug_names();
 
-    if false {
-        println!("## refcount_procs");
-        for proc in refcount_procs.iter() {
+    if DEBUG_LOG_SETTINGS.helper_procs_ir {
+        println!("## helper_procs");
+        for proc in helper_procs.iter() {
             println!("{}", proc.to_pretty(200));
-            println!("{:#?}", proc);
+            // println!("{:#?}", proc);
         }
     }
 
     // Generate Wasm for refcounting procs
-    for proc in refcount_procs.iter() {
+    for proc in helper_procs.iter() {
         backend.build_proc(proc);
     }
 
@@ -176,22 +179,43 @@ pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
 }
 
 /// Round up to alignment_bytes (which must be a power of 2)
-pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
-    if alignment_bytes <= 1 {
-        return unaligned;
-    }
-    if alignment_bytes.count_ones() != 1 {
-        internal_error!(
-            "Cannot align to {} bytes. Not a power of 2.",
-            alignment_bytes
-        );
-    }
-    let mut aligned = unaligned;
-    aligned += alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
-    aligned &= -alignment_bytes; // mask with a flag that has upper bits 1, lower bits 0
-    aligned
+#[macro_export]
+macro_rules! round_up_to_alignment {
+    ($unaligned: expr, $alignment_bytes: expr) => {
+        if $alignment_bytes <= 1 {
+            $unaligned
+        } else if $alignment_bytes.count_ones() != 1 {
+            panic!(
+                "Cannot align to {} bytes. Not a power of 2.",
+                $alignment_bytes
+            );
+        } else {
+            let mut aligned = $unaligned;
+            aligned += $alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
+            aligned &= !$alignment_bytes + 1; // mask with a flag that has upper bits 1, lower bits 0
+            aligned
+        }
+    };
 }
 
 pub fn debug_panic<E: std::fmt::Debug>(error: E) {
     internal_error!("{:?}", error);
 }
+
+pub struct WasmDebugLogSettings {
+    proc_start_end: bool,
+    user_procs_ir: bool,
+    helper_procs_ir: bool,
+    let_stmt_ir: bool,
+    instructions: bool,
+    pub keep_test_binary: bool,
+}
+
+pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
+    proc_start_end: false && cfg!(debug_assertions),
+    user_procs_ir: false && cfg!(debug_assertions),
+    helper_procs_ir: false && cfg!(debug_assertions),
+    let_stmt_ir: false && cfg!(debug_assertions),
+    instructions: false && cfg!(debug_assertions),
+    keep_test_binary: false && cfg!(debug_assertions),
+};

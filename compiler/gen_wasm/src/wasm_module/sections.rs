@@ -655,21 +655,35 @@ impl<'a> WasmModule<'a> {
     }
 
     /// Re-index internally-defined functions to make room for imported functions.
-    /// We do this after serialization, when all buffers in all CodeBuilders have been combined.
-    /// That makes the code simpler and avoids spreading it across multiple impl's and files.
+    /// Imported functions come first in the index space, but we didn't know how many we needed until now.
+    /// We do this after serializing the code section, since we have linker data that is literally
+    /// *designed* for changing function indices in serialized code!
     fn finalize_code_fn_indices<T: SerialBuffer>(
         &mut self,
         buffer: &mut T,
         code_section_body_index: usize,
         n_imported_fns: u32,
     ) {
-        // Modify symbol table entries
         let symbol_table = self.linking.symbol_table_mut();
-        let mut target_symbol_indices = std::vec::Vec::with_capacity(symbol_table.len());
-        for (i, sym_info) in symbol_table.iter_mut().enumerate() {
-            if let SymInfo::Function(WasmObjectSymbol::Defined { index, .. }) = sym_info {
-                target_symbol_indices.push(i as u32);
-                *index += n_imported_fns;
+
+        // Lookup vector of symbol index to new function index
+        let mut new_index_lookup = std::vec::Vec::with_capacity(symbol_table.len());
+
+        // Modify symbol table entries and fill the lookup vector
+        for sym_info in symbol_table.iter_mut() {
+            match sym_info {
+                SymInfo::Function(WasmObjectSymbol::Defined { index, .. }) => {
+                    let new_fn_index = *index + n_imported_fns;
+                    *index = new_fn_index;
+                    new_index_lookup.push(new_fn_index);
+                }
+                SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
+                    new_index_lookup.push(*index);
+                }
+                _ => {
+                    // Symbol is not a function, so we won't look it up. Use a dummy value.
+                    new_index_lookup.push(u32::MAX);
+                }
             }
         }
 
@@ -681,12 +695,9 @@ impl<'a> WasmModule<'a> {
                 symbol_index,
             } = reloc
             {
-                if target_symbol_indices.contains(symbol_index) {
-                    let orig_fn_index = *symbol_index; // trick: we know these were the first symbols we created
-                    let new_fn_index = orig_fn_index + n_imported_fns;
-                    let buffer_index = code_section_body_index + (*offset as usize);
-                    buffer.overwrite_padded_u32(buffer_index, new_fn_index);
-                }
+                let new_fn_index = new_index_lookup[*symbol_index as usize];
+                let buffer_index = code_section_body_index + (*offset as usize);
+                buffer.overwrite_padded_u32(buffer_index, new_fn_index);
             }
         }
     }

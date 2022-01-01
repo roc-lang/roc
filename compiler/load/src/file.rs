@@ -23,13 +23,12 @@ use roc_mono::ir::{
     UpdateModeIds,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
-use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
-use roc_parse::header::{
-    ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
-};
+use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
+use roc_parse::header::PackageName;
+use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::module::module_defs;
-use roc_parse::parser::{self, ParseProblem, Parser, SyntaxError};
-use roc_region::all::{Located, Region};
+use roc_parse::parser::{ParseProblem, Parser, SyntaxError};
+use roc_region::all::{Loc, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_types::solved_types::Solved;
@@ -668,13 +667,13 @@ struct ModuleHeader<'a> {
     is_root_module: bool,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
-    packages: MutMap<&'a str, PackageOrPath<'a>>,
+    packages: MutMap<&'a str, PackageName<'a>>,
     imported_modules: MutMap<ModuleId, Region>,
     package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     header_src: &'a str,
-    parse_state: roc_parse::parser::State<'a>,
+    parse_state: roc_parse::state::State<'a>,
     module_timing: ModuleTiming,
 }
 
@@ -684,7 +683,7 @@ enum HeaderFor<'a> {
         to_platform: To<'a>,
     },
     PkgConfig {
-        /// usually `base`
+        /// usually `pf`
         config_shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)
         /// (currently unused)
@@ -777,7 +776,7 @@ struct ParsedModule<'a> {
     imported_modules: MutMap<ModuleId, Region>,
     exposed_ident_ids: IdentIds,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    parsed_defs: &'a [Located<roc_parse::ast::Def<'a>>],
+    parsed_defs: &'a [Loc<roc_parse::ast::Def<'a>>],
 }
 
 /// A message sent out _from_ a worker thread,
@@ -887,7 +886,7 @@ struct State<'a> {
 
     /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     pub arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
-    pub arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageOrPath<'a>>>>,
+    pub arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
 
     pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 
@@ -980,7 +979,7 @@ enum BuildTask<'a> {
     LoadModule {
         module_name: PQModuleName<'a>,
         module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-        shorthands: Arc<Mutex<MutMap<&'a str, PackageOrPath<'a>>>>,
+        shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     },
     Parse {
@@ -1680,8 +1679,8 @@ fn update<'a>(
             {
                 let mut shorthands = (*state.arc_shorthands).lock();
 
-                for (shorthand, package_or_path) in header.packages.iter() {
-                    shorthands.insert(shorthand, *package_or_path);
+                for (shorthand, package_name) in header.packages.iter() {
+                    shorthands.insert(shorthand, *package_name);
                 }
 
                 if let PkgConfig {
@@ -2215,7 +2214,7 @@ fn finish_specialization(
 
     let path_to_platform = {
         use PlatformPath::*;
-        let package_or_path = match platform_path {
+        let package_name = match platform_path {
             Valid(To::ExistingPackage(shorthand)) => {
                 match (*state.arc_shorthands).lock().get(shorthand) {
                     Some(p_or_p) => *p_or_p,
@@ -2229,11 +2228,7 @@ fn finish_specialization(
             }
         };
 
-        match package_or_path {
-            PackageOrPath::Path(StrLiteral::PlainLine(path)) => path,
-            PackageOrPath::Path(_) => unreachable!("invalid"),
-            _ => todo!("packages"),
-        }
+        package_name.0
     };
 
     let platform_path = path_to_platform.into();
@@ -2356,7 +2351,7 @@ fn load_pkg_config<'a>(
         Ok(bytes_vec) => {
             let parse_start = SystemTime::now();
             let bytes = arena.alloc(bytes_vec);
-            let parse_state = parser::State::new(bytes);
+            let parse_state = roc_parse::state::State::new(bytes);
             let parsed = roc_parse::module::parse_header(arena, parse_state);
             let parse_header_duration = parse_start.elapsed().unwrap();
 
@@ -2384,7 +2379,7 @@ fn load_pkg_config<'a>(
                     )))
                 }
                 Ok((ast::Module::Platform { header }, parser_state)) => {
-                    let delta = bytes.len() - parser_state.bytes.len();
+                    let delta = bytes.len() - parser_state.bytes().len();
                     let chomped = &bytes[..delta];
                     let header_src = unsafe { std::str::from_utf8_unchecked(chomped) };
 
@@ -2434,7 +2429,7 @@ fn load_module<'a>(
     src_dir: &Path,
     module_name: PQModuleName<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageOrPath<'a>>>>,
+    arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
@@ -2456,13 +2451,9 @@ fn load_module<'a>(
             let shorthands = arc_shorthands.lock();
 
             match shorthands.get(shorthand) {
-                Some(PackageOrPath::Path(StrLiteral::PlainLine(path))) => {
+                Some(PackageName(path)) => {
                     filename.push(path);
                 }
-                Some(PackageOrPath::Path(_str_liteal)) => {
-                    unreachable!("invalid structure for path")
-                }
-                Some(PackageOrPath::Package(_name, _version)) => todo!("packages"),
                 None => unreachable!("there is no shorthand named {:?}", shorthand),
             }
 
@@ -2526,7 +2517,7 @@ fn parse_header<'a>(
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let parse_start = SystemTime::now();
-    let parse_state = parser::State::new(src_bytes);
+    let parse_state = roc_parse::state::State::new(src_bytes);
     let parsed = roc_parse::module::parse_header(arena, parse_state);
     let parse_header_duration = parse_start.elapsed().unwrap();
 
@@ -2539,12 +2530,12 @@ fn parse_header<'a>(
     match parsed {
         Ok((ast::Module::Interface { header }, parse_state)) => {
             let header_src = unsafe {
-                let chomped = src_bytes.len() - parse_state.bytes.len();
+                let chomped = src_bytes.len() - parse_state.bytes().len();
                 std::str::from_utf8_unchecked(&src_bytes[..chomped])
             };
 
             let info = HeaderInfo {
-                loc_name: Located {
+                loc_name: Loc {
                     region: header.name.region,
                     value: ModuleNameEnum::Interface(header.name.value),
                 },
@@ -2553,8 +2544,8 @@ fn parse_header<'a>(
                 opt_shorthand,
                 header_src,
                 packages: &[],
-                exposes: header.exposes.items,
-                imports: header.imports.items,
+                exposes: unspace(arena, header.exposes.items),
+                imports: unspace(arena, header.imports.items),
                 to_platform: None,
             };
 
@@ -2571,14 +2562,14 @@ fn parse_header<'a>(
             pkg_config_dir.pop();
 
             let header_src = unsafe {
-                let chomped = src_bytes.len() - parse_state.bytes.len();
+                let chomped = src_bytes.len() - parse_state.bytes().len();
                 std::str::from_utf8_unchecked(&src_bytes[..chomped])
             };
 
-            let packages = header.packages.items;
+            let packages = unspace(arena, header.packages.items);
 
             let info = HeaderInfo {
-                loc_name: Located {
+                loc_name: Loc {
                     region: header.name.region,
                     value: ModuleNameEnum::App(header.name.value),
                 },
@@ -2587,8 +2578,8 @@ fn parse_header<'a>(
                 opt_shorthand,
                 header_src,
                 packages,
-                exposes: header.provides.items,
-                imports: header.imports.items,
+                exposes: unspace(arena, header.provides.items),
+                imports: unspace(arena, header.imports.items),
                 to_platform: Some(header.to.value),
             };
 
@@ -2602,76 +2593,56 @@ fn parse_header<'a>(
 
             match header.to.value {
                 To::ExistingPackage(existing_package) => {
-                    let opt_base_package = packages.iter().find(|loc_package_entry| {
-                        let Located { value, .. } = loc_package_entry;
+                    let opt_base_package = packages.iter().find_map(|loc_package_entry| {
+                        let Loc { value, .. } = loc_package_entry;
 
-                        match value {
-                            PackageEntry::Entry { shorthand, .. } => shorthand == &existing_package,
-                            _ => false,
+                        if value.shorthand == existing_package {
+                            Some(value)
+                        } else {
+                            None
                         }
                     });
 
-                    match opt_base_package {
-                        Some(Located {
-                            value:
-                                PackageEntry::Entry {
-                                    shorthand,
-                                    package_or_path:
-                                        Located {
-                                            value: package_or_path,
-                                            ..
-                                        },
-                                    ..
-                                },
-                            ..
-                        }) => {
-                            match package_or_path {
-                                PackageOrPath::Path(StrLiteral::PlainLine(package)) => {
-                                    // check whether we can find a Package-Config.roc file
-                                    let mut pkg_config_roc = pkg_config_dir;
-                                    pkg_config_roc.push(package);
-                                    pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
-                                    pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
+                    if let Some(PackageEntry {
+                        shorthand,
+                        package_name:
+                            Loc {
+                                value: package_name,
+                                ..
+                            },
+                        ..
+                    }) = opt_base_package
+                    {
+                        let package = package_name.0;
 
-                                    if pkg_config_roc.as_path().exists() {
-                                        let load_pkg_config_msg = load_pkg_config(
-                                            arena,
-                                            &pkg_config_roc,
-                                            shorthand,
-                                            module_id,
-                                            module_ids,
-                                            ident_ids_by_module,
-                                        )?;
+                        // check whether we can find a Package-Config.roc file
+                        let mut pkg_config_roc = pkg_config_dir;
+                        pkg_config_roc.push(package);
+                        pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
+                        pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
 
-                                        Ok((
-                                            module_id,
-                                            Msg::Many(vec![
-                                                app_module_header_msg,
-                                                load_pkg_config_msg,
-                                            ]),
-                                        ))
-                                    } else {
-                                        Ok((module_id, app_module_header_msg))
-                                    }
-                                }
-                                _ => unreachable!(),
-                            }
+                        if pkg_config_roc.as_path().exists() {
+                            let load_pkg_config_msg = load_pkg_config(
+                                arena,
+                                &pkg_config_roc,
+                                shorthand,
+                                module_id,
+                                module_ids,
+                                ident_ids_by_module,
+                            )?;
+
+                            Ok((
+                                module_id,
+                                Msg::Many(vec![app_module_header_msg, load_pkg_config_msg]),
+                            ))
+                        } else {
+                            Ok((module_id, app_module_header_msg))
                         }
-                        _ => panic!("could not find base"),
+                    } else {
+                        panic!("could not find base")
                     }
                 }
-                To::NewPackage(package_or_path) => match package_or_path {
-                    PackageOrPath::Package(_, _) => panic!("TODO implement packages"),
-                    PackageOrPath::Path(StrLiteral::PlainLine(_package)) => {
-                        Ok((module_id, app_module_header_msg))
-                    }
-                    PackageOrPath::Path(StrLiteral::Block(_)) => {
-                        panic!("TODO implement block package path")
-                    }
-                    PackageOrPath::Path(StrLiteral::Line(_)) => {
-                        panic!("TODO implement line package path")
-                    }
-                },
+                To::NewPackage(_package_name) => Ok((module_id, app_module_header_msg)),
             }
         }
         Ok((ast::Module::Platform { header }, _parse_state)) => Ok(fabricate_effects_module(
@@ -2759,21 +2730,21 @@ enum ModuleNameEnum<'a> {
 
 #[derive(Debug)]
 struct HeaderInfo<'a> {
-    loc_name: Located<ModuleNameEnum<'a>>,
+    loc_name: Loc<ModuleNameEnum<'a>>,
     filename: PathBuf,
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     header_src: &'a str,
-    packages: &'a [Located<PackageEntry<'a>>],
-    exposes: &'a [Located<ExposesEntry<'a, &'a str>>],
-    imports: &'a [Located<ImportsEntry<'a>>],
+    packages: &'a [Loc<PackageEntry<'a>>],
+    exposes: &'a [Loc<ExposedName<'a>>],
+    imports: &'a [Loc<ImportsEntry<'a>>],
     to_platform: Option<To<'a>>,
 }
 
 #[allow(clippy::too_many_arguments)]
 fn send_header<'a>(
     info: HeaderInfo<'a>,
-    parse_state: parser::State<'a>,
+    parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
@@ -2845,7 +2816,7 @@ fn send_header<'a>(
 
         // For each of our imports, add an entry to deps_by_name
         //
-        // e.g. for `imports [ base.Foo.{ bar } ]`, add `Foo` to deps_by_name
+        // e.g. for `imports [ pf.Foo.{ bar } ]`, add `Foo` to deps_by_name
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
@@ -2912,24 +2883,13 @@ fn send_header<'a>(
         ident_ids.clone()
     };
 
-    let mut parse_entries: Vec<_> = packages.iter().map(|x| &x.value).collect();
-    let mut package_entries = MutMap::default();
-
-    while let Some(parse_entry) = parse_entries.pop() {
-        use PackageEntry::*;
-        match parse_entry {
-            Entry {
-                shorthand,
-                package_or_path,
-                ..
-            } => {
-                package_entries.insert(*shorthand, package_or_path.value);
-            }
-            SpaceBefore(inner, _) | SpaceAfter(inner, _) => {
-                parse_entries.push(inner);
-            }
-        }
-    }
+    let package_entries = packages
+        .iter()
+        .map(|pkg| {
+            let pkg = pkg.value;
+            (pkg.shorthand, pkg.package_name.value)
+        })
+        .collect::<MutMap<_, _>>();
 
     // Send the deps to the coordinator thread for processing,
     // then continue on to parsing and canonicalizing defs.
@@ -2987,18 +2947,17 @@ struct PlatformHeaderInfo<'a> {
     shorthand: &'a str,
     header_src: &'a str,
     app_module_id: ModuleId,
-    packages: &'a [Located<PackageEntry<'a>>],
-    provides: &'a [Located<ExposesEntry<'a, &'a str>>],
-    requires: &'a [Located<TypedIdent<'a>>],
-    imports: &'a [Located<ImportsEntry<'a>>],
+    packages: &'a [Loc<PackageEntry<'a>>],
+    provides: &'a [Loc<ExposedName<'a>>],
+    requires: &'a [Loc<TypedIdent<'a>>],
+    imports: &'a [Loc<ImportsEntry<'a>>],
 }
 
 // TODO refactor so more logic is shared with `send_header`
 #[allow(clippy::too_many_arguments)]
 fn send_header_two<'a>(
-    arena: &'a Bump,
     info: PlatformHeaderInfo<'a>,
-    parse_state: parser::State<'a>,
+    parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
@@ -3066,7 +3025,7 @@ fn send_header_two<'a>(
 
         // For each of our imports, add an entry to deps_by_name
         //
-        // e.g. for `imports [ base.Foo.{ bar } ]`, add `Foo` to deps_by_name
+        // e.g. for `imports [ pf.Foo.{ bar } ]`, add `Foo` to deps_by_name
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
@@ -3104,15 +3063,17 @@ fn send_header_two<'a>(
                 .entry(app_module_id)
                 .or_insert_with(IdentIds::default);
 
-            for (loc_ident, _) in unpack_exposes_entries(arena, requires) {
-                let ident: Ident = loc_ident.value.into();
+            for entry in requires {
+                let entry = entry.value;
+
+                let ident: Ident = entry.ident.value.into();
                 let ident_id = ident_ids.get_or_insert(&ident);
                 let symbol = Symbol::new(app_module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
                 debug_assert!(!scope.contains_key(&ident.clone()));
 
-                scope.insert(ident, (symbol, loc_ident.region));
+                scope.insert(ident, (symbol, entry.ident.region));
             }
         }
 
@@ -3145,24 +3106,10 @@ fn send_header_two<'a>(
         ident_ids.clone()
     };
 
-    let mut parse_entries: Vec<_> = packages.iter().map(|x| &x.value).collect();
-    let mut package_entries = MutMap::default();
-
-    while let Some(parse_entry) = parse_entries.pop() {
-        use PackageEntry::*;
-        match parse_entry {
-            Entry {
-                shorthand,
-                package_or_path,
-                ..
-            } => {
-                package_entries.insert(*shorthand, package_or_path.value);
-            }
-            SpaceBefore(inner, _) | SpaceAfter(inner, _) => {
-                parse_entries.push(inner);
-            }
-        }
-    }
+    let package_entries = packages
+        .iter()
+        .map(|pkg| (pkg.value.shorthand, pkg.value.package_name.value))
+        .collect::<MutMap<_, _>>();
 
     // Send the deps to the coordinator thread for processing,
     // then continue on to parsing and canonicalizing defs.
@@ -3341,21 +3288,29 @@ fn run_solve<'a>(
     }
 }
 
+fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [Loc<T>] {
+    bumpalo::collections::Vec::from_iter_in(
+        items
+            .iter()
+            .map(|item| Loc::at(item.region, item.value.extract_spaces().item)),
+        arena,
+    )
+    .into_bump_slice()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fabricate_pkg_config_module<'a>(
     arena: &'a Bump,
     shorthand: &'a str,
     app_module_id: ModuleId,
     filename: PathBuf,
-    parse_state: parser::State<'a>,
+    parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     header: &PlatformHeader<'a>,
     header_src: &'a str,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
-    let provides: &'a [Located<ExposesEntry<'a, &'a str>>] = header.provides.items;
-
     let info = PlatformHeaderInfo {
         filename,
         is_root_module: false,
@@ -3363,13 +3318,15 @@ fn fabricate_pkg_config_module<'a>(
         header_src,
         app_module_id,
         packages: &[],
-        provides,
-        requires: arena.alloc([header.requires.signature]),
-        imports: header.imports.items,
+        provides: unspace(arena, header.provides.items),
+        requires: &*arena.alloc([Loc::at(
+            header.requires.signature.region,
+            header.requires.signature.extract_spaces().item,
+        )]),
+        imports: unspace(arena, header.imports.items),
     };
 
     send_header_two(
-        arena,
         info,
         parse_state,
         module_ids,
@@ -3412,12 +3369,12 @@ fn fabricate_effects_module<'a>(
         let mut module_ids = (*module_ids).lock();
 
         for exposed in header.exposes.iter() {
-            if let ExposesEntry::Exposed(module_name) = exposed.value {
-                module_ids.get_or_insert(&PQModuleName::Qualified(
-                    shorthand,
-                    module_name.as_str().into(),
-                ));
-            }
+            let module_name = exposed.value.extract_spaces().item;
+
+            module_ids.get_or_insert(&PQModuleName::Qualified(
+                shorthand,
+                module_name.as_str().into(),
+            ));
         }
     }
 
@@ -3512,7 +3469,7 @@ fn fabricate_effects_module<'a>(
         scope.add_alias(
             effect_symbol,
             Region::zero(),
-            vec![Located::at_zero(("a".into(), a_var))],
+            vec![Loc::at_zero(("a".into(), a_var))],
             actual,
         );
 
@@ -3632,33 +3589,16 @@ fn fabricate_effects_module<'a>(
 
 fn unpack_exposes_entries<'a>(
     arena: &'a Bump,
-    entries: &'a [Located<TypedIdent<'a>>],
-) -> bumpalo::collections::Vec<'a, (&'a Located<&'a str>, &'a Located<TypeAnnotation<'a>>)> {
+    entries: &'a [Loc<Spaced<'a, TypedIdent<'a>>>],
+) -> bumpalo::collections::Vec<'a, (Loc<&'a str>, Loc<TypeAnnotation<'a>>)> {
     use bumpalo::collections::Vec;
 
-    let mut stack: Vec<&TypedIdent> = Vec::with_capacity_in(entries.len(), arena);
-    let mut output = Vec::with_capacity_in(entries.len(), arena);
+    let iter = entries.iter().map(|entry| {
+        let entry: TypedIdent<'a> = entry.value.extract_spaces().item;
+        (entry.ident, entry.ann)
+    });
 
-    for entry in entries.iter() {
-        stack.push(&entry.value);
-    }
-
-    while let Some(effects_entry) = stack.pop() {
-        match effects_entry {
-            TypedIdent::Entry {
-                ident,
-                spaces_before_colon: _,
-                ann,
-            } => {
-                output.push((ident, ann));
-            }
-            TypedIdent::SpaceAfter(nested, _) | TypedIdent::SpaceBefore(nested, _) => {
-                stack.push(nested);
-            }
-        }
-    }
-
-    output
+    Vec::from_iter_in(iter, arena)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3762,7 +3702,7 @@ where
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let mut module_timing = header.module_timing;
     let parse_start = SystemTime::now();
-    let source = header.parse_state.bytes;
+    let source = header.parse_state.bytes();
     let parse_state = header.parse_state;
     let parsed_defs = match module_defs().parse(arena, parse_state) {
         Ok((_, success, _state)) => success,
@@ -3849,21 +3789,11 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
 
             (qualified_module_name, exposed)
         }
-
-        SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => {
-            // Ignore spaces.
-            exposed_from_import(*sub_entry)
-        }
     }
 }
 
-fn ident_from_exposed(entry: &ExposesEntry<'_, &str>) -> Ident {
-    use roc_parse::header::ExposesEntry::*;
-
-    match entry {
-        Exposed(ident) => (*ident).into(),
-        SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => ident_from_exposed(sub_entry),
-    }
+fn ident_from_exposed(entry: &Spaced<'_, ExposedName<'_>>) -> Ident {
+    entry.extract_spaces().item.as_str().into()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4429,7 +4359,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     alloc.reflow("I could not find a platform based on your input file."),
                     alloc.reflow(r"Does the module header contain an entry that looks like this:"),
                     alloc
-                        .parser_suggestion(" packages { base: \"platform\" }")
+                        .parser_suggestion(" packages { pf: \"platform\" }")
                         .indent(4),
                     alloc.reflow("See also TODO."),
                 ]);

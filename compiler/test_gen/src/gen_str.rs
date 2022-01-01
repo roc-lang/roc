@@ -17,6 +17,36 @@ use roc_std::{RocList, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn str_split_empty_delimiter() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    List.len (Str.split "hello" "")
+                "#
+        ),
+        1,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.first (Str.split "JJJ" "") is
+                        Ok str ->
+                            Str.countGraphemes str
+
+                        _ ->
+                            -1
+
+                "#
+        ),
+        3,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_bigger_delimiter_small_str() {
     assert_evals_to!(
         indoc!(
@@ -1295,5 +1325,248 @@ fn str_trim_right_small_to_small_shared() {
         ),
         (RocStr::from(" hello world "), RocStr::from(" hello world"),),
         (RocStr, RocStr)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_nat() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toNat "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        usize
+    );
+}
+
+#[test]
+#[ignore = "TODO: figure out why returning i128 across FFI boundary is an issue"]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_i128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toI128 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        i128
+    );
+}
+
+#[test]
+#[ignore = "TODO: figure out why returning i128 across FFI boundary is an issue"]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_u128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toU128 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toI64 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toU64 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_i32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toI32 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        i32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toU32 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        u32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_i16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toI16 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        i16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_u16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toU16 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        u16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toI8 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        i8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_u8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toU8 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toF64 "1.0" is
+                Ok n -> n
+                Err _ -> 0
+
+            "#
+        ),
+        1.0,
+        f64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_f32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toF32 "1.0" is
+                Ok n -> n
+                Err _ -> 0
+
+            "#
+        ),
+        1.0,
+        f32
+    );
+}
+
+#[test]
+#[ignore = "TODO: figure out why returning i128 across FFI boundary is an issue"]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_dec() {
+    use roc_std::RocDec;
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toDec "1.0" is
+                Ok n -> n
+                Err _ -> 0
+
+            "#
+        ),
+        RocDec::from_str("1.0").unwrap(),
+        RocDec
     );
 }

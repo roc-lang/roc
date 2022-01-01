@@ -186,7 +186,7 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
-        use roc_parse::parser::State;
+        use roc_parse::state::State;
 
         let state = State::new(src.as_bytes());
 
@@ -1481,7 +1481,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn pattern_guard_mismatch() {
+    fn pattern_guard_mismatch_alias() {
         report_problem_as(
             indoc!(
                 r#"
@@ -1500,11 +1500,41 @@ mod test_reporting {
 
                 The first pattern is trying to match record values of type:
 
-                    { foo : [ True ]a }
+                    { foo : [ True ] }
 
                 But the expression between `when` and `is` has the type:
 
                     { foo : Num a }
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_guard_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 when { foo: "" } is
+                     { foo: True } -> 42
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st pattern in this `when` is causing a mismatch:
+
+                2│      { foo: True } -> 42
+                        ^^^^^^^^^^^^^
+
+                The first pattern is trying to match record values of type:
+
+                    { foo : [ True ] }
+
+                But the expression between `when` and `is` has the type:
+
+                    { foo : Str }
                 "#
             ),
         )
@@ -1632,7 +1662,7 @@ mod test_reporting {
 
                 But you are trying to use it as:
 
-                    [ Foo a ]b
+                    [ Foo a ]
                 "#
             ),
         )
@@ -2451,20 +2481,26 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This pattern does not cover all the possibilities:
+                This expression is used in an unexpected way:
 
                 5│  (Left y) = x
-                     ^^^^^^
+                               ^
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Right _
+                    [ Left I64, Right Bool ]
 
-                I would have to crash if I saw one of those! You can use a binding to
-                deconstruct a value if there is only ONE possibility. Use a `when` to
-                account for all possibilities.
+                But you are trying to use it as:
+
+                    [ Left a ]
+
+                Tip: Seems like a tag typo. Maybe `Right` should be `Left`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -6048,9 +6084,9 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 app "test-base64"
-                    packages { base: "platform" }
-                    imports [base.Task, Base64 ]
-                    provides [ main, @Foo ] to base
+                    packages { pf: "platform" }
+                    imports [pf.Task, Base64 ]
+                    provides [ main, @Foo ] to pf
                 "#
             ),
             indoc!(
@@ -6059,8 +6095,8 @@ I need all branches in an `if` to have the same type!
 
                 I am partway through parsing a provides list, but I got stuck here:
 
-                3│      imports [base.Task, Base64 ]
-                4│      provides [ main, @Foo ] to base
+                3│      imports [pf.Task, Base64 ]
+                4│      provides [ main, @Foo ] to pf
                                          ^
 
                 I was expecting a type name, value name or function name next, like
@@ -6076,7 +6112,7 @@ I need all branches in an `if` to have the same type!
         report_header_problem_as(
             indoc!(
                 r#"
-                platform folkertdev/foo
+                platform "folkertdev/foo"
                     requires { main : Effect {} }
                     exposes []
                     packages {}
@@ -6096,7 +6132,7 @@ I need all branches in an `if` to have the same type!
 
                 I am partway through parsing a header, but I got stuck here:
 
-                1│  platform folkertdev/foo
+                1│  platform "folkertdev/foo"
                 2│      requires { main : Effect {} }
                                    ^
 
@@ -6116,7 +6152,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 interface Foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6144,7 +6180,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 interface foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6170,7 +6206,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 app foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6879,6 +6915,117 @@ I need all branches in an `if` to have the same type!
                 Tip: Any connection between types must use a named type variable, not
                 a `*`! Maybe the annotation  on `f` should have a named type variable in
                 place of the `*`?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_not_an_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NOT AN INLINE ALIAS ─────────────────────────────────────────────────────────
+
+                The inline type after this `as` is not a type alias:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as a
+                                                             ^
+
+                Inline alias types must start with an uppercase identifier and be
+                followed by zero or more type arguments, like Point or List a.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_qualified() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── QUALIFIED ALIAS NAME ────────────────────────────────────────────────────────
+
+                This type alias has a qualified name:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
+                                                             ^
+
+                An alias introduces a new name to the current scope, so it must be
+                unqualified.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_argument_uppercase() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as LinkedList U
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE ARGUMENT NOT LOWERCASE ─────────────────────────────────────────────────
+
+                This alias type argument is not lowercase:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as LinkedList U
+                                                                        ^
+
+                All type arguments must be lowercase.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn mismatched_single_tag_arg() {
+        report_problem_as(
+            indoc!(
+                r#"
+                isEmpty =
+                    \email ->
+                        Email str = email
+                        Str.isEmpty str
+
+                isEmpty (Name "boo")
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `isEmpty` is not what I expect:
+
+                6│  isEmpty (Name "boo")
+                             ^^^^^^^^^^
+
+                This `Name` global tag application has the type:
+
+                    [ Name Str ]a
+
+                But `isEmpty` needs the 1st argument to be:
+
+                    [ Email Str ]
+
+                Tip: Seems like a tag typo. Maybe `Name` should be `Email`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )

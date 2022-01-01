@@ -3,7 +3,7 @@ use roc_collections::all::{Index, MutSet, SendMap};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_solve::solve;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
@@ -123,7 +123,7 @@ pub fn type_problem<'b>(
 fn report_shadowing<'b>(
     alloc: &'b RocDocAllocator<'b>,
     original_region: Region,
-    shadow: Located<Ident>,
+    shadow: Loc<Ident>,
 ) -> RocDocBuilder<'b> {
     let line = r#"Since these types have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
 

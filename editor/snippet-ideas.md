@@ -41,7 +41,13 @@ Fish hooks are used when subvariants should be created e.g.: <collection> means 
 - command: current date/datetime
     + example: current datetime >> `now <- Time.now\n`
 - command: list range 1 to 5
-    + example: >> [ 1, 2, 3, 4, 5 ]
+    + example: [ 1, 2, 3, 4, 5 ]
+- command: use commandline args
+- command: post/get/put request
+- command: extract float(s)/number/emal addresses  from string. regex match float/number/email address/...
+- command: execute (bash) command/script
+- command: cast/convert/parse list of x to list of y
+- command: pattern match/ match/ switch/ case
 
 ## AST aware snippets
 
@@ -54,7 +60,7 @@ Snippets are inserted based on type of value on which the cursor is located.
         * We show  a list with all builtin functions for the List type
         * User chooses contains
         * We change code to `List.contains people |Blank`
-- command: Str to charlist
+- command: Str to chars/charlist
 
 
 ## Snippets with Typed Holes
@@ -72,11 +78,18 @@ Snippets are inserted based on type of value on which the cursor is located.
 - command: remove/create file
 - command: read/write from file
 - command: concatenate strings
+- command: trim (newlines) at end/start/right/left
+- command: evaluate predicate for all in slice/list/array
+- command: get element at index
+- command: get char at index
+- command: reverse stirng
+- command: lambda/anonymous function
 - we should auto create type hole commands for all builtins.
     + example: List has builtins reverse, repeat, len... generated snippet commands should be:
         * reverse list > List.reverse ^List *^
         * repeat list > List.repeat ^elem^ ^Nat^
         * len list (fuzzy matches should be length of list)
+- append element to list
     
 # fuzzy matching
     
@@ -84,7 +97,7 @@ Snippets are inserted based on type of value on which the cursor is located.
  - hashmap > Dict
  - map > map (function), Dict
  - for > map, mapWithIndex, walk, walkBackwards, zip
- - apply > map
+ - apply/for yield > map
  - fold > walk, walkBackwards
  - foldl > walkBackwards
  - foldr > walk
@@ -97,3 +110,4 @@ Snippets are inserted based on type of value on which the cursor is located.
 - [github copilot](https://copilot.github.com/) snippet generation with machine learning
 - [stackoverflow](https://stackoverflow.com) 
 - [rosetta code](http://www.rosettacode.org/wiki/Rosetta_Code) snippets in many different programming languages. Many [snippets](https://www.rosettacode.org/wiki/Category:Programming_Tasks) are programming contest style problems, but there also problems that demonstrate the use of JSON, SHA-256, read a file line by line...
+- check docs of popular languages to cross reference function/snippet names for fuzzy matching

@@ -7,8 +7,7 @@ blah3 = bar
 
 str = Dep1.str
 
-# alwaysThree = \_ -> Dep1.three # TODO FIXME for some reason this infers as a circular type
-alwaysThree = \_ -> "foo"
+alwaysThree = \_ -> Dep1.three
 
 identity = \a -> a
 
