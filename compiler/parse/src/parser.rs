@@ -225,19 +225,55 @@ pub fn bad_input_to_syntax_error<'a>(bad_input: BadInputError, pos: Position) ->
     }
 }
 
-impl<'a> SyntaxError<'a> {
+impl<'a, T> SourceError<'a, T> {
+    pub fn new(
+        problem: T,
+        state: &State<'a>,
+    ) -> Self {
+        Self {
+            problem,
+            bytes: state.original_bytes(),
+        }
+    }
+
+    pub fn map_problem<E>(self, f: impl FnOnce(T) -> E) -> SourceError<'a, E> {
+        SourceError {
+            problem: f(self.problem),
+            bytes: self.bytes,
+        }
+    }
+    
     pub fn into_parse_problem(
         self,
         filename: std::path::PathBuf,
-        prefix: &'a str,
-        bytes: &'a [u8],
+    ) -> ParseProblem<'a, T> {
+        ParseProblem {
+            pos: Position::default(),
+            problem: self.problem,
+            filename,
+            bytes: self.bytes,
+        }
+    }
+}
+
+impl<'a> SyntaxError<'a> {
+    pub fn into_source_error(self, state: &State<'a>) -> SourceError<'a, SyntaxError<'a>> {
+        SourceError {
+            problem: self,
+            bytes: state.original_bytes(),
+        }
+    }
+
+    pub fn into_parse_problem(
+        self,
+        filename: std::path::PathBuf,
+        state: &State<'a>,
     ) -> ParseProblem<'a, SyntaxError<'a>> {
         ParseProblem {
             pos: Position::default(),
             problem: self,
             filename,
-            bytes,
-            prefix,
+            bytes: state.original_bytes(),
         }
     }
 }
@@ -562,13 +598,17 @@ pub enum ETypeInlineAlias {
 }
 
 #[derive(Debug)]
+pub struct SourceError<'a, T> {
+    pub problem: T,
+    pub bytes: &'a [u8],
+}
+
+#[derive(Debug)]
 pub struct ParseProblem<'a, T> {
     pub pos: Position,
     pub problem: T,
     pub filename: std::path::PathBuf,
     pub bytes: &'a [u8],
-    /// prefix is usually the header (for parse problems in the body), or empty
-    pub prefix: &'a str,
 }
 
 pub trait Parser<'a, Output, Error> {

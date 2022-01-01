@@ -7,11 +7,12 @@ use std::fmt;
 #[derive(Clone)]
 pub struct State<'a> {
     /// The raw input bytes from the file.
-    /// Beware: bytes[0] always points the the current byte the parser is examining.
-    bytes: &'a [u8],
+    /// Beware: original_bytes[0] always points the the start of the file.
+    /// Use bytes()[0] to access the current byte the parser is inspecting
+    original_bytes: &'a [u8],
 
-    /// Length of the original input in bytes
-    input_len: usize,
+    /// Offset in original_bytes that the parser is currently inspecting
+    offset: usize,
 
     /// Position of the start of the current line
     line_start: Position,
@@ -24,15 +25,19 @@ pub struct State<'a> {
 impl<'a> State<'a> {
     pub fn new(bytes: &'a [u8]) -> State<'a> {
         State {
-            bytes,
-            input_len: bytes.len(),
+            original_bytes: bytes,
+            offset: 0,
             line_start: Position::zero(),
             indent_column: 0,
         }
     }
 
+    pub fn original_bytes(&self) -> &'a [u8] {
+        self.original_bytes
+    }
+
     pub fn bytes(&self) -> &'a [u8] {
-        self.bytes
+        &self.original_bytes[self.offset..]
     }
 
     pub fn column(&self) -> u32 {
@@ -43,26 +48,26 @@ impl<'a> State<'a> {
     pub fn advance(&self, offset: usize) -> State<'a> {
         let mut state = self.clone();
         // debug_assert!(!state.bytes[..offset].iter().any(|b| *b == b'\n'));
-        state.bytes = &state.bytes[offset..];
+        state.offset += offset;
         state
     }
 
     #[must_use]
     pub fn advance_newline(&self) -> State<'a> {
         let mut state = self.clone();
-        state.bytes = &state.bytes[1..];
+        state.offset += 1;
         state.line_start = state.pos();
         state
     }
 
     /// Returns the current position
     pub const fn pos(&self) -> Position {
-        Position::new((self.input_len - self.bytes.len()) as u32)
+        Position::new(self.offset as u32)
     }
 
     /// Returns whether the parser has reached the end of the input
     pub const fn has_reached_end(&self) -> bool {
-        self.bytes.is_empty()
+        self.offset == self.original_bytes.len()
     }
 
     /// Returns a Region corresponding to the current state, but
@@ -88,9 +93,9 @@ impl<'a> fmt::Debug for State<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "State {{")?;
 
-        match std::str::from_utf8(self.bytes) {
+        match std::str::from_utf8(self.bytes()) {
             Ok(string) => write!(f, "\n\tbytes: [utf8] {:?}", string)?,
-            Err(_) => write!(f, "\n\tbytes: [invalid utf8] {:?}", self.bytes)?,
+            Err(_) => write!(f, "\n\tbytes: [invalid utf8] {:?}", self.bytes())?,
         }
 
         write!(f, "\n\t(offset): {:?},", self.pos())?;

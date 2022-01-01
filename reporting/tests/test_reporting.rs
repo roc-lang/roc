@@ -142,7 +142,7 @@ mod test_reporting {
 
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-                let problem = fail.into_parse_problem(filename.clone(), "", src.as_bytes());
+                let problem = fail.into_parse_problem(filename.clone());
                 let doc = parse_problem(&alloc, &lines, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
@@ -207,11 +207,9 @@ mod test_reporting {
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
                 use roc_parse::parser::SyntaxError;
-                let problem = SyntaxError::Header(fail).into_parse_problem(
-                    filename.clone(),
-                    "",
-                    src.as_bytes(),
-                );
+                let problem = fail
+                    .map_problem(SyntaxError::Header)
+                    .into_parse_problem(filename.clone());
                 let doc = parse_problem(&alloc, &lines, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
