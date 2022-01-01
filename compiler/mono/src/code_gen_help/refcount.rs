@@ -617,8 +617,6 @@ fn refcount_struct<'a>(
     ctx: &mut Context<'a>,
     field_layouts: &'a [Layout<'a>],
 ) -> Stmt<'a> {
-    println!("refcount_struct");
-
     let mut stmt = return_unit(root, ident_ids);
 
     for (i, field_layout) in field_layouts.iter().enumerate().rev() {
