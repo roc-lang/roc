@@ -22,7 +22,7 @@ pub fn refcount_stmt<'a>(
     layout: Layout<'a>,
     modify: &ModifyRc,
     following: &'a Stmt<'a>,
-) -> Stmt<'a> {
+) -> &'a Stmt<'a> {
     let arena = root.arena;
 
     match modify {
@@ -46,7 +46,7 @@ pub fn refcount_stmt<'a>(
                 .unwrap();
 
             let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
-            amount_stmt(arena.alloc(call_stmt))
+            arena.alloc(amount_stmt(arena.alloc(call_stmt)))
         }
 
         ModifyRc::Dec(structure) => {
@@ -55,26 +55,36 @@ pub fn refcount_stmt<'a>(
             let call_expr = root
                 .call_specialized_op(ident_ids, ctx, layout, arena.alloc([*structure]))
                 .unwrap();
-
-            Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following)
+            let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
+            arena.alloc(call_stmt)
         }
 
         ModifyRc::DecRef(structure) => {
-            if matches!(layout, Layout::Builtin(Builtin::Str)) {
-                ctx.op = HelperOp::Dec;
-                refcount_stmt(root, ident_ids, ctx, layout, modify, following)
-            } else if let HelperOp::DecRef(jp_decref) = ctx.op {
-                // Inline the body of the equivalent Dec function, without iterating fields,
-                // and replacing all return statements with jumps to the `following` statement.
-                let rc_stmt = refcount_generic(root, ident_ids, ctx, layout, *structure);
-                Stmt::Join {
-                    id: jp_decref,
-                    parameters: &[],
-                    body: following,
-                    remainder: root.arena.alloc(rc_stmt),
+            match layout {
+                // Str has no children, so we might as well do what we normally do and call the helper.
+                Layout::Builtin(Builtin::Str) => {
+                    ctx.op = HelperOp::Dec;
+                    refcount_stmt(root, ident_ids, ctx, layout, modify, following)
                 }
-            } else {
-                unreachable!()
+
+                // Struct is stack-only, so DecRef is a no-op
+                Layout::Struct(_) => following,
+
+                // Inline the refcounting code instead of making a function. Don't iterate fields,
+                // and replace any return statements with jumps to the `following` statement.
+                _ => match ctx.op {
+                    HelperOp::DecRef(jp_decref) => {
+                        let rc_stmt = refcount_generic(root, ident_ids, ctx, layout, *structure);
+                        let join = Stmt::Join {
+                            id: jp_decref,
+                            parameters: &[],
+                            body: following,
+                            remainder: arena.alloc(rc_stmt),
+                        };
+                        arena.alloc(join)
+                    }
+                    _ => unreachable!(),
+                },
             }
         }
     }
@@ -99,7 +109,9 @@ pub fn refcount_generic<'a>(
             refcount_list(root, ident_ids, ctx, &layout, elem_layout, structure)
         }
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_)) => rc_todo(),
-        Layout::Struct(field_layouts) => refcount_struct(root, ident_ids, ctx, field_layouts, structure),
+        Layout::Struct(field_layouts) => {
+            refcount_struct(root, ident_ids, ctx, field_layouts, structure)
+        }
         Layout::Union(_) => rc_todo(),
         Layout::LambdaSet(_) => {
             unreachable!("Refcounting on LambdaSet is invalid. Should be a Union at runtime.")
@@ -357,7 +369,7 @@ fn refcount_list<'a>(
     ctx: &mut Context<'a>,
     layout: &Layout,
     elem_layout: &'a Layout,
-    structure: Symbol
+    structure: Symbol,
 ) -> Stmt<'a> {
     let layout_isize = root.layout_isize;
     let arena = root.arena;

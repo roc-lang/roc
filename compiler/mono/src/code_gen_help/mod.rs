@@ -123,7 +123,8 @@ impl<'a> CodeGenHelp<'a> {
             ModifyRc::Inc(..) => HelperOp::Inc,
             ModifyRc::Dec(_) => HelperOp::Dec,
             ModifyRc::DecRef(_) => {
-                HelperOp::DecRef(JoinPointId(self.create_symbol(ident_ids, "jp_decref")))
+                let jp_decref = JoinPointId(self.create_symbol(ident_ids, "jp_decref"));
+                HelperOp::DecRef(jp_decref)
             }
         };
 
@@ -134,7 +135,7 @@ impl<'a> CodeGenHelp<'a> {
         };
 
         let rc_stmt = refcount::refcount_stmt(self, ident_ids, &mut ctx, layout, modify, following);
-        (self.arena.alloc(rc_stmt), ctx.new_linker_data)
+        (rc_stmt, ctx.new_linker_data)
     }
 
     /// Replace a generic `Lowlevel::Eq` call with a specialized helper proc.
