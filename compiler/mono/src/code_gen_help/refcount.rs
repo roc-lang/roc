@@ -4,7 +4,7 @@ use roc_module::symbol::{IdentIds, Symbol};
 
 use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Param, Stmt, UpdateModeId,
+    BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
 };
 use crate::layout::{Builtin, Layout, UnionLayout};
 
@@ -17,6 +17,77 @@ const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
 
 const ARG_1: Symbol = Symbol::ARG_1;
 const ARG_2: Symbol = Symbol::ARG_2;
+
+pub fn refcount_stmt<'a>(
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+    layout: Layout<'a>,
+    modify: &ModifyRc,
+    following: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let arena = root.arena;
+
+    match modify {
+        ModifyRc::Inc(structure, amount) => {
+            let layout_isize = root.layout_isize;
+
+            // Define a constant for the amount to increment
+            let amount_sym = root.create_symbol(ident_ids, "amount");
+            let amount_expr = Expr::Literal(Literal::Int(*amount as i128));
+            let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, layout_isize, next);
+
+            // Call helper proc, passing the Roc structure and constant amount
+            let call_result_empty = root.create_symbol(ident_ids, "call_result_empty");
+            let call_expr = root
+                .call_specialized_op(
+                    ident_ids,
+                    ctx,
+                    layout,
+                    arena.alloc([*structure, amount_sym]),
+                )
+                .unwrap();
+
+            let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
+            amount_stmt(arena.alloc(call_stmt))
+        }
+
+        ModifyRc::Dec(structure) => {
+            // Call helper proc, passing the Roc structure
+            let call_result_empty = root.create_symbol(ident_ids, "call_result_empty");
+            let call_expr = root
+                .call_specialized_op(ident_ids, ctx, layout, arena.alloc([*structure]))
+                .unwrap();
+
+            Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following)
+        }
+
+        ModifyRc::DecRef(structure) => {
+            // No generated procs for DecRef, just lowlevel ops
+            let rc_ptr_sym = root.create_symbol(ident_ids, "rc_ptr");
+
+            // Pass the refcount pointer to the lowlevel call (see utils.zig)
+            let call_result_empty = root.create_symbol(ident_ids, "call_result_empty");
+            let call_expr = Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::RefCountDec,
+                    update_mode: UpdateModeId::BACKEND_DUMMY,
+                },
+                arguments: arena.alloc([rc_ptr_sym]),
+            });
+            let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
+
+            // FIXME: `structure` is a pointer to the stack, not the heap!
+            rc_ptr_from_data_ptr(
+                root,
+                ident_ids,
+                *structure,
+                rc_ptr_sym,
+                arena.alloc(call_stmt),
+            )
+        }
+    }
+}
 
 pub fn refcount_generic<'a>(
     root: &mut CodeGenHelp<'a>,
@@ -36,7 +107,7 @@ pub fn refcount_generic<'a>(
             refcount_list(root, ident_ids, ctx, &layout, elem_layout)
         }
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_)) => rc_todo(),
-        Layout::Struct(_) => rc_todo(),
+        Layout::Struct(field_layouts) => refcount_struct(root, ident_ids, ctx, field_layouts),
         Layout::Union(_) => rc_todo(),
         Layout::LambdaSet(_) => {
             unreachable!("Refcounting on LambdaSet is invalid. Should be a Union at runtime.")
@@ -49,7 +120,13 @@ pub fn refcount_generic<'a>(
 // In the short term, it helps us to skip refcounting and let it leak, so we can make
 // progress incrementally. Kept in sync with generate_procs using assertions.
 pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
-    matches!(layout, Layout::Builtin(Builtin::Str | Builtin::List(_)))
+    match layout {
+        Layout::Builtin(Builtin::Dict(..) | Builtin::Set(_)) => false,
+        Layout::Builtin(Builtin::List(elem_layout)) => is_rc_implemented_yet(elem_layout),
+        Layout::Builtin(_) => true,
+        Layout::Struct(fields) => fields.iter().all(is_rc_implemented_yet),
+        _ => false,
+    }
 }
 
 fn return_unit<'a>(root: &CodeGenHelp<'a>, ident_ids: &mut IdentIds) -> Stmt<'a> {
@@ -535,4 +612,42 @@ fn refcount_list_elems<'a>(
             )),
         )),
     ))
+}
+
+fn refcount_struct<'a>(
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+    field_layouts: &'a [Layout<'a>],
+) -> Stmt<'a> {
+    let mut stmt = return_unit(root, ident_ids);
+
+    for (i, field_layout) in field_layouts.iter().enumerate().rev() {
+        if field_layout.contains_refcounted() {
+            let field_val = root.create_symbol(ident_ids, &format!("field_val_{}", i));
+            let field_val_expr = Expr::StructAtIndex {
+                index: i as u64,
+                field_layouts,
+                structure: ARG_1,
+            };
+            let field_val_stmt = |next| Stmt::Let(field_val, field_val_expr, *field_layout, next);
+
+            let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{}", i));
+            let mod_args = refcount_args(root, ctx, field_val);
+            let mod_expr = root
+                .call_specialized_op(ident_ids, ctx, *field_layout, mod_args)
+                .unwrap();
+            let mod_stmt = |next| Stmt::Let(mod_unit, mod_expr, LAYOUT_UNIT, next);
+
+            stmt = field_val_stmt(root.arena.alloc(
+                //
+                mod_stmt(root.arena.alloc(
+                    //
+                    stmt,
+                )),
+            ))
+        }
+    }
+
+    stmt
 }

@@ -6,7 +6,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 use crate::ir::{
-    Call, CallSpecId, CallType, Expr, HostExposedLayouts, Literal, ModifyRc, Proc, ProcLayout,
+    Call, CallSpecId, CallType, Expr, HostExposedLayouts, ModifyRc, Proc, ProcLayout,
     SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{Builtin, Layout, UnionLayout};
@@ -129,83 +129,14 @@ impl<'a> CodeGenHelp<'a> {
             return (following, Vec::new_in(self.arena));
         }
 
-        let arena = self.arena;
-
         let mut ctx = Context {
             new_linker_data: Vec::new_in(self.arena),
             recursive_union: None,
             op: HelperOp::from(modify),
         };
 
-        match modify {
-            ModifyRc::Inc(structure, amount) => {
-                let layout_isize = self.layout_isize;
-
-                // Define a constant for the amount to increment
-                let amount_sym = self.create_symbol(ident_ids, "amount");
-                let amount_expr = Expr::Literal(Literal::Int(*amount as i128));
-                let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, layout_isize, next);
-
-                // Call helper proc, passing the Roc structure and constant amount
-                let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
-                let call_expr = self
-                    .call_specialized_op(
-                        ident_ids,
-                        &mut ctx,
-                        layout,
-                        arena.alloc([*structure, amount_sym]),
-                    )
-                    .unwrap();
-                let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
-                let rc_stmt = arena.alloc(amount_stmt(arena.alloc(call_stmt)));
-
-                (rc_stmt, ctx.new_linker_data)
-            }
-
-            ModifyRc::Dec(structure) => {
-                // Call helper proc, passing the Roc structure
-                let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
-                let call_expr = self
-                    .call_specialized_op(ident_ids, &mut ctx, layout, arena.alloc([*structure]))
-                    .unwrap();
-
-                let rc_stmt = arena.alloc(Stmt::Let(
-                    call_result_empty,
-                    call_expr,
-                    LAYOUT_UNIT,
-                    following,
-                ));
-
-                (rc_stmt, ctx.new_linker_data)
-            }
-
-            ModifyRc::DecRef(structure) => {
-                // No generated procs for DecRef, just lowlevel ops
-                let rc_ptr_sym = self.create_symbol(ident_ids, "rc_ptr");
-
-                // Pass the refcount pointer to the lowlevel call (see utils.zig)
-                let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
-                let call_expr = Expr::Call(Call {
-                    call_type: CallType::LowLevel {
-                        op: LowLevel::RefCountDec,
-                        update_mode: UpdateModeId::BACKEND_DUMMY,
-                    },
-                    arguments: arena.alloc([rc_ptr_sym]),
-                });
-                let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
-
-                // FIXME: `structure` is a pointer to the stack, not the heap!
-                let rc_stmt = arena.alloc(refcount::rc_ptr_from_data_ptr(
-                    self,
-                    ident_ids,
-                    *structure,
-                    rc_ptr_sym,
-                    arena.alloc(call_stmt),
-                ));
-
-                (rc_stmt, ctx.new_linker_data)
-            }
-        }
+        let rc_stmt = refcount::refcount_stmt(self, ident_ids, &mut ctx, layout, modify, following);
+        (self.arena.alloc(rc_stmt), ctx.new_linker_data)
     }
 
     /// Replace a generic `Lowlevel::Eq` call with a specialized helper proc.
