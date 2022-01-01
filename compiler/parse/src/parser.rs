@@ -482,6 +482,7 @@ pub enum EType<'a> {
     TTagUnion(ETypeTagUnion<'a>, Position),
     TInParens(ETypeInParens<'a>, Position),
     TApply(ETypeApply, Position),
+    TInlineAlias(ETypeInlineAlias, Position),
     TBadTypeVariable(Position),
     TWildcard(Position),
     TInferred(Position),
@@ -551,6 +552,13 @@ pub enum ETypeApply {
     DoubleDot(Position),
     TrailingDot(Position),
     StartIsNumber(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ETypeInlineAlias {
+    NotAnAlias(Position),
+    Qualified(Position),
+    ArgumentNotLowercase(Position),
 }
 
 #[derive(Debug)]

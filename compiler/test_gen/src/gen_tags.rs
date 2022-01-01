@@ -23,10 +23,9 @@ fn width_and_alignment_u8_u8() {
 
     let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
 
-    // at the moment, the tag id uses an I64, so
     let ptr_width = 8;
-    assert_eq!(layout.alignment_bytes(ptr_width), 8);
-    assert_eq!(layout.stack_size(ptr_width), 16);
+    assert_eq!(layout.alignment_bytes(ptr_width), 1);
+    assert_eq!(layout.stack_size(ptr_width), 2);
 }
 
 #[test]
@@ -126,8 +125,7 @@ fn applied_tag_just_enum() {
                 "#
         ),
         (2, 0),
-        (u8, [u8; 7], u8),
-        |(a, _, c)| (a, c)
+        (u8, u8)
     );
 }
 
@@ -1244,4 +1242,23 @@ fn tag_must_be_its_own_type() {
         1,
         i64
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn recursive_tag_union_into_flat_tag_union() {
+    // Comprehensive test for correctness in cli/tests/repl_eval
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Item : [ Shallow [ L Str, R Str ], Deep Item ]
+            i : Item
+            i = Deep (Shallow (R "woo"))
+            i
+            "#
+        ),
+        0,
+        usize,
+        |_| 0
+    )
 }

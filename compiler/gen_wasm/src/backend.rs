@@ -4,7 +4,7 @@ use code_builder::Align;
 use roc_builtins::bitcode::{self, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::ident::Ident;
-use roc_module::low_level::LowLevel;
+use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, REFCOUNT_MAX};
 use roc_mono::ir::{
@@ -591,7 +591,9 @@ impl<'a> WasmBackend<'a> {
             }) => match call_type {
                 CallType::ByName { name: func_sym, .. } => {
                     // If this function is just a lowlevel wrapper, then inline it
-                    if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
+                    if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
+                        LowLevelWrapperType::from_symbol(*func_sym)
+                    {
                         return self.build_low_level(
                             lowlevel,
                             arguments,
@@ -678,17 +680,13 @@ impl<'a> WasmBackend<'a> {
             }
 
             Expr::Array { elems, elem_layout } => {
-                if let StoredValue::StackMemory {
-                    location,
-                    alignment_bytes,
-                    ..
-                } = storage
-                {
+                if let StoredValue::StackMemory { location, .. } = storage {
                     let size = elem_layout.stack_size(PTR_SIZE) * (elems.len() as u32);
 
                     // Allocate heap space and store its address in a local variable
                     let heap_local_id = self.storage.create_anonymous_local(PTR_TYPE);
-                    self.allocate_with_refcount(Some(size), *alignment_bytes, 1);
+                    let heap_alignment = elem_layout.alignment_bytes(PTR_SIZE);
+                    self.allocate_with_refcount(Some(size), heap_alignment, 1);
                     self.code_builder.set_local(heap_local_id);
 
                     let (stack_local_id, stack_offset) =
@@ -830,7 +828,9 @@ impl<'a> WasmBackend<'a> {
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
             let id_offset = data_offset + data_size - data_alignment;
-            let id_align = Align::from(data_alignment);
+
+            let id_align = union_layout.tag_id_builtin().alignment_bytes(PTR_SIZE);
+            let id_align = Align::from(id_align);
 
             self.code_builder.get_local(local_id);
 
@@ -912,7 +912,9 @@ impl<'a> WasmBackend<'a> {
         if union_layout.stores_tag_id_as_data(PTR_SIZE) {
             let (data_size, data_alignment) = union_layout.data_size_and_alignment(PTR_SIZE);
             let id_offset = data_size - data_alignment;
-            let id_align = Align::from(data_alignment);
+
+            let id_align = union_layout.tag_id_builtin().alignment_bytes(PTR_SIZE);
+            let id_align = Align::from(id_align);
 
             self.storage
                 .load_symbols(&mut self.code_builder, &[structure]);
@@ -956,7 +958,17 @@ impl<'a> WasmBackend<'a> {
             NonRecursive(tags) => tags[tag_index],
             Recursive(tags) => tags[tag_index],
             NonNullableUnwrapped(layouts) => *layouts,
-            NullableWrapped { other_tags, .. } => other_tags[tag_index],
+            NullableWrapped {
+                other_tags,
+                nullable_id,
+            } => {
+                let index = if tag_index > *nullable_id as usize {
+                    tag_index - 1
+                } else {
+                    tag_index
+                };
+                other_tags[index]
+            }
             NullableUnwrapped { other_fields, .. } => *other_fields,
         };
 
@@ -1034,12 +1046,11 @@ impl<'a> WasmBackend<'a> {
 
         // Save the allocation address to a temporary local variable
         let local_id = self.storage.create_anonymous_local(ValueType::I32);
-        self.code_builder.set_local(local_id);
+        self.code_builder.tee_local(local_id);
 
         // Write the initial refcount
         let refcount_offset = extra_bytes - PTR_SIZE;
         let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
-        self.code_builder.get_local(local_id);
         self.code_builder.i32_const(encoded_refcount);
         self.code_builder.i32_store(Align::Bytes4, refcount_offset);
 

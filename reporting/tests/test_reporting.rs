@@ -1662,7 +1662,7 @@ mod test_reporting {
 
                 But you are trying to use it as:
 
-                    [ Foo a ]b
+                    [ Foo a ]
                 "#
             ),
         )
@@ -2481,20 +2481,26 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This pattern does not cover all the possibilities:
+                This expression is used in an unexpected way:
 
                 5│  (Left y) = x
-                     ^^^^^^
+                               ^
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Right _
+                    [ Left I64, Right Bool ]
 
-                I would have to crash if I saw one of those! You can use a binding to
-                deconstruct a value if there is only ONE possibility. Use a `when` to
-                account for all possibilities.
+                But you are trying to use it as:
+
+                    [ Left a ]
+
+                Tip: Seems like a tag typo. Maybe `Right` should be `Left`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -6909,6 +6915,117 @@ I need all branches in an `if` to have the same type!
                 Tip: Any connection between types must use a named type variable, not
                 a `*`! Maybe the annotation  on `f` should have a named type variable in
                 place of the `*`?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_not_an_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NOT AN INLINE ALIAS ─────────────────────────────────────────────────────────
+
+                The inline type after this `as` is not a type alias:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as a
+                                                             ^
+
+                Inline alias types must start with an uppercase identifier and be
+                followed by zero or more type arguments, like Point or List a.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_qualified() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── QUALIFIED ALIAS NAME ────────────────────────────────────────────────────────
+
+                This type alias has a qualified name:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
+                                                             ^
+
+                An alias introduces a new name to the current scope, so it must be
+                unqualified.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_argument_uppercase() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as LinkedList U
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE ARGUMENT NOT LOWERCASE ─────────────────────────────────────────────────
+
+                This alias type argument is not lowercase:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as LinkedList U
+                                                                        ^
+
+                All type arguments must be lowercase.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn mismatched_single_tag_arg() {
+        report_problem_as(
+            indoc!(
+                r#"
+                isEmpty =
+                    \email ->
+                        Email str = email
+                        Str.isEmpty str
+
+                isEmpty (Name "boo")
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `isEmpty` is not what I expect:
+
+                6│  isEmpty (Name "boo")
+                             ^^^^^^^^^^
+
+                This `Name` global tag application has the type:
+
+                    [ Name Str ]a
+
+                But `isEmpty` needs the 1st argument to be:
+
+                    [ Email Str ]
+
+                Tip: Seems like a tag typo. Maybe `Name` should be `Email`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )

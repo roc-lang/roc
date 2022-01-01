@@ -18,18 +18,17 @@ Defs(
                     ],
                 ),
                 [],
-                |L 0-0, C 25-33| Apply(
-                    "",
-                    "Blah",
-                    [
-                        |L 0-0, C 30-31| BoundVariable(
+                AliasHeader {
+                    name: |L 0-0, C 25-29| "Blah",
+                    vars: [
+                        |L 0-0, C 30-31| Identifier(
                             "a",
                         ),
-                        |L 0-0, C 32-33| BoundVariable(
+                        |L 0-0, C 32-33| Identifier(
                             "b",
                         ),
                     ],
-                ),
+                },
             ),
         ),
     ],
