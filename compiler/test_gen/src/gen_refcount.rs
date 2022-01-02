@@ -153,7 +153,7 @@ fn struct_dealloc() {
 
 #[test]
 #[cfg(any(feature = "gen-wasm"))]
-fn union_nonrec_inc() {
+fn union_nonrecursive_inc() {
     assert_refcounts!(
         indoc!(
             r#"
@@ -177,7 +177,7 @@ fn union_nonrec_inc() {
 
 #[test]
 #[cfg(any(feature = "gen-wasm"))]
-fn union_nonrec_dec() {
+fn union_nonrecursive_dec() {
     assert_refcounts!(
         indoc!(
             r#"
@@ -195,5 +195,32 @@ fn union_nonrec_dec() {
         ),
         RocStr,
         &[1] // s
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn union_recursive_inc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                Expr : [ Sym Str, Add Expr Expr ]
+
+                s = Str.concat "heap_allocated_" "symbol_name"
+
+                e : Expr
+                e = Add (Sym s) (Sym s)
+
+                [e, e]
+            "#
+        ),
+        RocStr,
+        &[
+            4, // s
+            1, // Sym
+            1, // Sym
+            2, // Add
+            1  // list
+        ]
     );
 }
