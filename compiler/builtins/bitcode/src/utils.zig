@@ -251,8 +251,8 @@ pub fn expectFailed(
     failure_length += 1;
 }
 
-pub fn getExpectFailures() [*]Failure {
-    return failures;
+pub fn getExpectFailures() []Failure {
+    return failures[0..failure_length];
 }
 
 pub fn deinitFailures() void {
@@ -330,15 +330,15 @@ test "expectFailure does something"{
     // defer deinitFailures();
     // For now we're doing this instead:
     defer  std.testing.allocator.destroy(@ptrCast(*[4096]u8, failures));
-    
-    try std.testing.expectEqual(failure_length, 0);
+
+    try std.testing.expectEqual(getExpectFailures().len, 0);
     expectFailed(1, 2, 3, 4);
-    try std.testing.expectEqual(failure_length, 1);
+    try std.testing.expectEqual(getExpectFailures().len, 1);
     const what_it_should_look_like = Failure{
         .start_line = 1,
         .end_line = 2,
         .start_col = 3,
         .end_col = 4
     };
-    try std.testing.expectEqual(failures[0], what_it_should_look_like);
+    try std.testing.expectEqual(getExpectFailures()[0], what_it_should_look_like);
 }
