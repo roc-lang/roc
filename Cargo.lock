@@ -3653,6 +3653,9 @@ dependencies = [
 [[package]]
 name = "roc_region"
 version = "0.1.0"
+dependencies = [
+ "static_assertions",
+]
 
 [[package]]
 name = "roc_reporting"

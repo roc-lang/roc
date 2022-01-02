@@ -72,11 +72,8 @@ impl Region {
     }
 }
 
-#[test]
-fn region_size() {
-    // Region is used all over the place. Avoid increasing its size!
-    assert_eq!(std::mem::size_of::<Region>(), 12);
-}
+// Region is used all over the place. Avoid increasing its size!
+static_assertions::assert_eq_size!([u8; 8], Region);
 
 impl fmt::Debug for Region {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
