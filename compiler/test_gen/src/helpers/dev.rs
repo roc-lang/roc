@@ -3,6 +3,7 @@ use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
+use roc_region::all::LineInfo;
 use tempfile::tempdir;
 
 #[allow(unused_imports)]
@@ -124,6 +125,7 @@ pub fn helper(
             continue;
         }
 
+        let line_info = LineInfo::new(&src);
         let src_lines: Vec<&str> = src.split('\n').collect();
         let palette = DEFAULT_PALETTE;
 
@@ -139,7 +141,7 @@ pub fn helper(
                     continue;
                 }
                 _ => {
-                    let report = can_problem(&alloc, module_path.clone(), problem);
+                    let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
                     let mut buf = String::new();
 
                     report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -150,7 +152,7 @@ pub fn helper(
         }
 
         for problem in type_problems {
-            if let Some(report) = type_problem(&alloc, module_path.clone(), problem) {
+            if let Some(report) = type_problem(&alloc, &line_info, module_path.clone(), problem) {
                 let mut buf = String::new();
 
                 report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -160,7 +162,7 @@ pub fn helper(
         }
 
         for problem in mono_problems {
-            let report = mono_problem(&alloc, module_path.clone(), problem);
+            let report = mono_problem(&alloc, &line_info, module_path.clone(), problem);
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
