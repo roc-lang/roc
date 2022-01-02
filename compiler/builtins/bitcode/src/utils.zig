@@ -251,13 +251,33 @@ pub fn expectFailed(
     failure_length += 1;
 }
 
+pub fn expectFailedC (
+    start_line: u32,
+    end_line: u32,
+    start_col: u16,
+    end_col: u16,
+) callconv(.C) void {
+    return @call(.{ .modifier = always_inline }, expectFailed, .{ start_line, end_line, start_col, end_col });
+}
+
+
 pub fn getExpectFailures() []Failure {
     return failures[0..failure_length];
+}
+
+pub fn getExpectFailuresC() callconv(.C) *c_void {
+    var bytes = @ptrCast(*c_void, failures);
+
+    return bytes;
 }
 
 pub fn deinitFailures() void {
     roc_dealloc(failures, @alignOf(Failure));
     failure_length = 0;
+}
+
+pub fn deinitFailuresC() callconv(.C) void {
+    return @call(.{ .modifier = always_inline }, deinitFailures, .{});
 }
 
 pub fn unsafeReallocate(

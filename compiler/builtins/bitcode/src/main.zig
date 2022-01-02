@@ -146,8 +146,9 @@ comptime {
     exportUtilsFn(utils.increfC, "incref");
     exportUtilsFn(utils.decrefC, "decref");
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
-    exportUtilsFn(utils.expectFailed, "expect_failed");
-    exportUtilsFn(utils.getExpectFailures, "get_expect_failures");
+    exportUtilsFn(utils.expectFailedC, "expect_failed");
+    exportUtilsFn(utils.getExpectFailuresC, "get_expect_failures");
+    exportUtilsFn(utils.deinitFailuresC, "deinit_failures");
 
     @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
 }
