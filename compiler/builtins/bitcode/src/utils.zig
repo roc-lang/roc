@@ -251,8 +251,13 @@ pub fn expectFailed(
     failure_length += 1;
 }
 
-pub fn getExpectFailures() [_]Failure {
+pub fn getExpectFailures() [*]Failure {
     return failures;
+}
+
+pub fn deinitFailures() void {
+    roc_dealloc(failures, @alignOf(Failure));
+    failure_length = 0;
 }
 
 pub fn unsafeReallocate(
@@ -321,6 +326,11 @@ test "increfC, static data" {
 }
 
 test "expectFailure does something"{
+    //TODO: Fix whatever is causing this to error out
+    // defer deinitFailures();
+    // For now we're doing this instead:
+    defer  std.testing.allocator.destroy(@ptrCast(*[4096]u8, failures));
+    
     try std.testing.expectEqual(failure_length, 0);
     expectFailed(1, 2, 3, 4);
     try std.testing.expectEqual(failure_length, 1);
