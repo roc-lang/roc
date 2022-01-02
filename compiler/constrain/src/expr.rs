@@ -77,7 +77,7 @@ fn constrain_untyped_args(
             loc_pattern.region,
             pattern_expected,
             &mut pattern_state,
-            false,
+            true,
         );
 
         vars.push(*pattern_var);
@@ -1144,7 +1144,7 @@ fn constrain_def_pattern(env: &Env, loc_pattern: &Loc<Pattern>, expr_type: Type)
         loc_pattern.region,
         pattern_expected,
         &mut state,
-        false,
+        true,
     );
 
     state

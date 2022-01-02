@@ -361,7 +361,7 @@ impl<'a> UnionLayout<'a> {
     }
 
     fn stores_tag_id_in_pointer_bits(tags: &[&[Layout<'a>]], ptr_bytes: u32) -> bool {
-        tags.len() <= ptr_bytes as usize
+        tags.len() < ptr_bytes as usize
     }
 
     // i.e. it is not implicit and not stored in the pointer bits

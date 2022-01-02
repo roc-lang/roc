@@ -6,7 +6,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 use crate::ir::{
-    Call, CallSpecId, CallType, Expr, HostExposedLayouts, Literal, ModifyRc, Proc, ProcLayout,
+    Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
     SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{Builtin, Layout, UnionLayout};
@@ -28,18 +28,8 @@ pub const REFCOUNT_MAX: usize = 0;
 enum HelperOp {
     Inc,
     Dec,
-    DecRef,
+    DecRef(JoinPointId),
     Eq,
-}
-
-impl From<&ModifyRc> for HelperOp {
-    fn from(modify: &ModifyRc) -> Self {
-        match modify {
-            ModifyRc::Inc(..) => Self::Inc,
-            ModifyRc::Dec(_) => Self::Dec,
-            ModifyRc::DecRef(_) => Self::DecRef,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -129,83 +119,23 @@ impl<'a> CodeGenHelp<'a> {
             return (following, Vec::new_in(self.arena));
         }
 
-        let arena = self.arena;
+        let op = match modify {
+            ModifyRc::Inc(..) => HelperOp::Inc,
+            ModifyRc::Dec(_) => HelperOp::Dec,
+            ModifyRc::DecRef(_) => {
+                let jp_decref = JoinPointId(self.create_symbol(ident_ids, "jp_decref"));
+                HelperOp::DecRef(jp_decref)
+            }
+        };
 
         let mut ctx = Context {
             new_linker_data: Vec::new_in(self.arena),
             recursive_union: None,
-            op: HelperOp::from(modify),
+            op,
         };
 
-        match modify {
-            ModifyRc::Inc(structure, amount) => {
-                let layout_isize = self.layout_isize;
-
-                // Define a constant for the amount to increment
-                let amount_sym = self.create_symbol(ident_ids, "amount");
-                let amount_expr = Expr::Literal(Literal::Int(*amount as i128));
-                let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, layout_isize, next);
-
-                // Call helper proc, passing the Roc structure and constant amount
-                let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
-                let call_expr = self.call_specialized_op(
-                    ident_ids,
-                    &mut ctx,
-                    layout,
-                    arena.alloc([*structure, amount_sym]),
-                );
-                let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
-                let rc_stmt = arena.alloc(amount_stmt(arena.alloc(call_stmt)));
-
-                (rc_stmt, ctx.new_linker_data)
-            }
-
-            ModifyRc::Dec(structure) => {
-                // Call helper proc, passing the Roc structure
-                let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
-                let call_expr = self.call_specialized_op(
-                    ident_ids,
-                    &mut ctx,
-                    layout,
-                    arena.alloc([*structure]),
-                );
-
-                let rc_stmt = arena.alloc(Stmt::Let(
-                    call_result_empty,
-                    call_expr,
-                    LAYOUT_UNIT,
-                    following,
-                ));
-
-                (rc_stmt, ctx.new_linker_data)
-            }
-
-            ModifyRc::DecRef(structure) => {
-                // No generated procs for DecRef, just lowlevel ops
-                let rc_ptr_sym = self.create_symbol(ident_ids, "rc_ptr");
-
-                // Pass the refcount pointer to the lowlevel call (see utils.zig)
-                let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
-                let call_expr = Expr::Call(Call {
-                    call_type: CallType::LowLevel {
-                        op: LowLevel::RefCountDec,
-                        update_mode: UpdateModeId::BACKEND_DUMMY,
-                    },
-                    arguments: arena.alloc([rc_ptr_sym]),
-                });
-                let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
-
-                let rc_stmt = arena.alloc(refcount::rc_ptr_from_struct(
-                    self,
-                    ident_ids,
-                    *structure,
-                    rc_ptr_sym,
-                    arena.alloc(call_stmt),
-                ));
-
-                (rc_stmt, ctx.new_linker_data)
-            }
-        }
+        let rc_stmt = refcount::refcount_stmt(self, ident_ids, &mut ctx, layout, modify, following);
+        (rc_stmt, ctx.new_linker_data)
     }
 
     /// Replace a generic `Lowlevel::Eq` call with a specialized helper proc.
@@ -222,7 +152,9 @@ impl<'a> CodeGenHelp<'a> {
             op: HelperOp::Eq,
         };
 
-        let expr = self.call_specialized_op(ident_ids, &mut ctx, *layout, arguments);
+        let expr = self
+            .call_specialized_op(ident_ids, &mut ctx, *layout, arguments)
+            .unwrap();
 
         (expr, ctx.new_linker_data)
     }
@@ -238,8 +170,8 @@ impl<'a> CodeGenHelp<'a> {
         ident_ids: &mut IdentIds,
         ctx: &mut Context<'a>,
         called_layout: Layout<'a>,
-        arguments: &[Symbol],
-    ) -> Expr<'a> {
+        arguments: &'a [Symbol],
+    ) -> Option<Expr<'a>> {
         use HelperOp::*;
 
         debug_assert!(self.debug_recursion_depth < 10);
@@ -257,29 +189,31 @@ impl<'a> CodeGenHelp<'a> {
 
             let (ret_layout, arg_layouts): (&'a Layout<'a>, &'a [Layout<'a>]) = {
                 match ctx.op {
-                    Dec | DecRef => (&LAYOUT_UNIT, self.arena.alloc([layout])),
+                    Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([layout])),
                     Inc => (&LAYOUT_UNIT, self.arena.alloc([layout, self.layout_isize])),
                     Eq => (&LAYOUT_BOOL, self.arena.alloc([layout, layout])),
                 }
             };
 
-            Expr::Call(Call {
+            Some(Expr::Call(Call {
                 call_type: CallType::ByName {
                     name: proc_name,
                     ret_layout,
                     arg_layouts,
                     specialization_id: CallSpecId::BACKEND_DUMMY,
                 },
-                arguments: self.arena.alloc_slice_copy(arguments),
-            })
-        } else {
-            Expr::Call(Call {
+                arguments,
+            }))
+        } else if ctx.op == HelperOp::Eq {
+            Some(Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::Eq,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: self.arena.alloc_slice_copy(arguments),
-            })
+                arguments,
+            }))
+        } else {
+            None
         }
     }
 
@@ -315,9 +249,9 @@ impl<'a> CodeGenHelp<'a> {
 
         // Recursively generate the body of the Proc and sub-procs
         let (ret_layout, body) = match ctx.op {
-            Inc | Dec | DecRef => (
+            Inc | Dec | DecRef(_) => (
                 LAYOUT_UNIT,
-                refcount::refcount_generic(self, ident_ids, ctx, layout),
+                refcount::refcount_generic(self, ident_ids, ctx, layout, Symbol::ARG_1),
             ),
             Eq => (
                 LAYOUT_BOOL,
@@ -332,7 +266,7 @@ impl<'a> CodeGenHelp<'a> {
                     let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([roc_value, inc_amount])
                 }
-                Dec | DecRef => self.arena.alloc([roc_value]),
+                Dec | DecRef(_) => self.arena.alloc([roc_value]),
                 Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
             }
         };
@@ -375,7 +309,7 @@ impl<'a> CodeGenHelp<'a> {
                 arguments: self.arena.alloc([*layout]),
                 result: LAYOUT_UNIT,
             },
-            HelperOp::DecRef => unreachable!("No generated Proc for DecRef"),
+            HelperOp::DecRef(_) => unreachable!("No generated Proc for DecRef"),
             HelperOp::Eq => ProcLayout {
                 arguments: self.arena.alloc([*layout, *layout]),
                 result: LAYOUT_BOOL,
@@ -423,7 +357,7 @@ fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
             // Str type can use either Zig functions or generated IR, since it's not generic.
             // Eq uses a Zig function, refcount uses generated IR.
             // Both are fine, they were just developed at different times.
-            matches!(op, HelperOp::Inc | HelperOp::Dec | HelperOp::DecRef)
+            matches!(op, HelperOp::Inc | HelperOp::Dec | HelperOp::DecRef(_))
         }
 
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_)) => true,

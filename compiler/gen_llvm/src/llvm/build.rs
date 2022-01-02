@@ -1394,6 +1394,18 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
             );
 
             field_vals.push(ptr);
+        } else if matches!(
+            tag_field_layout,
+            Layout::Union(UnionLayout::NonRecursive(_))
+        ) {
+            debug_assert!(val.is_pointer_value());
+
+            // We store non-recursive unions without any indirection.
+            let reified = env
+                .builder
+                .build_load(val.into_pointer_value(), "load_non_recursive");
+
+            field_vals.push(reified);
         } else {
             // this check fails for recursive tag unions, but can be helpful while debugging
             // debug_assert_eq!(tag_field_layout, val_layout);
@@ -1763,16 +1775,19 @@ fn tag_pointer_set_tag_id<'a, 'ctx, 'env>(
         .build_int_to_ptr(combined, pointer.get_type(), "to_ptr")
 }
 
+pub fn tag_pointer_tag_id_bits_and_mask(ptr_bytes: u32) -> (u64, u64) {
+    match ptr_bytes {
+        8 => (3, 0b0000_0111),
+        4 => (2, 0b0000_0011),
+        _ => unreachable!(),
+    }
+}
+
 pub fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let mask: u64 = match env.ptr_bytes {
-        8 => 0b0000_0111,
-        4 => 0b0000_0011,
-        _ => unreachable!(),
-    };
-
+    let (_, mask) = tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
     let ptr_int = env.ptr_int();
 
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
@@ -1790,11 +1805,7 @@ pub fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let ptr_int = env.ptr_int();
 
-    let tag_id_bits_mask = match env.ptr_bytes {
-        8 => 3,
-        4 => 2,
-        _ => unreachable!(),
-    };
+    let (tag_id_bits_mask, _) = tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
 
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
 
@@ -3457,9 +3468,11 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
     let call_result = {
+        let last_block = builder.get_insert_block().unwrap();
+
         let roc_wrapper_function = make_exception_catcher(env, roc_function, return_layout);
 
-        builder.position_at_end(entry);
+        builder.position_at_end(last_block);
 
         call_roc_function(
             env,

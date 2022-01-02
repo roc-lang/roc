@@ -203,22 +203,6 @@ pub fn block_of_memory_slices<'ctx>(
     block_of_memory_help(context, union_size)
 }
 
-pub fn union_data_is_struct<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-    layouts: &[Layout<'_>],
-) -> StructType<'ctx> {
-    let data_type = basic_type_from_record(env, layouts);
-    union_data_is_struct_type(env.context, data_type.into_struct_type())
-}
-
-pub fn union_data_is_struct_type<'ctx>(
-    context: &'ctx Context,
-    struct_type: StructType<'ctx>,
-) -> StructType<'ctx> {
-    let tag_id_type = context.i64_type();
-    context.struct_type(&[struct_type.into(), tag_id_type.into()], false)
-}
-
 pub fn block_of_memory<'ctx>(
     context: &'ctx Context,
     layout: &Layout<'_>,

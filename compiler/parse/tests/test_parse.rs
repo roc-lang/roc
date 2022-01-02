@@ -130,6 +130,7 @@ mod test_parse {
         pass/comment_before_op.expr,
         pass/comment_inside_empty_list.expr,
         pass/comment_with_non_ascii.expr,
+        pass/destructure_tag_assignment.expr,
         pass/empty_app_header.header,
         pass/empty_interface_header.header,
         pass/empty_list.expr,

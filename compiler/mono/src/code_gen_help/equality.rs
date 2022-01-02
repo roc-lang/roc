@@ -151,12 +151,14 @@ fn eq_struct<'a>(
         };
         let field2_stmt = |next| Stmt::Let(field2_sym, field2_expr, *layout, next);
 
-        let eq_call_expr = root.call_specialized_op(
-            ident_ids,
-            ctx,
-            *layout,
-            root.arena.alloc([field1_sym, field2_sym]),
-        );
+        let eq_call_expr = root
+            .call_specialized_op(
+                ident_ids,
+                ctx,
+                *layout,
+                root.arena.alloc([field1_sym, field2_sym]),
+            )
+            .unwrap();
 
         let eq_call_name = format!("eq_call_{}", i);
         let eq_call_sym = root.create_symbol(ident_ids, &eq_call_name);
@@ -478,12 +480,14 @@ fn eq_tag_fields<'a>(
             structure: operands[1],
         };
 
-        let eq_call_expr = root.call_specialized_op(
-            ident_ids,
-            ctx,
-            *layout,
-            root.arena.alloc([field1_sym, field2_sym]),
-        );
+        let eq_call_expr = root
+            .call_specialized_op(
+                ident_ids,
+                ctx,
+                *layout,
+                root.arena.alloc([field1_sym, field2_sym]),
+            )
+            .unwrap();
 
         let eq_call_name = format!("eq_call_{}", i);
         let eq_call_sym = root.create_symbol(ident_ids, &eq_call_name);
@@ -657,7 +661,10 @@ fn eq_list<'a>(
 
     // Compare the two current elements
     let eq_elems = root.create_symbol(ident_ids, "eq_elems");
-    let eq_elems_expr = root.call_specialized_op(ident_ids, ctx, *elem_layout, &[elem1, elem2]);
+    let eq_elems_args = root.arena.alloc([elem1, elem2]);
+    let eq_elems_expr = root
+        .call_specialized_op(ident_ids, ctx, *elem_layout, eq_elems_args)
+        .unwrap();
 
     let eq_elems_stmt = |next| Stmt::Let(eq_elems, eq_elems_expr, LAYOUT_BOOL, next);
 

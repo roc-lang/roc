@@ -1,0 +1,38 @@
+Defs(
+    [
+        |L 0-0, C 0-36| Body(
+            |L 0-0, C 0-5| Apply(
+                |L 0-0, C 0-5| GlobalTag(
+                    "Email",
+                ),
+                [
+                    |L 0-0, C 6-9| Identifier(
+                        "str",
+                    ),
+                ],
+            ),
+            |L 0-0, C 12-36| Apply(
+                |L 0-0, C 12-17| GlobalTag(
+                    "Email",
+                ),
+                [
+                    |L 0-0, C 18-36| Str(
+                        PlainLine(
+                            "blah@example.com",
+                        ),
+                    ),
+                ],
+                Space,
+            ),
+        ),
+    ],
+    |L 1-1, C 0-3| SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "str",
+        },
+        [
+            Newline,
+        ],
+    ),
+)

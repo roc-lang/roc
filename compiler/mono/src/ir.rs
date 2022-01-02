@@ -1170,7 +1170,7 @@ impl ModifyRc {
                 .append(";"),
             Inc(symbol, n) => alloc
                 .text("inc ")
-                .append(alloc.text(format!("{}", n)))
+                .append(alloc.text(format!("{} ", n)))
                 .append(symbol_to_doc(alloc, symbol))
                 .append(";"),
             Dec(symbol) => alloc
@@ -6307,14 +6307,21 @@ fn handle_variable_aliasing<'a>(
     right: Symbol,
     mut result: Stmt<'a>,
 ) -> Stmt<'a> {
-    if env.is_imported_symbol(right) {
+    if procs.is_imported_module_thunk(right) {
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
         add_needed_external(procs, env, variable, right);
 
-        // then we must construct its closure; since imported symbols have no closure, we use the
-        // empty struct
+        let res_layout = layout_cache.from_var(env.arena, variable, env.subs);
+        let layout = return_on_layout_error!(env, res_layout);
 
+        force_thunk(env, right, layout, left, env.arena.alloc(result))
+    } else if env.is_imported_symbol(right) {
+        // if this is an imported symbol, then we must make sure it is
+        // specialized, and wrap the original in a function pointer.
+        add_needed_external(procs, env, variable, right);
+
+        // then we must construct its closure; since imported symbols have no closure, we use the empty struct
         let_empty_struct(left, env.arena.alloc(result))
     } else {
         substitute_in_exprs(env.arena, &mut result, left, right);
