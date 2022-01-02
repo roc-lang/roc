@@ -32,6 +32,12 @@ enum HelperOp {
     Eq,
 }
 
+impl HelperOp {
+    fn is_decref(&self) -> bool {
+        matches!(self, Self::DecRef(_))
+    } 
+}
+
 #[derive(Debug)]
 struct Specialization<'a> {
     op: HelperOp,

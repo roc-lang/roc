@@ -150,3 +150,50 @@ fn struct_dealloc() {
         &[0] // s
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn union_nonrec_inc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                TwoOrNone a: [ Two a a, None ]
+
+                s = Str.concat "A long enough string " "to be heap-allocated"
+
+                two : TwoOrNone Str
+                two = Two s s
+
+                [two, two]
+            "#
+        ),
+        RocList<([RocStr; 2], i64)>,
+        &[
+            4, // s
+            1  // result list
+        ]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn union_nonrec_dec() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                TwoOrNone a: [ Two a a, None ]
+
+                s = Str.concat "A long enough string " "to be heap-allocated"
+
+                two : TwoOrNone Str
+                two = Two s s
+
+                when two is
+                    Two x _ -> x
+                    None -> ""
+            "#
+        ),
+        RocStr,
+        &[1] // s
+    );
+}
