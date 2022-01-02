@@ -303,27 +303,37 @@ where
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
+    let expected_len = num_refcounts as i32;
     let init_refcount_test = instance.exports.get_function("init_refcount_test").unwrap();
-    let init_result = init_refcount_test.call(&[wasmer::Value::I32(num_refcounts as i32)]);
-    let refcount_array_addr = match init_result {
+    let init_result = init_refcount_test.call(&[wasmer::Value::I32(expected_len)]);
+    let refcount_vector_addr = match init_result {
         Err(e) => return Err(format!("{:?}", e)),
         Ok(result) => match result[0] {
             wasmer::Value::I32(a) => a,
             _ => panic!(),
         },
     };
-    // An array of refcount pointers
-    let refcount_ptr_array: WasmPtr<WasmPtr<i32>, wasmer::Array> =
-        WasmPtr::new(refcount_array_addr as u32);
-    let refcount_ptrs: &[Cell<WasmPtr<i32>>] = refcount_ptr_array
-        .deref(memory, 0, num_refcounts as u32)
-        .unwrap();
 
+    // Run the test
     let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
     match test_wrapper.call(&[]) {
         Err(e) => return Err(format!("{:?}", e)),
         Ok(_) => {}
     }
+
+    // Check we got the right number of refcounts
+    let refcount_vector_len: WasmPtr<i32> = WasmPtr::new(refcount_vector_addr as u32);
+    let actual_len = refcount_vector_len.deref(memory).unwrap().get();
+    if actual_len != expected_len {
+        panic!("Expected {} refcounts but got {}", expected_len, actual_len);
+    }
+
+    // Read the actual refcount values
+    let refcount_ptr_array: WasmPtr<WasmPtr<i32>, wasmer::Array> =
+        WasmPtr::new(4 + refcount_vector_addr as u32);
+    let refcount_ptrs: &[Cell<WasmPtr<i32>>] = refcount_ptr_array
+        .deref(memory, 0, num_refcounts as u32)
+        .unwrap();
 
     let mut refcounts = Vec::with_capacity(num_refcounts);
     for i in 0..num_refcounts {
