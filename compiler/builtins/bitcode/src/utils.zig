@@ -223,7 +223,8 @@ const Failure = struct{
     start_col: u16,
     end_col: u16,
 };
-threadlocal var failures = [_]Failure{  };
+threadlocal var failures: [*]Failure = undefined;
+threadlocal var failure_length: usize = 0;
 threadlocal var failure_capacity: usize = 0;
 
 pub fn expectFailed(
@@ -239,13 +240,15 @@ pub fn expectFailed(
         .end_col = end_col
     };
 
-    if (failures.len >= failure_capacity) {
+    if (failure_length >= failure_capacity) {
         failure_capacity += 4096;
-        failures.ptr = roc_alloc(failure_capacity, @alignOf(Failure));
+        const raw_pointer = roc_alloc(failure_capacity, @alignOf(Failure));
+        const aligned_pointer = @alignCast(@alignOf(Failure), raw_pointer);
+        failures = @ptrCast([*]Failure, aligned_pointer);
     }
 
-    failures[failures.len] = new_failure;
-    failures.len += 1;
+    failures[failure_length] = new_failure;
+    failure_length += 1;
 }
 
 pub fn getExpectFailures() [_]Failure {
@@ -318,9 +321,9 @@ test "increfC, static data" {
 }
 
 test "expectFailure does something"{
-    try std.testing.expectEqual(failures.len, 0);
+    try std.testing.expectEqual(failure_length, 0);
     expectFailed(1, 2, 3, 4);
-    try std.testing.expectEqual(failures.len, 1);
+    try std.testing.expectEqual(failure_length, 1);
     const what_it_should_look_like = Failure{
         .start_line = 1,
         .end_line = 2,
