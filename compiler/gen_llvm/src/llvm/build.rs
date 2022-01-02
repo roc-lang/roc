@@ -6038,6 +6038,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                 match env.ptr_bytes {
                     8 => {
+                        let test = env.module.get_function("get_expect_failed").unwrap();
                         let fn_ptr_type = context
                             .void_type()
                             .fn_type(&[], false)
