@@ -367,10 +367,7 @@ test "increfC, static data" {
 }
 
 test "expectFailure does something" {
-    //TODO: Fix whatever is causing this to error out
-    // defer deinitFailures();
-    // For now we're doing this instead:
-    defer std.testing.allocator.destroy(@ptrCast(*[4096]u8, failures));
+    defer deinitFailures();
 
     try std.testing.expectEqual(getExpectFailures().len, 0);
     expectFailed(1, 2, 3, 4);
