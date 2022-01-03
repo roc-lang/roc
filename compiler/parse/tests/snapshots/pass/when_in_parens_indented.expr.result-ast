@@ -1,14 +1,14 @@
 ParensAround(
     SpaceAfter(
         When(
-            |L 0-0, C 6-7| Var {
+            @6-7 Var {
                 module_name: "",
                 ident: "x",
             },
             [
                 WhenBranch {
                     patterns: [
-                        |L 1-1, C 4-6| SpaceBefore(
+                        @15-17 SpaceBefore(
                             GlobalTag(
                                 "Ok",
                             ),
@@ -17,7 +17,7 @@ ParensAround(
                             ],
                         ),
                     ],
-                    value: |L 1-1, C 10-11| Num(
+                    value: @21-22 Num(
                         "3",
                     ),
                     guard: None,

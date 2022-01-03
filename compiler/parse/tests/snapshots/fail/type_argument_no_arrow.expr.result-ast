@@ -1,1 +1,1 @@
-Expr(Type(TIndentEnd(0:12), 0:4))
+Expr(Type(TIndentEnd(@12), @4))

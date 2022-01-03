@@ -20,7 +20,7 @@ use roc_parse::{
     parser::{Parser, SyntaxError},
     state::State,
 };
-use roc_region::all::Loc;
+use roc_region::all::{Loc, Region};
 use roc_reporting::{internal_error, user_error};
 
 pub fn format(files: std::vec::Vec<PathBuf>) {
@@ -110,8 +110,8 @@ struct Ast<'a> {
 }
 
 fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
-    let (module, state) =
-        module::parse_header(arena, State::new(src.as_bytes())).map_err(SyntaxError::Header)?;
+    let (module, state) = module::parse_header(arena, State::new(src.as_bytes()))
+        .map_err(|e| SyntaxError::Header(e.problem))?;
 
     let (_, defs, _) = module_defs().parse(arena, state).map_err(|(_, e, _)| e)?;
 
@@ -319,7 +319,7 @@ impl<'a, T: RemoveSpaces<'a>> RemoveSpaces<'a> for Option<T> {
 impl<'a, T: RemoveSpaces<'a> + std::fmt::Debug> RemoveSpaces<'a> for Loc<T> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         let res = self.value.remove_spaces(arena);
-        Loc::new(0, 0, 0, 0, res)
+        Loc::at(Region::zero(), res)
     }
 }
 

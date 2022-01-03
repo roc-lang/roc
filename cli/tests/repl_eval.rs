@@ -1,20 +1,18 @@
 #[macro_use]
-extern crate pretty_assertions;
-
-#[macro_use]
 extern crate indoc;
 
 #[cfg(test)]
 mod repl_eval {
     use cli_utils::helpers;
+    use roc_test_utils::assert_multiline_str_eq;
 
     const ERROR_MESSAGE_START: char = '─';
 
     fn expect_success(input: &str, expected: &str) {
         let out = helpers::repl_eval(input);
 
-        assert_eq!(&out.stderr, "");
-        assert_eq!(&out.stdout, expected);
+        assert_multiline_str_eq!("", out.stderr.as_str());
+        assert_multiline_str_eq!(expected, out.stdout.as_str());
         assert!(out.status.success());
     }
 
@@ -25,12 +23,12 @@ mod repl_eval {
         // so skip till the header of the first error
         match out.stdout.find(ERROR_MESSAGE_START) {
             Some(index) => {
-                assert_eq!(&out.stderr, "");
-                assert_eq!(&out.stdout[index..], expected);
+                assert_multiline_str_eq!("", out.stderr.as_str());
+                assert_multiline_str_eq!(expected, &out.stdout[index..]);
                 assert!(out.status.success());
             }
             None => {
-                assert_eq!(&out.stderr, "");
+                assert_multiline_str_eq!("", out.stderr.as_str());
                 assert!(out.status.success());
                 panic!(
                     "I expected a failure, but there is no error message in stdout:\n\n{}",
