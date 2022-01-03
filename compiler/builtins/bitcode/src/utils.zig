@@ -217,7 +217,7 @@ pub fn allocateWithRefcount(
     }
 }
 
-const Failure = struct{
+const Failure = struct {
     start_line: u32,
     end_line: u32,
     start_col: u16,
@@ -233,12 +233,7 @@ pub fn expectFailed(
     start_col: u16,
     end_col: u16,
 ) void {
-    const new_failure = Failure{
-        .start_line = start_line,
-        .end_line = end_line,
-        .start_col = start_col,
-        .end_col = end_col
-    };
+    const new_failure = Failure{ .start_line = start_line, .end_line = end_line, .start_col = start_col, .end_col = end_col };
 
     if (failure_length >= failure_capacity) {
         failure_capacity += 4096;
@@ -251,7 +246,7 @@ pub fn expectFailed(
     failure_length += 1;
 }
 
-pub fn expectFailedC (
+pub fn expectFailedC(
     start_line: u32,
     end_line: u32,
     start_col: u16,
@@ -259,7 +254,6 @@ pub fn expectFailedC (
 ) callconv(.C) void {
     return @call(.{ .modifier = always_inline }, expectFailed, .{ start_line, end_line, start_col, end_col });
 }
-
 
 pub fn getExpectFailures() []Failure {
     return failures[0..failure_length];
@@ -345,20 +339,15 @@ test "increfC, static data" {
     try std.testing.expectEqual(mock_rc, REFCOUNT_MAX_ISIZE);
 }
 
-test "expectFailure does something"{
+test "expectFailure does something" {
     //TODO: Fix whatever is causing this to error out
     // defer deinitFailures();
     // For now we're doing this instead:
-    defer  std.testing.allocator.destroy(@ptrCast(*[4096]u8, failures));
+    defer std.testing.allocator.destroy(@ptrCast(*[4096]u8, failures));
 
     try std.testing.expectEqual(getExpectFailures().len, 0);
     expectFailed(1, 2, 3, 4);
     try std.testing.expectEqual(getExpectFailures().len, 1);
-    const what_it_should_look_like = Failure{
-        .start_line = 1,
-        .end_line = 2,
-        .start_col = 3,
-        .end_col = 4
-    };
+    const what_it_should_look_like = Failure{ .start_line = 1, .end_line = 2, .start_col = 3, .end_col = 4 };
     try std.testing.expectEqual(getExpectFailures()[0], what_it_should_look_like);
 }
