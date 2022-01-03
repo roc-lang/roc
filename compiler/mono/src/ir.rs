@@ -2909,8 +2909,13 @@ fn specialize_naked_symbol<'a>(
                     std::vec::Vec::new(),
                     layout_cache,
                     assigned,
-                    env.arena.alloc(Stmt::Ret(assigned)),
+                    env.arena.alloc(match hole {
+                        Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([assigned])),
+                        Stmt::Ret(_) => Stmt::Ret(assigned),
+                        _ => unreachable!(),
+                    }),
                 );
+
                 return result;
             }
         }
