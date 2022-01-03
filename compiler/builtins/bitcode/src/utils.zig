@@ -226,9 +226,13 @@ const Failure = struct {
     start_col: u16,
     end_col: u16,
 };
-threadlocal var failures: [*]Failure = undefined;
-threadlocal var failure_length: usize = 0;
-threadlocal var failure_capacity: usize = 0;
+
+// BEGIN FAILURES GLOBALS ///////////////////
+var failures_mutex = std.Thread.Mutex{};
+var failures: [*]Failure = undefined;
+var failure_length: usize = 0;
+var failure_capacity: usize = 0;
+// END FAILURES GLOBALS /////////////////////
 
 pub fn expectFailed(
     start_line: u32,
@@ -237,6 +241,21 @@ pub fn expectFailed(
     end_col: u16,
 ) void {
     const new_failure = Failure{ .start_line = start_line, .end_line = end_line, .start_col = start_col, .end_col = end_col };
+
+    // Lock the failures mutex before reading from any of the failures globals,
+    // and then release the lock once we're done modifying things.
+
+    // TODO FOR ZIG 0.9: this API changed in https://github.com/ziglang/zig/commit/008b0ec5e58fc7e31f3b989868a7d1ea4df3f41d
+    // to this: https://github.com/ziglang/zig/blob/c710d5eefe3f83226f1651947239730e77af43cb/lib/std/Thread/Mutex.zig
+    //
+    // ...so just use these two lines of code instead of the non-commented-out ones to make this work in Zig 0.9:
+    //
+    // failures_mutex.lock();
+    // defer failures_mutex.release();
+    //
+    // 👆 👆 👆 IF UPGRADING TO ZIG 0.9, LOOK HERE! 👆 👆 👆
+    const held = failures_mutex.acquire();
+    defer held.release();
 
     // If we don't have enough capacity to add a failure, allocate a new failures pointer.
     if (failure_length >= failure_capacity) {
