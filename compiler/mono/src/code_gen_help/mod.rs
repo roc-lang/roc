@@ -35,7 +35,7 @@ enum HelperOp {
 impl HelperOp {
     fn is_decref(&self) -> bool {
         matches!(self, Self::DecRef(_))
-    } 
+    }
 }
 
 #[derive(Debug)]

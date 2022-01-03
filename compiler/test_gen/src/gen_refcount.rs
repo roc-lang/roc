@@ -206,21 +206,54 @@ fn union_recursive_inc() {
             r#"
                 Expr : [ Sym Str, Add Expr Expr ]
 
-                s = Str.concat "heap_allocated_" "symbol_name"
+                s = Str.concat "heap_allocated" "_symbol_name"
+
+                x : Expr
+                x = Sym s
 
                 e : Expr
-                e = Add (Sym s) (Sym s)
+                e = Add x x
 
                 [e, e]
             "#
         ),
-        RocStr,
+        // test_wrapper receives a List, doesn't matter kind of elements it points to
+        RocList<usize>,
         &[
             4, // s
-            1, // Sym
-            1, // Sym
-            2, // Add
+            4, // sym
+            2, // e
             1  // list
+        ]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn union_recursive_dec() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                Expr : [ Sym Str, Add Expr Expr ]
+
+                s = Str.concat "heap_allocated" "_symbol_name"
+
+                x : Expr
+                x = Sym s
+
+                e : Expr
+                e = Add x x
+
+                when e is
+                    Add y _ -> y
+                    Sym _ -> e
+            "#
+        ),
+        &RocStr,
+        &[
+            1, // s
+            1, // sym
+            0  // e
         ]
     );
 }
