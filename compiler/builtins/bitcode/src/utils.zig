@@ -18,6 +18,9 @@ extern fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void;
 // Signals to the host that the program has panicked
 extern fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void;
 
+// should work just like libc memcpy (we can't assume libc is present)
+extern fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
+
 comptime {
     const builtin = @import("builtin");
     // During tetsts, use the testing allocators to satisfy these functions.
@@ -235,11 +238,35 @@ pub fn expectFailed(
 ) void {
     const new_failure = Failure{ .start_line = start_line, .end_line = end_line, .start_col = start_col, .end_col = end_col };
 
+    // If we don't have enough capacity to add a failure, allocate a new failures pointer.
     if (failure_length >= failure_capacity) {
-        failure_capacity += 4096;
-        const raw_pointer = roc_alloc(failure_capacity, @alignOf(Failure));
-        const aligned_pointer = @alignCast(@alignOf(Failure), raw_pointer);
-        failures = @ptrCast([*]Failure, aligned_pointer);
+        if (failure_capacity > 0) {
+            // We already had previous failures allocated, so try to realloc in order
+            // to grow the size in-place without having to memcpy bytes over.
+            const old_pointer = failures;
+            const old_bytes = failure_capacity * @sizeOf(Failure);
+
+            failure_capacity *= 2;
+
+            const new_bytes = failure_capacity * @sizeOf(Failure);
+            const raw_pointer = roc_realloc(failures, new_bytes, old_bytes, @alignOf(Failure));
+
+            failures = @ptrCast([*]Failure, @alignCast(@alignOf(Failure), raw_pointer));
+
+            // If realloc wasn't able to expand in-place (that is, it returned a different pointer),
+            // then copy the data into the new pointer and dealloc the old one.
+            if (failures != old_pointer) {
+                roc_memcpy(@ptrCast([*]u8, failures), @ptrCast([*]u8, old_pointer), old_bytes);
+                roc_dealloc(old_pointer, @alignOf(Failure));
+            }
+        } else {
+            // We've never had any failures before, so allocate the failures for the first time.
+            failure_capacity = 10;
+
+            const raw_pointer = roc_alloc(failure_capacity * @sizeOf(Failure), @alignOf(Failure));
+
+            failures = @ptrCast([*]Failure, @alignCast(@alignOf(Failure), raw_pointer));
+        }
     }
 
     failures[failure_length] = new_failure;
