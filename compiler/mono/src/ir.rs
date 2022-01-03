@@ -4017,7 +4017,8 @@ pub fn with_hole<'a>(
             // if it's in there, it's a call by name, otherwise it's a call by pointer
             let is_known = |key| {
                 // a proc in this module, or an imported symbol
-                procs.partial_procs.contains_key(key) || env.is_imported_symbol(key)
+                procs.partial_procs.contains_key(key)
+                    || (env.is_imported_symbol(key) && !procs.is_imported_module_thunk(key))
             };
 
             match loc_expr.value {
@@ -4072,8 +4073,44 @@ pub fn with_hole<'a>(
                         LocalFunction(_) => {
                             unreachable!("if this was known to be a function, we would not be here")
                         }
-                        Imported(_) => {
-                            unreachable!("an imported value is never an anonymous function")
+                        Imported(thunk_name) => {
+                            debug_assert!(procs.is_imported_module_thunk(thunk_name));
+
+                            add_needed_external(procs, env, fn_var, thunk_name);
+
+                            let function_symbol = env.unique_symbol();
+
+                            match full_layout {
+                                RawFunctionLayout::Function(
+                                    arg_layouts,
+                                    lambda_set,
+                                    ret_layout,
+                                ) => {
+                                    let closure_data_symbol = function_symbol;
+
+                                    result = match_on_lambda_set(
+                                        env,
+                                        lambda_set,
+                                        closure_data_symbol,
+                                        arg_symbols,
+                                        arg_layouts,
+                                        ret_layout,
+                                        assigned,
+                                        hole,
+                                    );
+
+                                    result = force_thunk(
+                                        env,
+                                        thunk_name,
+                                        Layout::LambdaSet(lambda_set),
+                                        function_symbol,
+                                        env.arena.alloc(result),
+                                    );
+                                }
+                                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                                    unreachable!("calling a non-closure layout")
+                                }
+                            }
                         }
                         Value(function_symbol) => match full_layout {
                             RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
