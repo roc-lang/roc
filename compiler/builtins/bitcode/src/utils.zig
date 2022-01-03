@@ -43,7 +43,7 @@ fn testing_roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, _: u32)
 fn testing_roc_dealloc(c_ptr: *c_void, _: u32) callconv(.C) void {
     const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
 
-    std.testing.allocator.free(ptr);
+    std.testing.allocator.destroy(ptr);
 }
 
 fn testing_roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
