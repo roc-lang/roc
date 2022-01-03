@@ -5322,7 +5322,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);
 
             let number_layout = match layout {
-                Layout::Union(UnionLayout::NonRecursive(tags)) => tags[1][0],
                 Layout::Struct(fields) => fields[0], // TODO: why is it sometimes a struct?
                 _ => unreachable!(),
             };

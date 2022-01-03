@@ -1,7 +1,7 @@
 use roc_builtins::bitcode::{self, FloatWidth};
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_mono::layout::{Builtin, Layout};
 use roc_reporting::internal_error;
 
 use crate::layout::{StackMemoryFormat::*, WasmLayout};
@@ -50,8 +50,7 @@ pub fn dispatch_low_level<'a>(
         StrCountGraphemes => return BuiltinCall(bitcode::STR_COUNT_GRAPEHEME_CLUSTERS),
         StrToNum => {
             let number_layout = match mono_layout {
-                Layout::Union(UnionLayout::NonRecursive(tags)) => tags[1][0],
-                Layout::Struct(fields) => fields[0], // TODO: why is it sometimes a struct?
+                Layout::Struct(fields) => fields[0],
                 _ => internal_error!("Unexpected mono layout {:?} for StrToNum", mono_layout),
             };
             // match on the return layout to figure out which zig builtin we need
