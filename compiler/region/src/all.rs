@@ -140,7 +140,7 @@ impl Debug for Position {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 pub struct LineColumn {
     pub line: u32,
-    pub column: u16,
+    pub column: u32,
 }
 
 impl LineColumn {
@@ -149,7 +149,7 @@ impl LineColumn {
     }
 
     #[must_use]
-    pub const fn bump_column(self, count: u16) -> Self {
+    pub const fn bump_column(self, count: u32) -> Self {
         Self {
             line: self.line,
             column: self.column + count,
@@ -353,7 +353,7 @@ impl LineInfo {
         let column = offset - self.line_offsets[line];
         LineColumn {
             line: line as u32,
-            column: column as u16,
+            column: column as u32,
         }
     }
 
@@ -419,7 +419,7 @@ fn test_line_info() {
             info.convert_offset(input.len() as u32),
             LineColumn {
                 line: lines.len().saturating_sub(1) as u32,
-                column: lines.last().map(|l| l.len()).unwrap_or(0) as u16,
+                column: lines.last().map(|l| l.len()).unwrap_or(0) as u32,
             }
         )
     }

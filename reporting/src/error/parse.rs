@@ -3628,7 +3628,7 @@ fn next_line_starts_with_char(
             match spaces_dropped.chars().next() {
                 Some(c) if c == character => Some(LineColumn {
                     line: pos.line + 1,
-                    column: (line.len() - spaces_dropped.len()) as u16,
+                    column: (line.len() - spaces_dropped.len()) as u32,
                 }),
                 _ => None,
             }
@@ -3639,6 +3639,6 @@ fn next_line_starts_with_char(
 fn to_keyword_region(pos: LineColumn, keyword: &str) -> LineColumnRegion {
     LineColumnRegion {
         start: pos,
-        end: pos.bump_column(keyword.len() as u16),
+        end: pos.bump_column(keyword.len() as u32),
     }
 }

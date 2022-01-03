@@ -49,7 +49,6 @@ pub enum SyntaxError<'a> {
     Unexpected(Region),
     OutdentedTooFar,
     ConditionFailed,
-    LineTooLong(Position),
     TooManyLines,
     Eof(Region),
     InvalidPattern,
@@ -208,18 +207,16 @@ pub enum EImports {
 pub enum BadInputError {
     HasTab,
     ///
-    LineTooLong,
     TooManyLines,
     ///
     ///
     BadUtf8,
 }
 
-pub fn bad_input_to_syntax_error<'a>(bad_input: BadInputError, pos: Position) -> SyntaxError<'a> {
+pub fn bad_input_to_syntax_error<'a>(bad_input: BadInputError) -> SyntaxError<'a> {
     use crate::parser::BadInputError::*;
     match bad_input {
         HasTab => SyntaxError::NotYetImplemented("call error on tabs".to_string()),
-        LineTooLong => SyntaxError::LineTooLong(pos),
         TooManyLines => SyntaxError::TooManyLines,
         BadUtf8 => SyntaxError::BadUtf8,
     }
@@ -323,7 +320,6 @@ pub enum EExpr<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ENumber {
     End,
-    LineTooLong,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
