@@ -48,7 +48,6 @@ impl Progress {
 pub enum SyntaxError<'a> {
     Unexpected(Region),
     OutdentedTooFar,
-    ConditionFailed,
     TooManyLines,
     Eof(Region),
     InvalidPattern,
@@ -59,7 +58,7 @@ pub enum SyntaxError<'a> {
     Todo,
     Type(EType<'a>),
     Pattern(EPattern<'a>),
-    Expr(EExpr<'a>),
+    Expr(EExpr<'a>, Position),
     Header(EHeader<'a>),
     Space(BadInputError),
     NotEndOfFile(Position),
@@ -237,12 +236,10 @@ impl<'a, T> SourceError<'a, T> {
         }
     }
 
-    pub fn into_parse_problem(self, filename: std::path::PathBuf) -> ParseProblem<'a, T> {
-        ParseProblem {
-            pos: Position::default(),
-            problem: self.problem,
+    pub fn into_file_error(self, filename: std::path::PathBuf) -> FileError<'a, T> {
+        FileError {
+            problem: self,
             filename,
-            bytes: self.bytes,
         }
     }
 }
@@ -255,17 +252,12 @@ impl<'a> SyntaxError<'a> {
         }
     }
 
-    pub fn into_parse_problem(
+    pub fn into_file_error(
         self,
         filename: std::path::PathBuf,
         state: &State<'a>,
-    ) -> ParseProblem<'a, SyntaxError<'a>> {
-        ParseProblem {
-            pos: Position::default(),
-            problem: self,
-            filename,
-            bytes: state.original_bytes(),
-        }
+    ) -> FileError<'a, SyntaxError<'a>> {
+        self.into_source_error(state).into_file_error(filename)
     }
 }
 
@@ -594,11 +586,9 @@ pub struct SourceError<'a, T> {
 }
 
 #[derive(Debug)]
-pub struct ParseProblem<'a, T> {
-    pub pos: Position,
-    pub problem: T,
+pub struct FileError<'a, T> {
+    pub problem: SourceError<'a, T>,
     pub filename: std::path::PathBuf,
-    pub bytes: &'a [u8],
 }
 
 pub trait Parser<'a, Output, Error> {
@@ -1292,6 +1282,22 @@ where
     move |a, s| match parser.parse(a, s) {
         Ok(t) => Ok(t),
         Err((p, error, s)) => Err((p, map_error(error, s.pos()), s)),
+    }
+}
+
+/// Like `specialize`, except the error function receives a Region representing the begin/end of the error
+pub fn specialize_region<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
+where
+    F: Fn(X, Region) -> Y,
+    P: Parser<'a, T, X>,
+    Y: 'a,
+{
+    move |a, s: State<'a>| {
+        let start = s.pos();
+        match parser.parse(a, s) {
+            Ok(t) => Ok(t),
+            Err((p, error, s)) => Err((p, map_error(error, Region::new(start, s.pos())), s)),
+        }
     }
 }
 

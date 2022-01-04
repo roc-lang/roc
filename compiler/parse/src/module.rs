@@ -7,8 +7,8 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, specialize, word1, word2, EEffects, EExposes, EHeader, EImports, EPackages,
-    EProvides, ERequires, ETypedIdent, Parser, SourceError, SyntaxError,
+    backtrackable, specialize, specialize_region, word1, word2, EEffects, EExposes, EHeader,
+    EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser, SourceError, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal;
@@ -31,7 +31,10 @@ pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, SyntaxError<'
     // force that we parse until the end of the input
     let min_indent = 0;
     skip_second!(
-        specialize(|e, _| SyntaxError::Expr(e), crate::expr::defs(min_indent),),
+        specialize_region(
+            |e, r| SyntaxError::Expr(e, r.start()),
+            crate::expr::defs(min_indent),
+        ),
         end_of_file()
     )
 }
