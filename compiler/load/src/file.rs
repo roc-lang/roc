@@ -27,7 +27,7 @@ use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::PackageName;
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::module::module_defs;
-use roc_parse::parser::{ParseProblem, Parser, SyntaxError};
+use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
@@ -843,7 +843,7 @@ enum Msg<'a> {
         exposed_to_host: MutMap<Symbol, Variable>,
     },
 
-    FailedToParse(ParseProblem<'a, SyntaxError<'a>>),
+    FailedToParse(FileError<'a, SyntaxError<'a>>),
     FailedToReadFile {
         filename: PathBuf,
         error: io::ErrorKind,
@@ -1035,7 +1035,7 @@ pub enum LoadingProblem<'a> {
         filename: PathBuf,
         error: io::ErrorKind,
     },
-    ParsingFailed(ParseProblem<'a, SyntaxError<'a>>),
+    ParsingFailed(FileError<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
 
     MsgChannelDied,
@@ -2412,7 +2412,7 @@ fn load_pkg_config<'a>(
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
-                        .into_parse_problem(filename),
+                        .into_file_error(filename),
                 )),
             }
         }
@@ -2656,7 +2656,7 @@ fn parse_header<'a>(
         )),
         Err(fail) => Err(LoadingProblem::ParsingFailed(
             fail.map_problem(SyntaxError::Header)
-                .into_parse_problem(filename),
+                .into_file_error(filename),
         )),
     }
 }
@@ -3709,7 +3709,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         Ok((_, success, _state)) => success,
         Err((_, fail, state)) => {
             return Err(LoadingProblem::ParsingFailed(
-                fail.into_parse_problem(header.module_path, &state),
+                fail.into_file_error(header.module_path, &state),
             ));
         }
     };
@@ -4309,14 +4309,14 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
 }
 
 fn to_parse_problem_report<'a>(
-    problem: ParseProblem<'a, SyntaxError<'a>>,
+    problem: FileError<'a, SyntaxError<'a>>,
     mut module_ids: ModuleIds,
     all_ident_ids: MutMap<ModuleId, IdentIds>,
 ) -> String {
     use roc_reporting::report::{parse_problem, RocDocAllocator, DEFAULT_PALETTE};
 
     // TODO this is not in fact safe
-    let src = unsafe { from_utf8_unchecked(problem.bytes) };
+    let src = unsafe { from_utf8_unchecked(problem.problem.bytes) };
     let src_lines = src.lines().collect::<Vec<_>>();
     // let mut src_lines: Vec<&str> = problem.prefix.lines().collect();
     // src_lines.extend(src.lines().skip(1));

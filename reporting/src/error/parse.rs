@@ -1,4 +1,4 @@
-use roc_parse::parser::{ParseProblem, SyntaxError};
+use roc_parse::parser::{FileError, SyntaxError};
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
 
@@ -10,15 +10,9 @@ pub fn parse_problem<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     _starting_line: u32,
-    parse_problem: ParseProblem<SyntaxError<'a>>,
+    parse_problem: FileError<SyntaxError<'a>>,
 ) -> Report<'a> {
-    to_syntax_report(
-        alloc,
-        lines,
-        filename,
-        &parse_problem.problem,
-        parse_problem.pos,
-    )
+    to_syntax_report(alloc, lines, filename, &parse_problem.problem.problem)
 }
 
 fn note_for_record_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
@@ -68,7 +62,6 @@ fn to_syntax_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::SyntaxError<'a>,
-    start: Position,
 ) -> Report<'a> {
     use SyntaxError::*;
 
@@ -79,22 +72,7 @@ fn to_syntax_report<'a>(
         severity: Severity::RuntimeError,
     };
 
-    let region = Region::from_pos(start);
-
     match parse_problem {
-        SyntaxError::ConditionFailed => {
-            let doc = alloc.stack(vec![
-                alloc.reflow("A condition failed:"),
-                alloc.region(lines.convert_region(region)),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "PARSE PROBLEM".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
         SyntaxError::ArgumentsBeforeEquals(region) => {
             let doc = alloc.stack(vec![
                 alloc.reflow("Unexpected tokens in front of the `=` symbol:"),
@@ -126,12 +104,11 @@ fn to_syntax_report<'a>(
             report(doc)
         }
         NotEndOfFile(pos) => {
-            let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
 
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I expected to reach the end of the file, but got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region(region),
                 alloc.concat(vec![alloc.reflow("no hints")]),
             ]);
 
@@ -167,11 +144,11 @@ fn to_syntax_report<'a>(
         }
         Type(typ) => to_type_report(alloc, lines, filename, typ, Position::default()),
         Pattern(pat) => to_pattern_report(alloc, lines, filename, pat, Position::default()),
-        Expr(expr) => to_expr_report(
+        Expr(expr, start) => to_expr_report(
             alloc,
             lines,
             filename,
-            Context::InDef(start),
+            Context::InDef(*start),
             expr,
             Position::default(),
         ),
