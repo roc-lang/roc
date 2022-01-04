@@ -1,6 +1,7 @@
 use roc_builtins::bitcode::{self, FloatWidth};
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::Symbol;
+use roc_mono::layout::{Builtin, Layout};
 use roc_reporting::internal_error;
 
 use crate::layout::{StackMemoryFormat::*, WasmLayout};
@@ -20,6 +21,7 @@ pub fn dispatch_low_level<'a>(
     lowlevel: LowLevel,
     args: &[Symbol],
     ret_layout: &WasmLayout,
+    mono_layout: &Layout<'a>,
 ) -> LowlevelBuildResult {
     use LowlevelBuildResult::*;
 
@@ -46,7 +48,21 @@ pub fn dispatch_low_level<'a>(
             return NotImplemented;
         }
         StrCountGraphemes => return BuiltinCall(bitcode::STR_COUNT_GRAPEHEME_CLUSTERS),
-        StrToNum => return NotImplemented, // choose builtin based on storage size
+        StrToNum => {
+            let number_layout = match mono_layout {
+                Layout::Struct(fields) => fields[0],
+                _ => internal_error!("Unexpected mono layout {:?} for StrToNum", mono_layout),
+            };
+            // match on the return layout to figure out which zig builtin we need
+            let intrinsic = match number_layout {
+                Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                Layout::Builtin(Builtin::Float(float_width)) => &bitcode::STR_TO_FLOAT[float_width],
+                Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                rest => internal_error!("Unexpected builtin {:?} for StrToNum", rest),
+            };
+
+            return BuiltinCall(intrinsic);
+        }
         StrFromInt => {
             // This does not get exposed in user space. We switched to NumToStr instead.
             // We can probably just leave this as NotImplemented. We may want remove this LowLevel.

@@ -204,6 +204,8 @@ macro_rules! int_intrinsic {
     ($name:literal) => {{
         let mut output = IntrinsicName::default();
 
+        // These are LLVM types which don't include
+        // u64 for example
         output.options[4] = concat!($name, ".i8");
         output.options[5] = concat!($name, ".i16");
         output.options[6] = concat!($name, ".i32");
