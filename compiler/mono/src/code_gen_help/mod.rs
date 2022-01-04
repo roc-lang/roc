@@ -180,7 +180,7 @@ impl<'a> CodeGenHelp<'a> {
     ) -> Option<Expr<'a>> {
         use HelperOp::*;
 
-        debug_assert!(self.debug_recursion_depth < 10);
+        // debug_assert!(self.debug_recursion_depth < 100);
         self.debug_recursion_depth += 1;
 
         let layout = if matches!(called_layout, Layout::RecursivePointer) {
