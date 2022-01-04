@@ -48,6 +48,8 @@ call = \func, argument ->
 
 main : Task {} *
 main =
+    {  } <- await (Stdout.line "hi")
+
     x = Var "x"
 
     identity = Lambda { name: "x", body: x }
