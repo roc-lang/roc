@@ -1,5 +1,3 @@
-use crate::parser::Progress;
-use bumpalo::Bump;
 use roc_region::all::{Position, Region};
 use std::fmt;
 
@@ -76,16 +74,6 @@ impl<'a> State<'a> {
     /// and thus wanting a Region while not having access to loc().
     pub fn len_region(&self, length: u32) -> Region {
         Region::new(self.pos(), self.pos().bump_column(length))
-    }
-
-    /// Return a failing ParseResult for the given FailReason
-    pub fn fail<T, X>(
-        self,
-        _arena: &'a Bump,
-        progress: Progress,
-        reason: X,
-    ) -> Result<(Progress, T, Self), (Progress, X, Self)> {
-        Err((progress, reason, self))
     }
 }
 
