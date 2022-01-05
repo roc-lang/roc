@@ -167,7 +167,7 @@ pub fn run_in_place(
         rank,
         &mut pools,
         problems,
-        &mut MutMap::default(),
+        &mut Default::default(),
         subs,
         constraint,
     );
@@ -182,7 +182,7 @@ fn solve(
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<TypeError>,
-    cached_aliases: &mut MutMap<Symbol, Variable>,
+    cached_aliases: &mut CachedAliases,
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
@@ -743,11 +743,17 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
     });
 }
 
+#[derive(Default)]
+struct CachedAliases {
+    stored_at: MutMap<Symbol, (Variable, std::vec::Vec<Variable>, std::vec::Vec<Variable>)>,
+    rigids: MutMap<Variable, Variable>,
+}
+
 fn type_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    cached_aliases: &mut MutMap<Symbol, Variable>,
+    cached_aliases: &mut CachedAliases,
     typ: &Type,
 ) -> Variable {
     let mut arena = take_scratchpad();
@@ -767,7 +773,7 @@ fn type_to_variable<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'a bumpalo::Bump,
-    cached_aliases: &mut MutMap<Symbol, Variable>,
+    cached_aliases: &mut CachedAliases,
     typ: &Type,
 ) -> Variable {
     use bumpalo::collections::Vec;
@@ -910,32 +916,71 @@ fn type_to_variable<'a>(
             lambda_set_variables,
             actual,
         } => {
-            let cached_variable = match cached_aliases.get(symbol) {
-                None => {
-                    println!("not cached");
-                    dbg!(&actual);
-                    let actual =
-                        type_to_variable(subs, Rank::NONE, pools, arena, cached_aliases, actual);
+            let (cached_variable, cached_type_arguments, cached_lambda_set_variables) =
+                match cached_aliases.stored_at.get(symbol) {
+                    None => {
+                        // substitute the variables from this instantation out; make a truly generic version
+                        let mut actual: Type = *actual.clone();
+                        let variables = actual.variables();
 
-                    for (name, _, variable) in type_arguments {
-                        subs.rigid_var(*variable, name.clone());
+                        let substitutions = variables
+                            .iter()
+                            .map(|v| (*v, Type::Variable(subs.fresh_unnamed_flex_var())))
+                            .collect();
+
+                        actual.substitute(&substitutions);
+
+                        // println!("not cached");
+                        let actual = type_to_variable(
+                            subs,
+                            Rank::NONE,
+                            pools,
+                            arena,
+                            cached_aliases,
+                            &actual,
+                        );
+
+                        let unpack = |t: &Type| match t {
+                            Type::Variable(v) => *v,
+                            _ => unreachable!(),
+                        };
+
+                        let type_arguments: std::vec::Vec<Variable> = type_arguments
+                            .iter()
+                            .map(|(_, _, v)| unpack(&substitutions[v]))
+                            .collect();
+
+                        let lambda_set_variables: std::vec::Vec<Variable> = lambda_set_variables
+                            .iter()
+                            .map(|v| unpack(&substitutions[v]))
+                            .collect();
+
+                        cached_aliases.stored_at.insert(
+                            *symbol,
+                            (actual, type_arguments.clone(), lambda_set_variables.clone()),
+                        );
+
+                        // (actual, type_arguments, lambda_set_variables)
+                        match cached_aliases.stored_at.get(symbol).unwrap() {
+                            (variable, type_arguments, lambda_set_variables) => {
+                                (*variable, type_arguments, lambda_set_variables)
+                            }
+                        }
                     }
-
-                    cached_aliases.insert(*symbol, actual);
-
-                    actual
-                }
-                Some(variable) => {
-                    println!("cached");
-                    *variable
-                }
-            };
+                    Some((variable, type_arguments, lambda_set_variables)) => {
+                        // println!("cached");
+                        (*variable, type_arguments, lambda_set_variables)
+                    }
+                };
 
             let mut alias_variables = Vec::new_in(arena);
-            alias_variables.extend(type_arguments.iter().map(|t| t.2));
-            alias_variables.extend(lambda_set_variables);
+            // alias_variables.extend(type_arguments.iter().map(|t| t.2));
+            // alias_variables.extend(lambda_set_variables);
+            alias_variables.extend(cached_type_arguments);
+            alias_variables.extend(cached_lambda_set_variables);
 
             for v in alias_variables.iter() {
+                // need to have rank none because otherwise they are not copied
                 subs.set_rank(*v, Rank::NONE);
             }
 
@@ -944,7 +989,8 @@ fn type_to_variable<'a>(
             let alias_variable =
                 instantiate_alias(subs, rank, pools, &mut alias_variables, cached_variable);
 
-            // dbg!(&subs, cached_variable, alias_variable);
+            let cached_lambda_set_variables: std::vec::Vec<_> =
+                cached_lambda_set_variables.iter().copied().collect();
 
             // unify type arguments with instantiated variables
             // debug_assert_eq!(type_arguments.len(), alias_variables.len());
@@ -953,36 +999,46 @@ fn type_to_variable<'a>(
 
                 match t {
                     AppliedAliasArgument::Concrete(t) => {
+                        println!("some concrete thing");
                         let type_as_var =
                             type_to_variable(subs, rank, pools, arena, cached_aliases, t);
                         roc_unify::unify::unify(subs, *v, type_as_var, Mode::Eq);
                     }
-                    AppliedAliasArgument::Rigid(name) => {
-                        subs.rigid_var(*v, name.clone());
-                        subs.set_rank(*v, rank);
+                    AppliedAliasArgument::Rigid(name, rigid_var) => {
+                        match cached_aliases.rigids.entry(*rigid_var) {
+                            Entry::Occupied(occupied) => {
+                                debug_assert_eq!(*rigid_var, *occupied.get());
+                                subs.force_child(*rigid_var, *v);
+                            }
+
+                            Entry::Vacant(vacant) => {
+                                subs.force_child(*rigid_var, *v);
+
+                                vacant.insert(*rigid_var);
+
+                                subs.set(*rigid_var, Content::RigidVar(name.clone()).into());
+                                subs.set_rank(*rigid_var, rank);
+                            }
+                        }
                     }
                 }
             }
 
             let it = alias_variables.iter().skip(type_arguments.len());
 
-            for (lambda_set_var, v) in lambda_set_variables.iter().zip(it) {
+            for (lambda_set_var, v) in cached_lambda_set_variables.iter().zip(it) {
                 let copy = deep_copy_var(subs, rank, pools, *lambda_set_var);
                 roc_unify::unify::unify(subs, *v, copy, Mode::Eq);
             }
 
             let type_variables = alias_variables[..type_arguments.len()].iter().copied();
+
             let lambda_set_variables = alias_variables[type_arguments.len()..].iter().copied();
             let arg_vars =
                 AliasVariables::insert_into_subs(subs, type_variables, lambda_set_variables);
 
             let content = Content::Alias(*symbol, arg_vars, alias_variable);
-            let v = register(subs, rank, pools, content);
-
-            // dbg!(subs);
-            // panic!();
-
-            v
+            register(subs, rank, pools, content)
         }
 
         Type::Alias {
@@ -1023,8 +1079,6 @@ fn type_to_variable<'a>(
             };
 
             // dbg!(&subs, alias_variable);
-
-            debug_assert_eq!(rank, subs.get_rank(alias_variable));
 
             let content = Content::Alias(*symbol, alias_variables, alias_variable);
 
@@ -1085,7 +1139,7 @@ fn alias_to_var<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'a bumpalo::Bump,
-    cached_aliases: &mut MutMap<Symbol, Variable>,
+    cached_aliases: &mut CachedAliases,
     type_arguments: &[(roc_module::ident::Lowercase, Type)],
     lambda_set_variables: &[roc_types::types::LambdaSet],
 ) -> AliasVariables {
@@ -1115,7 +1169,7 @@ fn roc_result_to_var<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'a bumpalo::Bump,
-    cached_aliases: &mut MutMap<Symbol, Variable>,
+    cached_aliases: &mut CachedAliases,
     result_type: &Type,
 ) -> Variable {
     match result_type {
@@ -1283,7 +1337,7 @@ fn insert_tags_fast_path<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'a bumpalo::Bump,
-    cached_aliases: &mut MutMap<Symbol, Variable>,
+    cached_aliases: &mut CachedAliases,
     tags: &[(TagName, Vec<Type>)],
 ) -> UnionTags {
     let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
@@ -1336,7 +1390,7 @@ fn insert_tags_slow_path<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'a bumpalo::Bump,
-    cached_aliases: &mut MutMap<Symbol, Variable>,
+    cached_aliases: &mut CachedAliases,
     tags: &[(TagName, Vec<Type>)],
     mut tag_vars: bumpalo::collections::Vec<(TagName, VariableSubsSlice)>,
 ) -> UnionTags {
@@ -1361,7 +1415,7 @@ fn type_to_union_tags<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'a bumpalo::Bump,
-    cached_aliases: &mut MutMap<Symbol, Variable>,
+    cached_aliases: &mut CachedAliases,
     tags: &[(TagName, Vec<Type>)],
     ext: &Type,
 ) -> (UnionTags, Variable) {
@@ -2199,7 +2253,7 @@ fn deep_copy_var_help_x(
         return copy;
     } else if desc.rank != Rank::NONE {
         // up in the air if this is valid for this function
-        return var;
+        // return var;
     }
 
     visited.push(var);
@@ -2375,10 +2429,13 @@ fn deep_copy_var_help_x(
         }
 
         RigidVar(name) => {
+            subs.set_copy(var, var);
+            dbg!(var, subs.get(var));
             // subs.set(copy, make_descriptor(RigidVar(name)));
-            subs.set(copy, make_descriptor(FlexVar(Some(name))));
-
-            copy
+            // subs.set(copy, make_descriptor(FlexVar(Some(name))));
+            // copy
+            // var
+            var
         }
 
         Alias(symbol, arguments, real_type_var) => {

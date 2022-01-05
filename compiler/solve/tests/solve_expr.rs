@@ -2340,7 +2340,6 @@ mod solve_expr {
             indoc!(
                 r#"
                     numIdentity : Num.Num a -> Num.Num a
-                    numIdentity = \x -> x
 
                     y = numIdentity 3.14
 
@@ -2348,6 +2347,73 @@ mod solve_expr {
                 "#
             ),
             "{ numIdentity : Num a -> Num a, x : Num a, y : F64 }",
+        );
+    }
+
+    #[test]
+    fn task_always() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Effect a : [ @Effect ({} -> a) ]
+
+                Task a err : Effect (Result a err)
+
+
+                # this failed because of the `*`, but worked with `err`
+                always : a -> Task a *
+                always = \x ->
+                    inner = \{} -> (Ok x)
+
+                    @Effect inner
+
+                mane : Task {} (Float *)
+                mane = always {}
+
+                mane
+                "#
+            ),
+            "Identity NodeColor",
+        );
+    }
+
+    #[test]
+    fn task_foobar() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Effect a : [ @Effect a ]
+
+                Task a err : Effect (Result a err)
+
+                always : a -> Task a {}
+                always = \x -> @Effect (Ok x)
+
+                mane : Task {} {} 
+                mane = always {}
+
+                mane
+                "#
+            ),
+            "Task {} {}",
+        );
+    }
+
+    #[test]
+    fn identity_identity() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    Identity id : [ Identity id ]
+
+                    identity : Identity a -> Identity a
+
+                    x : Identity Str
+
+                    identity x 
+                "#
+            ),
+            "Identity Str",
         );
     }
 
@@ -4740,24 +4806,24 @@ mod solve_expr {
                 main = greeting
                 "#
             ),
-            "",
+            "Str",
         )
     }
 
     #[test]
-    fn issue_2217() {
+    fn issue_2217_not_inlined() {
         infer_eq_without_problem(
             indoc!(
                 r#"
                 LinkedList elem : [Empty, Prepend (LinkedList elem) elem]
 
-                fromList : List elem -> LinkedList elem
+                fromList : List a -> LinkedList a
                 fromList = \elems -> List.walk elems Empty Prepend
 
                 fromList
                 "#
             ),
-            "List elem -> LinkedList elem",
+            "List a -> LinkedList a",
         )
     }
 

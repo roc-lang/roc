@@ -134,7 +134,7 @@ pub fn unify_pool(
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    if true {
+    if false {
         // if true, print the types that are unified.
         //
         // NOTE: names are generated here (when creating an error type) and that modifies names
@@ -269,7 +269,16 @@ fn unify_structure(
         }
         RigidVar(name) => {
             // Type mismatch! Rigid can only unify with flex.
-            mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name)
+            mismatch!(
+                "trying to unify {:?} with rigid var {:?}:{:?}",
+                &flat_type,
+                name,
+                (
+                    ctx.second,
+                    subs.get_root_key(ctx.second),
+                    subs.get(ctx.second)
+                )
+            )
         }
         RecursionVar { structure, .. } => match flat_type {
             FlatType::TagUnion(_, _) => {

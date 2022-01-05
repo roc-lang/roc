@@ -83,8 +83,6 @@ pub fn canonicalize_annotation(
     let mut references = MutSet::default();
     let mut aliases = SendMap::default();
 
-    dbg!(&annotation);
-
     let typ = can_annotation_help(
         env,
         annotation,
@@ -311,7 +309,19 @@ fn can_annotation_help(
 
                 match arg.value {
                     TypeAnnotation::BoundVariable(name) => {
-                        uninstantiated_args.push(AppliedAliasArgument::Rigid(name.into()));
+                        let name = Lowercase::from(name);
+
+                        let rigid_var = match introduced_variables.var_by_name(&name) {
+                            Some(var) => *var,
+                            None => {
+                                let var = var_store.fresh();
+
+                                introduced_variables.insert_named(name.clone(), var);
+                                var
+                            }
+                        };
+
+                        uninstantiated_args.push(AppliedAliasArgument::Rigid(name, rigid_var));
                     }
                     _ => {
                         let arg_ann = can_annotation_help(
@@ -354,8 +364,6 @@ fn can_annotation_help(
                     }
 
                     if true {
-                        dbg!(ident, &alias.type_variables);
-
                         let type_arguments = alias
                             .type_variables
                             .iter()

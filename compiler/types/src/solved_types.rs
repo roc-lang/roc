@@ -30,7 +30,7 @@ pub struct SolvedLambdaSet(pub SolvedType);
 #[derive(Clone, Debug)]
 pub enum AppliedAliasArgument {
     Concrete(SolvedType),
-    Rigid(Lowercase),
+    Rigid(Lowercase, VarId),
 }
 
 /// This is a fully solved type, with no Variables remaining in it.
@@ -204,8 +204,9 @@ impl SolvedType {
                         crate::types::AppliedAliasArgument::Concrete(t) => {
                             AppliedAliasArgument::Concrete(Self::from_type(solved_subs, t))
                         }
-                        crate::types::AppliedAliasArgument::Rigid(name) => {
-                            AppliedAliasArgument::Rigid(name.clone())
+                        crate::types::AppliedAliasArgument::Rigid(name, rigid_var) => {
+                            let rigid_var_id = VarId::from_var(*rigid_var, solved_subs.inner());
+                            AppliedAliasArgument::Rigid(name.clone(), rigid_var_id)
                         }
                     };
                     let var_id = VarId::from_var(*variable, solved_subs.inner());
@@ -654,8 +655,9 @@ pub fn to_type(
                                 solved, free_vars, var_store,
                             ))
                         }
-                        AppliedAliasArgument::Rigid(name) => {
-                            crate::types::AppliedAliasArgument::Rigid(name.clone())
+                        AppliedAliasArgument::Rigid(name, rigid_var_id) => {
+                            let rigid_var = var_id_to_flex_var(*rigid_var_id, free_vars, var_store);
+                            crate::types::AppliedAliasArgument::Rigid(name.clone(), rigid_var)
                         }
                     };
 

@@ -163,7 +163,16 @@ impl LambdaSet {
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub enum AppliedAliasArgument {
     Concrete(Type),
-    Rigid(Lowercase),
+    /// The alias is applied to a rigid type variable
+    ///
+    /// - Lowercase is the name in the type annotation
+    /// - Variable enables us to connect this rigid to other
+    ///     rigids of the same name in the same annotation
+    ///
+    /// f : Identity a -> Identity a
+    ///
+    /// would give two UninstantiatedAlias nodes with the same Lowercase and the same Variable
+    Rigid(Lowercase, Variable),
 }
 
 #[derive(PartialEq, Eq, Clone)]
@@ -561,7 +570,19 @@ impl Type {
                 }
                 ext.substitute(substitutions);
             }
-            Type::UninstantiatedAlias { .. } => todo!(),
+            Type::UninstantiatedAlias { type_arguments, .. } => {
+                for (_, applied_argument, _) in type_arguments.iter_mut() {
+                    match applied_argument {
+                        AppliedAliasArgument::Concrete(t) => {
+                            t.substitute(substitutions);
+                        }
+
+                        AppliedAliasArgument::Rigid(_, _) => {
+                            // do nothing
+                        }
+                    }
+                }
+            }
             Alias {
                 type_arguments,
                 lambda_set_variables,
@@ -627,7 +648,20 @@ impl Type {
                 }
                 ext.substitute_alias(rep_symbol, actual);
             }
-            Type::UninstantiatedAlias { .. } => todo!(),
+            Type::UninstantiatedAlias { type_arguments, .. } => {
+                for (_, applied_argument, _) in type_arguments.iter_mut() {
+                    match applied_argument {
+                        AppliedAliasArgument::Concrete(t) => {
+                            t.substitute_alias(rep_symbol, actual);
+                            dbg!(&t);
+                        }
+
+                        AppliedAliasArgument::Rigid(_, _) => {
+                            // do nothing
+                        }
+                    }
+                }
+            }
             Alias {
                 actual: alias_actual,
                 ..
@@ -1009,8 +1043,26 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             // this rec var doesn't need to be in flex_vars or rigid_vars
             accum.remove(rec);
         }
-        UninstantiatedAlias { actual, .. } => {
-            variables_help(actual, accum);
+        UninstantiatedAlias {
+            symbol: _,
+            type_arguments,
+            lambda_set_variables,
+            actual: _,
+        } => {
+            // NOTE actual does not matter because this alias is/should be uninstantiated
+
+            for (_, applied_argument, _) in type_arguments {
+                match applied_argument {
+                    AppliedAliasArgument::Concrete(t) => {
+                        variables_help(t, accum);
+                    }
+                    AppliedAliasArgument::Rigid(_name, rigid_var) => {
+                        accum.insert(*rigid_var);
+                    }
+                }
+            }
+
+            accum.extend(lambda_set_variables.iter().copied());
         }
 
         Alias {

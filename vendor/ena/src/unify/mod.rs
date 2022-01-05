@@ -395,7 +395,7 @@ impl<S: UnificationStore> UnificationTable<S> {
     /// a root) to a child of `new_root_key` (which will remain a
     /// root). The rank and value of `new_root_key` will be updated to
     /// `new_rank` and `new_value` respectively.
-    fn redirect_root(
+    pub fn redirect_root(
         &mut self,
         new_rank: u32,
         old_root_key: S::Key,

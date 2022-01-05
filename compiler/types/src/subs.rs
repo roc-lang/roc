@@ -1149,6 +1149,21 @@ impl Subs {
         self.utable.unify_roots(r_root, l_root, desc)
     }
 
+    pub fn force_child(&mut self, parent: Variable, child: Variable) {
+        let p_root = self.utable.get_root_key(parent);
+        let c_root = self.utable.get_root_key(child);
+
+        // assert_eq!(p_root, parent);
+        // assert_eq!(c_root, child);
+
+        let old_root_key = c_root;
+        let new_root_key = p_root;
+        let new_value = self.get(p_root);
+
+        self.utable
+            .redirect_root(0, old_root_key, new_root_key, new_value)
+    }
+
     pub fn get(&mut self, key: Variable) -> Descriptor {
         self.utable.probe_value(key)
     }
@@ -1198,6 +1213,14 @@ impl Subs {
         let l_key = self.utable.get_root_key(key);
 
         self.utable.update_value(l_key, |node| node.value = r_value);
+    }
+
+    pub fn set_copy(&mut self, key: Variable, copy: Variable) {
+        let l_key = self.utable.get_root_key(key);
+
+        self.utable.update_value(l_key, |node| {
+            node.value.copy = copy.into();
+        });
     }
 
     pub fn set_rank(&mut self, key: Variable, rank: Rank) {
