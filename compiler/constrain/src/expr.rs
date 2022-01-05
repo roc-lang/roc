@@ -12,18 +12,17 @@ use roc_can::pattern::Pattern;
 use roc_collections::all::{ImMap, Index, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
-use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Category, PReason, Reason, RecordField};
+use roc_types::types::{AnnotationSource, Category, PReason, Reason, RecordField};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
 pub struct Info {
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
-    pub def_types: SendMap<Symbol, Located<Type>>,
+    pub def_types: SendMap<Symbol, Loc<Type>>,
 }
 
 impl Info {
@@ -57,7 +56,7 @@ pub struct Env {
 
 fn constrain_untyped_args(
     env: &Env,
-    arguments: &[(Variable, Located<Pattern>)],
+    arguments: &[(Variable, Loc<Pattern>)],
     closure_type: Type,
     return_type: Type,
 ) -> (Vec<Variable>, PatternState, Type) {
@@ -78,6 +77,7 @@ fn constrain_untyped_args(
             loc_pattern.region,
             pattern_expected,
             &mut pattern_state,
+            true,
         );
 
         vars.push(*pattern_var);
@@ -448,7 +448,7 @@ pub fn constrain_expr(
             branch_cons.push(cond_var_is_bool_con);
 
             match expected {
-                FromAnnotation(name, arity, _, tipe) => {
+                FromAnnotation(name, arity, ann_source, tipe) => {
                     let num_branches = branches.len() + 1;
                     for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
                         let cond_con = constrain_expr(
@@ -468,6 +468,7 @@ pub fn constrain_expr(
                                 AnnotationSource::TypedIfBranch {
                                     index: Index::zero_based(index),
                                     num_branches,
+                                    region: ann_source.region(),
                                 },
                                 tipe.clone(),
                             ),
@@ -487,6 +488,7 @@ pub fn constrain_expr(
                             AnnotationSource::TypedIfBranch {
                                 index: Index::zero_based(branches.len()),
                                 num_branches,
+                                region: ann_source.region(),
                             },
                             tipe.clone(),
                         ),
@@ -577,7 +579,7 @@ pub fn constrain_expr(
             constraints.push(expr_con);
 
             match &expected {
-                FromAnnotation(name, arity, _, _typ) => {
+                FromAnnotation(name, arity, ann_source, _typ) => {
                     // NOTE deviation from elm.
                     //
                     // in elm, `_typ` is used, but because we have this `expr_var` too
@@ -602,8 +604,9 @@ pub fn constrain_expr(
                             FromAnnotation(
                                 name.clone(),
                                 *arity,
-                                TypedWhenBranch {
+                                AnnotationSource::TypedWhenBranch {
                                     index: Index::zero_based(index),
+                                    region: ann_source.region(),
                                 },
                                 typ.clone(),
                             ),
@@ -739,11 +742,10 @@ pub fn constrain_expr(
                 region,
             );
 
-            let ext = Type::Variable(*closure_var);
-            let lambda_set = Type::TagUnion(
-                vec![(TagName::Closure(*closure_name), vec![])],
-                Box::new(ext),
-            );
+            let lambda_set = Type::ClosureTag {
+                name: *closure_name,
+                ext: *closure_var,
+            };
 
             let function_type = Type::Function(
                 vec![record_type],
@@ -1038,6 +1040,7 @@ fn constrain_when_branch(
             loc_pattern.region,
             pattern_expected.clone(),
             &mut state,
+            true,
         );
     }
 
@@ -1078,7 +1081,7 @@ fn constrain_when_branch(
     }
 }
 
-fn constrain_field(env: &Env, field_var: Variable, loc_expr: &Located<Expr>) -> (Type, Constraint) {
+fn constrain_field(env: &Env, field_var: Variable, loc_expr: &Loc<Expr>) -> (Type, Constraint) {
     let field_type = Variable(field_var);
     let field_expected = NoExpectation(field_type.clone());
     let constraint = constrain_expr(env, loc_expr.region, &loc_expr.value, field_expected);
@@ -1126,11 +1129,7 @@ pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
     constraint
 }
 
-fn constrain_def_pattern(
-    env: &Env,
-    loc_pattern: &Located<Pattern>,
-    expr_type: Type,
-) -> PatternState {
+fn constrain_def_pattern(env: &Env, loc_pattern: &Loc<Pattern>, expr_type: Type) -> PatternState {
     let pattern_expected = PExpected::NoExpectation(expr_type);
 
     let mut state = PatternState {
@@ -1145,6 +1144,7 @@ fn constrain_def_pattern(
         loc_pattern.region,
         pattern_expected,
         &mut state,
+        true,
     );
 
     state
@@ -1265,6 +1265,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 loc_pattern.region,
                                 pattern_expected,
                                 &mut state,
+                                false,
                             );
                         }
 
@@ -1416,11 +1417,19 @@ fn constrain_closure_size(
         ));
     }
 
-    let tag_name = roc_module::ident::TagName::Closure(name);
-    let closure_type = Type::TagUnion(
-        vec![(tag_name, tag_arguments)],
-        Box::new(Type::Variable(closure_ext_var)),
-    );
+    // pick a more efficient representation if we don't actually capture anything
+    let closure_type = if tag_arguments.is_empty() {
+        Type::ClosureTag {
+            name,
+            ext: closure_ext_var,
+        }
+    } else {
+        let tag_name = TagName::Closure(name);
+        Type::TagUnion(
+            vec![(tag_name, tag_arguments)],
+            Box::new(Type::Variable(closure_ext_var)),
+        )
+    };
 
     let finalizer = Eq(
         Type::Variable(closure_var),
@@ -1439,8 +1448,8 @@ fn instantiate_rigids(
     introduced_vars: &IntroducedVariables,
     new_rigids: &mut Vec<Variable>,
     ftv: &mut ImMap<Lowercase, Variable>, // rigids defined before the current annotation
-    loc_pattern: &Located<Pattern>,
-    headers: &mut SendMap<Symbol, Located<Type>>,
+    loc_pattern: &Loc<Pattern>,
+    headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> Type {
     let mut annotation = annotation.clone();
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
@@ -1463,7 +1472,7 @@ fn instantiate_rigids(
 
     if let Some(new_headers) = crate::pattern::headers_from_annotation(
         &loc_pattern.value,
-        &Located::at(loc_pattern.region, annotation.clone()),
+        &Loc::at(loc_pattern.region, annotation.clone()),
     ) {
         for (symbol, loc_type) in new_headers {
             for var in loc_type.value.variables() {
@@ -1624,6 +1633,7 @@ pub fn rec_defs_help(
                                     loc_pattern.region,
                                     pattern_expected,
                                     &mut state,
+                                    false,
                                 );
                             }
 
@@ -1760,7 +1770,7 @@ fn constrain_field_update(
     var: Variable,
     region: Region,
     field: Lowercase,
-    loc_expr: &Located<Expr>,
+    loc_expr: &Loc<Expr>,
 ) -> (Variable, Type, Constraint) {
     let field_type = Type::Variable(var);
     let reason = Reason::RecordUpdateValue(field);

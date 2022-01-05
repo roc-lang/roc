@@ -1,20 +1,18 @@
 #[macro_use]
-extern crate pretty_assertions;
-
-#[macro_use]
 extern crate indoc;
 
 #[cfg(test)]
 mod repl_eval {
     use cli_utils::helpers;
+    use roc_test_utils::assert_multiline_str_eq;
 
     const ERROR_MESSAGE_START: char = '─';
 
     fn expect_success(input: &str, expected: &str) {
         let out = helpers::repl_eval(input);
 
-        assert_eq!(&out.stderr, "");
-        assert_eq!(&out.stdout, expected);
+        assert_multiline_str_eq!("", out.stderr.as_str());
+        assert_multiline_str_eq!(expected, out.stdout.as_str());
         assert!(out.status.success());
     }
 
@@ -25,12 +23,12 @@ mod repl_eval {
         // so skip till the header of the first error
         match out.stdout.find(ERROR_MESSAGE_START) {
             Some(index) => {
-                assert_eq!(&out.stderr, "");
-                assert_eq!(&out.stdout[index..], expected);
+                assert_multiline_str_eq!("", out.stderr.as_str());
+                assert_multiline_str_eq!(expected, &out.stdout[index..]);
                 assert!(out.status.success());
             }
             None => {
-                assert_eq!(&out.stderr, "");
+                assert_multiline_str_eq!("", out.stderr.as_str());
                 assert!(out.status.success());
                 panic!(
                     "I expected a failure, but there is no error message in stdout:\n\n{}",
@@ -175,6 +173,51 @@ mod repl_eval {
     #[test]
     fn newtype_of_unit() {
         expect_success("Foo Bar", "Foo Bar : [ Foo [ Bar ]* ]*");
+    }
+
+    #[test]
+    fn newtype_of_big_data() {
+        expect_success(
+            indoc!(
+                r#"
+                Either a b : [ Left a, Right b ]
+                lefty : Either Str Str
+                lefty = Left "loosey"
+                A lefty
+                "#
+            ),
+            r#"A (Left "loosey") : [ A (Either Str Str) ]*"#,
+        )
+    }
+
+    #[test]
+    fn newtype_nested() {
+        expect_success(
+            indoc!(
+                r#"
+                Either a b : [ Left a, Right b ]
+                lefty : Either Str Str
+                lefty = Left "loosey"
+                A (B (C lefty))
+                "#
+            ),
+            r#"A (B (C (Left "loosey"))) : [ A [ B [ C (Either Str Str) ]* ]* ]*"#,
+        )
+    }
+
+    #[test]
+    fn newtype_of_big_of_newtype() {
+        expect_success(
+            indoc!(
+                r#"
+                Big a : [ Big a [ Wrapper [ Newtype a ] ] ]
+                big : Big Str
+                big = Big "s" (Wrapper (Newtype "t"))
+                A big
+                "#
+            ),
+            r#"A (Big "s" (Wrapper (Newtype "t"))) : [ A (Big Str) ]*"#,
+        )
     }
 
     #[test]
@@ -565,6 +608,207 @@ mod repl_eval {
                 "#
             ),
         );
+    }
+
+    #[test]
+    fn issue_2149() {
+        expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [ InvalidNumStr ]*");
+        expect_success(
+            r#"Str.toI8 "128""#,
+            "Err InvalidNumStr : Result I8 [ InvalidNumStr ]*",
+        );
+        expect_success(
+            r#"Str.toI16 "32767""#,
+            "Ok 32767 : Result I16 [ InvalidNumStr ]*",
+        );
+        expect_success(
+            r#"Str.toI16 "32768""#,
+            "Err InvalidNumStr : Result I16 [ InvalidNumStr ]*",
+        );
+    }
+
+    #[test]
+    fn multiline_input() {
+        expect_success(
+            indoc!(
+                r#"
+                a : Str
+                a = "123"
+                a
+                "#
+            ),
+            r#""123" : Str"#,
+        )
+    }
+
+    #[test]
+    fn recursive_tag_union_flat_variant() {
+        expect_success(
+            indoc!(
+                r#"
+                Expr : [ Sym Str, Add Expr Expr ]
+                s : Expr
+                s = Sym "levitating"
+                s
+                "#
+            ),
+            r#"Sym "levitating" : Expr"#,
+        )
+    }
+
+    #[test]
+    fn large_recursive_tag_union_flat_variant() {
+        expect_success(
+            // > 7 variants so that to force tag storage alongside the data
+            indoc!(
+                r#"
+                Item : [ A Str, B Str, C Str, D Str, E Str, F Str, G Str, H Str, I Str, J Str, K Item ]
+                s : Item
+                s = H "woo"
+                s
+                "#
+            ),
+            r#"H "woo" : Item"#,
+        )
+    }
+
+    #[test]
+    fn recursive_tag_union_recursive_variant() {
+        expect_success(
+            indoc!(
+                r#"
+                Expr : [ Sym Str, Add Expr Expr ]
+                s : Expr
+                s = Add (Add (Sym "one") (Sym "two")) (Sym "four")
+                s
+                "#
+            ),
+            r#"Add (Add (Sym "one") (Sym "two")) (Sym "four") : Expr"#,
+        )
+    }
+
+    #[test]
+    fn large_recursive_tag_union_recursive_variant() {
+        expect_success(
+            // > 7 variants so that to force tag storage alongside the data
+            indoc!(
+                r#"
+                Item : [ A Str, B Str, C Str, D Str, E Str, F Str, G Str, H Str, I Str, J Str, K Item, L Item ]
+                s : Item
+                s = K (L (E "woo"))
+                s
+                "#
+            ),
+            r#"K (L (E "woo")) : Item"#,
+        )
+    }
+
+    #[test]
+    fn recursive_tag_union_into_flat_tag_union() {
+        expect_success(
+            indoc!(
+                r#"
+                Item : [ One [ A Str, B Str ], Deep Item ]
+                i : Item
+                i = Deep (One (A "woo"))
+                i
+                "#
+            ),
+            r#"Deep (One (A "woo")) : Item"#,
+        )
+    }
+
+    #[test]
+    fn non_nullable_unwrapped_tag_union() {
+        expect_success(
+            indoc!(
+                r#"
+                RoseTree a : [ Tree a (List (RoseTree a)) ]
+                e1 : RoseTree Str
+                e1 = Tree "e1" []
+                e2 : RoseTree Str
+                e2 = Tree "e2" []
+                combo : RoseTree Str
+                combo = Tree "combo" [e1, e2]
+                combo
+                "#
+            ),
+            r#"Tree "combo" [ Tree "e1" [], Tree "e2" [] ] : RoseTree Str"#,
+        )
+    }
+
+    #[test]
+    fn nullable_unwrapped_tag_union() {
+        expect_success(
+            indoc!(
+                r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                c1 : LinkedList Str
+                c1 = Cons "Red" Nil
+                c2 : LinkedList Str
+                c2 = Cons "Yellow" c1
+                c3 : LinkedList Str
+                c3 = Cons "Green" c2
+                c3
+                "#
+            ),
+            r#"Cons "Green" (Cons "Yellow" (Cons "Red" Nil)) : LinkedList Str"#,
+        )
+    }
+
+    #[test]
+    fn nullable_wrapped_tag_union() {
+        expect_success(
+            indoc!(
+                r#"
+                Container a : [ Empty, Whole a, Halved (Container a) (Container a) ]
+
+                meats : Container Str
+                meats = Halved (Whole "Brisket") (Whole "Ribs")
+
+                sides : Container Str
+                sides = Halved (Whole "Coleslaw") Empty
+
+                bbqPlate : Container Str
+                bbqPlate = Halved meats sides
+
+                bbqPlate
+                "#
+            ),
+            r#"Halved (Halved (Whole "Brisket") (Whole "Ribs")) (Halved (Whole "Coleslaw") Empty) : Container Str"#,
+        )
+    }
+
+    #[test]
+    fn large_nullable_wrapped_tag_union() {
+        // > 7 non-empty variants so that to force tag storage alongside the data
+        expect_success(
+            indoc!(
+                r#"
+                Cont a : [ Empty, S1 a, S2 a, S3 a, S4 a, S5 a, S6 a, S7 a, Tup (Cont a) (Cont a) ]
+
+                fst : Cont Str
+                fst = Tup (S1 "S1") (S2 "S2")
+
+                snd : Cont Str
+                snd = Tup (S5 "S5") Empty
+
+                tup : Cont Str
+                tup = Tup fst snd
+
+                tup
+                "#
+            ),
+            r#"Tup (Tup (S1 "S1") (S2 "S2")) (Tup (S5 "S5") Empty) : Cont Str"#,
+        )
+    }
+
+    #[test]
+    fn issue_2300() {
+        expect_success(
+            r#"\Email str -> str == """#,
+            r#"<function> : [ Email Str ] -> Bool"#,
+        )
     }
 
     //    #[test]

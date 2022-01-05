@@ -1,0 +1,170 @@
+Platform {
+    header: PlatformHeader {
+        name: @9-23 PackageName(
+            "examples/cli",
+        ),
+        requires: PlatformRequires {
+            rigids: [],
+            signature: @41-58 TypedIdent {
+                ident: @41-45 "main",
+                spaces_before_colon: [],
+                ann: @48-58 Apply(
+                    "",
+                    "Task",
+                    [
+                        @53-55 Record {
+                            fields: [],
+                            ext: None,
+                        },
+                        @56-58 TagUnion {
+                            ext: None,
+                            tags: [],
+                        },
+                    ],
+                ),
+            },
+        },
+        exposes: [],
+        packages: [],
+        imports: [
+            @119-132 Module(
+                ModuleName(
+                    "Task",
+                ),
+                [
+                    @126-130 ExposedName(
+                        "Task",
+                    ),
+                ],
+            ),
+        ],
+        provides: [
+            @150-161 ExposedName(
+                "mainForHost",
+            ),
+        ],
+        effects: Effects {
+            spaces_before_effects_keyword: [
+                Newline,
+            ],
+            spaces_after_effects_keyword: [],
+            spaces_after_type_name: [
+                Newline,
+            ],
+            effect_shortname: "fx",
+            effect_type_name: "Effect",
+            entries: [
+                @208-228 SpaceBefore(
+                    TypedIdent {
+                        ident: @208-215 "getLine",
+                        spaces_before_colon: [],
+                        ann: @218-228 Apply(
+                            "",
+                            "Effect",
+                            [
+                                @225-228 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                            ],
+                        ),
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+                @242-268 SpaceBefore(
+                    TypedIdent {
+                        ident: @242-249 "putLine",
+                        spaces_before_colon: [],
+                        ann: @259-268 Function(
+                            [
+                                @252-255 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                            ],
+                            @259-268 Apply(
+                                "",
+                                "Effect",
+                                [
+                                    @266-268 Record {
+                                        fields: [],
+                                        ext: None,
+                                    },
+                                ],
+                            ),
+                        ),
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+                @282-318 SpaceBefore(
+                    SpaceAfter(
+                        TypedIdent {
+                            ident: @282-294 "twoArguments",
+                            spaces_before_colon: [],
+                            ann: @309-318 Function(
+                                [
+                                    @297-300 Apply(
+                                        "",
+                                        "Int",
+                                        [],
+                                    ),
+                                    @302-305 Apply(
+                                        "",
+                                        "Int",
+                                        [],
+                                    ),
+                                ],
+                                @309-318 Apply(
+                                    "",
+                                    "Effect",
+                                    [
+                                        @316-318 Record {
+                                            fields: [],
+                                            ext: None,
+                                        },
+                                    ],
+                                ),
+                            ),
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+        },
+        before_header: [],
+        after_platform_keyword: [],
+        before_requires: [
+            Newline,
+        ],
+        after_requires: [],
+        before_exposes: [
+            LineComment(
+                " TODO FIXME",
+            ),
+        ],
+        after_exposes: [],
+        before_packages: [
+            Newline,
+        ],
+        after_packages: [],
+        before_imports: [
+            Newline,
+        ],
+        after_imports: [],
+        before_provides: [
+            Newline,
+        ],
+        after_provides: [],
+    },
+}

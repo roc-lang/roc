@@ -3,12 +3,13 @@ use roc_collections::all::{Index, MutSet, SendMap};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve::solve;
-use roc_types::pretty_print::Parens;
+use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
 use std::path::PathBuf;
 
+use crate::internal_error;
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use ven_pretty::DocAllocator;
 
@@ -17,6 +18,7 @@ const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annota
 
 pub fn type_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     problem: solve::TypeError,
 ) -> Option<Report<'b>> {
@@ -33,13 +35,14 @@ pub fn type_problem<'b>(
 
     match problem {
         BadExpr(region, category, found, expected) => Some(to_expr_report(
-            alloc, filename, region, category, found, expected,
+            alloc, lines, filename, region, category, found, expected,
         )),
         BadPattern(region, category, found, expected) => Some(to_pattern_report(
-            alloc, filename, region, category, found, expected,
+            alloc, lines, filename, region, category, found, expected,
         )),
         CircularType(region, symbol, overall_type) => Some(to_circular_report(
             alloc,
+            lines,
             filename,
             region,
             symbol,
@@ -86,7 +89,7 @@ pub fn type_problem<'b>(
                             found_arguments,
                             alloc.reflow(" instead:"),
                         ]),
-                        alloc.region(region),
+                        alloc.region(lines.convert_region(region)),
                         alloc.reflow("Are there missing parentheses?"),
                     ]);
 
@@ -99,7 +102,7 @@ pub fn type_problem<'b>(
                     report(title, doc, filename)
                 }
                 CyclicAlias(symbol, region, others) => {
-                    let (doc, title) = cyclic_alias(alloc, symbol, region, others);
+                    let (doc, title) = cyclic_alias(alloc, lines, symbol, region, others);
 
                     report(title, doc, filename)
                 }
@@ -107,7 +110,7 @@ pub fn type_problem<'b>(
                 SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/rtfeldman/roc/pull/1711
 
                 Shadowed(original_region, shadow) => {
-                    let doc = report_shadowing(alloc, original_region, shadow);
+                    let doc = report_shadowing(alloc, lines, original_region, shadow);
                     let title = DUPLICATE_NAME.to_string();
 
                     report(title, doc, filename)
@@ -121,8 +124,9 @@ pub fn type_problem<'b>(
 
 fn report_shadowing<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     original_region: Region,
-    shadow: Located<Ident>,
+    shadow: Loc<Ident>,
 ) -> RocDocBuilder<'b> {
     let line = r#"Since these types have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
 
@@ -131,15 +135,16 @@ fn report_shadowing<'b>(
             .text("The ")
             .append(alloc.ident(shadow.value))
             .append(alloc.reflow(" name is first defined here:")),
-        alloc.region(original_region),
+        alloc.region(lines.convert_region(original_region)),
         alloc.reflow("But then it's defined a second time here:"),
-        alloc.region(shadow.region),
+        alloc.region(lines.convert_region(shadow.region)),
         alloc.reflow(line),
     ])
 }
 
 pub fn cyclic_alias<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     symbol: Symbol,
     region: roc_region::all::Region,
     others: Vec<Symbol>,
@@ -150,7 +155,7 @@ pub fn cyclic_alias<'b>(
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
                 .append(alloc.reflow(" alias is self-recursive in an invalid way:")),
-            alloc.region(region),
+            alloc.region(lines.convert_region(region)),
             alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
         ])
     } else {
@@ -159,7 +164,7 @@ pub fn cyclic_alias<'b>(
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
                 .append(alloc.reflow(" alias is recursive in an invalid way:")),
-            alloc.region(region),
+            alloc.region(lines.convert_region(region)),
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
@@ -185,6 +190,7 @@ pub fn cyclic_alias<'b>(
 #[allow(clippy::too_many_arguments)]
 fn report_mismatch<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     category: &Category,
     found: ErrorType,
@@ -197,9 +203,12 @@ fn report_mismatch<'b>(
     further_details: Option<RocDocBuilder<'b>>,
 ) -> Report<'b> {
     let snippet = if let Some(highlight) = opt_highlight {
-        alloc.region_with_subregion(highlight, region)
+        alloc.region_with_subregion(
+            lines.convert_region(highlight),
+            lines.convert_region(region),
+        )
     } else {
-        alloc.region(region)
+        alloc.region(lines.convert_region(region))
     };
     let lines = vec![
         problem,
@@ -208,6 +217,7 @@ fn report_mismatch<'b>(
             alloc,
             found,
             expected_type,
+            ExpectationContext::Arbitrary,
             add_category(alloc, this_is, category),
             instead_of,
             further_details,
@@ -225,6 +235,7 @@ fn report_mismatch<'b>(
 #[allow(clippy::too_many_arguments)]
 fn report_bad_type<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     category: &Category,
     found: ErrorType,
@@ -236,9 +247,12 @@ fn report_bad_type<'b>(
     further_details: RocDocBuilder<'b>,
 ) -> Report<'b> {
     let snippet = if let Some(highlight) = opt_highlight {
-        alloc.region_with_subregion(highlight, region)
+        alloc.region_with_subregion(
+            lines.convert_region(highlight),
+            lines.convert_region(region),
+        )
     } else {
-        alloc.region(region)
+        alloc.region(lines.convert_region(region))
     };
     let lines = vec![
         problem,
@@ -247,6 +261,7 @@ fn report_bad_type<'b>(
             alloc,
             found,
             expected_type,
+            ExpectationContext::Arbitrary,
             add_category(alloc, this_is, category),
             further_details,
         ),
@@ -272,8 +287,17 @@ fn pattern_to_doc<'b>(
     }
 }
 
+fn lowercase_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => Default::default(),
+        Some(c) => c.to_lowercase().chain(chars).collect(),
+    }
+}
+
 fn to_expr_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     expr_region: roc_region::all::Region,
     category: Category,
@@ -286,6 +310,7 @@ fn to_expr_report<'b>(
                 alloc,
                 found,
                 expected_type,
+                ExpectationContext::Arbitrary,
                 add_category(alloc, alloc.text("It is"), &category),
                 alloc.text("But you are trying to use it as:"),
                 None,
@@ -296,7 +321,7 @@ fn to_expr_report<'b>(
                 title: "TYPE MISMATCH".to_string(),
                 doc: alloc.stack(vec![
                     alloc.text("This expression is used in an unexpected way:"),
-                    alloc.region(expr_region),
+                    alloc.region(lines.convert_region(expr_region)),
                     comparison,
                 ]),
                 severity: Severity::RuntimeError,
@@ -313,12 +338,13 @@ fn to_expr_report<'b>(
                 None => (alloc.text("this"), alloc.nil()),
             };
 
-            let mut sub_region = None;
+            let ann_region = annotation_source.region();
 
             let thing = match annotation_source {
                 TypedIfBranch {
                     index,
                     num_branches,
+                    ..
                 } if num_branches == 2 => alloc.concat(vec![
                     alloc.keyword(if index == Index::FIRST {
                         "then"
@@ -335,20 +361,17 @@ fn to_expr_report<'b>(
                     alloc.keyword("if"),
                     alloc.text(" expression:"),
                 ]),
-                TypedWhenBranch { index } => alloc.concat(vec![
+                TypedWhenBranch { index, .. } => alloc.concat(vec![
                     alloc.string(index.ordinal()),
                     alloc.reflow(" branch of this "),
                     alloc.keyword("when"),
                     alloc.text(" expression:"),
                 ]),
-                TypedBody { region: ann_region } => {
-                    sub_region = Some(ann_region);
-                    alloc.concat(vec![
-                        alloc.text("body of "),
-                        the_name_text,
-                        alloc.text(" definition:"),
-                    ])
-                }
+                TypedBody { .. } => alloc.concat(vec![
+                    alloc.text("body of "),
+                    the_name_text,
+                    alloc.text(" definition:"),
+                ]),
             };
 
             let it_is = match annotation_source {
@@ -357,32 +380,64 @@ fn to_expr_report<'b>(
                 TypedBody { .. } => "The body is".into(),
             };
 
-            let comparison = type_comparison(
+            let expectation_context = ExpectationContext::Annotation {
+                on: on_name_text.clone(),
+            };
+
+            let comparison = if diff_is_wildcard_comparison(
                 alloc,
-                found,
-                expected_type,
-                add_category(alloc, alloc.text(it_is), &category),
-                alloc.concat(vec![
-                    alloc.text("But the type annotation"),
-                    on_name_text,
-                    alloc.text(" says it should be:"),
-                ]),
-                None,
-            );
+                found.clone(),
+                expected_type.clone(),
+            ) {
+                let it_is = lowercase_first(&it_is);
+                let (it, _) = format_category(alloc, alloc.text(it_is), &category, false);
+                lone_type(
+                        alloc,
+                        found,
+                        expected_type,
+                        expectation_context,
+                        alloc.concat(vec![
+                            alloc.reflow("The type annotation"),
+                            on_name_text,
+                            alloc.reflow(" says "),
+                            it.clone(),
+                            alloc.reflow(" should have the type:"),
+                        ]),
+                        alloc.concat(vec![
+                            alloc.reflow("However, the type of "),
+                            it,
+                            alloc.reflow(" is connected to another type in a way that isn't reflected in this annotation.")
+                        ]),
+                    )
+            } else {
+                type_comparison(
+                    alloc,
+                    found,
+                    expected_type,
+                    expectation_context,
+                    add_category(alloc, alloc.text(it_is), &category),
+                    alloc.concat(vec![
+                        alloc.text("But the type annotation"),
+                        on_name_text,
+                        alloc.text(" says it should be:"),
+                    ]),
+                    None,
+                )
+            };
 
             Report {
                 title: "TYPE MISMATCH".to_string(),
                 filename,
                 doc: alloc.stack(vec![
                     alloc.text("Something is off with the ").append(thing),
-                    match sub_region {
-                        None => alloc.region(expr_region),
-                        Some(ann_region) => {
-                            // for typed bodies, include the line(s) have the signature
-                            let joined =
-                                roc_region::all::Region::span_across(&ann_region, &expr_region);
-                            alloc.region_with_subregion(joined, expr_region)
-                        }
+                    {
+                        // for typed bodies, include the line(s) with the signature
+                        let joined =
+                            roc_region::all::Region::span_across(&ann_region, &expr_region);
+                        alloc.region_with_subregion(
+                            lines.convert_region(joined),
+                            lines.convert_region(expr_region),
+                        )
                     },
                     comparison,
                 ]),
@@ -401,6 +456,7 @@ fn to_expr_report<'b>(
 
                 report_bad_type(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -439,6 +495,7 @@ fn to_expr_report<'b>(
 
                 report_bad_type(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -476,6 +533,7 @@ fn to_expr_report<'b>(
                 ]);
                 report_bad_type(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -503,6 +561,7 @@ fn to_expr_report<'b>(
             } => match total_branches {
                 2 => report_mismatch(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -536,6 +595,7 @@ fn to_expr_report<'b>(
                 ),
                 _ => report_mismatch(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -560,6 +620,7 @@ fn to_expr_report<'b>(
             },
             Reason::WhenBranch { index } => report_mismatch(
                 alloc,
+                lines,
                 filename,
                 &category,
                 found,
@@ -598,6 +659,7 @@ fn to_expr_report<'b>(
 
                 report_mismatch(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -612,6 +674,7 @@ fn to_expr_report<'b>(
             }
             Reason::RecordUpdateValue(field) => report_mismatch(
                 alloc,
+                lines,
                 filename,
                 &category,
                 found,
@@ -646,6 +709,7 @@ fn to_expr_report<'b>(
                     match diff.next().and_then(|k| Some((k, expected_fields.get(k)?))) {
                         None => report_mismatch(
                             alloc,
+                            lines,
                             filename,
                             &category,
                             found,
@@ -680,7 +744,7 @@ fn to_expr_report<'b>(
 
                             let doc = alloc.stack(vec![
                                 header,
-                                alloc.region(*field_region),
+                                alloc.region(lines.convert_region(*field_region)),
                                 if suggestions.is_empty() {
                                     alloc.concat(vec![
                                         alloc.reflow("In fact, "),
@@ -725,6 +789,7 @@ fn to_expr_report<'b>(
                 }
                 _ => report_bad_type(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -759,7 +824,7 @@ fn to_expr_report<'b>(
                                 }
                             )),
                         ]),
-                        alloc.region(expr_region),
+                        alloc.region(lines.convert_region(expr_region)),
                         alloc.reflow("Are there any missing commas? Or missing parentheses?"),
                     ];
 
@@ -794,7 +859,7 @@ fn to_expr_report<'b>(
                                     arity
                                 )),
                             ]),
-                            alloc.region(expr_region),
+                            alloc.region(lines.convert_region(expr_region)),
                             alloc.reflow("Are there any missing commas? Or missing parentheses?"),
                         ];
 
@@ -818,7 +883,7 @@ fn to_expr_report<'b>(
                                     arity
                                 )),
                             ]),
-                            alloc.region(expr_region),
+                            alloc.region(lines.convert_region(expr_region)),
                             alloc.reflow(
                                 "Roc does not allow functions to be partially applied. \
                                 Use a closure to make partial application explicit.",
@@ -844,6 +909,7 @@ fn to_expr_report<'b>(
 
                 report_mismatch(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -906,10 +972,30 @@ fn count_arguments(tipe: &ErrorType) -> usize {
     }
 }
 
+/// The context a type expectation is derived from.
+#[derive(Clone)]
+enum ExpectationContext<'a> {
+    /// An expected type was discovered from a type annotation. Corresponds to
+    /// [`Expected::FromAnnotation`](Expected::FromAnnotation).
+    Annotation { on: RocDocBuilder<'a> },
+    /// When we don't know the context, or it's not relevant.
+    Arbitrary,
+}
+
+impl<'a> std::fmt::Debug for ExpectationContext<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExpectationContext::Annotation { .. } => f.write_str("Annotation"),
+            ExpectationContext::Arbitrary => f.write_str("Arbitrary"),
+        }
+    }
+}
+
 fn type_comparison<'b>(
     alloc: &'b RocDocAllocator<'b>,
     actual: ErrorType,
     expected: ErrorType,
+    expectation_context: ExpectationContext<'b>,
     i_am_seeing: RocDocBuilder<'b>,
     instead_of: RocDocBuilder<'b>,
     context_hints: Option<RocDocBuilder<'b>>,
@@ -927,7 +1013,11 @@ fn type_comparison<'b>(
         lines.push(alloc.concat(context_hints));
     }
 
-    lines.extend(problems_to_tip(alloc, comparison.problems));
+    lines.extend(problems_to_tip(
+        alloc,
+        comparison.problems,
+        expectation_context,
+    ));
 
     alloc.stack(lines)
 }
@@ -936,6 +1026,7 @@ fn lone_type<'b>(
     alloc: &'b RocDocAllocator<'b>,
     actual: ErrorType,
     expected: ErrorType,
+    expectation_context: ExpectationContext<'b>,
     i_am_seeing: RocDocBuilder<'b>,
     further_details: RocDocBuilder<'b>,
 ) -> RocDocBuilder<'b> {
@@ -943,107 +1034,166 @@ fn lone_type<'b>(
 
     let mut lines = vec![i_am_seeing, comparison.actual, further_details];
 
-    lines.extend(problems_to_tip(alloc, comparison.problems));
+    lines.extend(problems_to_tip(
+        alloc,
+        comparison.problems,
+        expectation_context,
+    ));
 
     alloc.stack(lines)
 }
 
-fn add_category<'b>(
+/// Formats an item in a Roc program to a tuple (summary, has_type_colon), where
+/// concatenation of the tuple items introduces the item and leads up to its type.
+fn format_category<'b>(
     alloc: &'b RocDocAllocator<'b>,
     this_is: RocDocBuilder<'b>,
     category: &Category,
-) -> RocDocBuilder<'b> {
+    capitalize_start: bool,
+) -> (RocDocBuilder<'b>, RocDocBuilder<'b>) {
     use Category::*;
 
+    let t = if capitalize_start { "T" } else { "t" };
+
     match category {
-        Lookup(name) => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.symbol_foreign_qualified(*name),
-            alloc.text(" value is a:"),
-        ]),
+        Lookup(name) => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.symbol_foreign_qualified(*name),
+                alloc.text(" value"),
+            ]),
+            alloc.text(" is a:"),
+        ),
 
-        If => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.keyword("if"),
-            alloc.text(" expression produces:"),
-        ]),
-        When => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.keyword("when"),
-            alloc.text(" expression produces:"),
-        ]),
+        If => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.keyword("if"),
+                alloc.text(" expression"),
+            ]),
+            alloc.text(" produces:"),
+        ),
+        When => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.keyword("when"),
+                alloc.text(" expression"),
+            ]),
+            alloc.text(" produces:"),
+        ),
 
-        List => alloc.concat(vec![this_is, alloc.text(" a list of type:")]),
-        Num => alloc.concat(vec![this_is, alloc.text(" a number of type:")]),
-        Int => alloc.concat(vec![this_is, alloc.text(" an integer of type:")]),
-        Float => alloc.concat(vec![this_is, alloc.text(" a float of type:")]),
-        Str => alloc.concat(vec![this_is, alloc.text(" a string of type:")]),
-        StrInterpolation => alloc.concat(vec![
-            this_is,
-            alloc.text(" a value in a string interpolation, which was of type:"),
-        ]),
+        List => (
+            alloc.concat(vec![this_is, alloc.text(" a list")]),
+            alloc.text(" of type:"),
+        ),
+        Num => (
+            alloc.concat(vec![this_is, alloc.text(" a number")]),
+            alloc.text(" of type:"),
+        ),
+        Int => (
+            alloc.concat(vec![this_is, alloc.text(" an integer")]),
+            alloc.text(" of type:"),
+        ),
+        Float => (
+            alloc.concat(vec![this_is, alloc.text(" a float")]),
+            alloc.text(" of type:"),
+        ),
+        Str => (
+            alloc.concat(vec![this_is, alloc.text(" a string")]),
+            alloc.text(" of type:"),
+        ),
+        StrInterpolation => (
+            alloc.concat(vec![
+                this_is,
+                alloc.text(" a value in a string interpolation,"),
+            ]),
+            alloc.text(" which was of type:"),
+        ),
 
-        Lambda => alloc.concat(vec![this_is, alloc.text(" an anonymous function of type:")]),
+        Lambda => (
+            alloc.concat(vec![this_is, alloc.text(" an anonymous function")]),
+            alloc.text(" of type:"),
+        ),
 
-        ClosureSize => alloc.concat(vec![
-            this_is,
-            alloc.text(" the closure size of a function of type:"),
-        ]),
+        ClosureSize => (
+            alloc.concat(vec![this_is, alloc.text(" the closure size of a function")]),
+            alloc.text(" of type:"),
+        ),
 
         TagApply {
             tag_name: TagName::Global(name),
             args_count: 0,
-        } => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.global_tag_name(name.to_owned()),
-            if name.as_str() == "True" || name.as_str() == "False" {
-                alloc.text(" boolean has the type:")
-            } else {
-                alloc.text(" global tag has the type:")
-            },
-        ]),
+        } => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.global_tag_name(name.to_owned()),
+                if name.as_str() == "True" || name.as_str() == "False" {
+                    alloc.text(" boolean")
+                } else {
+                    alloc.text(" global tag")
+                },
+            ]),
+            alloc.text(" has the type:"),
+        ),
         TagApply {
             tag_name: TagName::Private(name),
             args_count: 0,
-        } => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.private_tag_name(*name),
-            alloc.text(" private tag has the type:"),
-        ]),
+        } => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.private_tag_name(*name),
+                alloc.text(" private tag"),
+            ]),
+            alloc.text(" has the type:"),
+        ),
 
         TagApply {
             tag_name: TagName::Global(name),
             args_count: _,
-        } => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.global_tag_name(name.to_owned()),
-            alloc.text(" global tag application has the type:"),
-        ]),
+        } => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.global_tag_name(name.to_owned()),
+                alloc.text(" global tag application"),
+            ]),
+            alloc.text(" has the type:"),
+        ),
         TagApply {
             tag_name: TagName::Private(name),
             args_count: _,
-        } => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.private_tag_name(*name),
-            alloc.text(" private tag application has the type:"),
-        ]),
+        } => (
+            alloc.concat(vec![
+                alloc.text("This "),
+                alloc.private_tag_name(*name),
+                alloc.text(" private tag application"),
+            ]),
+            alloc.text(" has the type:"),
+        ),
         TagApply {
             tag_name: TagName::Closure(_name),
             args_count: _,
         } => unreachable!("closure tags are for internal use only"),
 
-        Record => alloc.concat(vec![this_is, alloc.text(" a record of type:")]),
+        Record => (
+            alloc.concat(vec![this_is, alloc.text(" a record")]),
+            alloc.text(" of type:"),
+        ),
 
-        Accessor(field) => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.record_field(field.to_owned()),
-            alloc.text(" value is a:"),
-        ]),
-        Access(field) => alloc.concat(vec![
-            alloc.text("The value at "),
-            alloc.record_field(field.to_owned()),
+        Accessor(field) => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.record_field(field.to_owned()),
+                alloc.text(" value"),
+            ]),
             alloc.text(" is a:"),
-        ]),
+        ),
+        Access(field) => (
+            alloc.concat(vec![
+                alloc.text(format!("{}he value at ", t)),
+                alloc.record_field(field.to_owned()),
+            ]),
+            alloc.text(" is a:"),
+        ),
         CallResult(
             Some(_),
             CalledVia::BinOp(
@@ -1054,16 +1204,23 @@ fn add_category<'b>(
                 | BinOp::LessThanOrEq
                 | BinOp::GreaterThanOrEq,
             ),
-        ) => alloc.concat(vec![alloc.text("This comparison produces:")]),
-        CallResult(Some(_), CalledVia::StringInterpolation) => {
-            alloc.concat(vec![this_is, alloc.text(" a string of type:")])
-        }
-        CallResult(Some(symbol), _) => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.symbol_foreign_qualified(*symbol),
-            alloc.text(" call produces:"),
-        ]),
-        CallResult(None, _) => alloc.concat(vec![this_is, alloc.text(":")]),
+        ) => (
+            alloc.text(format!("{}his comparison", t)),
+            alloc.text(" produces:"),
+        ),
+        CallResult(Some(_), CalledVia::StringInterpolation) => (
+            alloc.concat(vec![this_is, alloc.text(" a string")]),
+            alloc.text(" of type:"),
+        ),
+        CallResult(Some(symbol), _) => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.symbol_foreign_qualified(*symbol),
+                alloc.text(" call"),
+            ]),
+            alloc.text(" produces:"),
+        ),
+        CallResult(None, _) => (this_is, alloc.text(":")),
         LowLevelOpResult(op) => {
             panic!(
                 "Compiler bug: invalid return type from low-level op {:?}",
@@ -1074,18 +1231,33 @@ fn add_category<'b>(
             panic!("Compiler bug: invalid return type from foreign call",);
         }
 
-        Uniqueness => alloc.concat(vec![
-            this_is,
-            alloc.text(" an uniqueness attribute of type:"),
-        ]),
-        Storage(_file, _line) => alloc.concat(vec![this_is, alloc.text(" a value of type:")]),
-
-        DefaultValue(_) => alloc.concat(vec![this_is, alloc.text(" a default field of type:")]),
+        Uniqueness => (
+            alloc.concat(vec![this_is, alloc.text(" an uniqueness attribute")]),
+            alloc.text(" of type:"),
+        ),
+        Storage(_file, _line) => (
+            alloc.concat(vec![this_is, alloc.text(" a value")]),
+            alloc.text(" of type:"),
+        ),
+        DefaultValue(_) => (
+            alloc.concat(vec![this_is, alloc.text(" a default field")]),
+            alloc.text(" of type:"),
+        ),
     }
+}
+
+fn add_category<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    this_is: RocDocBuilder<'b>,
+    category: &Category,
+) -> RocDocBuilder<'b> {
+    let (summary, suffix) = format_category(alloc, this_is, category, true);
+    alloc.concat(vec![summary, suffix])
 }
 
 fn to_pattern_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     expr_region: roc_region::all::Region,
     category: PatternCategory,
@@ -1098,7 +1270,7 @@ fn to_pattern_report<'b>(
         PExpected::NoExpectation(expected_type) => {
             let doc = alloc.stack(vec![
                 alloc.text("This pattern is being used in an unexpected way:"),
-                alloc.region(expr_region),
+                alloc.region(lines.convert_region(expr_region)),
                 pattern_type_comparison(
                     alloc,
                     found,
@@ -1131,7 +1303,7 @@ fn to_pattern_report<'b>(
                         .append(alloc.text(" argument to "))
                         .append(name.clone())
                         .append(alloc.text(" is weird:")),
-                    alloc.region(region),
+                    alloc.region(lines.convert_region(region)),
                     pattern_type_comparison(
                         alloc,
                         found,
@@ -1166,7 +1338,7 @@ fn to_pattern_report<'b>(
                             .text("The 1st pattern in this ")
                             .append(alloc.keyword("when"))
                             .append(alloc.text(" is causing a mismatch:")),
-                        alloc.region(region),
+                        alloc.region(lines.convert_region(region)),
                         pattern_type_comparison(
                             alloc,
                             found,
@@ -1199,7 +1371,7 @@ fn to_pattern_report<'b>(
                             .string(format!("The {} pattern in this ", index.ordinal()))
                             .append(alloc.keyword("when"))
                             .append(alloc.text(" does not match the previous ones:")),
-                        alloc.region(region),
+                        alloc.region(lines.convert_region(region)),
                         pattern_type_comparison(
                             alloc,
                             found,
@@ -1249,7 +1421,11 @@ fn pattern_type_comparison<'b>(
         comparison.expected,
     ];
 
-    lines.extend(problems_to_tip(alloc, comparison.problems));
+    lines.extend(problems_to_tip(
+        alloc,
+        comparison.problems,
+        ExpectationContext::Arbitrary,
+    ));
     lines.extend(reason_hints);
 
     alloc.stack(lines)
@@ -1284,6 +1460,7 @@ fn add_pattern_category<'b>(
 
 fn to_circular_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     region: roc_region::all::Region,
     symbol: Symbol,
@@ -1298,7 +1475,7 @@ fn to_circular_report<'b>(
                     .reflow("I'm inferring a weird self-referential type for ")
                     .append(alloc.symbol_unqualified(symbol))
                     .append(alloc.text(":")),
-                alloc.region(region),
+                alloc.region(lines.convert_region(region)),
                 alloc.stack(vec![
                     alloc.reflow(
                         "Here is my best effort at writing down the type. \
@@ -1328,12 +1505,13 @@ pub enum Problem {
 fn problems_to_tip<'b>(
     alloc: &'b RocDocAllocator<'b>,
     mut problems: Vec<Problem>,
+    expectation_context: ExpectationContext<'b>,
 ) -> Option<RocDocBuilder<'b>> {
     if problems.is_empty() {
         None
     } else {
         let problem = problems.remove(problems.len() - 1);
-        Some(type_problem_to_pretty(alloc, problem))
+        Some(type_problem_to_pretty(alloc, problem, expectation_context))
     }
 }
 
@@ -1412,6 +1590,20 @@ fn to_comparison<'b>(
             Status::Similar => vec![],
             Status::Different(problems) => problems,
         },
+    }
+}
+
+fn diff_is_wildcard_comparison<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    actual: ErrorType,
+    expected: ErrorType,
+) -> bool {
+    let Comparison { problems, .. } = to_comparison(alloc, actual, expected);
+    match problems.last() {
+        Some(Problem::BadRigidVar(v1, ErrorType::RigidVar(v2))) => {
+            v1.as_str() == WILDCARD && v2.as_str() == WILDCARD
+        }
+        _ => false,
     }
 }
 
@@ -1602,7 +1794,10 @@ fn to_diff<'b>(
         (Error, Error) | (Infinite, Infinite) => same(alloc, parens, type1),
 
         (FlexVar(x), FlexVar(y)) if x == y => same(alloc, parens, type1),
-        (RigidVar(x), RigidVar(y)) if x == y => same(alloc, parens, type1),
+        // Wildcards are always different!
+        (RigidVar(x), RigidVar(y)) if x == y && x.as_str() != WILDCARD => {
+            same(alloc, parens, type1)
+        }
 
         (Function(args1, _, ret1), Function(args2, _, ret2)) => {
             if args1.len() == args2.len() {
@@ -2428,11 +2623,12 @@ mod report_text {
 fn type_problem_to_pretty<'b>(
     alloc: &'b RocDocAllocator<'b>,
     problem: crate::error::r#type::Problem,
+    expectation_context: ExpectationContext<'b>,
 ) -> RocDocBuilder<'b> {
     use crate::error::r#type::Problem::*;
 
-    match problem {
-        FieldTypo(typo, possibilities) => {
+    match (problem, expectation_context) {
+        (FieldTypo(typo, possibilities), _) => {
             let suggestions = suggest::sort(typo.as_str(), possibilities);
 
             match suggestions.get(0) {
@@ -2458,7 +2654,7 @@ fn type_problem_to_pretty<'b>(
                 }
             }
         }
-        FieldsMissing(missing) => match missing.split_last() {
+        (FieldsMissing(missing), _) => match missing.split_last() {
             None => alloc.nil(),
             Some((f1, [])) => alloc
                 .tip()
@@ -2479,7 +2675,7 @@ fn type_problem_to_pretty<'b>(
                     .append(alloc.reflow(" fields are missing."))
             }
         },
-        TagTypo(typo, possibilities_tn) => {
+        (TagTypo(typo, possibilities_tn), _) => {
             let possibilities: Vec<IdentStr> = possibilities_tn
                 .into_iter()
                 .map(|tag_name| tag_name.as_ident_str(alloc.interns, alloc.home))
@@ -2509,7 +2705,7 @@ fn type_problem_to_pretty<'b>(
                 }
             }
         }
-        ArityMismatch(found, expected) => {
+        (ArityMismatch(found, expected), _) => {
             let line = if found < expected {
                 format!(
                     "It looks like it takes too few arguments. I was expecting {} more.",
@@ -2525,7 +2721,7 @@ fn type_problem_to_pretty<'b>(
             alloc.tip().append(line)
         }
 
-        BadRigidVar(x, tipe) => {
+        (BadRigidVar(x, tipe), ExpectationContext::Annotation { on }) => {
             use ErrorType::*;
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
@@ -2538,8 +2734,25 @@ fn type_problem_to_pretty<'b>(
                     .append(alloc.reflow(" of a single specific type. Maybe change the type annotation to be more specific? Maybe change the code to be more general?"))
             };
 
-            let bad_double_rigid = |a, b| {
-                let line = r#" as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same your type annotation? Maybe your code uses them in a weird way?"#;
+            let bad_double_wildcard = || {
+                alloc.tip().append(alloc.concat(vec![
+                    alloc.reflow(
+                        "Any connection between types must use a named type variable, not a ",
+                    ),
+                    alloc.type_variable(WILDCARD.into()),
+                    alloc.reflow("! Maybe the annotation "),
+                    on,
+                    alloc.reflow(" should have a named type variable in place of the "),
+                    alloc.type_variable(WILDCARD.into()),
+                    alloc.reflow("?"),
+                ]))
+            };
+
+            let bad_double_rigid = |a: Lowercase, b: Lowercase| {
+                if a.as_str() == WILDCARD && b.as_str() == WILDCARD {
+                    return bad_double_wildcard();
+                }
+                let line = r#" as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same in your type annotation? Maybe your code uses them in a weird way?"#;
 
                 alloc
                     .tip()
@@ -2568,7 +2781,11 @@ fn type_problem_to_pretty<'b>(
                 ),
             }
         }
-        IntFloat => alloc.tip().append(alloc.concat(vec![
+        (BadRigidVar(_, _), expectation_context) => {
+            internal_error!("I thought mismatches between rigid vars could only happen in the context of a type annotation, but here they're happening with a {:?}!", expectation_context)
+        }
+
+        (IntFloat, _) => alloc.tip().append(alloc.concat(vec![
             alloc.reflow("You can convert between "),
             alloc.type_str("Int"),
             alloc.reflow(" and "),
@@ -2580,7 +2797,7 @@ fn type_problem_to_pretty<'b>(
             alloc.reflow("."),
         ])),
 
-        TagsMissing(missing) => match missing.split_last() {
+        (TagsMissing(missing), _) => match missing.split_last() {
             None => alloc.nil(),
             Some((f1, [])) => {
                 let tip1 = alloc
@@ -2621,7 +2838,7 @@ fn type_problem_to_pretty<'b>(
                 alloc.stack(vec![tip1, tip2])
             }
         },
-        OptionalRequiredMismatch(field) => alloc.tip().append(alloc.concat(vec![
+        (OptionalRequiredMismatch(field), _) => alloc.tip().append(alloc.concat(vec![
             alloc.reflow("To extract the "),
             alloc.record_field(field),
             alloc.reflow(

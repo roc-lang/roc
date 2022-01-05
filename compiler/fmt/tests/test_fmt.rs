@@ -1,49 +1,57 @@
 #[macro_use]
-extern crate pretty_assertions;
-#[macro_use]
 extern crate indoc;
 extern crate bumpalo;
 extern crate roc_fmt;
 
 #[cfg(test)]
 mod test_fmt {
-    use bumpalo::collections::String;
     use bumpalo::Bump;
     use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_def;
     use roc_fmt::module::fmt_module;
+    use roc_fmt::Buf;
     use roc_parse::module::{self, module_defs};
-    use roc_parse::parser::{Parser, State};
+    use roc_parse::parser::Parser;
+    use roc_parse::state::State;
+    use roc_test_utils::assert_multiline_str_eq;
 
-    fn expr_formats_to(input: &str, expected: &str) {
+    // Not intended to be used directly in tests; please use expr_formats_to or expr_formats_same
+    fn expect_format_expr_helper(input: &str, expected: &str) {
         let arena = Bump::new();
-        let input = input.trim_end();
-        let expected = expected.trim_end();
-
         match roc_parse::test_helpers::parse_expr_with(&arena, input.trim()) {
             Ok(actual) => {
-                let mut buf = String::new_in(&arena);
+                let mut buf = Buf::new_in(&arena);
 
                 actual.format_with_options(&mut buf, Parens::NotNeeded, Newlines::Yes, 0);
 
-                assert_eq!(buf, expected)
+                assert_multiline_str_eq!(expected, buf.as_str());
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", input, error)
         };
+    }
+
+    fn expr_formats_to(input: &str, expected: &str) {
+        let input = input.trim_end();
+        let expected = expected.trim_end();
+
+        // First check that input formats to the expected version
+        expect_format_expr_helper(input, expected);
+
+        // Parse the expected result format it, asserting that it doesn't change
+        // It's important that formatting be stable / idempotent
+        expect_format_expr_helper(expected, expected);
     }
 
     fn expr_formats_same(input: &str) {
         expr_formats_to(input, input);
     }
 
-    fn module_formats_to(src: &str, expected: &str) {
+    // Not intended to be used directly in tests; please use module_formats_to or module_formats_same
+    fn expect_format_module_helper(src: &str, expected: &str) {
         let arena = Bump::new();
-        let src = src.trim_end();
-        let expected = expected.trim_end();
-
         match module::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
-                let mut buf = String::new_in(&arena);
+                let mut buf = Buf::new_in(&arena);
 
                 fmt_module(&mut buf, &actual);
 
@@ -55,11 +63,19 @@ mod test_fmt {
                     }
                     Err(error) => panic!("Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
                 }
-
-                assert_eq!(buf, expected)
+                assert_multiline_str_eq!(expected, buf.as_str())
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
         };
+    }
+
+    fn module_formats_to(input: &str, expected: &str) {
+        // First check that input formats to the expected version
+        expect_format_module_helper(input, expected);
+
+        // Parse the expected result format it, asserting that it doesn't change
+        // It's important that formatting be stable / idempotent
+        expect_format_module_helper(expected, expected);
     }
 
     fn module_formats_same(input: &str) {
@@ -87,6 +103,32 @@ mod test_fmt {
             a
             "#
         ));
+    }
+
+    #[test]
+    #[ignore]
+    fn def_with_comment_on_same_line() {
+        // TODO(joshuawarner32): make trailing comments format stabily
+        // This test currently fails because the comment ends up as SpaceBefore for the following `a`
+        // This works fine when formatted _once_ - but if you format again, the formatter wants to
+        // insert a newline between `a = "Hello"` and the comment, further muddying the waters.
+        // Clearly the formatter shouldn't be allowed to migrate a comment around like that.
+        expr_formats_to(
+            indoc!(
+                r#"
+                a = "Hello" # This variable is for greeting
+
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                a = "Hello"
+                # This variable is for greeting
+                a
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -1835,7 +1877,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn when_with_alternatives() {
+    fn when_with_alternatives_1() {
         expr_formats_same(indoc!(
             r#"
             when b is
@@ -1848,6 +1890,10 @@ mod test_fmt {
                     5
         "#
         ));
+    }
+
+    #[test]
+    fn when_with_alternatives_2() {
         expr_formats_same(indoc!(
             r#"
             when b is
@@ -1857,6 +1903,10 @@ mod test_fmt {
                     1
         "#
         ));
+    }
+
+    #[test]
+    fn when_with_alternatives_3() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1874,6 +1924,10 @@ mod test_fmt {
                 "#
             ),
         );
+    }
+
+    #[test]
+    fn when_with_alternatives_4() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1902,15 +1956,15 @@ mod test_fmt {
                 r#"
             when b is
                 1
-                | 2
-                | 3 ->
+                 | 2
+                 | 3 ->
                     4
 
                 5 | 6 | 7 ->
                     8
 
                 9
-                | 10 ->
+                 | 10 ->
                     11
 
                 12 | 13 ->
@@ -1919,12 +1973,36 @@ mod test_fmt {
                             16
 
                         17
-                        | 18 ->
+                         | 18 ->
                             19
 
                 20 ->
                     21
                 "#
+            ),
+        );
+    }
+
+    #[test]
+    fn with_multiline_pattern_indentation() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            when b is   3->4
+                        9
+                         |8->9
+            "#
+            ),
+            indoc!(
+                r#"
+            when b is
+                3 ->
+                    4
+
+                9
+                 | 8 ->
+                    9
+            "#
             ),
         );
     }
@@ -2109,6 +2187,35 @@ mod test_fmt {
                 x
             "#
         ));
+    }
+
+    #[test]
+    fn inner_def_with_triple_newline_before() {
+        // The triple newline used to cause the code in add_spaces to not indent the next line,
+        // which of course is not the same tree (and nor does it parse)
+        expr_formats_to(
+            indoc!(
+                r#"
+                \x ->
+                    m = 2
+
+
+                    m1 = insert m n powerOf10
+
+                    42
+                "#
+            ),
+            indoc!(
+                r#"
+                \x ->
+                    m = 2
+
+                    m1 = insert m n powerOf10
+
+                    42
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -2311,6 +2418,15 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn binop_if() {
+        expr_formats_same(indoc!(
+            r#"
+            5 * (if x > 0 then 1 else 2)
+            "#
+        ));
+    }
+
     // UNARY OP
 
     #[test]
@@ -2320,6 +2436,25 @@ mod test_fmt {
                 y = -4
 
                 !x
+            "#
+        ));
+    }
+
+    #[test]
+    fn unary_call_parens() {
+        expr_formats_same(indoc!(
+            r#"
+                !(f 1)
+            "#
+        ));
+    }
+
+    #[test]
+    fn unary_call_no_parens() {
+        // TIL: Negating a function "does what you might expect"... which is cool!
+        expr_formats_same(indoc!(
+            r#"
+                !f 1
             "#
         ));
     }
@@ -2436,15 +2571,43 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn pipline_op_with_apply() {
+        expr_formats_same(indoc!(
+            r#"
+            output
+                |> List.set (offset + 0) b
+                |> List.set (offset + 1) a
+            "#
+        ));
+    }
+
     // MODULES
 
     #[test]
     fn single_line_interface() {
         module_formats_same(indoc!(
             r#"
-                interface Foo exposes [] imports []
-            "#
+                interface Foo exposes [] imports []"#
         ));
+    }
+
+    #[test]
+    fn defs_with_trailing_comment() {
+        // TODO: make the formatter add a space between '42' and # below:
+        module_formats_to(
+            indoc!(
+                r#"
+            interface Foo exposes [] imports []
+            a = 42 # Yay greetings"#
+            ),
+            indoc!(
+                r#"
+            interface Foo exposes [] imports []
+            a = 42# Yay greetings
+            "#
+            ),
+        );
     }
 
     #[test]
@@ -2453,8 +2616,7 @@ mod test_fmt {
             r#"
                 interface Foo
                     exposes []
-                    imports []
-            "#
+                    imports []"#
         ));
     }
 
@@ -2464,8 +2626,7 @@ mod test_fmt {
             r#"
                 interface Foo
                     exposes [ Bar, Baz, a, b ]
-                    imports []
-            "#
+                    imports []"#
         ));
     }
 
@@ -2475,9 +2636,34 @@ mod test_fmt {
             r#"
                 interface Foo
                     exposes [ Bar, Baz, a, b ]
-                    imports [ Blah, Thing.{ foo, bar }, Stuff ]
-            "#
+                    imports [ Blah, Thing.{ foo, bar }, Stuff ]"#
         ));
+    }
+
+    #[test]
+    fn single_line_app() {
+        module_formats_same(indoc!(
+            r#"
+                app "Foo" packages { pf: "platform" } imports [] provides [ main ] to pf"#
+        ));
+    }
+
+    #[test]
+    fn single_line_platform() {
+        module_formats_same(
+            "platform \"folkertdev/foo\" \
+            requires { model=>Model, msg=>Msg } { main : Effect {} } \
+            exposes [] \
+            packages {} \
+            imports [ Task.{ Task } ] \
+            provides [ mainForHost ] \
+            effects fx.Effect \
+            { \
+                putLine : Str -> Effect {}, \
+                putInt : I64 -> Effect {}, \
+                getInt : Effect { value : I64, errorCode : [ A, B ], isError : Bool } \
+            }",
+        );
     }
 
     /// Annotations and aliases
@@ -2532,6 +2718,21 @@ mod test_fmt {
 
             b
             "#
+        ));
+    }
+
+    #[test]
+    fn multiline_tag_union_annotation_beginning_on_same_line() {
+        expr_formats_same(indoc!(
+            r#"
+            Expr : [
+                    Add Expr Expr,
+                    Mul Expr Expr,
+                    Val I64,
+                    Var I64,
+                ]
+
+            Expr"#
         ));
     }
 
@@ -2622,6 +2823,18 @@ mod test_fmt {
     }
 
     #[test]
+    fn function_application_package_type() {
+        expr_formats_same(indoc!(
+            r#"
+            main : Task.Task {} []
+            main = 42
+
+            main
+            "#
+        ));
+    }
+
+    #[test]
     fn record_type() {
         expr_formats_same(indoc!(
             r#"
@@ -2667,6 +2880,94 @@ mod test_fmt {
             y
             "#
         ));
+    }
+
+    #[test]
+    fn backpassing_simple() {
+        expr_formats_same(indoc!(
+            r#"
+                getChar = \ctx ->
+                    x <- Task.await (getCharScope scope)
+                    42
+
+                42
+            "#
+        ));
+    }
+
+    #[test]
+    fn backpassing_apply_tag() {
+        expr_formats_same(indoc!(
+            r#"
+                getChar = \ctx ->
+                    (T val newScope) <- Task.await (getCharScope scope)
+                    42
+
+                42
+            "#
+        ));
+    }
+
+    #[test]
+    fn backpassing_parens_body() {
+        expr_formats_same(indoc!(
+            r#"
+            Task.fromResult
+                (
+                    a, b <- binaryOp ctx
+                    if a == b then
+                        -1
+                    else
+                        0
+                )
+            "#
+        ));
+    }
+
+    #[test]
+    fn backpassing_body_on_newline() {
+        expr_formats_same(indoc!(
+            r#"
+                getChar = \ctx ->
+                    x <-
+                        Task.await (getCharScope scope)
+                    42
+
+                42
+            "#
+        ));
+    }
+
+    #[test]
+    /// Test that everything under examples/ is formatted correctly
+    /// If this test fails on your diff, it probably means you need to re-format the examples.
+    /// Try this:
+    /// `cargo run -- format $(find examples -name \*.roc)`
+    fn test_fmt_examples() {
+        let mut count = 0;
+        let mut root = std::env::current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_owned();
+        root.push("examples");
+        for entry in walkdir::WalkDir::new(&root) {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension() == Some(&std::ffi::OsStr::new("roc")) {
+                count += 1;
+                let src = std::fs::read_to_string(path).unwrap();
+                println!("Now trying to format {}", path.display());
+                module_formats_same(&src);
+            }
+        }
+        assert!(
+            count > 0,
+            "Expecting to find at least 1 .roc file to format under {}",
+            root.display()
+        );
     }
 
     // this is a parse error atm

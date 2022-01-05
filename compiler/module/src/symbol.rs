@@ -359,7 +359,7 @@ impl fmt::Debug for ModuleId {
     }
 }
 
-/// base.Task
+/// pf.Task
 /// 1. build mapping from short name to package
 /// 2. when adding new modules from package we need to register them in some other map (this module id goes with short name) (shortname, module-name) -> moduleId
 /// 3. pass this around to other modules getting headers parsed. when parsing interfaces we need to use this map to reference shortnames
@@ -880,6 +880,9 @@ define_builtins! {
 
         // the _ used in mono when a specialized symbol is deleted
         25 REMOVED_SPECIALIZATION: "#removed_specialization"
+
+        // used in dev backend
+        26 DEV_TMP: "#dev_tmp"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -989,6 +992,7 @@ define_builtins! {
         104 NUM_BYTES_TO_U32: "bytesToU32"
         105 NUM_CAST_TO_NAT: "#castToNat"
         106 NUM_DIV_CEIL: "divCeil"
+        107 NUM_TO_STR: "toStr"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -1014,19 +1018,32 @@ define_builtins! {
         7 STR_COUNT_GRAPHEMES: "countGraphemes"
         8 STR_STARTS_WITH: "startsWith"
         9 STR_ENDS_WITH: "endsWith"
-        10 STR_FROM_INT: "fromInt"
-        11 STR_FROM_FLOAT: "fromFloat"
-        12 STR_FROM_UTF8: "fromUtf8"
-        13 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
-        14 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
-        15 STR_TO_UTF8: "toUtf8"
-        16 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
-        17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
-        18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
-        19 STR_REPEAT: "repeat"
-        20 STR_TRIM: "trim"
-        21 STR_TRIM_LEFT: "trimLeft"
-        22 STR_TRIM_RIGHT: "trimRight"
+        10 STR_FROM_UTF8: "fromUtf8"
+        11 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
+        12 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
+        13 STR_TO_UTF8: "toUtf8"
+        14 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
+        15 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
+        16 STR_FROM_UTF8_RANGE: "fromUtf8Range"
+        17 STR_REPEAT: "repeat"
+        18 STR_TRIM: "trim"
+        19 STR_TRIM_LEFT: "trimLeft"
+        20 STR_TRIM_RIGHT: "trimRight"
+        21 STR_TO_DEC: "toDec"
+        22 STR_TO_F64: "toF64"
+        23 STR_TO_F32: "toF32"
+        24 STR_TO_NAT: "toNat"
+        25 STR_TO_U128: "toU128"
+        26 STR_TO_I128: "toI128"
+        27 STR_TO_U64: "toU64"
+        28 STR_TO_I64: "toI64"
+        29 STR_TO_U32: "toU32"
+        30 STR_TO_I32: "toI32"
+        31 STR_TO_U16: "toU16"
+        32 STR_TO_I16: "toI16"
+        33 STR_TO_U8: "toU8"
+        34 STR_TO_I8: "toI8"
+
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -1084,6 +1101,8 @@ define_builtins! {
         52 LIST_SPLIT: "split"
         53 LIST_SPLIT_CLOS: "#splitClos"
         54 LIST_ALL: "all"
+        55 LIST_DROP_IF: "dropIf"
+        56 LIST_DROP_IF_PREDICATE: "#dropIfPred"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

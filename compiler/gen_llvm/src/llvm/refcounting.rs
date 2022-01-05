@@ -10,7 +10,7 @@ use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
-use inkwell::types::{AnyTypeEnum, BasicType, BasicTypeEnum};
+use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
     BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
 };
@@ -19,6 +19,8 @@ use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
+/// "Infinite" reference count, for static values
+/// Ref counts are encoded as negative numbers where isize::MIN represents 1
 pub const REFCOUNT_MAX: usize = 0_usize;
 
 pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
@@ -442,8 +444,8 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
             Some(function)
         }
         Set(element_layout) => {
-            let key_layout = &Layout::Struct(&[]);
-            let value_layout = element_layout;
+            let key_layout = element_layout;
+            let value_layout = &Layout::Struct(&[]);
 
             let function = modify_refcount_dict(
                 env,
@@ -565,9 +567,11 @@ fn call_help<'a, 'ctx, 'env>(
     let call = match call_mode {
         CallMode::Inc(inc_amount) => {
             env.builder
-                .build_call(function, &[value, inc_amount.into()], "increment")
+                .build_call(function, &[value.into(), inc_amount.into()], "increment")
         }
-        CallMode::Dec => env.builder.build_call(function, &[value], "decrement"),
+        CallMode::Dec => env
+            .builder
+            .build_call(function, &[value.into()], "decrement"),
     };
 
     call.set_call_convention(FAST_CALL_CONV);
@@ -593,21 +597,31 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
         Union(variant) => {
             use UnionLayout::*;
 
-            if let NonRecursive(tags) = variant {
-                let function = modify_refcount_union(env, layout_ids, mode, when_recursive, tags);
+            match variant {
+                NonRecursive(&[]) => {
+                    // void type, nothing to refcount here
+                    None
+                }
 
-                return Some(function);
+                NonRecursive(tags) => {
+                    let function =
+                        modify_refcount_union(env, layout_ids, mode, when_recursive, tags);
+
+                    Some(function)
+                }
+
+                _ => {
+                    let function = build_rec_union(
+                        env,
+                        layout_ids,
+                        mode,
+                        &WhenRecursive::Loop(*variant),
+                        *variant,
+                    );
+
+                    Some(function)
+                }
             }
-
-            let function = build_rec_union(
-                env,
-                layout_ids,
-                mode,
-                &WhenRecursive::Loop(*variant),
-                *variant,
-            );
-
-            Some(function)
         }
 
         Struct(layouts) => {
@@ -1041,6 +1055,11 @@ pub fn build_header_help<'a, 'ctx, 'env>(
     arguments: &[BasicTypeEnum<'ctx>],
 ) -> FunctionValue<'ctx> {
     use inkwell::types::AnyTypeEnum::*;
+
+    let it = arguments.iter().map(|x| BasicMetadataTypeEnum::from(*x));
+    let vec = Vec::from_iter_in(it, env.arena);
+    let arguments = vec.as_slice();
+
     let fn_type = match return_type {
         ArrayType(t) => t.fn_type(arguments, false),
         FloatType(t) => t.fn_type(arguments, false),

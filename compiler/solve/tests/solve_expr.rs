@@ -88,9 +88,9 @@ mod solve_expr {
         let mut can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
 
-        let mut subs = solved.inner_mut();
+        let subs = solved.inner_mut();
 
-        dbg!(&subs);
+        // dbg!(&subs);
 
         //        assert!(can_problems.is_empty());
         //        assert!(type_problems.is_empty());
@@ -111,7 +111,7 @@ mod solve_expr {
 
         // name type vars
         for var in exposed_to_host.values() {
-            name_all_type_vars(*var, &mut subs);
+            name_all_type_vars(*var, subs);
         }
 
         let content = {
@@ -230,10 +230,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Str.fromInt
+                Num.toStr
                 "#
             ),
-            "Int * -> Str",
+            "Num * -> Str",
         );
     }
 
@@ -1329,7 +1329,7 @@ mod solve_expr {
                     \Foo -> 42
                 "#
             ),
-            "[ Foo ]* -> Num *",
+            "[ Foo ] -> Num *",
         );
     }
 
@@ -1341,7 +1341,7 @@ mod solve_expr {
                     \@Foo -> 42
                 "#
             ),
-            "[ @Foo ]* -> Num *",
+            "[ @Foo ] -> Num *",
         );
     }
 
@@ -1356,7 +1356,7 @@ mod solve_expr {
                             False -> 0
                 "#
             ),
-            "[ False, True ]* -> Num *",
+            "[ False, True ] -> Num *",
         );
     }
 
@@ -1421,7 +1421,7 @@ mod solve_expr {
                     \Foo x -> Foo x
                 "#
             ),
-            "[ Foo a ]* -> [ Foo a ]*",
+            "[ Foo a ] -> [ Foo a ]*",
         );
     }
 
@@ -1433,7 +1433,7 @@ mod solve_expr {
                     \Foo x _ -> Foo x "y"
                 "#
             ),
-            "[ Foo a * ]* -> [ Foo a Str ]*",
+            "[ Foo a * ] -> [ Foo a Str ]*",
         );
     }
 
@@ -2302,19 +2302,17 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    ok : Result I64 *
-                    ok = Ok 5
+                    ok : Result {} err
 
-                    err : Result * Str
-                    err = Err "blah"
+                    err : Result ok Str
 
-                    if 1 > 0 then
+                    if True then
                         ok
                     else
                         err
                 "#
             ),
-            "Result I64 Str",
+            "Result {} Str",
         );
     }
 
@@ -2418,7 +2416,7 @@ mod solve_expr {
                    toBit
                 "#
             ),
-            "[ False, True ]* -> Num *",
+            "[ False, True ] -> Num *",
         );
     }
 
@@ -2682,7 +2680,7 @@ mod solve_expr {
                     map
                        "#
             ),
-            "(a -> b), [ Cons a c, Nil ]* as c -> [ Cons b d, Nil ]* as d",
+            "(a -> b), [ Cons a c, Nil ] as c -> [ Cons b d, Nil ]* as d",
         );
     }
 
@@ -2943,7 +2941,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ]* as a -> [ S b, Z ]* as b",
+            "[ S a, Z ] as a -> [ S b, Z ]* as b",
         );
     }
 
@@ -2962,7 +2960,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ]* as a -> [ S b, Z ]* as b",
+            "[ S a, Z ] as a -> [ S b, Z ]* as b",
         );
     }
 
@@ -2983,20 +2981,20 @@ mod solve_expr {
         );
     }
 
-    // #[test]
-    // fn let_tag_pattern_with_annotation() {
-    //     infer_eq_without_problem(
-    //         indoc!(
-    //             r#"
-    //                 UserId x : [ UserId I64 ]
-    //                 UserId x = UserId 42
+    #[test]
+    fn let_tag_pattern_with_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                     UserId x : [ UserId I64 ]
+                     UserId x = UserId 42
 
-    //                 x
-    //             "#
-    //         ),
-    //         "I64",
-    //     );
-    // }
+                     x
+                 "#
+            ),
+            "I64",
+        );
+    }
 
     #[test]
     fn typecheck_record_linked_list_map() {
@@ -3033,7 +3031,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "(a -> b), [ Cons { x : a, xs : c }*, Nil ]* as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
+            "(a -> b), [ Cons { x : a, xs : c }*, Nil ] as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
         );
     }
 
@@ -3102,7 +3100,7 @@ mod solve_expr {
                    toAs
                 "#
             ),
-            "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
+            "(a -> b), [ Cons c [ Cons a d, Nil ], Nil ] as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
         );
     }
 
@@ -3907,7 +3905,7 @@ mod solve_expr {
                             x
                 "#
             ),
-            "[ Empty, Foo [ Bar ] I64 ]",
+            "[ Empty, Foo Bar I64 ]",
         );
     }
 
@@ -4545,8 +4543,8 @@ mod solve_expr {
                                 |> Str.concat ") ("
                                 |> Str.concat (printExpr b)
                                 |> Str.concat ")"
-                        Val v -> Str.fromInt v
-                        Var v -> "Var " |> Str.concat (Str.fromInt v)
+                        Val v -> Num.toStr v
+                        Var v -> "Var " |> Str.concat (Num.toStr v)
 
                 main : Str
                 main = printExpr (Var 3)
@@ -4743,6 +4741,225 @@ mod solve_expr {
                 "#
             ),
             "",
+        )
+    }
+
+    #[test]
+    fn issue_2217() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                LinkedList elem : [Empty, Prepend (LinkedList elem) elem]
+
+                fromList : List elem -> LinkedList elem
+                fromList = \elems -> List.walk elems Empty Prepend
+
+                fromList
+                "#
+            ),
+            "List elem -> LinkedList elem",
+        )
+    }
+
+    #[test]
+    fn issue_2217_inlined() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                fromList : List elem -> [ Empty, Prepend (LinkedList elem) elem ] as LinkedList elem
+                fromList = \elems -> List.walk elems Empty Prepend
+
+                fromList
+                "#
+            ),
+            "List elem -> LinkedList elem",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position1() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A -> X
+                       B -> Y
+                 "#
+            ),
+            "[ A, B ] -> [ X, Y ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position2() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A -> X
+                       B -> Y
+                       _ -> Z
+                 "#
+            ),
+            "[ A, B ]* -> [ X, Y, Z ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position3() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       A N -> Y
+                 "#
+            ),
+            "[ A [ M, N ] ] -> [ X, Y ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position4() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       A N -> Y
+                       A _ -> Z
+                 "#
+            ),
+            "[ A [ M, N ]* ] -> [ X, Y, Z ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position5() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A (M J) -> X
+                       A (N K) -> X
+                 "#
+            ),
+            "[ A [ M [ J ], N [ K ] ] ] -> [ X ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position6() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       B   -> X
+                       A N -> X
+                 "#
+            ),
+            "[ A [ M, N ], B ] -> [ X ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position7() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                         A -> X
+                         t -> t
+                 "#
+            ),
+            // TODO: we could be a bit smarter by subtracting "A" as a possible
+            // tag in the union known by t, which would yield the principal type
+            // [ A, ]a -> [ X ]a
+            "[ A, X ]a -> [ A, X ]a",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position8() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \opt ->
+                     when opt is
+                         Some ({tag: A}) -> 1
+                         Some ({tag: B}) -> 1
+                         None -> 0
+                 "#
+            ),
+            "[ None, Some { tag : [ A, B ] }* ] -> Num *",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position9() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 opt : [ Some Str, None ]
+                 opt = Some ""
+                 rcd = { opt }
+
+                 when rcd is
+                     { opt: Some s } -> s
+                     { opt: None } -> "?"
+                 "#
+            ),
+            "Str",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position10() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \r ->
+                     when r is
+                         { x: Blue, y ? 3 } -> y
+                         { x: Red, y ? 5 } -> y
+                 "#
+            ),
+            "{ x : [ Blue, Red ], y ? Num a }* -> Num a",
+        )
+    }
+
+    #[test]
+    // Issue #2299
+    fn infer_union_argument_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \UserId id -> id + 1
+                 "#
+            ),
+            "[ UserId (Num a) ] -> Num a",
+        )
+    }
+
+    #[test]
+    fn infer_union_def_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \email ->
+                    Email str = email
+                    Str.isEmpty str
+                 "#
+            ),
+            "[ Email Str ] -> Bool",
         )
     }
 }

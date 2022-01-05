@@ -1,15 +1,14 @@
 Platform {
     header: PlatformHeader {
-        name: |L 0-0, C 9-23| PackageName {
-            account: "rtfeldman",
-            pkg: "blah",
-        },
+        name: @9-25 PackageName(
+            "rtfeldman/blah",
+        ),
         requires: PlatformRequires {
             rigids: [],
-            signature: |L 0-0, C 38-47| Entry {
-                ident: |L 0-0, C 38-42| "main",
+            signature: @40-49 TypedIdent {
+                ident: @40-44 "main",
                 spaces_before_colon: [],
-                ann: |L 0-0, C 45-47| Record {
+                ann: @47-49 Record {
                     fields: [],
                     ext: None,
                 },

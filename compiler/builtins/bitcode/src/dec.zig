@@ -1,5 +1,6 @@
 const std = @import("std");
 const str = @import("str.zig");
+const num_ = @import("num.zig");
 const utils = @import("utils.zig");
 
 const math = std.math;
@@ -1051,6 +1052,14 @@ test "div: 10 / 3" {
 }
 
 // exports
+
+pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
+    if (@call(.{ .modifier = always_inline }, RocDec.fromStr, .{arg})) |dec| {
+        return .{ .errorcode = 0, .value = dec.num };
+    } else {
+        return .{ .errorcode = 1, .value = 0 };
+    }
+}
 
 pub fn fromF64C(arg: f64) callconv(.C) i128 {
     return if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| dec.num else @panic("TODO runtime exception failing convert f64 to RocDec");

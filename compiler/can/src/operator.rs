@@ -7,7 +7,7 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{AssignedField, Def, WhenBranch};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind
 // https://github.com/gluon-lang/gluon - license information can be found in
@@ -17,10 +17,10 @@ use roc_region::all::{Located, Region};
 
 fn new_op_call_expr<'a>(
     arena: &'a Bump,
-    left: &'a Located<Expr<'a>>,
-    loc_op: Located<BinOp>,
-    right: &'a Located<Expr<'a>>,
-) -> Located<Expr<'a>> {
+    left: &'a Loc<Expr<'a>>,
+    loc_op: Loc<BinOp>,
+    right: &'a Loc<Expr<'a>>,
+) -> Loc<Expr<'a>> {
     let region = Region::span_across(&left.region, &right.region);
 
     let value = match loc_op.value {
@@ -51,7 +51,7 @@ fn new_op_call_expr<'a>(
 
             let args = arena.alloc([left, right]);
 
-            let loc_expr = arena.alloc(Located {
+            let loc_expr = arena.alloc(Loc {
                 value: Expr::Var { module_name, ident },
                 region: loc_op.region,
             });
@@ -60,19 +60,19 @@ fn new_op_call_expr<'a>(
         }
     };
 
-    Located { region, value }
+    Loc { region, value }
 }
 
 fn desugar_def_helps<'a>(
     arena: &'a Bump,
     region: Region,
-    defs: &'a [&'a Located<Def<'a>>],
-    loc_ret: &'a Located<Expr<'a>>,
-) -> &'a Located<Expr<'a>> {
+    defs: &'a [&'a Loc<Def<'a>>],
+    loc_ret: &'a Loc<Expr<'a>>,
+) -> &'a Loc<Expr<'a>> {
     let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
 
     for loc_def in defs.iter() {
-        let loc_def = Located {
+        let loc_def = Loc {
             value: desugar_def(arena, &loc_def.value),
             region: loc_def.region,
         };
@@ -82,7 +82,7 @@ fn desugar_def_helps<'a>(
 
     let desugared_defs = desugared_defs.into_bump_slice();
 
-    arena.alloc(Located {
+    arena.alloc(Loc {
         value: Defs(desugared_defs, desugar_expr(arena, loc_ret)),
         region,
     })
@@ -119,7 +119,7 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
 
 /// Reorder the expression tree based on operator precedence and associativity rules,
 /// then replace the BinOp nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
-pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Located<Expr<'a>> {
+pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc<Expr<'a>> {
     match &loc_expr.value {
         Float(_)
         | Num(_)
@@ -136,13 +136,13 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
         Access(sub_expr, paths) => {
             let region = loc_expr.region;
-            let loc_sub_expr = Located {
+            let loc_sub_expr = Loc {
                 region,
                 value: **sub_expr,
             };
             let value = Access(&desugar_expr(arena, arena.alloc(loc_sub_expr)).value, paths);
 
-            arena.alloc(Located { region, value })
+            arena.alloc(Loc { region, value })
         }
         List(items) => {
             let mut new_items = Vec::with_capacity_in(items.len(), arena);
@@ -153,16 +153,16 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             let new_items = new_items.into_bump_slice();
             let value: Expr<'a> = List(items.replace_items(new_items));
 
-            arena.alloc(Located {
+            arena.alloc(Loc {
                 region: loc_expr.region,
                 value,
             })
         }
-        Record(fields) => arena.alloc(Located {
+        Record(fields) => arena.alloc(Loc {
             region: loc_expr.region,
             value: Record(fields.map_items(arena, |field| {
                 let value = desugar_field(arena, &field.value);
-                Located {
+                Loc {
                     value,
                     region: field.region,
                 }
@@ -173,13 +173,13 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             // NOTE the `update` field is always a `Var { .. }` and does not need to be desugared
             let new_fields = fields.map_items(arena, |field| {
                 let value = desugar_field(arena, &field.value);
-                Located {
+                Loc {
                     value,
                     region: field.region,
                 }
             });
 
-            arena.alloc(Located {
+            arena.alloc(Loc {
                 region: loc_expr.region,
                 value: RecordUpdate {
                     update: *update,
@@ -187,7 +187,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 },
             })
         }
-        Closure(loc_patterns, loc_ret) => arena.alloc(Located {
+        Closure(loc_patterns, loc_ret) => arena.alloc(Loc {
             region: loc_expr.region,
             value: Closure(loc_patterns, desugar_expr(arena, loc_ret)),
         }),
@@ -201,17 +201,17 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             let desugared_ret = desugar_expr(arena, loc_ret);
             let closure = Expr::Closure(loc_patterns, desugared_ret);
-            let loc_closure = Located::at(loc_expr.region, closure);
+            let loc_closure = Loc::at(loc_expr.region, closure);
 
             match &desugared_body.value {
                 Expr::Apply(function, arguments, called_via) => {
-                    let mut new_arguments: Vec<'a, &'a Located<Expr<'a>>> =
+                    let mut new_arguments: Vec<'a, &'a Loc<Expr<'a>>> =
                         Vec::with_capacity_in(arguments.len() + 1, arena);
                     new_arguments.extend(arguments.iter());
                     new_arguments.push(arena.alloc(loc_closure));
 
                     let call = Expr::Apply(function, new_arguments.into_bump_slice(), *called_via);
-                    let loc_call = Located::at(loc_expr.region, call);
+                    let loc_call = Loc::at(loc_expr.region, call);
 
                     arena.alloc(loc_call)
                 }
@@ -222,7 +222,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                         arena.alloc([&*arena.alloc(loc_closure)]),
                         CalledVia::Space,
                     );
-                    let loc_call = Located::at(loc_expr.region, call);
+                    let loc_call = Loc::at(loc_expr.region, call);
 
                     arena.alloc(loc_call)
                 }
@@ -239,7 +239,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             let desugared_args = desugared_args.into_bump_slice();
 
-            arena.alloc(Located {
+            arena.alloc(Loc {
                 value: Apply(desugar_expr(arena, loc_fn), desugared_args, *called_via),
                 region: loc_expr.region,
             })
@@ -271,7 +271,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             let desugared_branches = desugared_branches.into_bump_slice();
 
-            arena.alloc(Located {
+            arena.alloc(Loc {
                 value: When(loc_desugared_cond, desugared_branches),
                 region: loc_expr.region,
             })
@@ -294,10 +294,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                     ident: "not",
                 },
             };
-            let loc_fn_var = arena.alloc(Located { region, value });
+            let loc_fn_var = arena.alloc(Loc { region, value });
             let desugared_args = arena.alloc([desugar_expr(arena, loc_arg)]);
 
-            arena.alloc(Located {
+            arena.alloc(Loc {
                 value: Apply(loc_fn_var, desugared_args, CalledVia::UnaryOp(op)),
                 region: loc_expr.region,
             })
@@ -307,7 +307,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             // are no longer needed and should be dropped.
             desugar_expr(
                 arena,
-                arena.alloc(Located {
+                arena.alloc(Loc {
                     value: **expr,
                     region: loc_expr.region,
                 }),
@@ -326,7 +326,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 ));
             }
 
-            arena.alloc(Located {
+            arena.alloc(Loc {
                 value: If(desugared_if_thens.into_bump_slice(), desugared_final_else),
                 region: loc_expr.region,
             })
@@ -334,7 +334,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         Expect(condition, continuation) => {
             let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
             let desugared_continuation = &*arena.alloc(desugar_expr(arena, continuation));
-            arena.alloc(Located {
+            arena.alloc(Loc {
                 value: Expect(desugared_condition, desugared_continuation),
                 region: loc_expr.region,
             })
@@ -350,7 +350,7 @@ fn desugar_field<'a>(
 
     match field {
         RequiredValue(loc_str, spaces, loc_expr) => RequiredValue(
-            Located {
+            Loc {
                 value: loc_str.value,
                 region: loc_str.region,
             },
@@ -358,7 +358,7 @@ fn desugar_field<'a>(
             desugar_expr(arena, loc_expr),
         ),
         OptionalValue(loc_str, spaces, loc_expr) => OptionalValue(
-            Located {
+            Loc {
                 value: loc_str.value,
                 region: loc_str.region,
             },
@@ -367,7 +367,7 @@ fn desugar_field<'a>(
         ),
         LabelOnly(loc_str) => {
             // Desugar { x } into { x: x }
-            let loc_expr = Located {
+            let loc_expr = Loc {
                 value: Var {
                     module_name: "",
                     ident: loc_str.value,
@@ -376,7 +376,7 @@ fn desugar_field<'a>(
             };
 
             RequiredValue(
-                Located {
+                Loc {
                     value: loc_str.value,
                     region: loc_str.region,
                 },
@@ -423,11 +423,11 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
 fn desugar_bin_ops<'a>(
     arena: &'a Bump,
     whole_region: Region,
-    lefts: &'a [(Located<Expr<'_>>, Located<BinOp>)],
-    right: &'a Located<Expr<'_>>,
-) -> &'a Located<Expr<'a>> {
-    let mut arg_stack: Vec<&'a Located<Expr>> = Vec::with_capacity_in(lefts.len() + 1, arena);
-    let mut op_stack: Vec<Located<BinOp>> = Vec::with_capacity_in(lefts.len(), arena);
+    lefts: &'a [(Loc<Expr<'_>>, Loc<BinOp>)],
+    right: &'a Loc<Expr<'_>>,
+) -> &'a Loc<Expr<'a>> {
+    let mut arg_stack: Vec<&'a Loc<Expr>> = Vec::with_capacity_in(lefts.len() + 1, arena);
+    let mut op_stack: Vec<Loc<BinOp>> = Vec::with_capacity_in(lefts.len(), arena);
 
     for (loc_expr, loc_op) in lefts {
         arg_stack.push(desugar_expr(arena, loc_expr));
@@ -447,18 +447,18 @@ fn desugar_bin_ops<'a>(
 }
 
 enum Step<'a> {
-    Error(&'a Located<Expr<'a>>),
-    Push(Located<BinOp>),
+    Error(&'a Loc<Expr<'a>>),
+    Push(Loc<BinOp>),
     Skip,
 }
 
 fn run_binop_step<'a>(
     arena: &'a Bump,
     whole_region: Region,
-    arg_stack: &mut Vec<&'a Located<Expr<'a>>>,
-    op_stack: &mut Vec<Located<BinOp>>,
-    next_op: Located<BinOp>,
-) -> Result<(), &'a Located<Expr<'a>>> {
+    arg_stack: &mut Vec<&'a Loc<Expr<'a>>>,
+    op_stack: &mut Vec<Loc<BinOp>>,
+    next_op: Loc<BinOp>,
+) -> Result<(), &'a Loc<Expr<'a>>> {
     use Step::*;
 
     match binop_step(arena, whole_region, arg_stack, op_stack, next_op) {
@@ -471,9 +471,9 @@ fn run_binop_step<'a>(
 fn binop_step<'a>(
     arena: &'a Bump,
     whole_region: Region,
-    arg_stack: &mut Vec<&'a Located<Expr<'a>>>,
-    op_stack: &mut Vec<Located<BinOp>>,
-    next_op: Located<BinOp>,
+    arg_stack: &mut Vec<&'a Loc<Expr<'a>>>,
+    op_stack: &mut Vec<Loc<BinOp>>,
+    next_op: Loc<BinOp>,
 ) -> Step<'a> {
     use roc_module::called_via::Associativity::*;
     use std::cmp::Ordering;
@@ -542,7 +542,7 @@ fn binop_step<'a>(
                             };
                             let value = Expr::PrecedenceConflict(arena.alloc(data));
 
-                            Step::Error(arena.alloc(Located { region, value }))
+                            Step::Error(arena.alloc(Loc { region, value }))
                         }
 
                         _ => {

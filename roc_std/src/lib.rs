@@ -2,6 +2,8 @@
 #![no_std]
 use core::convert::From;
 use core::ffi::c_void;
+use core::mem::{ManuallyDrop, MaybeUninit};
+use core::ops::Drop;
 use core::{fmt, mem, ptr, slice};
 
 // A list of C functions that are being imported
@@ -507,7 +509,7 @@ impl RocStr {
     pub fn storage(&self) -> Option<Storage> {
         use core::cmp::Ordering::*;
 
-        if self.is_small_str() || self.length == 0 {
+        if self.is_small_str() {
             return None;
         }
 
@@ -660,7 +662,7 @@ impl RocStr {
 impl Default for RocStr {
     fn default() -> Self {
         Self {
-            length: 0,
+            length: isize::MIN as usize,
             elements: core::ptr::null_mut(),
         }
     }
@@ -675,11 +677,21 @@ impl From<&str> for RocStr {
 impl fmt::Debug for RocStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // RocStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
-        f.debug_struct("RocStr")
-            .field("is_small_str", &self.is_small_str())
-            .field("storage", &self.storage())
-            .field("elements", &self.as_slice())
-            .finish()
+
+        match core::str::from_utf8(self.as_slice()) {
+            Ok(string) => f
+                .debug_struct("RocStr")
+                .field("is_small_str", &self.is_small_str())
+                .field("storage", &self.storage())
+                .field("string_contents", &string)
+                .finish(),
+            Err(_) => f
+                .debug_struct("RocStr")
+                .field("is_small_str", &self.is_small_str())
+                .field("storage", &self.storage())
+                .field("byte_contents", &self.as_slice())
+                .finish(),
+        }
     }
 }
 
@@ -693,7 +705,7 @@ impl Eq for RocStr {}
 
 impl Clone for RocStr {
     fn clone(&self) -> Self {
-        if self.is_small_str() || self.is_empty() {
+        if self.is_small_str() {
             Self {
                 elements: self.elements,
                 length: self.length,
@@ -730,7 +742,7 @@ impl Clone for RocStr {
 
 impl Drop for RocStr {
     fn drop(&mut self) {
-        if !self.is_small_str() && !self.is_empty() {
+        if !self.is_small_str() {
             let storage_ptr = self.get_storage_ptr_mut();
 
             unsafe {
@@ -752,14 +764,152 @@ impl Drop for RocStr {
     }
 }
 
-/// Like a Rust Result, but with Roc's fixed discriminant size of u64, and
-/// with Roc's Err = 0, Ok = 1 discriminant numbers.
+/// Like a Rust `Result`, but following Roc's ABI instead of Rust's.
+/// (Using Rust's `Result` instead of this will not work properly with Roc code!)
 ///
-/// Using Rust's Result instead of this will not work properly with Roc code!
-#[repr(u64)]
-pub enum RocResult<Ok, Err> {
-    Err(Err),
-    Ok(Ok),
+/// This can be converted to/from a Rust `Result` using `.into()`
+#[repr(C)]
+pub struct RocResult<T, E> {
+    payload: RocResultPayload<T, E>,
+    tag: RocResultTag,
+}
+
+impl<T, E> core::fmt::Debug for RocResult<T, E>
+where
+    T: core::fmt::Debug,
+    E: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.as_result_of_refs() {
+            Ok(payload) => write!(f, "RocOk({:?})", payload),
+            Err(payload) => write!(f, "RocErr({:?})", payload),
+        }
+    }
+}
+
+impl<T, E> PartialEq for RocResult<T, E>
+where
+    T: PartialEq,
+    E: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.as_result_of_refs() == other.as_result_of_refs()
+    }
+}
+
+impl<T, E> Clone for RocResult<T, E>
+where
+    T: Clone,
+    E: Clone,
+{
+    fn clone(&self) -> Self {
+        match self.as_result_of_refs() {
+            Ok(payload) => RocResult::ok(ManuallyDrop::into_inner(payload.clone())),
+            Err(payload) => RocResult::err(ManuallyDrop::into_inner(payload.clone())),
+        }
+    }
+}
+
+impl<T, E> RocResult<T, E> {
+    pub fn ok(payload: T) -> Self {
+        Self {
+            tag: RocResultTag::RocOk,
+            payload: RocResultPayload {
+                ok: ManuallyDrop::new(payload),
+            },
+        }
+    }
+
+    pub fn err(payload: E) -> Self {
+        Self {
+            tag: RocResultTag::RocErr,
+            payload: RocResultPayload {
+                err: ManuallyDrop::new(payload),
+            },
+        }
+    }
+
+    pub fn is_ok(&self) -> bool {
+        matches!(self.tag, RocResultTag::RocOk)
+    }
+
+    pub fn is_err(&self) -> bool {
+        matches!(self.tag, RocResultTag::RocErr)
+    }
+
+    fn into_payload(mut self) -> RocResultPayload<T, E> {
+        let mut value = MaybeUninit::uninit();
+        let ref_mut_value = unsafe { &mut *value.as_mut_ptr() };
+
+        // move the value into our MaybeUninit memory
+        core::mem::swap(&mut self.payload, ref_mut_value);
+
+        // don't run the destructor on self; the `payload` has been moved out
+        // and replaced by uninitialized memory
+        core::mem::forget(self);
+
+        unsafe { value.assume_init() }
+    }
+
+    fn as_result_of_refs(&self) -> Result<&ManuallyDrop<T>, &ManuallyDrop<E>> {
+        use RocResultTag::*;
+
+        unsafe {
+            match self.tag {
+                RocOk => Ok(&self.payload.ok),
+                RocErr => Err(&self.payload.err),
+            }
+        }
+    }
+}
+
+impl<T, E> From<RocResult<T, E>> for Result<T, E> {
+    fn from(roc_result: RocResult<T, E>) -> Self {
+        use RocResultTag::*;
+
+        let tag = roc_result.tag;
+        let payload = roc_result.into_payload();
+
+        unsafe {
+            match tag {
+                RocOk => Ok(ManuallyDrop::into_inner(payload.ok)),
+                RocErr => Err(ManuallyDrop::into_inner(payload.err)),
+            }
+        }
+    }
+}
+
+impl<T, E> From<Result<T, E>> for RocResult<T, E> {
+    fn from(result: Result<T, E>) -> Self {
+        match result {
+            Ok(payload) => RocResult::ok(payload),
+            Err(payload) => RocResult::err(payload),
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy)]
+enum RocResultTag {
+    RocErr = 0,
+    RocOk = 1,
+}
+
+#[repr(C)]
+union RocResultPayload<T, E> {
+    ok: ManuallyDrop<T>,
+    err: ManuallyDrop<E>,
+}
+
+impl<T, E> Drop for RocResult<T, E> {
+    fn drop(&mut self) {
+        use RocResultTag::*;
+
+        match self.tag {
+            RocOk => unsafe { ManuallyDrop::drop(&mut self.payload.ok) },
+            RocErr => unsafe { ManuallyDrop::drop(&mut self.payload.err) },
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]

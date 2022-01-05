@@ -11,8 +11,9 @@ use roc_collections::all::{ImMap, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, Import};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
+use roc_parse::parser::{SourceError, SyntaxError};
 use roc_problem::can::Problem;
-use roc_region::all::Located;
+use roc_region::all::Loc;
 use roc_solve::solve;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
@@ -90,7 +91,7 @@ pub fn can_expr<'a>(arena: &'a Bump, expr_str: &'a str) -> Result<CanExprOut, Pa
 }
 
 pub struct CanExprOut {
-    pub loc_expr: Located<Expr>,
+    pub loc_expr: Loc<Expr>,
     pub output: Output,
     pub problems: Vec<Problem>,
     pub home: ModuleId,
@@ -102,7 +103,7 @@ pub struct CanExprOut {
 
 #[derive(Debug)]
 pub struct ParseErrOut<'a> {
-    pub fail: roc_parse::parser::SyntaxError<'a>,
+    pub fail: SourceError<'a, SyntaxError<'a>>,
     pub home: ModuleId,
     pub interns: Interns,
 }
@@ -169,7 +170,7 @@ pub fn can_expr_with<'a>(
     let imports: Vec<_> = types
         .into_iter()
         .map(|(symbol, (solved_type, region))| Import {
-            loc_symbol: Located::at(region, symbol),
+            loc_symbol: Loc::at(region, symbol),
             solved_type,
         })
         .collect();

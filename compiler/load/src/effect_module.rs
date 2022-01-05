@@ -8,7 +8,7 @@ use roc_collections::all::{MutSet, SendMap};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Type;
 
@@ -112,7 +112,7 @@ fn build_effect_always(
     let const_closure = {
         let arguments = vec![(
             var_store.fresh(),
-            Located::at_zero(empty_record_pattern(var_store)),
+            Loc::at_zero(empty_record_pattern(var_store)),
         )];
 
         let body = Expr::Var(value_symbol);
@@ -126,7 +126,7 @@ fn build_effect_always(
             captured_symbols: vec![(value_symbol, var_store.fresh())],
             recursive: Recursive::NotRecursive,
             arguments,
-            loc_body: Box::new(Located::at_zero(body)),
+            loc_body: Box::new(Loc::at_zero(body)),
         })
     };
 
@@ -137,12 +137,12 @@ fn build_effect_always(
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
             name: effect_tag_name.clone(),
-            arguments: vec![(var_store.fresh(), Located::at_zero(const_closure))],
+            arguments: vec![(var_store.fresh(), Loc::at_zero(const_closure))],
         };
 
         let arguments = vec![(
             var_store.fresh(),
-            Located::at_zero(Pattern::Identifier(value_symbol)),
+            Loc::at_zero(Pattern::Identifier(value_symbol)),
         )];
 
         let function_var = var_store.fresh();
@@ -155,7 +155,7 @@ fn build_effect_always(
             captured_symbols: Vec::new(),
             recursive: Recursive::NotRecursive,
             arguments,
-            loc_body: Box::new(Located::at_zero(body)),
+            loc_body: Box::new(Loc::at_zero(body)),
         });
 
         (function_var, closure)
@@ -199,8 +199,8 @@ fn build_effect_always(
     let mut pattern_vars = SendMap::default();
     pattern_vars.insert(always_symbol, function_var);
     let def = Def {
-        loc_pattern: Located::at_zero(pattern),
-        loc_expr: Located::at_zero(always_closure),
+        loc_pattern: Loc::at_zero(pattern),
+        loc_expr: Loc::at_zero(always_closure),
         expr_var: function_var,
         pattern_vars,
         annotation: Some(def_annotation),
@@ -255,12 +255,12 @@ fn build_effect_map(
     let force_thunk_call = {
         let boxed = (
             var_store.fresh(),
-            Located::at_zero(Expr::Var(thunk_symbol)),
+            Loc::at_zero(Expr::Var(thunk_symbol)),
             var_store.fresh(),
             var_store.fresh(),
         );
 
-        let arguments = vec![(var_store.fresh(), Located::at_zero(Expr::EmptyRecord))];
+        let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::EmptyRecord))];
         Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
     };
 
@@ -268,12 +268,12 @@ fn build_effect_map(
     let mapper_call = {
         let boxed = (
             var_store.fresh(),
-            Located::at_zero(Expr::Var(mapper_symbol)),
+            Loc::at_zero(Expr::Var(mapper_symbol)),
             var_store.fresh(),
             var_store.fresh(),
         );
 
-        let arguments = vec![(var_store.fresh(), Located::at_zero(force_thunk_call))];
+        let arguments = vec![(var_store.fresh(), Loc::at_zero(force_thunk_call))];
         Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
     };
 
@@ -292,7 +292,7 @@ fn build_effect_map(
     let inner_closure = {
         let arguments = vec![(
             var_store.fresh(),
-            Located::at_zero(empty_record_pattern(var_store)),
+            Loc::at_zero(empty_record_pattern(var_store)),
         )];
 
         Expr::Closure(ClosureData {
@@ -307,26 +307,26 @@ fn build_effect_map(
             ],
             recursive: Recursive::NotRecursive,
             arguments,
-            loc_body: Box::new(Located::at_zero(mapper_call)),
+            loc_body: Box::new(Loc::at_zero(mapper_call)),
         })
     };
 
     let arguments = vec![
         (
             var_store.fresh(),
-            Located::at_zero(Pattern::AppliedTag {
+            Loc::at_zero(Pattern::AppliedTag {
                 whole_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
                 tag_name: effect_tag_name.clone(),
                 arguments: vec![(
                     var_store.fresh(),
-                    Located::at_zero(Pattern::Identifier(thunk_symbol)),
+                    Loc::at_zero(Pattern::Identifier(thunk_symbol)),
                 )],
             }),
         ),
         (
             var_store.fresh(),
-            Located::at_zero(Pattern::Identifier(mapper_symbol)),
+            Loc::at_zero(Pattern::Identifier(mapper_symbol)),
         ),
     ];
 
@@ -335,7 +335,7 @@ fn build_effect_map(
         variant_var: var_store.fresh(),
         ext_var: var_store.fresh(),
         name: effect_tag_name.clone(),
-        arguments: vec![(var_store.fresh(), Located::at_zero(inner_closure))],
+        arguments: vec![(var_store.fresh(), Loc::at_zero(inner_closure))],
     };
 
     let function_var = var_store.fresh();
@@ -348,7 +348,7 @@ fn build_effect_map(
         captured_symbols: Vec::new(),
         recursive: Recursive::NotRecursive,
         arguments,
-        loc_body: Box::new(Located::at_zero(body)),
+        loc_body: Box::new(Loc::at_zero(body)),
     });
 
     let mut introduced_variables = IntroducedVariables::default();
@@ -411,8 +411,8 @@ fn build_effect_map(
     let mut pattern_vars = SendMap::default();
     pattern_vars.insert(map_symbol, function_var);
     let def = Def {
-        loc_pattern: Located::at_zero(pattern),
-        loc_expr: Located::at_zero(map_closure),
+        loc_pattern: Loc::at_zero(pattern),
+        loc_expr: Loc::at_zero(map_closure),
         expr_var: function_var,
         pattern_vars,
         annotation: Some(def_annotation),
@@ -467,12 +467,12 @@ fn build_effect_after(
     let force_thunk_call = {
         let boxed = (
             var_store.fresh(),
-            Located::at_zero(Expr::Var(thunk_symbol)),
+            Loc::at_zero(Expr::Var(thunk_symbol)),
             var_store.fresh(),
             var_store.fresh(),
         );
 
-        let arguments = vec![(var_store.fresh(), Located::at_zero(Expr::EmptyRecord))];
+        let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::EmptyRecord))];
         Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
     };
 
@@ -480,31 +480,31 @@ fn build_effect_after(
     let to_effect_call = {
         let boxed = (
             var_store.fresh(),
-            Located::at_zero(Expr::Var(to_effect_symbol)),
+            Loc::at_zero(Expr::Var(to_effect_symbol)),
             var_store.fresh(),
             var_store.fresh(),
         );
 
-        let arguments = vec![(var_store.fresh(), Located::at_zero(force_thunk_call))];
+        let arguments = vec![(var_store.fresh(), Loc::at_zero(force_thunk_call))];
         Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
     };
 
     let arguments = vec![
         (
             var_store.fresh(),
-            Located::at_zero(Pattern::AppliedTag {
+            Loc::at_zero(Pattern::AppliedTag {
                 whole_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
                 tag_name: effect_tag_name.clone(),
                 arguments: vec![(
                     var_store.fresh(),
-                    Located::at_zero(Pattern::Identifier(thunk_symbol)),
+                    Loc::at_zero(Pattern::Identifier(thunk_symbol)),
                 )],
             }),
         ),
         (
             var_store.fresh(),
-            Located::at_zero(Pattern::Identifier(to_effect_symbol)),
+            Loc::at_zero(Pattern::Identifier(to_effect_symbol)),
         ),
     ];
 
@@ -518,7 +518,7 @@ fn build_effect_after(
         captured_symbols: Vec::new(),
         recursive: Recursive::NotRecursive,
         arguments,
-        loc_body: Box::new(Located::at_zero(to_effect_call)),
+        loc_body: Box::new(Loc::at_zero(to_effect_call)),
     });
 
     let mut introduced_variables = IntroducedVariables::default();
@@ -578,8 +578,8 @@ fn build_effect_after(
     let mut pattern_vars = SendMap::default();
     pattern_vars.insert(after_symbol, function_var);
     let def = Def {
-        loc_pattern: Located::at_zero(pattern),
-        loc_expr: Located::at_zero(after_closure),
+        loc_pattern: Loc::at_zero(pattern),
+        loc_expr: Loc::at_zero(after_closure),
         expr_var: function_var,
         pattern_vars,
         annotation: Some(def_annotation),
@@ -602,7 +602,7 @@ pub fn build_host_exposed_def(
     let mut pattern_vars = SendMap::default();
     pattern_vars.insert(symbol, expr_var);
 
-    let mut arguments: Vec<(Variable, Located<Pattern>)> = Vec::new();
+    let mut arguments: Vec<(Variable, Loc<Pattern>)> = Vec::new();
     let mut linked_symbol_arguments: Vec<(Variable, Expr)> = Vec::new();
     let mut captured_symbols: Vec<(Symbol, Variable)> = Vec::new();
 
@@ -626,7 +626,7 @@ pub fn build_host_exposed_def(
 
                     let arg_var = var_store.fresh();
 
-                    arguments.push((arg_var, Located::at_zero(Pattern::Identifier(arg_symbol))));
+                    arguments.push((arg_var, Loc::at_zero(Pattern::Identifier(arg_symbol))));
 
                     captured_symbols.push((arg_symbol, arg_var));
                     linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol)));
@@ -663,16 +663,16 @@ pub fn build_host_exposed_def(
                     recursive: Recursive::NotRecursive,
                     arguments: vec![(
                         var_store.fresh(),
-                        Located::at_zero(empty_record_pattern(var_store)),
+                        Loc::at_zero(empty_record_pattern(var_store)),
                     )],
-                    loc_body: Box::new(Located::at_zero(low_level_call)),
+                    loc_body: Box::new(Loc::at_zero(low_level_call)),
                 });
 
                 let body = Expr::Tag {
                     variant_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
                     name: effect_tag_name,
-                    arguments: vec![(var_store.fresh(), Located::at_zero(effect_closure))],
+                    arguments: vec![(var_store.fresh(), Loc::at_zero(effect_closure))],
                 };
 
                 Expr::Closure(ClosureData {
@@ -684,7 +684,7 @@ pub fn build_host_exposed_def(
                     captured_symbols: std::vec::Vec::new(),
                     recursive: Recursive::NotRecursive,
                     arguments,
-                    loc_body: Box::new(Located::at_zero(body)),
+                    loc_body: Box::new(Loc::at_zero(body)),
                 })
             }
             _ => {
@@ -725,15 +725,15 @@ pub fn build_host_exposed_def(
                     name: effect_closure_symbol,
                     captured_symbols,
                     recursive: Recursive::NotRecursive,
-                    arguments: vec![(var_store.fresh(), Located::at_zero(empty_record_pattern))],
-                    loc_body: Box::new(Located::at_zero(low_level_call)),
+                    arguments: vec![(var_store.fresh(), Loc::at_zero(empty_record_pattern))],
+                    loc_body: Box::new(Loc::at_zero(low_level_call)),
                 });
 
                 Expr::Tag {
                     variant_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
                     name: effect_tag_name,
-                    arguments: vec![(var_store.fresh(), Located::at_zero(effect_closure))],
+                    arguments: vec![(var_store.fresh(), Loc::at_zero(effect_closure))],
                 }
             }
         }
@@ -747,8 +747,8 @@ pub fn build_host_exposed_def(
     };
 
     Def {
-        loc_pattern: Located::at_zero(pattern),
-        loc_expr: Located::at_zero(def_body),
+        loc_pattern: Loc::at_zero(pattern),
+        loc_expr: Loc::at_zero(def_body),
         expr_var,
         pattern_vars,
         annotation: Some(def_annotation),

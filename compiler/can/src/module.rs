@@ -12,7 +12,7 @@ use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
 
@@ -43,7 +43,7 @@ pub struct ModuleOutput {
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a, F>(
     arena: &Bump,
-    loc_defs: &'a [Located<ast::Def<'a>>],
+    loc_defs: &'a [Loc<ast::Def<'a>>],
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
@@ -76,7 +76,7 @@ where
         bumpalo::collections::Vec::with_capacity_in(loc_defs.len() + num_deps, arena);
 
     for loc_def in loc_defs.iter() {
-        desugared.push(&*arena.alloc(Located {
+        desugared.push(&*arena.alloc(Loc {
             value: desugar_def(arena, &loc_def.value),
             region: loc_def.region,
         }));
@@ -263,8 +263,8 @@ where
 
                 let runtime_error = RuntimeError::ExposedButNotDefined(symbol);
                 let def = Def {
-                    loc_pattern: Located::new(0, 0, 0, 0, Pattern::Identifier(symbol)),
-                    loc_expr: Located::new(0, 0, 0, 0, Expr::RuntimeError(runtime_error)),
+                    loc_pattern: Loc::at(Region::zero(), Pattern::Identifier(symbol)),
+                    loc_expr: Loc::at(Region::zero(), Expr::RuntimeError(runtime_error)),
                     expr_var: var_store.fresh(),
                     pattern_vars,
                     annotation: None,

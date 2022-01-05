@@ -1,6 +1,6 @@
 use roc_module::{ident::Ident, module_err::ModuleError};
 use roc_parse::parser::SyntaxError;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use snafu::{Backtrace, Snafu};
 
 use crate::lang::core::ast::ASTNodeId;
@@ -56,8 +56,8 @@ impl From<ModuleError> for ASTError {
     }
 }
 
-impl From<(Region, Located<Ident>)> for ASTError {
-    fn from(ident_exists_err: (Region, Located<Ident>)) -> Self {
+impl From<(Region, Loc<Ident>)> for ASTError {
+    fn from(ident_exists_err: (Region, Loc<Ident>)) -> Self {
         Self::IdentExistsError {
             msg: format!("{:?}", ident_exists_err),
         }

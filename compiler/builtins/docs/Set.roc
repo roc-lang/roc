@@ -2,18 +2,18 @@ interface Set
     exposes
         [
             Set,
-            empty,
-            single,
-            len,
-            insert,
-            remove,
-            union,
+            contains,
             difference,
-            intersection,
-            toList,
+            empty,
             fromList,
-            walk,
-            contains
+            insert,
+            intersection,
+            len,
+            remove,
+            single,
+            toList,
+            union,
+            walk
         ]
     imports []
 
@@ -29,6 +29,8 @@ isEmpty : Set * -> Bool
 
 len : Set * -> Nat
 
+## Modify
+
 # TODO: removed `'` from signature because parser does not support it yet
 # Original signature: `add : Set 'elem, 'elem -> Set 'elem`
 ## Make sure never to add a *NaN* to a [Set]! Because *NaN* is defined to be
@@ -40,6 +42,8 @@ add : Set elem, elem -> Set elem
 # TODO: removed `'` from signature because parser does not support it yet
 # Original signature: `drop : Set 'elem, 'elem -> Set 'elem`
 drop : Set elem, elem -> Set elem
+
+## Transform
 
 ## Convert each element in the set to something new, by calling a conversion
 ## function on each of them. Then return a new set of the converted values.

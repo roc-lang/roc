@@ -3,6 +3,7 @@ use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
+use roc_region::all::LineInfo;
 use tempfile::tempdir;
 
 #[allow(unused_imports)]
@@ -64,17 +65,12 @@ pub fn helper(
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
-        procedures: top_procedures,
-        interns,
+        module_id,
+        procedures,
+        mut interns,
         exposed_to_host,
         ..
     } = loaded;
-
-    let mut procedures = MutMap::default();
-
-    for (key, proc) in top_procedures {
-        procedures.insert(key, proc);
-    }
 
     // You can comment and uncomment this block out to get more useful information
     // while you're working on the dev backend!
@@ -129,6 +125,7 @@ pub fn helper(
             continue;
         }
 
+        let line_info = LineInfo::new(&src);
         let src_lines: Vec<&str> = src.split('\n').collect();
         let palette = DEFAULT_PALETTE;
 
@@ -144,7 +141,7 @@ pub fn helper(
                     continue;
                 }
                 _ => {
-                    let report = can_problem(&alloc, module_path.clone(), problem);
+                    let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
                     let mut buf = String::new();
 
                     report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -155,7 +152,7 @@ pub fn helper(
         }
 
         for problem in type_problems {
-            if let Some(report) = type_problem(&alloc, module_path.clone(), problem) {
+            if let Some(report) = type_problem(&alloc, &line_info, module_path.clone(), problem) {
                 let mut buf = String::new();
 
                 report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -165,7 +162,7 @@ pub fn helper(
         }
 
         for problem in mono_problems {
-            let report = mono_problem(&alloc, module_path.clone(), problem);
+            let report = mono_problem(&alloc, &line_info, module_path.clone(), problem);
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -181,15 +178,14 @@ pub fn helper(
 
     let env = roc_gen_dev::Env {
         arena,
-        interns,
+        module_id,
         exposed_to_host: exposed_to_host.keys().copied().collect(),
         lazy_literals,
         generate_allocators: true, // Needed for testing, since we don't have a platform
     };
 
     let target = target_lexicon::Triple::host();
-    let module_object =
-        roc_gen_dev::build_module(&env, &target, procedures).expect("failed to compile module");
+    let module_object = roc_gen_dev::build_module(&env, &mut interns, &target, procedures);
 
     let module_out = module_object
         .write()

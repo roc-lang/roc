@@ -2,12 +2,11 @@
 
 Roc is a language for making delightful software.
 
-If you already know [Elm](https://elm-lang.org/), then [Roc for Elm Programmers](https://github.com/rtfeldman/roc/blob/trunk/roc-for-elm-programmers.md) may be of interest.
+The [tutorial](TUTORIAL.md) is the best place to learn about how to use the language - it assumes no prior knowledge of Roc or similar languages. (If you already know [Elm](https://elm-lang.org/), then [Roc for Elm Programmers](https://github.com/rtfeldman/roc/blob/trunk/roc-for-elm-programmers.md) may be of interest.)
 
-If you're curious about where the language's name and logo came from,
-[here's an explanation](https://github.com/rtfeldman/roc/blob/trunk/name-and-logo.md).
+There's also a folder of [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) - the [CLI example](https://github.com/rtfeldman/roc/tree/trunk/examples/cli) in particular is a reasonable starting point to build on.
 
-You can get help and discuss with other people on the [Roc Zulip chat](https://roc.zulipchat.com).
+[Roc Zulip chat](https://roc.zulipchat.com) is the best place to ask questions and get help! It's also where we discuss [ideas](https://roc.zulipchat.com/#narrow/stream/304641-ideas) for the language. If you want to get involved in contributing to the language, Zulip is also a great place to ask about good first projects.
 
 ## State of Roc
 
@@ -16,26 +15,22 @@ Many programs can however be compiled correctly. Check out [examples](examples) 
 
 ## Getting started
 
-1. [Install Rust](https://rustup.rs/)
-2. [Build from source](BUILDING_FROM_SOURCE.md)
-3. In a terminal, run this from the root folder:
-    ```
-    cargo run repl
-    ```
-4. Check out [these tests](https://github.com/rtfeldman/roc/blob/trunk/cli/tests/repl_eval.rs) for examples of using the REPL
+- [Linux x86](getting_started/linux_x86.md)
+- [Windows](getting_started/windows.md)
+- [Other](getting_started/other.md)
 
 ### Examples
 
-Took a look at the [examples folder](examples), [examples/benchmarks](examples/benchmarks) contains some larger examples.
-
 Run examples as follows:
-1. Navigate to `/examples`
-2. Run with:
 ```
-cargo run hello-world/Hello.roc
+cargo run examples/hello-world/Hello.roc
 ```
 Some examples like `examples/benchmarks/NQueens.roc` require input after running.
-For NQueens, input 10 in the terminal and press enter.  
+For NQueens, input 10 in the terminal and press enter.
+
+[examples/benchmarks](examples/benchmarks) contains larger examples.
+
+**Tip:** when programming in roc, we recommend to execute `./roc check myproject/Foo.roc` before `./roc myproject/Foo.roc` or `./roc build myproject/Foo.roc`. `./roc check` can produce clear error messages in cases where building/running may panic.
 
 ## Applications and Platforms
 
@@ -108,3 +103,8 @@ been able to find beginner-friendly projects to get people up to speed gradually
 
 If you're interested in getting involved, check out
 [CONTRIBUTING.md](https://github.com/rtfeldman/roc/blob/trunk/CONTRIBUTING.md)!
+
+## Name and Logo
+
+If you're curious about where the language's name and logo came from,
+[here's an explanation](https://github.com/rtfeldman/roc/blob/trunk/name-and-logo.md).

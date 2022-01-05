@@ -20,6 +20,8 @@ procedure Test.1 (Test.27, Test.28, Test.29):
             let Test.23 = Struct {Test.24, Test.25};
             let Test.5 = StructAtIndex 0 Test.23;
             let Test.6 = StructAtIndex 1 Test.23;
+            inc Test.6;
+            dec Test.23;
             let Test.21 = 1i64;
             let Test.20 = CallByName Num.25 Test.5 Test.21;
             let Test.16 = CallByName Test.1 Test.6 Test.3 Test.20;

@@ -26,7 +26,7 @@ pub fn update_invalid_lookup(
 
         new_lookup_str.insert_str(caret_offset, input_str);
 
-        let new_pool_str = PoolStr::new(&new_lookup_str, &mut ed_model.module.env.pool);
+        let new_pool_str = PoolStr::new(&new_lookup_str, ed_model.module.env.pool);
 
         // update AST
         ed_model

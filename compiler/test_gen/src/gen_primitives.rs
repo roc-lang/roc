@@ -996,7 +996,7 @@ fn annotation_without_body() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn simple_closure() {
     assert_evals_to!(
         indoc!(
@@ -1972,7 +1972,7 @@ fn hof_conditional() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(
-    expected = "Roc failed with message: \"Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 6-6, C 8-9| Ident"
+    expected = "Roc failed with message: \"Shadowing { original_region: @57-58, shadow: @90-91 Ident"
 )]
 fn pattern_shadowing() {
     assert_evals_to!(
@@ -1982,26 +1982,6 @@ fn pattern_shadowing() {
 
             when 4 is
                 x -> x
-            "#
-        ),
-        0,
-        i64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = "TODO non-exhaustive pattern")]
-fn non_exhaustive_pattern_let() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            x : Result (Int a) (Float b)
-            x = Ok 4
-
-            (Ok y) = x
-
-            y
             "#
         ),
         0,
@@ -2468,9 +2448,7 @@ fn backpassing_result() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(
-    expected = "Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 5-5, C 6-7| Ident"
-)]
+#[should_panic(expected = "Shadowing { original_region: @57-58, shadow: @74-75 Ident")]
 fn function_malformed_pattern() {
     assert_evals_to!(
         indoc!(
@@ -2602,7 +2580,7 @@ fn hit_unresolved_type_variable() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn pattern_match_empty_record() {
     assert_evals_to!(
         indoc!(
@@ -3134,6 +3112,73 @@ fn call_that_needs_closure_parameter() {
             "#
         ),
         RocStr::from_slice(b"FAIL"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn alias_defined_out_of_order() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main : Foo
+            main = "foo"
+
+            Foo : Bar
+            Bar : Str
+
+            "#
+        ),
+        RocStr::from_slice(b"foo"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn recursively_build_effect() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            greeting =
+                hi = "Hello"
+                name = "World"
+
+                "\(hi), \(name)!"
+
+            main =
+                when nestHelp 4 is
+                    _ -> greeting
+
+            nestHelp : I64 -> XEffect {}
+            nestHelp = \m ->
+                when m is
+                    0 ->
+                        always {}
+
+                    _ ->
+                        always {} |> after \_ -> nestHelp (m - 1)
+
+
+            XEffect a : [ @XEffect ({} -> a) ]
+
+            always : a -> XEffect a
+            always = \x -> @XEffect (\{} -> x)
+
+            after : XEffect a, (a -> XEffect b) -> XEffect b
+            after = \(@XEffect e), toB ->
+                @XEffect \{} ->
+                    when toB (e {}) is
+                        @XEffect e2 ->
+                            e2 {}
+            "#
+        ),
+        RocStr::from_slice(b"Hello, World!"),
         RocStr
     );
 }

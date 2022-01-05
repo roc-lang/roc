@@ -1,28 +1,32 @@
-#![cfg(feature = "gen-llvm")]
-
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
+
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::expect_runtime_error_panic;
 
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to;
 
-// #[cfg(feature = "gen-wasm")]
-// use crate::helpers::wasm::assert_evals_to;
+#[cfg(feature = "gen-wasm")]
+use crate::helpers::wasm::assert_evals_to;
 
+#[allow(unused_imports)]
 use crate::helpers::with_larger_debug_stack;
 //use crate::assert_wasm_evals_to as assert_evals_to;
+#[allow(unused_imports)]
 use indoc::indoc;
+#[allow(unused_imports)]
 use roc_std::{RocList, RocStr};
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn roc_list_construction() {
     let list = RocList::from_slice(&[1i64; 23]);
     assert_eq!(&list, &list);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_literal() {
     assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
 }
@@ -34,12 +38,13 @@ fn list_literal_empty_record() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_singleton_list_literal() {
     assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_list_literal() {
     assert_evals_to!("[ 12, 9 ]", RocList::from_slice(&[12, 9]), RocList<i64>);
     assert_evals_to!(
@@ -129,7 +134,7 @@ fn bool_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn variously_sized_list_literals() {
     assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
     assert_evals_to!("[1]", RocList::from_slice(&[1]), RocList<i64>);
@@ -360,6 +365,99 @@ fn list_drop_at_shared() {
             RocList::from_slice(&[4, 5, 6]),
         ),
         (RocList<i64>, RocList<i64>,)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_empty_list_of_int() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            empty : List I64
+            empty = []
+
+            List.dropIf empty \_ -> True
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            alwaysTrue : I64 -> Bool
+            alwaysTrue = \_ -> True
+
+            List.dropIf [] alwaysTrue
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_always_false_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> False)
+            "#
+        ),
+        RocList::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_always_true_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> True)
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_geq3() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\n -> n >= 3)
+            "#
+        ),
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_string_eq() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             List.dropIf ["x", "y", "x"] (\s -> s == "y")
+             "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from_slice("x".as_bytes()),
+            RocStr::from_slice("x".as_bytes())
+        ]),
+        RocList<RocStr>
     );
 }
 
@@ -1314,6 +1412,8 @@ fn list_concat_two_bigger_non_empty_lists() {
     );
 }
 
+#[allow(dead_code)]
+#[cfg(any(feature = "gen-llvm"))]
 fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
     let vec1: Vec<i64> = (0..num_elems1)
         .map(|i| 12345 % (i + num_elems1 + num_elems2 + 1))
@@ -1388,19 +1488,19 @@ fn list_concat_large() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_len() {
     assert_evals_to!("List.len []", 0, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn basic_int_list_len() {
     assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn loaded_int_list_len() {
     assert_evals_to!(
         indoc!(
@@ -1434,13 +1534,13 @@ fn fn_int_list_len() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_list_is_empty() {
     assert_evals_to!("List.isEmpty [ 12, 9, 6, 3 ]", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_is_empty() {
     assert_evals_to!("List.isEmpty []", true, bool);
 }
@@ -2289,7 +2389,16 @@ fn list_product() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_keep_oks() {
-    assert_evals_to!("List.keepOks [] (\\x -> x)", 0, i64);
+    assert_evals_to!(
+        "List.keepOks [] (\\x -> x)",
+        RocList::from_slice(&[]),
+        RocList<()>
+    );
+    assert_evals_to!(
+        "List.keepOks [Ok {}, Ok {}] (\\x -> x)",
+        RocList::from_slice(&[(), ()]),
+        RocList<()>
+    );
     assert_evals_to!(
         "List.keepOks [1,2] (\\x -> Ok x)",
         RocList::from_slice(&[1, 2]),
@@ -2310,7 +2419,16 @@ fn list_keep_oks() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_keep_errs() {
-    assert_evals_to!("List.keepErrs [] (\\x -> x)", 0, i64);
+    assert_evals_to!(
+        "List.keepErrs [] (\\x -> x)",
+        RocList::from_slice(&[]),
+        RocList<()>
+    );
+    assert_evals_to!(
+        "List.keepErrs [Err {}, Err {}] (\\x -> x)",
+        RocList::from_slice(&[(), ()]),
+        RocList<()>
+    );
     assert_evals_to!(
         "List.keepErrs [1,2] (\\x -> Err x)",
         RocList::from_slice(&[1, 2]),
@@ -2413,7 +2531,10 @@ fn list_any_empty_with_unknown_element_type() {
     //     Application crashed with message
     //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
     //     Shutting down
-    assert_evals_to!("List.any [] (\\_ -> True)", false, bool);
+    //
+    // TODO: eventually we should insert the empty type for unresolved type
+    // variables, since that means they're unbound.
+    expect_runtime_error_panic!("List.any [] (\\_ -> True)");
 }
 
 #[test]
@@ -2435,7 +2556,10 @@ fn list_all_empty_with_unknown_element_type() {
     //     Application crashed with message
     //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
     //     Shutting down
-    assert_evals_to!("List.all [] (\\_ -> True)", false, bool);
+    //
+    // TODO: eventually we should insert the empty type for unresolved type
+    // variables, since that means they're unbound.
+    expect_runtime_error_panic!("List.all [] (\\_ -> True)");
 }
 
 #[test]

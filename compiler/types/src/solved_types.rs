@@ -3,7 +3,7 @@ use crate::types::{Problem, RecordField, Type};
 use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
@@ -26,6 +26,12 @@ impl<T> Solved<T> {
 
 #[derive(Debug, Clone)]
 pub struct SolvedLambdaSet(pub SolvedType);
+
+#[derive(Clone, Debug)]
+pub enum AppliedAliasArgument {
+    Concrete(SolvedType),
+    Rigid(Lowercase),
+}
 
 /// This is a fully solved type, with no Variables remaining in it.
 #[derive(Debug, Clone)]
@@ -67,6 +73,13 @@ pub enum SolvedType {
         arguments: Vec<(Lowercase, SolvedType)>,
         lambda_set_variables: Vec<SolvedLambdaSet>,
         actual_var: VarId,
+        actual: Box<SolvedType>,
+    },
+
+    UninstantiatedAlias {
+        symbol: Symbol,
+        type_arguments: Vec<(Lowercase, AppliedAliasArgument, VarId)>,
+        lambda_set_variables: Vec<VarId>,
         actual: Box<SolvedType>,
     },
 
@@ -130,6 +143,11 @@ impl SolvedType {
                     ext: Box::new(solved_ext),
                 }
             }
+            ClosureTag { name, ext } => {
+                let solved_ext = Self::from_type(solved_subs, &Type::Variable(*ext));
+                let solved_tags = vec![(TagName::Closure(*name), vec![])];
+                SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
+            }
             TagUnion(tags, box_ext) => {
                 let solved_ext = Self::from_type(solved_subs, box_ext);
                 let mut solved_tags = Vec::with_capacity(tags.len());
@@ -177,37 +195,34 @@ impl SolvedType {
                 lambda_set_variables,
                 actual: box_type,
             } => {
-                let mut actual = box_type.clone();
-
-                let mut substitutions = ImMap::default();
-                for (_, arg_ann, var) in type_arguments.iter() {
-                    substitutions.insert(*var, arg_ann.clone());
-                }
-
-                actual.substitute(&substitutions);
-
                 let solved_type = Self::from_type(solved_subs, box_type);
+
                 let mut solved_args = Vec::with_capacity(type_arguments.len());
 
-                for (name, var, _) in type_arguments {
-                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
+                for (name, applied_argument, variable) in type_arguments {
+                    let argument = match applied_argument {
+                        crate::types::AppliedAliasArgument::Concrete(t) => {
+                            AppliedAliasArgument::Concrete(Self::from_type(solved_subs, t))
+                        }
+                        crate::types::AppliedAliasArgument::Rigid(name) => {
+                            AppliedAliasArgument::Rigid(name.clone())
+                        }
+                    };
+                    let var_id = VarId::from_var(*variable, solved_subs.inner());
+                    solved_args.push((name.clone(), argument, var_id));
                 }
 
-                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
+                let lambda_set_variables = lambda_set_variables
+                    .iter()
+                    .map(|v| VarId::from_var(*v, solved_subs.inner()))
+                    .collect();
 
-                for var in lambda_set_variables {
-                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_type(
-                        solved_subs,
-                        &Type::Variable(*var),
-                    )));
+                SolvedType::UninstantiatedAlias {
+                    symbol: *symbol,
+                    type_arguments: solved_args,
+                    lambda_set_variables,
+                    actual: Box::new(solved_type),
                 }
-
-                SolvedType::Alias(
-                    *symbol,
-                    solved_args,
-                    solved_lambda_sets,
-                    Box::new(solved_type),
-                )
             }
             Alias {
                 symbol,
@@ -332,7 +347,7 @@ impl SolvedType {
             Apply(symbol, args) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in subs.get_subs_slice(*args.as_subs_slice()) {
+                for var in subs.get_subs_slice(*args) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
@@ -341,7 +356,7 @@ impl SolvedType {
             Func(args, closure, ret) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in subs.get_subs_slice(*args.as_subs_slice()) {
+                for var in subs.get_subs_slice(*args) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
@@ -432,7 +447,7 @@ impl SolvedType {
 #[derive(Clone, Debug)]
 pub struct BuiltinAlias {
     pub region: Region,
-    pub vars: Vec<Located<Lowercase>>,
+    pub vars: Vec<Loc<Lowercase>>,
     pub typ: SolvedType,
 }
 
@@ -621,6 +636,48 @@ pub fn to_type(
                 type_arguments: type_variables,
                 lambda_set_variables,
                 actual_var: var_id_to_flex_var(*actual_var, free_vars, var_store),
+                actual: Box::new(actual),
+            }
+        }
+        UninstantiatedAlias {
+            symbol,
+            type_arguments,
+            lambda_set_variables,
+            actual: solved_actual,
+        } => {
+            let type_arguments = type_arguments
+                .iter()
+                .map(|(name, applied_argument, var_id)| {
+                    let argument = match applied_argument {
+                        AppliedAliasArgument::Concrete(solved) => {
+                            crate::types::AppliedAliasArgument::Concrete(to_type(
+                                solved, free_vars, var_store,
+                            ))
+                        }
+                        AppliedAliasArgument::Rigid(name) => {
+                            crate::types::AppliedAliasArgument::Rigid(name.clone())
+                        }
+                    };
+
+                    (
+                        name.clone(),
+                        argument,
+                        var_id_to_flex_var(*var_id, free_vars, var_store),
+                    )
+                })
+                .collect();
+
+            let lambda_set_variables = lambda_set_variables
+                .iter()
+                .map(|var_id| var_id_to_flex_var(*var_id, free_vars, var_store))
+                .collect();
+
+            let actual = to_type(solved_actual, free_vars, var_store);
+
+            Type::UninstantiatedAlias {
+                symbol: *symbol,
+                type_arguments,
+                lambda_set_variables,
                 actual: Box::new(actual),
             }
         }

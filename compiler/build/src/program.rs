@@ -5,6 +5,7 @@ pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_load::file::{LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
+use roc_region::all::LineInfo;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -81,13 +82,15 @@ fn report_problems_help(
             src_lines.extend(src.split('\n'));
         }
 
+        let lines = LineInfo::new(src);
+
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, *home, interns);
 
         let problems = can_problems.remove(home).unwrap_or_default();
 
         for problem in problems.into_iter() {
-            let report = can_problem(&alloc, module_path.clone(), problem);
+            let report = can_problem(&alloc, &lines, module_path.clone(), problem);
             let severity = report.severity;
             let mut buf = String::new();
 
@@ -106,7 +109,7 @@ fn report_problems_help(
         let problems = type_problems.remove(home).unwrap_or_default();
 
         for problem in problems {
-            if let Some(report) = type_problem(&alloc, module_path.clone(), problem) {
+            if let Some(report) = type_problem(&alloc, &lines, module_path.clone(), problem) {
                 let severity = report.severity;
                 let mut buf = String::new();
 
@@ -126,7 +129,7 @@ fn report_problems_help(
         let problems = mono_problems.remove(home).unwrap_or_default();
 
         for problem in problems {
-            let report = mono_problem(&alloc, module_path.clone(), problem);
+            let report = mono_problem(&alloc, &lines, module_path.clone(), problem);
             let severity = report.severity;
             let mut buf = String::new();
 
@@ -491,11 +494,12 @@ fn gen_from_mono_module_dev_wasm32(
     loaded: MonomorphizedModule,
     app_o_file: &Path,
 ) -> CodeGenTiming {
-    let mut procedures = MutMap::default();
-
-    for (key, proc) in loaded.procedures {
-        procedures.insert(key, proc);
-    }
+    let MonomorphizedModule {
+        module_id,
+        procedures,
+        mut interns,
+        ..
+    } = loaded;
 
     let exposed_to_host = loaded
         .exposed_to_host
@@ -505,11 +509,11 @@ fn gen_from_mono_module_dev_wasm32(
 
     let env = roc_gen_wasm::Env {
         arena,
-        interns: loaded.interns,
+        module_id,
         exposed_to_host,
     };
 
-    let bytes = roc_gen_wasm::build_module(&env, procedures).unwrap();
+    let bytes = roc_gen_wasm::build_module(&env, &mut interns, procedures).unwrap();
 
     std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
 
@@ -525,16 +529,23 @@ fn gen_from_mono_module_dev_assembly(
     let lazy_literals = true;
     let generate_allocators = false; // provided by the platform
 
+    let MonomorphizedModule {
+        module_id,
+        procedures,
+        mut interns,
+        exposed_to_host,
+        ..
+    } = loaded;
+
     let env = roc_gen_dev::Env {
         arena,
-        interns: loaded.interns,
-        exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
+        module_id,
+        exposed_to_host: exposed_to_host.keys().copied().collect(),
         lazy_literals,
         generate_allocators,
     };
 
-    let module_object = roc_gen_dev::build_module(&env, target, loaded.procedures)
-        .expect("failed to compile module");
+    let module_object = roc_gen_dev::build_module(&env, &mut interns, target, procedures);
 
     let module_out = module_object
         .write()

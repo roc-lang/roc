@@ -1,39 +1,39 @@
 Backpassing(
     [
-        |L 0-0, C 0-1| Identifier(
+        @0-1 Identifier(
             "x",
         ),
-        |L 0-0, C 3-4| Identifier(
+        @3-4 Identifier(
             "y",
         ),
     ],
-    |L 0-0, C 8-23| Apply(
-        |L 0-0, C 8-17| Var {
+    @8-23 Apply(
+        @8-17 Var {
             module_name: "List",
             ident: "map2",
         },
         [
-            |L 0-0, C 18-20| List(
+            @18-20 List(
                 [],
             ),
-            |L 0-0, C 21-23| List(
+            @21-23 List(
                 [],
             ),
         ],
         Space,
     ),
-    |L 2-2, C 0-5| SpaceBefore(
+    @25-30 SpaceBefore(
         BinOps(
             [
                 (
-                    |L 2-2, C 0-1| Var {
+                    @25-26 Var {
                         module_name: "",
                         ident: "x",
                     },
-                    |L 2-2, C 2-3| Plus,
+                    @27-28 Plus,
                 ),
             ],
-            |L 2-2, C 4-5| Var {
+            @29-30 Var {
                 module_name: "",
                 ident: "y",
             },

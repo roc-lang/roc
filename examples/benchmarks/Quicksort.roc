@@ -5,22 +5,23 @@ show = \list ->
     if List.isEmpty list then
         "[]"
     else
-        content = 
+        content =
             list
-                |> List.map Str.fromInt
-                |> Str.joinWith ", " 
+                |> List.map Num.toStr
+                |> Str.joinWith ", "
 
         "[ \(content) ]"
 
 sortBy : List a, (a -> Num *) -> List a
-sortBy = \list, toComparable -> 
+sortBy = \list, toComparable ->
     sortWith list (\x, y -> Num.compare (toComparable x) (toComparable y))
 
 Order a : a, a -> [ LT, GT, EQ ]
 
-sortWith : List a, (a, a -> [ LT, GT, EQ ]) -> List a 
-sortWith = \list, order -> 
+sortWith : List a, (a, a -> [ LT, GT, EQ ]) -> List a
+sortWith = \list, order ->
     n = List.len list
+
     quicksortHelp list order 0 (n - 1)
 
 quicksortHelp : List a, Order a, Nat, Nat -> List a
@@ -33,7 +34,6 @@ quicksortHelp = \list, order, low, high ->
                     |> quicksortHelp order (partitionIndex + 1) high
     else
         list
-
 
 partition : Nat, Nat, List a, Order a -> [ Pair Nat (List a) ]
 partition = \low, high, initialList, order ->
@@ -52,17 +52,16 @@ partitionHelp = \i, j, list, order, high, pivot ->
         when List.get list j is
             Ok value ->
                 when order value pivot is
-                    LT | EQ -> 
+                    LT | EQ ->
                         partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) order high pivot
 
-                    GT -> 
+                    GT ->
                         partitionHelp i (j + 1) list order high pivot
 
             Err _ ->
                 Pair i list
     else
         Pair i list
-
 
 swap : Nat, Nat, List a -> List a
 swap = \i, j, list ->

@@ -1,39 +1,38 @@
 Defs(
     [
-        |L 0-0, C 0-33| Annotation(
-            |L 0-0, C 0-3| Identifier(
+        @0-33 Annotation(
+            @0-3 Identifier(
                 "foo",
             ),
-            |L 0-0, C 6-33| As(
-                |L 0-0, C 6-21| Apply(
+            @6-33 As(
+                @6-21 Apply(
                     "Foo.Bar",
                     "Baz",
                     [
-                        |L 0-0, C 18-19| BoundVariable(
+                        @18-19 BoundVariable(
                             "x",
                         ),
-                        |L 0-0, C 20-21| BoundVariable(
+                        @20-21 BoundVariable(
                             "y",
                         ),
                     ],
                 ),
                 [],
-                |L 0-0, C 25-33| Apply(
-                    "",
-                    "Blah",
-                    [
-                        |L 0-0, C 30-31| BoundVariable(
+                AliasHeader {
+                    name: @25-29 "Blah",
+                    vars: [
+                        @30-31 Identifier(
                             "a",
                         ),
-                        |L 0-0, C 32-33| BoundVariable(
+                        @32-33 Identifier(
                             "b",
                         ),
                     ],
-                ),
+                },
             ),
         ),
     ],
-    |L 2-2, C 0-2| SpaceBefore(
+    @35-37 SpaceBefore(
         Num(
             "42",
         ),

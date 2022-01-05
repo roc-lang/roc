@@ -329,9 +329,9 @@ fn default() {
     assert_eq!(answer.len(), 0);
     assert_eq!(answer, answer);
     assert_eq!(answer.clone(), answer);
-    assert_eq!(answer.clone(), answer.clone());
+    assert_eq!(answer, answer);
     assert_eq!(answer.as_str(), "");
-    assert_eq!(answer.clone().as_str(), "");
+    assert_eq!(answer.as_str(), "");
 }
 
 #[test]
@@ -410,9 +410,9 @@ fn small_max_length() {
     assert_eq!(answer.len(), string.len());
     assert_eq!(answer, answer);
     assert_eq!(answer.clone(), answer);
-    assert_eq!(answer.clone(), answer.clone());
+    assert_eq!(answer, answer);
     assert_eq!(answer.as_str(), string);
-    assert_eq!(answer.clone().as_str(), string);
+    assert_eq!(answer.as_str(), string);
 }
 
 #[cfg(target_pointer_width = "32")]

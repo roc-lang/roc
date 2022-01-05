@@ -150,10 +150,10 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Float(float_width) => float_type_from_float_width(env, *float_width).as_basic_type_enum(),
         Bool => context.bool_type().as_basic_type_enum(),
         Decimal => context.i128_type().as_basic_type_enum(),
-        Dict(_, _) | EmptyDict => zig_dict_type(env).into(),
-        Set(_) | EmptySet => zig_dict_type(env).into(),
-        List(_) | EmptyList => zig_list_type(env).into(),
-        Str | EmptyStr => zig_str_type(env).into(),
+        Dict(_, _) => zig_dict_type(env).into(),
+        Set(_) => zig_dict_type(env).into(),
+        List(_) => zig_list_type(env).into(),
+        Str => zig_str_type(env).into(),
     }
 }
 
@@ -203,22 +203,6 @@ pub fn block_of_memory_slices<'ctx>(
     block_of_memory_help(context, union_size)
 }
 
-pub fn union_data_is_struct<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-    layouts: &[Layout<'_>],
-) -> StructType<'ctx> {
-    let data_type = basic_type_from_record(env, layouts);
-    union_data_is_struct_type(env.context, data_type.into_struct_type())
-}
-
-pub fn union_data_is_struct_type<'ctx>(
-    context: &'ctx Context,
-    struct_type: StructType<'ctx>,
-) -> StructType<'ctx> {
-    let tag_id_type = context.i64_type();
-    context.struct_type(&[struct_type.into(), tag_id_type.into()], false)
-}
-
 pub fn block_of_memory<'ctx>(
     context: &'ctx Context,
     layout: &Layout<'_>,
@@ -246,14 +230,18 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
     let num_i64 = union_size / 8;
     let num_i8 = union_size % 8;
 
+    let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
     let i64_array_type = context.i64_type().array_type(num_i64).as_basic_type_enum();
 
-    if num_i8 == 0 {
-        // the object fits perfectly in some number of i64's
+    if num_i64 == 0 {
+        // The object fits perfectly in some number of i8s
+        context.struct_type(&[i8_array_type], false).into()
+    } else if num_i8 == 0 {
+        // The object fits perfectly in some number of i64s
         // (i.e. the size is a multiple of 8 bytes)
         context.struct_type(&[i64_array_type], false).into()
     } else {
-        // there are some trailing bytes at the end
+        // There are some trailing bytes at the end
         let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
 
         context

@@ -1,7 +1,7 @@
 app "hello-world"
-    packages { base: "platform" }
+    packages { pf: "platform" }
     imports []
-    provides [ main ] to base
+    provides [ main ] to pf
 
 Effect a : {} -> a
 
