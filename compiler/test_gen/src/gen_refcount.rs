@@ -297,3 +297,44 @@ fn refcount_different_rosetrees_inc() {
         ]
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn refcount_different_rosetrees_dec() {
+    // Requires two different equality procedures for `List (Rose I64)` and `List (Rose Str)`
+    // even though both appear in the mono Layout as `List(RecursivePointer)`
+    assert_refcounts!(
+        indoc!(
+            r#"
+                Rose a : [ Rose a (List (Rose a)) ]
+
+                s = Str.concat "A long enough string " "to be heap-allocated"
+
+                i1 : Rose I64
+                i1 = Rose 999 []
+
+                s1 : Rose Str
+                s1 = Rose s []
+
+                i2 : Rose I64
+                i2 = Rose 0 [i1, i1]
+
+                s2 : Rose Str
+                s2 = Rose "" [s1, s1]
+
+                when (Tuple i2 s2) is
+                    Tuple (Rose x _) _ -> x
+        "#
+        ),
+        i64,
+        &[
+            0, // s
+            0, // i1
+            0, // s1
+            0, // [i1, i1]
+            0, // i2
+            0, // [s1, s1]
+            0, // s2
+        ]
+    );
+}
