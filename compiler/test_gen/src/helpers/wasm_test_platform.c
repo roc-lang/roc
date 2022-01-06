@@ -3,9 +3,10 @@
 // Makes test runs take 50% longer, due to linking
 #define ENABLE_PRINTF 0
 
-typedef struct {
+typedef struct
+{
     size_t length;
-    size_t* elements[]; // flexible array member
+    size_t *elements[]; // flexible array member
 } Vector;
 
 // Globals for refcount testing
@@ -28,15 +29,15 @@ Vector *init_refcount_test(size_t capacity)
 }
 
 #if ENABLE_PRINTF
-#define ASSERT(x)                   \
-    if (!(x))                       \
-    {                               \
-        printf("FAILED: " #x "\n"); \
-        abort();                    \
+#define ASSERT(condition, format, ...)                       \
+    if (!(condition))                                        \
+    {                                                        \
+        printf("ASSERT FAILED: " #format "\n", __VA_ARGS__); \
+        abort();                                             \
     }
 #else
-#define ASSERT(x) \
-    if (!(x))     \
+#define ASSERT(condition, format, ...) \
+    if (!(condition))                  \
         abort();
 #endif
 
@@ -55,8 +56,9 @@ void *roc_alloc(size_t size, unsigned int alignment)
 
     if (rc_pointers)
     {
-        ASSERT(alignment >= sizeof(size_t));
-        ASSERT(rc_pointers->length < rc_pointers_capacity);
+        ASSERT(alignment >= sizeof(size_t), "alignment %zd != %zd", alignment, sizeof(size_t));
+        size_t num_alloc = rc_pointers->length + 1;
+        ASSERT(num_alloc <= rc_pointers_capacity, "Too many allocations %zd > %zd", num_alloc, rc_pointers_capacity);
 
         size_t *rc_ptr = alloc_ptr_to_rc_ptr(allocated, alignment);
         rc_pointers->elements[rc_pointers->length] = rc_ptr;
@@ -108,7 +110,7 @@ void roc_dealloc(void *ptr, unsigned int alignment)
             }
         }
         int was_found = i < rc_pointers->length;
-        ASSERT(was_found);
+        ASSERT(was_found, "RC pointer not found %p", rc_ptr);
     }
 
 #if ENABLE_PRINTF
