@@ -265,7 +265,7 @@ fn union_recursive_dec() {
 #[test]
 #[cfg(any(feature = "gen-wasm"))]
 fn refcount_different_rosetrees_inc() {
-    // Requires two different equality procedures for `List (Rose I64)` and `List (Rose Str)`
+    // Requires two different Inc procedures for `List (Rose I64)` and `List (Rose Str)`
     // even though both appear in the mono Layout as `List(RecursivePointer)`
     assert_refcounts!(
         indoc!(
@@ -305,7 +305,7 @@ fn refcount_different_rosetrees_inc() {
 #[test]
 #[cfg(any(feature = "gen-wasm"))]
 fn refcount_different_rosetrees_dec() {
-    // Requires two different equality procedures for `List (Rose I64)` and `List (Rose Str)`
+    // Requires two different Dec procedures for `List (Rose I64)` and `List (Rose Str)`
     // even though both appear in the mono Layout as `List(RecursivePointer)`
     assert_refcounts!(
         indoc!(

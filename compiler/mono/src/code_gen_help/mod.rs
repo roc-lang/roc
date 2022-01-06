@@ -381,6 +381,48 @@ impl<'a> CodeGenHelp<'a> {
             Layout::RecursivePointer => Layout::Union(ctx.recursive_union.unwrap()),
         }
     }
+
+    fn union_tail_recursion_fields(
+        &self,
+        union: UnionLayout<'a>,
+    ) -> (bool, Vec<'a, Option<usize>>) {
+        use UnionLayout::*;
+        match union {
+            NonRecursive(_) => return (false, bumpalo::vec![in self.arena]),
+
+            Recursive(tags) => self.union_tail_recursion_fields_help(tags),
+
+            NonNullableUnwrapped(field_layouts) => {
+                self.union_tail_recursion_fields_help(&[field_layouts])
+            }
+
+            NullableWrapped {
+                other_tags: tags, ..
+            } => self.union_tail_recursion_fields_help(tags),
+
+            NullableUnwrapped { other_fields, .. } => {
+                self.union_tail_recursion_fields_help(&[other_fields])
+            }
+        }
+    }
+
+    fn union_tail_recursion_fields_help(
+        &self,
+        tags: &[&'a [Layout<'a>]],
+    ) -> (bool, Vec<'a, Option<usize>>) {
+        let mut can_use_tailrec = false;
+        let mut tailrec_indices = Vec::with_capacity_in(tags.len(), self.arena);
+
+        for fields in tags.iter() {
+            let found_index = fields
+                .iter()
+                .position(|f| matches!(f, Layout::RecursivePointer));
+            tailrec_indices.push(found_index);
+            can_use_tailrec |= found_index.is_some();
+        }
+
+        (can_use_tailrec, tailrec_indices)
+    }
 }
 
 fn let_lowlevel<'a>(
