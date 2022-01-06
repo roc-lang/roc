@@ -374,7 +374,6 @@ fn eq_linked_list_false() {
 
 #[test]
 #[cfg(any(feature = "gen-wasm"))]
-#[ignore] // TODO: tail-call elimination for refcounting
 fn eq_linked_list_long() {
     assert_evals_to!(
         indoc!(

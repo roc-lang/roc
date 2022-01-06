@@ -396,3 +396,35 @@ fn union_linked_list_dec() {
         ]
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn union_linked_list_long_dec() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                prependOnes = \n, tail ->
+                    if n == 0 then
+                        tail
+                    else
+                        prependOnes (n-1) (Cons 1 tail)
+
+                main =
+                    n = 1_000
+
+                    linked : LinkedList I64
+                    linked = prependOnes n Nil
+
+                    when linked is
+                        Cons x _ -> x
+                        Nil -> -1
+                "#
+        ),
+        i64,
+        &[0; 1_000]
+    );
+}
