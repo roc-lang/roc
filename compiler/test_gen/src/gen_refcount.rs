@@ -7,6 +7,10 @@ use indoc::indoc;
 #[allow(unused_imports)]
 use roc_std::{RocList, RocStr};
 
+// A "good enough" representation of a pointer for these tests, because
+// we ignore the return value. As long as it's the right stack size, it's fine.
+type Pointer = usize;
+
 #[test]
 #[cfg(any(feature = "gen-wasm"))]
 fn str_inc() {
@@ -154,6 +158,8 @@ fn struct_dealloc() {
 #[test]
 #[cfg(any(feature = "gen-wasm"))]
 fn union_nonrecursive_inc() {
+    type TwoStr = (RocStr, RocStr, i64);
+
     assert_refcounts!(
         indoc!(
             r#"
@@ -164,14 +170,14 @@ fn union_nonrecursive_inc() {
                 two : TwoOrNone Str
                 two = Two s s
 
-                [two, two]
+                four : TwoOrNone (TwoOrNone Str)
+                four = Two two two
+
+                four
             "#
         ),
-        RocList<([RocStr; 2], i64)>,
-        &[
-            4, // s
-            1  // result list
-        ]
+        (TwoStr, TwoStr, i64),
+        &[4]
     );
 }
 
@@ -214,16 +220,14 @@ fn union_recursive_inc() {
                 e : Expr
                 e = Add x x
 
-                [e, e]
+                Pair e e
             "#
         ),
-        // test_wrapper receives a List, doesn't matter kind of elements it points to
-        RocList<usize>,
+        (Pointer, Pointer),
         &[
             4, // s
             4, // sym
             2, // e
-            1  // list
         ]
     );
 }
@@ -249,7 +253,7 @@ fn union_recursive_dec() {
                     Sym _ -> e
             "#
         ),
-        &RocStr,
+        Pointer,
         &[
             1, // s
             1, // sym
@@ -285,7 +289,7 @@ fn refcount_different_rosetrees_inc() {
                 Tuple i2 s2
         "#
         ),
-        (usize, usize),
+        (Pointer, Pointer),
         &[
             2, // s
             3, // i1
@@ -335,6 +339,60 @@ fn refcount_different_rosetrees_dec() {
             0, // i2
             0, // [s1, s1]
             0, // s2
+        ]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn union_linked_list_inc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                s = Str.concat "A long enough string " "to be heap-allocated"
+
+                linked : LinkedList Str
+                linked = Cons s (Cons s (Cons s Nil))
+
+                Tuple linked linked
+            "#
+        ),
+        (Pointer, Pointer),
+        &[
+            6, // s
+            2, // Cons
+            2, // Cons
+            2, // Cons
+        ]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn union_linked_list_dec() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                s = Str.concat "A long enough string " "to be heap-allocated"
+
+                linked : LinkedList Str
+                linked = Cons s (Cons s (Cons s Nil))
+
+                when linked is
+                    Cons x _ -> x
+                    Nil -> ""
+            "#
+        ),
+        RocStr,
+        &[
+            1, // s
+            0, // Cons
+            0, // Cons
+            0, // Cons
         ]
     );
 }
