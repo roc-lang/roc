@@ -291,7 +291,8 @@ Records are not objects; they don't have methods or inheritance, they just store
 We create the record when we write `{ birds: 5, iguanas: 7 }`. This defines
 a record with two *fields* - namely, the `birds` field and the `iguanas` field -
 and then assigns the number `5` to the `birds` field and the number `7` to the
-`iguanas` field.
+`iguanas` field. Order doesn't matter with record fields; we could have also specified
+`iguanas` first and `birds` second, and Roc would consider it the exact same record.
 
 When we write `counts.birds`, it accesses the `birds` field of the `counts` record,
 and when we write `counts.iguanas` it accesses the `iguanas` field. When we use `==`
@@ -545,6 +546,11 @@ This makes two changes to our earlier `stoplightColor` / `stoplightStr` example.
 Any tag can be given a payload like this. A payload doesn't have to be a string; we could also have said (for example) `Custom { r: 40, g: 60, b: 80 }` to specify an RGB color instead of a string. Then in our `when` we could have written `Custom record ->` and then after the `->` used `record.r`, `record.g`, and `record.b` to access the `40`, `60`, `80` values. We could also have written `Custom { r, g, b } ->` to *destructure* the record, and then
 accessed these `r`, `g`, and `b` defs after the `->` instead.
 
+We refer to whatever comes before a `->` in a `when` expression as a *pattern* - so for example, in the
+`Custom description -> description` branch, `Custom description` would be a pattern. In programming, using
+patterns in branching conditionals like `when` is known as [pattern matching](https://en.wikipedia.org/wiki/Pattern_matching). You may hear people say things like "let's pattern match on `Custom` here" as a way to
+suggest making a `when` branch that begins with something like `Custom description ->`.
+
 ## Lists
 
 Another thing we can do in Roc is to make a *list* of values. Here's an example:
@@ -653,6 +659,24 @@ Instead, we're using a `when` to tell when we've got a string or a number, and t
 
 We could take this as far as we like, adding more different tags (e.g. `BoolElem True`) and then adding
 more branches to the `when` to handle them appropriately.
+
+### Using tags as functions
+
+Let's say I want to apply a tag to a bunch of elements in a list. For example:
+
+```elm
+List.map [ "a", "b", "c", ] \str -> Foo str
+```
+
+This is a perfectly reasonable way to write it, but I can also write it like this:
+
+```elm
+List.map [ "a", "b", "c", ] Foo
+```
+
+These two versions compile to the same thing. As a convenience, Roc lets you specify
+a tag name where a function is expected; when you do this, the compiler infers that you
+want a function which uses all of its arguments as the payload to the given tag.
 
 ### `List.any` and `List.all`
 
@@ -1011,14 +1035,6 @@ its argument without modifying it in any way. This is known as [the identity fun
 
 [ This part of the tutorial has not been written yet. Coming soon! ]
 
-### Open and closed records
-
-[ This part of the tutorial has not been written yet. Coming soon! ]
-
-### Open and closed tag unions
-
-[ This part of the tutorial has not been written yet. Coming soon! ]
-
 ## Interface modules
 
 [ This part of the tutorial has not been written yet. Coming soon! ]
@@ -1329,6 +1345,417 @@ Some important things to note about backpassing and `await`:
 * `await` is not a language keyword in Roc! It's referring to the `Task.await` function, which we imported unqualified by writing `Task.{ await }` in our module imports. (That said, it is playing a similar role here to the `await` keyword in languages that have `async`/`await` keywords, even though in this case it's a function instead of a special keyword.)
 * Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 * Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
+
+# Appendix: Advanced Concepts
+
+Here are some concepts you likely won't need as a beginner, but may want to know about eventually.
+This is listed as an appendix rather than the main tutorial, to emphasize that it's totally fine
+to stop reading here and go build things!
+
+## Open Records and Closed Records
+
+Let's say I write a function which takes a record with a `firstName`
+and `lastName` field, and puts them together with a space in between:
+
+```swift
+fullName = \user ->
+    "\(user.firstName) \(user.lastName)"
+```
+
+I can pass this function a record that has more fields than just
+`firstName` and `lastName`, as long as it has *at least* both of those fields
+(and both of them are strings). So any of these calls would work:
+
+* `fullName { firstName: "Sam", lastName: "Sample" }`
+* `fullName { firstName: "Sam", lastName: "Sample", email: "blah@example.com" }`
+* `fullName { age: 5, firstName: "Sam", things: 3, lastName: "Sample", role: Admin }`
+
+This `user` argument is an *open record* - that is, a description of a minimum set of fields
+on a record, and their types. When a function takes an open record as an argument,
+it's okay if you pass it a record with more fields than just the ones specified.
+
+In contrast, a *closed record* is one that requires an exact set of fields (and their types),
+with no additional fields accepted.
+
+If we add a type annotation to this `fullName` function, we can choose to have it accept either
+an open record or a closed record:
+
+```coffee
+# Closed record
+fullName : { firstName : Str, lastName : Str } -> Str
+fullName = \user - >
+    "\(user.firstName) \(user.lastName)"
+```
+
+```coffee
+# Open record (because of the `*`)
+fullName : { firstName : Str, lastName : Str }* -> Str
+fullName = \user - >
+    "\(user.firstName) \(user.lastName)"
+```
+
+The `*` in the type `{ firstName : Str, lastName : Str }*` is what makes it an open record type.
+This `*` is the *wildcard type* we saw earlier with empty lists. (An empty list has the type `List *`,
+in contrast to something like `List Str` which is a list of strings.)
+
+This is because record types can optionally end in a type variable. If that variable is a `*`, then
+it's an open record. If the type variable is missing, then it's a closed record. You can also specify
+a closed type variable by putting a `{}` there (so for example, `{ email : Str }{}` is another way to write
+`{ email : Str }`). In practice, it's basically always written without the `{}` on the end, but later on
+we'll see a situation where putting types other than `*` in that spot can be useful.
+
+## Constrained Records
+
+The type variable can also be a named type variable, like so:
+
+```coffee
+addHttps : { url : Str }a -> { url : Str }a
+addHttps = \record ->
+    { record & url: "https://\(record.url)" }
+```
+
+This function uses *constrained records* in its type. The annotation is saying:
+* This function takes a record which has at least a `url` field, and possibly others
+* That `url` field has the type `Str`
+* It returns a record of exactly the same type as the one it was given
+
+So if we give this function a record with five fields, it will return a record with those
+same five fields. The only requirement is that one of those fields must be `url : Str`.
+
+In practice, constrained records appear in type annotations much less often than open or closed records do.
+
+Here's when you can typically expect to encounter these three flavors of type variables in records:
+
+- *Open records* are what the compiler infers when you use a record as an argument, or when destructuring it (for example, `{ x, y } =`).
+- *Closed records* are what the compiler infers when you create a new record (for example, `{ x: 5, y: 6 }`)
+- *Constrained records* are what the compiler infers when you do a record update (for example, `{ user & email: newEmail }`)
+
+Of note, you can pass a closed record to a function that accepts a smaller open record, but not the reverse.
+So a function `{ a : Str, b : Bool }* -> Str` can accept an `{ a : Str, b : Bool, c : Bool }` record,
+but a function `{ a : Str, b : Bool, c : Bool } -> Str` would not accept an `{ a : Str, b : Bool }*` record.
+
+This is because if a function accepts `{ a : Str, b : Bool, c : Bool }`, that means it might access the `c`
+field of that record. So if you passed it a record that was not guaranteed to have all three of those fields
+present (such as an `{ a : Str, b : Bool }*` record, which only guarantees that the fields `a` and `b` are present),
+the function might try to access a `c` field at runtime that did not exist!
+
+## Type Variables in Record Annotations
+
+You can add type annotations to make record types less flexible than what the compiler infers, but not more
+flexible. For example, you can use an annotation to tell the compiler to treat a record as closed when it would
+be inferred as open (or constrained), but you can't use an annotation to make a record open when it would be
+inferred as closed.
+
+If you like, you can always annotate your functions as accepting open records. However, in practice this may not
+always be the nicest choice. For example, let's say you have a `User` type alias, like so:
+
+```coffee
+User :
+    {
+        email : Str,
+        firstName : Str,
+        lastName : Str,
+    }
+```
+
+This defines `User` to be a closed record, which in practice is the most common way records named `User`
+tend to be defined.
+
+If you want to have a function take a `User`, you might write its type like so:
+
+```elm
+isValid : User -> Bool
+```
+
+If you want to have a function return a `User`, you might write its type like so:
+
+```elm
+userFromEmail : Str -> User
+```
+
+A function which takes a user and returns a user might look like this:
+
+```elm
+capitalizeNames : User -> User
+```
+
+This is a perfectly reasonable way to write all of these functions. However, I
+might decide that I really want the `isValid` function to take an open record -
+that is, a record with *at least* the fields of this `User` record, but possibly others as well.
+
+Since open records have a type variable, in order to do this I'd need to add a
+type variable to the `User` type alias:
+
+```coffee
+User a :
+    {
+        email : Str,
+        firstName : Str,
+        lastName : Str,
+    }a
+```
+
+I can still write the same three functions, but now their types need to look different.
+
+This is what the first one would look like:
+
+```elm
+isValid : User * -> Bool
+```
+
+Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias,
+which takes it from `{ email : Str, … }a` to `{ email : Str, … }*`. Now I can pass it any
+record that has at least the fields in `User`, and possibly others as well, which was my goal.
+
+```elm
+userFromEmail : Str -> User {}
+```
+
+Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias,
+which takes it from `{ email : Str, … }a` to `{ email : Str, … }{}`. As noted earlier,
+this is another way to specify a closed record: putting a `{}` after it, in the same place that
+you'd find a `*` in an open record.
+
+> **Aside:** This works because you can form new record types by replacing the type variable with
+> other record types. For example, `{ a : Str, b : Str }` can also be written `{ a : Str }{ b : Str }`.
+> You can chain these more than once, e.g. `{ a : Str }{ b : Str }{ c : Str, d : Str }`.
+> This is more useful when used with type annotations; for example, `{ a : Str, b : Str }User` describes
+> a closed record consisting of all the fields in the closed record `User`, plus `a : Str` and `b : Str`.
+
+This function still returns the same record as it always did, it just needs to be annotated as
+`User {}` now instead of just `User`, becuase the `User` type alias has a variable in it that must be
+specified.
+
+The third function might need to use a named type variable:
+
+```elm
+capitalizeNames : User a -> User a
+```
+
+If this function does a record update on the given user, and returns that - for example, if its
+definition were `capitalizeNames = \user -> { user & email: "blah" }` - then it needs to use the
+same named type variable for both the argument and return value.
+
+However, if returns a new `User` that it created from scratch, then its type could instead be:
+
+```elm
+capitalizeNames : User * -> User {}
+```
+
+This says that it takes a record with at least the fields specified in the `User` type alias,
+and possibly others...and then returns a record with exactly the fields specified in the `User`
+type alias, and no others.
+
+These three examples illustrate why it's relatively uncommon to use open records for type aliases:
+it makes a lot of types need to incorporate a type variable that otherwise they could omit,
+all so that `isValid` can be given something that has not only the fields `User` has, but
+some others as well. (In the case of a `User` record in particular, it may be that the extra
+fields were included due to a mistake rather than on purpose, and accepting an open record could
+prevent the compiler from raising an error that would have revealed the mistake.)
+
+That said, this is a useful technique to know about if you want to (for example) make a record
+type that accumulates more and more fields as it progresses through a series of operations.
+
+## Open and Closed Tag Unions
+
+Just like how Roc has open records and closed records, it also has open and closed tag unions.
+
+The *open tag union* (or *open union* for short) `[ Foo Str, Bar Bool ]*` represents a tag that might
+be `Foo Str` and might be `Bar Bool`, but might also be some other tag whose type isn't known at compile time.
+
+Because an open union represents possibilities that are impossible to know ahead of time, any `when` I use on a
+`[ Foo Str, Bar Bool ]*` value must include a catch-all `_ ->` branch. Otherwise, if one of those
+unknown tags were to come up, the `when` would not know what to do with it! For example:
+
+```coffee
+example : [ Foo Str, Bar Bool ]* -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+        _ -> False
+```
+
+In contrast, a *closed tag union* (or *closed union*) like `[ Foo Str, Bar Bool ]` (without the `*`)
+represents an exhaustive set of possible tags. If I use a `when` on one of these, I can match on `Foo`
+only and then on `Bar` only, with no need for a catch-all branch. For example:
+
+```coffee
+example : [ Foo Str, Bar Bool ] -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+```
+
+If we were to remove the type annotations from the previous two code examples, Roc would infer the same
+types for them anyway.
+
+It would infer `tag : [ Foo Str, Bar Bool ]` for the latter example because the `when tag is` expression
+only includes a `Foo Str` branch and a `Bar Bool` branch, and nothing else. Since the `when` doesn't handle
+any other possibilities, these two tags must be the only possible ones the `tag` argument could be.
+
+It would infer `tag : [ Foo Str, Bar Bool ]*` for the former example because the `when tag is` expression
+includes a `Foo Str` branch and a `Bar Bool` branch - meaning we know about at least those two specific
+possibilities - but also a `_ ->` branch, indicating that there may be other tags we don't know about. Since
+the `when` is flexible enough to handle all possible tags, `tag` gets inferred as an open union.
+
+Putting these together, whether a tag union is inferred to be open or closed depends on which possibilities
+the implementation actually handles.
+
+> **Aside:** As with open and closed records, we can use type annotations to make tag union types less flexible
+> than what would be inferred. If we added a `_ ->` branch to the second example above, the compiler would still
+> accept `example : [ Foo Str, Bar Bool ] -> Bool` as the type annotation, even though the catch-all branch
+> would permit the more flexible `example : [ Foo Str, Bar Bool ]* -> Bool` annotation instead.
+
+## Combining Open Unions
+
+When we make a new record, it's inferred to be a closed record. For example, in `foo { a: "hi" }`,
+the type of `{ a: "hi" }` is inferred to be `{ a : Str }`. In contrast, when we make a new tag, it's inferred
+to be an open union. So in `foo (Bar "hi")`, the type of `Bar "hi"` is inferred to be `[ Bar Str ]*`.
+
+This is because open unions can accumulate additional tags based on how they're used in the program,
+whereas closed unions cannot. For example, let's look at this conditional:
+
+```elm
+if x > 5 then
+    "foo"
+else
+    7
+```
+
+This will be a type mismatch because the two branches have incompatible types. Strings and numbers are not
+type-compatible! Now let's look at another example:
+
+```elm
+if x > 5 then
+    Ok "foo"
+else
+    Err "bar"
+```
+
+This shouldn't be a type mismatch, because we can see that the two branches are compatible; they are both
+tags that could easily coexist in the same tag union. But if the compiler inferred the type of `Ok "foo"` to be
+the closed union `[ Ok Str ]`, and likewise for `Err "bar"` and `[ Err Str ]`, then this would have to be
+a type mismatch - because those two closed unions are incompatible.
+
+Instead, the compiler infers `Ok "foo"` to be the open union `[ Ok Str ]*`, and `Err "bar"` to be the open
+union `[ Err Str ]*`. Then, when using them together in this conditional, the inferred type of the conditional
+becomes `[ Ok Str, Err Str ]*` - that is, the combination of the unions in each of its branches. (Branches in
+a `when` work the same way with open unions.)
+
+Earlier we saw how a function which accepts an open union must account for more possibilities, by including
+catch-all `_ ->` patterns in its `when` expressions. So *accepting* an open union means you have more requirements.
+In contrast, when you already *have* a value which is an open union, you have fewer requirements. A value
+which is an open union (like `Ok "foo"`, which has the type `[ Ok Str ]*`) can be provided to anything that's
+expecting a tag union (no matter whether it's open or closed), as long as the expected tag union includes at least
+the tags in the open union you're providing.
+
+So if I have an `[ Ok Str ]*` value, I can pass it functions with any of these types (among others):
+
+* `[ Ok Str ]* -> Bool`
+* `[ Ok Str ] -> Bool`
+* `[ Ok Str, Err Bool ]* -> Bool`
+* `[ Ok Str, Err Bool ] -> Bool`
+* `[ Ok Str, Err Bool, Whatever ]* -> Bool`
+* `[ Ok Str, Err Bool, Whatever ] -> Bool`
+* `Result Str Bool -> Bool`
+* `[ Err Bool, Whatever ]* -> Bool`
+
+That last one works because a function accepting an open union can accept any unrecognized tag, including
+`Ok Str` - even though it is not mentioned as one of the tags in `[ Err Bool, Whatever ]*`! Remember, when
+a function accepts an open tag union, any `when` branches on that union must include a catch-all `_ ->` branch,
+which is the branch that will end up handling the `Ok Str` value we pass in.
+
+However, I could not pass an `[ Ok Str ]*` to a function with a *closed* tag union argument that did not
+mention `Ok Str` as one of its tags. So if I tried to pass `[ Ok Str ]*` to a function with the type
+`[ Err Bool, Whatever ] -> Str`, I would get a type mismatch - because a `when` in that function could
+be handling the `Err Bool` possibility and the `Whatever` possibility, and since it would not necessarily have
+a catch-all `_ ->` branch, it might not know what to do with an `Ok Str` if it received one.
+
+> **Note:** It wouldn't be accurate to say that a function which accepts an open union handles
+> "all possible tags." For example, if I have a function `[ Ok Str ]* -> Bool` and I pass it
+> `Ok 5`, that will still be a type mismatch. If you think about it, a `when` in that function might
+> have the branch `Ok str ->` which assumes there's a string inside that `Ok`, and if `Ok 5` type-checked,
+> then that assumption would be false and things would break!
+>
+> So `[ Ok Str ]*` is more restrictive than `[]*`. It's basically saying "this may or may not be an `Ok` tag,
+> but if it is an `Ok` tag, then it's guaranteed to have a payload of exactly `Str`."
+
+In summary, here's a way to think about the difference between open unions in a value you have, compared to a value you're accepting:
+
+* If you *have* a closed union, that means it has all the tags it ever will, and can't accumulate more.
+* If you *have* an open union, that means it can accumulate more tags through conditional branches.
+* If you *accept* a closed union, that means you only have to handle the possibilities listed in the union.
+* If you *accept* an open union, that means you have to handle the possibility that it has a tag you can't know about.
+
+## Type Variables in Tag Unions
+
+Earlier we saw these two examples, one with an open tag union and the other with a closed one:
+
+```coffee
+example : [ Foo Str, Bar Bool ]* -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+        _ -> False
+```
+
+```coffee
+example : [ Foo Str, Bar Bool ] -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+```
+
+Similarly to how there are open records with a `*`, closed records with nothing,
+and constrained records with a named type variable, we can also have *constrained tag unions*
+with a named type variable. Here's an example:
+
+```coffee
+example : [ Foo Str, Bar Bool ]a -> [ Foo Str, Bar Bool ]a
+example = \tag ->
+    when tag is
+        Foo str -> Bar (Str.isEmpty str)
+        Bar _ -> Bar False
+        other -> other
+```
+
+This type says that the `example` function will take either a `Foo Str` tag, or a `Bar Bool` tag,
+or possibly another tag we don't know about at compile time - and it also says that the function's
+return type is the same as the type of its argument.
+
+So if we give this function a `[ Foo Str, Bar Bool, Baz (List Str) ]` argument, then it will be guaranteed
+to return a `[ Foo Str, Bar Bool, Baz (List Str) ]` value. This is more constrained than a function that
+returned `[ Foo Str, Bar Bool ]*` because that would say it could return *any* other tag (in addition to
+the `Foo Str` and `Bar Bool` we already know about).
+
+If we removed the type annotation from `example` above, Roc's compiler would infer the same type anyway.
+This may be surprising if you look closely at the body of the function, because:
+
+* The return type includes `Foo Str`, but no branch explicitly returns `Foo`. Couldn't the return type be `[ Bar Bool ]a` instead?
+* The argument type includes `Bar Bool` even though we never look at `Bar`'s payload. Couldn't the argument type be inferred to be `Bar *` instead of `Bar Bool`, since we never look at it?
+
+The reason it has this type is the `other -> other` branch. Take a look at that branch, and ask this question:
+"What is the type of `other`?" There has to be exactly one answer! It can't be the case that `other` has one
+type before the `->` and another type after it; whenever you see a named value in Roc, it is guaranteed to have
+the same type everywhere it appears in that scope.
+
+For this reason, any time you see a function that only runs a `when` on its only argument, and that `when`
+includes a branch like `x -> x` or `other -> other`, the function's argument type and reurn type must necessarily
+be equivalent.
+
+> **Note:** Just like with records, you can also replace the type variable in tag union types with a concrete type.
+> For example, `[ Foo Str ][ Bar Bool ][ Baz (List Str) ]` is equivalent to `[ Foo Str, Bar Bool, Baz (List Str) ]`.
+>
+> Also just like with records, you can use this to compose tag union type aliases. For example, you can write
+> `NetworkError : [ Timeout, Disconnected ]` and then `Problem : [ InvalidInput, UnknownFormat ]NetworkError`
+
+## Phantom Types
+
+[ This part of the tutorial has not been written yet. Coming soon! ]
 
 ## Operator Desugaring Table
 
