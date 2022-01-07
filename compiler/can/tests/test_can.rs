@@ -1570,6 +1570,8 @@ mod test_can {
         assert_can(r#""x\u(101010)x""#, expr_str("x\u{101010}x"));
     }
 
+    // FIXME GIESCH
+    // i broke this? try it on trunk
     #[test]
     fn block_string() {
         assert_can(

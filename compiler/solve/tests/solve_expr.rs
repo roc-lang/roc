@@ -3866,6 +3866,42 @@ mod solve_expr {
     }
 
     #[test]
+    fn str_trim_right() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.trimRight
+                "#
+            ),
+            "Str -> Str",
+        );
+    }
+
+    #[test]
+    fn str_drop_prefix() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.dropPrefix
+                "#
+            ),
+            "Str, Str -> Str",
+        );
+    }
+
+    #[test]
+    fn str_drop_suffix() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.dropSuffix
+                "#
+            ),
+            "Str, Str -> Str",
+        );
+    }
+
+    #[test]
     fn list_take_first() {
         infer_eq_without_problem(
             indoc!(

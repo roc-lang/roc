@@ -278,6 +278,9 @@ pub fn str_trim_right<'a, 'ctx, 'env>(
     call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_RIGHT)
 }
 
+// TODO GIESCH
+// this is where the startsWith/endsWith checks should be?
+
 /// Str.dropPrefix : Str, Str -> Str
 pub fn str_drop_prefix<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
