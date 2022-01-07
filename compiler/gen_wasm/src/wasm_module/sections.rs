@@ -84,6 +84,21 @@ fn serialize_vector_section<B: SerialBuffer, T: Serialize>(
     }
 }
 
+/// Serialize a section that is stored as bytes and a count
+fn serialize_bytes_section<B: SerialBuffer>(
+    buffer: &mut B,
+    section_id: SectionId,
+    count: u32,
+    bytes: &[u8],
+) {
+    if !bytes.is_empty() {
+        let header_indices = write_section_header(buffer, section_id);
+        buffer.encode_u32(count);
+        buffer.append_slice(bytes);
+        update_section_size(buffer, header_indices);
+    }
+}
+
 /*******************************************************************
  *
  * Type section
@@ -150,12 +165,12 @@ impl<'a> TypeSection<'a> {
 
 impl<'a> Serialize for TypeSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if !self.bytes.is_empty() {
-            let header_indices = write_section_header(buffer, SectionId::Type);
-            buffer.encode_u32(self.offsets.len() as u32);
-            buffer.append_slice(&self.bytes);
-            update_section_size(buffer, header_indices);
-        }
+        serialize_bytes_section(
+            buffer,
+            SectionId::Type,
+            self.offsets.len() as u32,
+            &self.bytes,
+        );
     }
 }
 
@@ -260,19 +275,26 @@ impl<'a> Serialize for ImportSection<'a> {
 
 #[derive(Debug)]
 pub struct FunctionSection<'a> {
-    pub signature_indices: Vec<'a, u32>,
+    pub count: u32,
+    pub bytes: Vec<'a, u8>,
 }
 
 impl<'a> FunctionSection<'a> {
     pub fn new(arena: &'a Bump, capacity: usize) -> Self {
         FunctionSection {
-            signature_indices: Vec::with_capacity_in(capacity, arena),
+            count: 0,
+            bytes: Vec::with_capacity_in(capacity, arena),
         }
+    }
+
+    fn add_sig(&mut self, sig_id: u32) {
+        self.bytes.encode_u32(sig_id);
+        self.count += 1;
     }
 }
 impl<'a> Serialize for FunctionSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_vector_section(buffer, SectionId::Function, &self.signature_indices);
+        serialize_bytes_section(buffer, SectionId::Function, self.count, &self.bytes);
     }
 }
 
@@ -608,7 +630,7 @@ impl<'a> WasmModule<'a> {
     /// Create entries in the Type and Function sections for a function signature
     pub fn add_function_signature(&mut self, signature: Signature<'a>) {
         let index = self.types.insert(signature);
-        self.function.signature_indices.push(index);
+        self.function.add_sig(index);
     }
 
     /// Serialize the module to bytes
