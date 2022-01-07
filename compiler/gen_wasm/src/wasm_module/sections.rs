@@ -489,6 +489,8 @@ impl<'a> Serialize for ExportSection<'a> {
 
 #[derive(Debug)]
 pub struct CodeSection<'a> {
+    pub preloaded_count: u32,
+    pub preloaded_bytes: Vec<'a, u8>,
     pub code_builders: Vec<'a, CodeBuilder<'a>>,
 }
 
@@ -500,7 +502,9 @@ impl<'a> CodeSection<'a> {
         relocations: &mut Vec<'a, RelocationEntry>,
     ) -> usize {
         let header_indices = write_section_header(buffer, SectionId::Code);
-        buffer.encode_u32(self.code_builders.len() as u32);
+        buffer.encode_u32(self.preloaded_count + self.code_builders.len() as u32);
+
+        buffer.append_slice(&self.preloaded_bytes);
 
         for code_builder in self.code_builders.iter() {
             code_builder.serialize_with_relocs(buffer, relocations, header_indices.body_index);

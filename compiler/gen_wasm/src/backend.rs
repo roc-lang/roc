@@ -126,6 +126,8 @@ impl<'a> WasmBackend<'a> {
             start: (),
             element: (),
             code: CodeSection {
+                preloaded_count: 0,
+                preloaded_bytes: Vec::with_capacity_in(0, arena),
                 code_builders: Vec::with_capacity_in(num_procs, arena),
             },
             data: DataSection {
