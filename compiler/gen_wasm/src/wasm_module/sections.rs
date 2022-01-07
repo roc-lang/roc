@@ -108,35 +108,54 @@ impl<'a> Serialize for Signature<'a> {
 #[derive(Debug)]
 pub struct TypeSection<'a> {
     /// Private. See WasmModule::add_function_signature
-    signatures: Vec<'a, Signature<'a>>,
+    arena: &'a Bump,
+    bytes: Vec<'a, u8>,
+    offsets: Vec<'a, usize>,
 }
 
 impl<'a> TypeSection<'a> {
     pub fn new(arena: &'a Bump, capacity: usize) -> Self {
         TypeSection {
-            signatures: Vec::with_capacity_in(capacity, arena),
+            arena,
+            bytes: Vec::with_capacity_in(capacity * 4, arena),
+            offsets: Vec::with_capacity_in(capacity, arena),
         }
     }
 
     /// Find a matching signature or insert a new one. Return the index.
     pub fn insert(&mut self, signature: Signature<'a>) -> u32 {
-        // Using linear search because we need to preserve indices stored in
-        // the Function section. (Also for practical sizes it's fast)
-        let maybe_index = self.signatures.iter().position(|s| *s == signature);
-        match maybe_index {
-            Some(index) => index as u32,
-            None => {
-                let index = self.signatures.len();
-                self.signatures.push(signature);
-                index as u32
+        let mut sig_bytes = Vec::with_capacity_in(signature.param_types.len() + 4, self.arena);
+        signature.serialize(&mut sig_bytes);
+
+        let sig_len = sig_bytes.len();
+        let bytes_len = self.bytes.len();
+
+        for (i, offset) in self.offsets.iter().enumerate() {
+            let end = offset + sig_len;
+            if end > bytes_len {
+                break;
+            }
+            if &self.bytes[*offset..end] == sig_bytes.as_slice() {
+                return i as u32;
             }
         }
+
+        let sig_id = self.offsets.len();
+        self.offsets.push(bytes_len);
+        self.bytes.extend_from_slice(&sig_bytes);
+
+        sig_id as u32
     }
 }
 
 impl<'a> Serialize for TypeSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_vector_section(buffer, SectionId::Type, &self.signatures);
+        if !self.bytes.is_empty() {
+            let header_indices = write_section_header(buffer, SectionId::Type);
+            buffer.encode_u32(self.offsets.len() as u32);
+            buffer.append_slice(&self.bytes);
+            update_section_size(buffer, header_indices);
+        }
     }
 }
 
