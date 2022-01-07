@@ -130,6 +130,11 @@ comptime {
     exportStrFn(str.strTrimLeft, "trim_left");
     exportStrFn(str.strTrimRight, "trim_right");
 
+    // TODO GIESCH
+    // use or fix these
+    exportStrFn(str.dropLeftNBytesUnsafe, "drop_left_n_bytes_unsafe");
+    exportStrFn(str.dropRightNBytesUnsafe, "drop_right_n_bytes_unsafe");
+
     inline for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");
         num.exportParseInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".to_int.");
