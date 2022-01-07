@@ -30,8 +30,9 @@ use crate::wasm_module::{
     LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
-    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, DEBUG_LOG_SETTINGS,
-    MEMORY_NAME, PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME,
+    DEBUG_LOG_SETTINGS, MEMORY_NAME, PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID,
+    STACK_POINTER_NAME,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -1465,11 +1466,15 @@ impl<'a> WasmBackend<'a> {
             None => {
                 let const_segment_bytes = &mut self.module.data.segments[CONST_SEGMENT_INDEX].init;
 
-                // Store the string in the data section
-                // Prefix it with a special refcount value (treated as "infinity")
-                // The string's `elements` field points at the data after the refcount
+                // Pad the existing data segment to make sure the refcount and string are aligned
+                let aligned_len = round_up_to_alignment!(const_segment_bytes.len(), 4usize);
+                const_segment_bytes.resize(aligned_len, 0);
+
+                // Prefix the string with "infinite" refcount
                 let refcount_max_bytes: [u8; 4] = (REFCOUNT_MAX as i32).to_le_bytes();
                 const_segment_bytes.extend_from_slice(&refcount_max_bytes);
+
+                // Add the string bytes to the data segment
                 let elements_offset = const_segment_bytes.len() as u32;
                 let elements_addr = elements_offset + CONST_SEGMENT_BASE_ADDR;
                 const_segment_bytes.extend_from_slice(string.as_bytes());
