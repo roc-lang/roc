@@ -1031,9 +1031,99 @@ of the type annotation, or even the function's implementation! The only way to h
 Similarly, the only way to have a function whose type is `a -> a` is if the function's implementation returns
 its argument without modifying it in any way. This is known as [the identity function](https://en.wikipedia.org/wiki/Identity_function).
 
-### Numeric types
+## Numeric types
 
-[ This part of the tutorial has not been written yet. Coming soon! ]
+Roc has different numeric types that each have different tradeoffs.
+They can all be broken down into two categories: [fractions](https://en.wikipedia.org/wiki/Fraction),
+and [integers](https://en.wikipedia.org/wiki/Integer). In Roc we call these `Frac` and `Int` for short.
+
+### Integers
+
+Roc's integer types have two important characteristics: their *size* and their [*signedness*](https://en.wikipedia.org/wiki/Signedness).
+Together, these two characteristics determine the range of numbers the integer type can represent.
+
+For example, the Roc type `U8` can represent the numbers 0 through 255, whereas the `I16` type can represent
+the numbers -32768 through 32767. You can actually infer these ranges from their names (`U8` and `I16`) alone!
+
+The `U` in `U8` indicates that it's *unsigned*, meaning that it can't have a minus [sign](https://en.wikipedia.org/wiki/Sign_(mathematics)), and therefore can't be negative. The fact that it's unsigned tells us immediately that
+its lowest value is zero. The 8 in `U8` means it is 8 [bits](https://en.wikipedia.org/wiki/Bit) in size, which
+means it has room to represent 2⁸ (which is equal to 256) different numbers. Since one of those 256 different numbers
+is 0, we can look at `U8` and know that it goes from `0` (since it's unsigned) to `255` (2⁸ - 1, since it's 8 bits).
+
+If we change `U8` to `I8`, making it a *signed* 8-bit integer, the range changes. Because it's still 8 bits, it still
+has room to represent 2⁸ (that is, 256) different numbers. However, now in addition to one of those 256 numbers
+being zero, about half of rest will be negative, and the others positive. So instead of ranging from, say -255
+to 255 (which, counting zero, would represent 511 different numbers; too many to fit in 8 bits!) an `I8` value
+ranges from -128 to 127.
+
+Notice that the negative extreme is `-128` versus `127` (not `128`) on the positive side. That's because of
+needing room for zero; the slot for zero is taken from the positive range because zero doesn't have a minus sign.
+So in general, you can find the lowest signed number by taking its total range (256 different numbers in the case
+of an 8-bit integer) and dividing it in half (half of 256 is 128, so -128 is `I8`'s lowest number). To find the
+highest number, take the positive version of the lowest number (so, convert `-128` to `128`) and then subtract 1
+to make room for zero (so, `128` becomes `127`; `I8` ranges from -128 to 127).
+
+Following this pattern, the 16 in `I16` means that it's a signed 16 bit integer.
+That tells us it has room to represent 2¹⁶ (which is equal to 65536) different numbers. Half of 65536 is 32768,
+so the lowest `I16` would be -32768, and the highest would be 32767. Knowing that, we can also quickly tell that
+the lowest `U16` would be zero (since it always is for unsigned integers), and the higeest `U16` would be 65536.
+
+Choosing a size depends on your performance needs and the range of numbers you want to represent. Consider:
+
+* Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
+* Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
+* Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
+
+Here are the different fixed-size integer types that Roc supports:
+
+| Range                                                  | Type  | Size     |
+|--------------------------------------------------------|-------|----------|
+| `                                                -128` | #I8   | 1 Byte   |
+| `                                                 127` |       |          |
+|--------------------------------------------------------|-------|----------|
+| `                                                   0` | #U8   | 1 Byte   |
+| `                                                 255` |       |          |
+|--------------------------------------------------------|-------|----------|
+| `                                             -32_768` | #I16  | 2 Bytes  |
+| `                                              32_767` |       |          |
+|--------------------------------------------------------|-------|----------|
+| `                                                   0` | #U16  | 2 Bytes  |
+| `                                              65_535` |       |          |
+|--------------------------------------------------------|-------|----------|
+| `                                      -2_147_483_648` | #I32  | 4 Bytes  |
+| `                                       2_147_483_647` |       |          |
+|--------------------------------------------------------|-------|----------|
+| `                                                   0` | #U32  | 4 Bytes  |
+| ` (over 4 billion)                      4_294_967_295` |       |          |
+|--------------------------------------------------------|-------|----------|
+| `                          -9_223_372_036_854_775_808` | #I64  | 8 Bytes  |
+| `                           9_223_372_036_854_775_807` |       |          |
+|--------------------------------------------------------|-------|----------|
+| `                                                   0` | #U64  | 8 Bytes  |
+| ` (over 18 quintillion)    18_446_744_073_709_551_615` |       |          |
+|--------------------------------------------------------|-------|----------|
+| `-170_141_183_460_469_231_731_687_303_715_884_105_728` | #I128 | 16 Bytes |
+| ` 170_141_183_460_469_231_731_687_303_715_884_105_727` |       |          |
+|--------------------------------------------------------|-------|----------|
+| ` (over 340 undecillion)                            0` | #U128 | 16 Bytes |
+| ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
+
+Roc also has one variable-size integer type: [Nat]. The size of [Nat] is equal
+to the size of a memory address, which varies by system. For example, when
+compiling for a 64-bit system, [Nat] is the same as [U64]. When compiling for a
+32-bit system, it's the same as [U32].
+
+A common use for [Nat] is to store the length ("len" for short) of a
+collection like a [List]. 64-bit systems can represent longer
+lists in memory than 32-bit systems can, which is why the length of a list
+is represented as a [Nat] in Roc.
+
+If any operation would result in an [Int] that is either too big
+or too small to fit in that range (e.g. calling `Int.maxI32 + 1`),
+then the operation will *overflow*. When an overflow occurs, the program will crash.
+
+As such, it's very important to design your code not to exceed these bounds!
+If you need to do math outside these bounds, consider using a larger numeric size.
 
 ## Interface modules
 
