@@ -629,7 +629,7 @@ impl SectionCounter {
 
 /// A Wasm module section that we don't use for Roc code,
 /// but may be present in a preloaded binary
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct OpaqueSection<'a> {
     bytes: &'a [u8],
 }
@@ -640,16 +640,10 @@ impl<'a> OpaqueSection<'a> {
     }
 }
 
-impl<'a> Default for OpaqueSection<'a> {
-    fn default() -> Self {
-        Self { bytes: &[] }
-    }
-}
-
 impl Serialize for OpaqueSection<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         if !self.bytes.is_empty() {
-            buffer.append_slice(&self.bytes);
+            buffer.append_slice(self.bytes);
         }
     }
 }
@@ -682,7 +676,6 @@ impl<'a> WasmModule<'a> {
 
     /// Serialize the module to bytes
     /// (Mutates some data related to linking)
-    #[allow(clippy::unit_arg)]
     pub fn serialize_mut<T: SerialBuffer>(&mut self, buffer: &mut T) {
         buffer.append_u8(0);
         buffer.append_slice("asm".as_bytes());

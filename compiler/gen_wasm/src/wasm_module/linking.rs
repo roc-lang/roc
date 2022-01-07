@@ -430,7 +430,7 @@ enum SubSectionId {
     SymbolTable = 8,
 }
 
-fn serialize_subsection<'a, I: Serialize, T: SerialBuffer>(
+fn serialize_subsection<I: Serialize, T: SerialBuffer>(
     buffer: &mut T,
     id: SubSectionId,
     items: &[I],
