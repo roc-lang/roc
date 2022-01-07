@@ -530,6 +530,14 @@ pub enum DataMode {
     Passive,
 }
 
+impl DataMode {
+    pub fn active_at(offset: u32) -> Self {
+        DataMode::Active {
+            offset: ConstExpr::I32(offset as i32),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct DataSegment<'a> {
     pub mode: DataMode,
@@ -554,19 +562,30 @@ impl Serialize for DataSegment<'_> {
 
 #[derive(Debug)]
 pub struct DataSection<'a> {
-    pub segments: Vec<'a, DataSegment<'a>>,
+    segment_count: u32,
+    bytes: Vec<'a, u8>,
 }
 
 impl<'a> DataSection<'a> {
-    fn is_empty(&self) -> bool {
-        self.segments.is_empty() || self.segments.iter().all(|seg| seg.init.is_empty())
+    pub fn new(arena: &'a Bump) -> Self {
+        DataSection {
+            segment_count: 0,
+            bytes: bumpalo::vec![in arena],
+        }
+    }
+
+    pub fn append_segment(&mut self, segment: DataSegment<'a>) -> u32 {
+        let index = self.segment_count;
+        self.segment_count += 1;
+        segment.serialize(&mut self.bytes);
+        index
     }
 }
 
 impl Serialize for DataSection<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if !self.is_empty() {
-            serialize_vector_section(buffer, SectionId::Data, &self.segments);
+        if !self.bytes.is_empty() {
+            serialize_bytes_section(buffer, SectionId::Data, self.segment_count, &self.bytes);
         }
     }
 }

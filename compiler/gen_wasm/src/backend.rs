@@ -40,9 +40,6 @@ use crate::{
 /// Follow Emscripten's example by leaving 1kB unused (though 4 bytes would probably do!)
 const CONST_SEGMENT_BASE_ADDR: u32 = 1024;
 
-/// Index of the data segment where we store constants
-const CONST_SEGMENT_INDEX: usize = 0;
-
 pub struct WasmBackend<'a> {
     env: &'a Env<'a>,
     interns: &'a mut Interns,
@@ -50,7 +47,7 @@ pub struct WasmBackend<'a> {
     // Module-level data
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
-    constant_sym_index_map: MutMap<&'a str, usize>,
+    next_constant_addr: u32,
     builtin_sym_index_map: MutMap<&'a str, usize>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
     linker_symbols: Vec<'a, SymInfo>,
@@ -107,13 +104,6 @@ impl<'a> WasmBackend<'a> {
             name: STACK_POINTER_NAME.to_string(),
         }));
 
-        let const_segment = DataSegment {
-            mode: DataMode::Active {
-                offset: ConstExpr::I32(CONST_SEGMENT_BASE_ADDR as i32),
-            },
-            init: Vec::with_capacity_in(64, arena),
-        };
-
         let module = WasmModule {
             types: TypeSection::new(arena, num_procs),
             import: ImportSection::new(arena),
@@ -131,9 +121,7 @@ impl<'a> WasmBackend<'a> {
                 preloaded_bytes: Vec::with_capacity_in(0, arena),
                 code_builders: Vec::with_capacity_in(num_procs, arena),
             },
-            data: DataSection {
-                segments: bumpalo::vec![in arena; const_segment],
-            },
+            data: DataSection::new(arena),
             linking: LinkingSection::new(arena),
             relocations: RelocationSection::new(arena, "reloc.CODE"),
         };
@@ -146,7 +134,7 @@ impl<'a> WasmBackend<'a> {
             module,
 
             layout_ids,
-            constant_sym_index_map: MutMap::default(),
+            next_constant_addr: CONST_SEGMENT_BASE_ADDR,
             builtin_sym_index_map: MutMap::default(),
             proc_symbols,
             linker_symbols,
@@ -1445,61 +1433,41 @@ impl<'a> WasmBackend<'a> {
         sym: Symbol,
         layout: &Layout<'a>,
     ) -> (u32, u32) {
-        match self.constant_sym_index_map.get(string) {
-            Some(linker_sym_index) => {
-                // We've seen this string before. The linker metadata has a reference
-                // to its offset in the constants data segment.
-                let syminfo = &self.linker_symbols[*linker_sym_index];
-                match syminfo {
-                    SymInfo::Data(DataSymbol::Defined { segment_offset, .. }) => {
-                        let elements_addr = *segment_offset + CONST_SEGMENT_BASE_ADDR;
-                        (*linker_sym_index as u32, elements_addr)
-                    }
-                    _ => internal_error!(
-                        "Compiler bug: Invalid linker symbol info for string {:?}:\n{:?}",
-                        string,
-                        syminfo
-                    ),
-                }
-            }
+        // Place the segment at a 4-byte aligned offset
+        let segment_addr = round_up_to_alignment!(self.next_constant_addr, PTR_SIZE);
+        let elements_addr = segment_addr + PTR_SIZE;
+        let length_with_refcount = 4 + string.len();
+        self.next_constant_addr = segment_addr + length_with_refcount as u32;
 
-            None => {
-                let const_segment_bytes = &mut self.module.data.segments[CONST_SEGMENT_INDEX].init;
+        let mut segment = DataSegment {
+            mode: DataMode::active_at(segment_addr),
+            init: Vec::with_capacity_in(length_with_refcount, self.env.arena),
+        };
 
-                // Pad the existing data segment to make sure the refcount and string are aligned
-                let aligned_len = round_up_to_alignment!(const_segment_bytes.len(), 4usize);
-                const_segment_bytes.resize(aligned_len, 0);
+        // Prefix the string bytes with "infinite" refcount
+        let refcount_max_bytes: [u8; 4] = (REFCOUNT_MAX as i32).to_le_bytes();
+        segment.init.extend_from_slice(&refcount_max_bytes);
+        segment.init.extend_from_slice(string.as_bytes());
 
-                // Prefix the string with "infinite" refcount
-                let refcount_max_bytes: [u8; 4] = (REFCOUNT_MAX as i32).to_le_bytes();
-                const_segment_bytes.extend_from_slice(&refcount_max_bytes);
+        let segment_index = self.module.data.append_segment(segment);
 
-                // Add the string bytes to the data segment
-                let elements_offset = const_segment_bytes.len() as u32;
-                let elements_addr = elements_offset + CONST_SEGMENT_BASE_ADDR;
-                const_segment_bytes.extend_from_slice(string.as_bytes());
+        // Generate linker info
+        let name = self
+            .layout_ids
+            .get(sym, layout)
+            .to_symbol_string(sym, self.interns);
+        let linker_symbol = SymInfo::Data(DataSymbol::Defined {
+            flags: 0,
+            name,
+            segment_index,
+            segment_offset: 4,
+            size: string.len() as u32,
+        });
 
-                // Generate linker info
-                // Just pick the symbol name from the first usage
-                let name = self
-                    .layout_ids
-                    .get(sym, layout)
-                    .to_symbol_string(sym, self.interns);
-                let linker_symbol = SymInfo::Data(DataSymbol::Defined {
-                    flags: 0,
-                    name,
-                    segment_index: CONST_SEGMENT_INDEX as u32,
-                    segment_offset: elements_offset,
-                    size: string.len() as u32,
-                });
+        let linker_sym_index = self.linker_symbols.len();
+        self.linker_symbols.push(linker_symbol);
 
-                let linker_sym_index = self.linker_symbols.len();
-                self.constant_sym_index_map.insert(string, linker_sym_index);
-                self.linker_symbols.push(linker_symbol);
-
-                (linker_sym_index as u32, elements_addr)
-            }
-        }
+        (linker_sym_index as u32, elements_addr)
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
