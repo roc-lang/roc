@@ -15,10 +15,10 @@ use crate::llvm::build_list::{
     list_single, list_sort_with, list_sublist, list_swap,
 };
 use crate::llvm::build_str::{
-    str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
-    str_from_utf8_range, str_join_with, str_number_of_bytes, str_repeat, str_split,
-    str_starts_with, str_starts_with_code_point, str_to_utf8, str_trim, str_trim_left,
-    str_trim_right,
+    str_concat, str_count_graphemes, str_drop_prefix, str_drop_suffix, str_ends_with,
+    str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_join_with,
+    str_number_of_bytes, str_repeat, str_split, str_starts_with, str_starts_with_code_point,
+    str_to_utf8, str_trim, str_trim_left, str_trim_right,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
@@ -5459,15 +5459,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.dropPrefix : Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            // TODO GIESCH
-            todo!("write me");
+            str_drop_prefix(env, scope, args[0], args[1])
         }
         StrDropSuffix => {
             // Str.dropSuffix : Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            // TODO GIESCH
-            todo!("write me");
+            str_drop_suffix(env, scope, args[0], args[1])
         }
         ListLen => {
             // List.len : List * -> Int

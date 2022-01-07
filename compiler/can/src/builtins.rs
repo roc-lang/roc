@@ -85,6 +85,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_TRIM => str_trim,
         STR_TRIM_LEFT => str_trim_left,
         STR_TRIM_RIGHT => str_trim_right,
+        STR_DROP_PREFIX => str_drop_prefix,
+        STR_DROP_SUFFIX => str_drop_suffix,
         STR_TO_DEC => str_to_num,
         STR_TO_F64 => str_to_num,
         STR_TO_F32 => str_to_num,
@@ -1418,6 +1420,16 @@ fn str_trim_left(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Str.trimRight : Str -> Str
 fn str_trim_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrimRight, var_store)
+}
+
+/// Str.dropPrefix : Str, Str -> Str
+fn str_drop_prefix(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::StrDropPrefix, var_store)
+}
+
+/// Str.dropSuffix : Str, Str -> Str
+fn str_drop_suffix(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::StrDropSuffix, var_store)
 }
 
 /// Str.toNum : Str -> Result (Num *) [ InvalidNumStr ]*

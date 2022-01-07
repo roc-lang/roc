@@ -1711,10 +1711,8 @@ pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
 // dropSuffix : Str, Str -> Result Str {}
 // dropPrefix : Str, Str -> Result Str {}
 //
-// This needs to expose two kinds of fns
-// Str.#prefixMatch and Str.#suffixMatch : Str, Str -> bool
 // Str.#dropLeftNBytesUnsave and Str.#dropRightNBytesUnsafe Str, Nat -> Str
-// then, the can/src/builtins level puts them together to return a result,
+// then, the can/src/builtins uses with startsWith/endsWith to return a result,
 // like list_get does for List.#getUnsafe
 
 // TODO GIESCH
@@ -1727,57 +1725,6 @@ pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
 // ...
 // ...
 // N. add roc source code tests
-
-pub fn suffixMatch(string: RocStr, suffix: RocStr) callconv(.C) bool {
-    if (suffix.isEmpty()) {
-        return true;
-    }
-
-    if (suffix.len() > string.len()) {
-        return false;
-    }
-
-    const suffix_begin = string.len() - suffix.len();
-    const string_bytes = string.asU8ptr()[suffix_begin..string.len()];
-    var string_iter = unicode.Utf8View.initUnchecked(string_bytes).iterator();
-
-    const suffix_bytes = suffix.asU8ptr()[0..suffix.len()];
-    var suffix_iter = unicode.Utf8View.initUnchecked(suffix_bytes).iterator();
-
-    while (suffix_iter.nextCodepoint()) |suffix_codepoint| {
-        var string_codepoint = string_iter.nextCodepoint();
-        if (suffix_codepoint != string_codepoint) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-pub fn prefixMatch(string: RocStr, prefix: RocStr) callconv(.C) bool {
-    if (prefix.isEmpty()) {
-        return true;
-    }
-
-    if (prefix.len() > string.len()) {
-        return false;
-    }
-
-    const string_bytes = string.asU8ptr()[0..prefix.len()];
-    var string_iter = unicode.Utf8View.initUnchecked(string_bytes).iterator();
-
-    const prefix_bytes = prefix.asU8ptr()[0..prefix.len()];
-    var prefix_iter = unicode.Utf8View.initUnchecked(prefix_bytes).iterator();
-
-    while (prefix_iter.nextCodepoint()) |prefix_codepoint| {
-        var string_codepoint = string_iter.nextCodepoint();
-        if (prefix_codepoint != string_codepoint) {
-            return false;
-        }
-    }
-
-    return true;
-}
 
 // NOTE this is unsafe in that it ignores unicode correctness
 // it's the caller's responsibility to ensure that
@@ -1945,7 +1892,7 @@ test "trim prefix: full match" {
     const prefix = RocStr.init(prefix_bytes, prefix_bytes.len);
     defer prefix.deinit();
 
-    const match = prefixMatch(string, prefix);
+    const match = startsWith(string, prefix);
     try expect(match);
 
     const result = dropLeftNBytesUnsafe(string, prefix.len());
@@ -1961,7 +1908,7 @@ test "trim prefix: partial match" {
     const prefix = RocStr.init(prefix_bytes, prefix_bytes.len);
     defer prefix.deinit();
 
-    const match = prefixMatch(string, prefix);
+    const match = startsWith(string, prefix);
     try expect(match);
 
     const suffix = " a laaaaaaaaaaaaaaaaarge string";
@@ -1981,7 +1928,7 @@ test "trim prefix: no match" {
     const prefix = RocStr.init(prefix_bytes, prefix_bytes.len);
     defer prefix.deinit();
 
-    const match = prefixMatch(string, prefix);
+    const match = startsWith(string, prefix);
     try expect(!match);
 }
 
@@ -1994,7 +1941,7 @@ test "trim suffix: full match" {
     const suffix = RocStr.init(suffix_bytes, suffix_bytes.len);
     defer suffix.deinit();
 
-    const match = suffixMatch(string, suffix);
+    const match = endsWith(string, suffix);
     try expect(match);
 
     const result = dropRightNBytesUnsafe(string, suffix.len());
@@ -2010,7 +1957,7 @@ test "trim suffix: partial match" {
     const suffix = RocStr.init(suffix_bytes, suffix_bytes.len);
     defer suffix.deinit();
 
-    const match = suffixMatch(string, suffix);
+    const match = endsWith(string, suffix);
     try expect(match);
 
     const prefix = "this is a laaaaaaaaaaaaaaaa";
@@ -2030,7 +1977,7 @@ test "trim suffix: no match" {
     const suffix = RocStr.init(suffix_bytes, suffix_bytes.len);
     defer suffix.deinit();
 
-    const match = suffixMatch(string, suffix);
+    const match = endsWith(string, suffix);
     try expect(!match);
 }
 
