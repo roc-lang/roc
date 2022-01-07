@@ -389,17 +389,17 @@ Nat : Int [ @Natural ]
 ## | ` (over 340 undecillion)                            0` | #U128 | 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## Roc also has one variable-size integer type: #Nat. The size of #Nat is equal
+## Roc also has one variable-size integer type: [Nat]. The size of [Nat] is equal
 ## to the size of a memory address, which varies by system. For example, when
-## compiling for a 64-bit system, #Nat is the same as #U64. When compiling for a
-## 32-bit system, it's the same as #U32.
+## compiling for a 64-bit system, [Nat] is the same as [U64]. When compiling for a
+## 32-bit system, it's the same as [U32].
 ##
-## A common use for #Nat is to store the length ("len" for short) of a
-## collection like #List, #Set, or #Map. 64-bit systems can represent longer
+## A common use for [Nat] is to store the length ("len" for short) of a
+## collection like a [List]. 64-bit systems can represent longer
 ## lists in memory than 32-bit systems can, which is why the length of a list
-## is represented as a #Nat in Roc.
+## is represented as a [Nat] in Roc.
 ##
-## If any operation would result in an #Int that is either too big
+## If any operation would result in an [Int] that is either too big
 ## or too small to fit in that range (e.g. calling `Int.maxI32 + 1`),
 ## then the operation will *overflow*. When an overflow occurs, the program will crash.
 ##
