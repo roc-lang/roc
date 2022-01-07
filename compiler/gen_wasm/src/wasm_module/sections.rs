@@ -627,20 +627,44 @@ impl SectionCounter {
     }
 }
 
+/// A Wasm module section that we don't use for Roc code,
+/// but may be present in a preloaded binary
+#[derive(Debug)]
+pub struct OpaqueSection<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> OpaqueSection<'a> {
+    pub fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+}
+
+impl<'a> Default for OpaqueSection<'a> {
+    fn default() -> Self {
+        Self { bytes: &[] }
+    }
+}
+
+impl Serialize for OpaqueSection<'_> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        if !self.bytes.is_empty() {
+            buffer.append_slice(&self.bytes);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct WasmModule<'a> {
     pub types: TypeSection<'a>,
     pub import: ImportSection<'a>,
     pub function: FunctionSection<'a>,
-    /// Dummy placeholder for tables (used for function pointers and host references)
-    pub table: (),
+    pub table: OpaqueSection<'a>,
     pub memory: MemorySection,
     pub global: GlobalSection<'a>,
     pub export: ExportSection<'a>,
-    /// Dummy placeholder for start function. In Roc, this would be part of the platform.
-    pub start: (),
-    /// Dummy placeholder for table elements. Roc does not use tables.
-    pub element: (),
+    pub start: OpaqueSection<'a>,
+    pub element: OpaqueSection<'a>,
     pub code: CodeSection<'a>,
     pub data: DataSection<'a>,
     pub linking: LinkingSection<'a>,

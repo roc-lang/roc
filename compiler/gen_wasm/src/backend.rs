@@ -23,7 +23,7 @@ use crate::wasm_module::linking::{
 };
 use crate::wasm_module::sections::{
     CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
-    Import, ImportDesc, ImportSection, MemorySection, TypeSection, WasmModule,
+    Import, ImportDesc, ImportSection, MemorySection, OpaqueSection, TypeSection, WasmModule,
 };
 use crate::wasm_module::{
     code_builder, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType, LocalId,
@@ -109,14 +109,14 @@ impl<'a> WasmBackend<'a> {
             types: TypeSection::new(arena, num_procs),
             import: ImportSection::new(arena),
             function: FunctionSection::new(arena, num_procs),
-            table: (),
+            table: OpaqueSection::default(),
             memory: MemorySection::new(MEMORY_INIT_SIZE),
             global: GlobalSection {
                 entries: bumpalo::vec![in arena; stack_pointer],
             },
             export: ExportSection { entries: exports },
-            start: (),
-            element: (),
+            start: OpaqueSection::default(),
+            element: OpaqueSection::default(),
             code: CodeSection {
                 preloaded_count: 0,
                 preloaded_bytes: Vec::with_capacity_in(0, arena),
