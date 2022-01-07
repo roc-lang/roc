@@ -940,6 +940,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrTrim => arena.alloc_slice_copy(&[owned]),
         StrTrimLeft => arena.alloc_slice_copy(&[owned]),
         StrTrimRight => arena.alloc_slice_copy(&[owned]),
+        StrDropPrefix => arena.alloc_slice_copy(&[owned, borrowed]),
+        StrDropSuffix => arena.alloc_slice_copy(&[owned, borrowed]),
         StrSplit => arena.alloc_slice_copy(&[borrowed, borrowed]),
         StrToNum => arena.alloc_slice_copy(&[borrowed]),
         ListSingle => arena.alloc_slice_copy(&[irrelevant]),

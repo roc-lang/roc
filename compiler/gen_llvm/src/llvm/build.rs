@@ -5455,6 +5455,20 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_trim_right(env, scope, args[0])
         }
+        StrDropPrefix => {
+            // Str.dropPrefix : Str, Str -> Str
+            debug_assert_eq!(args.len(), 2);
+
+            // TODO GIESCH
+            todo!("write me");
+        }
+        StrDropSuffix => {
+            // Str.dropSuffix : Str, Str -> Str
+            debug_assert_eq!(args.len(), 2);
+
+            // TODO GIESCH
+            todo!("write me");
+        }
         ListLen => {
             // List.len : List * -> Int
             debug_assert_eq!(args.len(), 1);

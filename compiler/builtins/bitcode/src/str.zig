@@ -1717,6 +1717,17 @@ pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
 // then, the can/src/builtins level puts them together to return a result,
 // like list_get does for List.#getUnsafe
 
+// TODO GIESCH
+// steps:
+// 1. add the LowLevel (and symbol?) for suffix/prefix match and dropleft/dropright
+//    (do the prefix version all the way first)
+// 2. add the builtin_defs_map entry that calls those builtins
+// 3. add ownership config/impl
+//    [owned, borrowed] - TODO double check this is correct
+// ...
+// ...
+// N. add roc source code tests
+
 pub fn suffixMatch(string: RocStr, suffix: RocStr) callconv(.C) bool {
     if (suffix.isEmpty()) {
         return true;
