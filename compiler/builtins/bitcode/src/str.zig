@@ -1726,11 +1726,12 @@ pub fn suffixMatch(string: RocStr, suffix: RocStr) callconv(.C) bool {
         return false;
     }
 
-    var string_bytes = string.asU8ptr()[0..string.len()];
-    var string_iter = ReverseUtf8View.initUnchecked(string_bytes).iterator();
+    const suffix_begin = string.len() - suffix.len();
+    const string_bytes = string.asU8ptr()[suffix_begin..string.len()];
+    var string_iter = unicode.Utf8View.initUnchecked(string_bytes).iterator();
 
-    var suffix_bytes = suffix.asU8ptr()[0..suffix.len()];
-    var suffix_iter = ReverseUtf8View.initUnchecked(suffix_bytes).iterator();
+    const suffix_bytes = suffix.asU8ptr()[0..suffix.len()];
+    var suffix_iter = unicode.Utf8View.initUnchecked(suffix_bytes).iterator();
 
     while (suffix_iter.nextCodepoint()) |suffix_codepoint| {
         var string_codepoint = string_iter.nextCodepoint();
@@ -1751,10 +1752,10 @@ pub fn prefixMatch(string: RocStr, prefix: RocStr) callconv(.C) bool {
         return false;
     }
 
-    var string_bytes = string.asU8ptr()[0..string.len()];
+    const string_bytes = string.asU8ptr()[0..prefix.len()];
     var string_iter = unicode.Utf8View.initUnchecked(string_bytes).iterator();
 
-    var prefix_bytes = prefix.asU8ptr()[0..prefix.len()];
+    const prefix_bytes = prefix.asU8ptr()[0..prefix.len()];
     var prefix_iter = unicode.Utf8View.initUnchecked(prefix_bytes).iterator();
 
     while (prefix_iter.nextCodepoint()) |prefix_codepoint| {
