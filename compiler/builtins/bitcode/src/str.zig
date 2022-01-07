@@ -1926,10 +1926,12 @@ fn utf8BeginByte(byte: u8) bool {
 
 test "trim prefix: empty result" {
     const string_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
-    const string = RocStr.init(string_bytes);
+    const string = RocStr.init(string_bytes, string_bytes.len);
+    // NOTE 'string' is deinitted by dropping the whole thing as a prefix
 
     const prefix_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
-    const prefix = RocStr.init(prefix_bytes);
+    const prefix = RocStr.init(prefix_bytes, prefix_bytes.len);
+    defer prefix.deinit();
 
     const match = prefixMatch(string, prefix);
     try expect(match);
