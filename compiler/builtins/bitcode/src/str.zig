@@ -1717,7 +1717,7 @@ pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
 // then, the can/src/builtins level puts them together to return a result,
 // like list_get does for List.#getUnsafe
 
-fn suffixMatch(string: RocStr, suffix: RocStr) bool {
+pub fn suffixMatch(string: RocStr, suffix: RocStr) callconv(.C) bool {
     if (suffix.isEmpty()) {
         return true;
     }
@@ -1742,7 +1742,7 @@ fn suffixMatch(string: RocStr, suffix: RocStr) bool {
     return true;
 }
 
-fn prefixMatch(string: RocStr, prefix: RocStr) bool {
+pub fn prefixMatch(string: RocStr, prefix: RocStr) callconv(.C) bool {
     if (prefix.isEmpty()) {
         return true;
     }
@@ -1770,7 +1770,7 @@ fn prefixMatch(string: RocStr, prefix: RocStr) bool {
 // NOTE this is unsafe in that it ignores unicode correctness
 // it's the caller's responsibility to ensure that
 // the right n bytes are a valid group of full codepoints
-fn dropRightNBytesUnsafe(string: RocStr, n: usize) RocStr {
+pub fn dropRightNBytesUnsafe(string: RocStr, n: usize) callconv(.C) RocStr {
     if (n == 0) {
         return string;
     }
@@ -1797,7 +1797,7 @@ fn dropRightNBytesUnsafe(string: RocStr, n: usize) RocStr {
 // NOTE this is unsafe in that it ignores unicode correctness
 // it's the caller's responsibility to ensure that
 // the left n bytes are a valid group of full codepoints
-fn dropLeftNBytesUnsafe(string: RocStr, n: usize) RocStr {
+pub fn dropLeftNBytesUnsafe(string: RocStr, n: usize) callconv(.C) RocStr {
     if (n == 0) {
         return string;
     }
@@ -1965,11 +1965,60 @@ test "trim prefix: no match" {
     const string = RocStr.init(string_bytes, string_bytes.len);
     defer string.deinit();
 
-    const prefix_bytes = "nope";
+    const prefix_bytes = "string";
     const prefix = RocStr.init(prefix_bytes, prefix_bytes.len);
     defer prefix.deinit();
 
     const match = prefixMatch(string, prefix);
+    try expect(!match);
+}
+
+test "trim suffix: full match" {
+    const string_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
+    const string = RocStr.init(string_bytes, string_bytes.len);
+    // NOTE 'string' is deinitted by dropping the whole thing as a prefix
+
+    const suffix_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
+    const suffix = RocStr.init(suffix_bytes, suffix_bytes.len);
+    defer suffix.deinit();
+
+    const match = suffixMatch(string, suffix);
+    try expect(match);
+
+    const result = dropRightNBytesUnsafe(string, suffix.len());
+    try expect(result.eq(RocStr.empty()));
+}
+
+test "trim suffix: partial match" {
+    const string_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
+    const string = RocStr.init(string_bytes, string_bytes.len);
+    defer string.deinit();
+
+    const suffix_bytes = "arge string";
+    const suffix = RocStr.init(suffix_bytes, suffix_bytes.len);
+    defer suffix.deinit();
+
+    const match = suffixMatch(string, suffix);
+    try expect(match);
+
+    const prefix = "this is a laaaaaaaaaaaaaaaa";
+    const expected = RocStr.init(prefix, prefix.len);
+    defer expected.deinit();
+
+    const result = dropRightNBytesUnsafe(string, suffix.len());
+    try expect(result.eq(expected));
+}
+
+test "trim suffix: no match" {
+    const string_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
+    const string = RocStr.init(string_bytes, string_bytes.len);
+    defer string.deinit();
+
+    const suffix_bytes = "this";
+    const suffix = RocStr.init(suffix_bytes, suffix_bytes.len);
+    defer suffix.deinit();
+
+    const match = suffixMatch(string, suffix);
     try expect(!match);
 }
 
