@@ -26,8 +26,8 @@ use crate::wasm_module::sections::{
     Import, ImportDesc, ImportSection, MemorySection, TypeSection, WasmModule,
 };
 use crate::wasm_module::{
-    code_builder, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
-    LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
+    code_builder, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType, LocalId,
+    Signature, SymInfo, ValueType,
 };
 use crate::{
     copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME,
@@ -50,7 +50,6 @@ pub struct WasmBackend<'a> {
     next_constant_addr: u32,
     builtin_sym_index_map: MutMap<&'a str, usize>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
-    linker_symbols: Vec<'a, SymInfo>,
     helper_proc_gen: CodeGenHelp<'a>,
 
     // Function-level data
@@ -103,6 +102,8 @@ impl<'a> WasmBackend<'a> {
             index: STACK_POINTER_GLOBAL_ID,
             name: STACK_POINTER_NAME.to_string(),
         }));
+        let mut linking = LinkingSection::new(arena);
+        linking.symbol_table = linker_symbols;
 
         let module = WasmModule {
             types: TypeSection::new(arena, num_procs),
@@ -122,7 +123,7 @@ impl<'a> WasmBackend<'a> {
                 code_builders: Vec::with_capacity_in(num_procs, arena),
             },
             data: DataSection::new(arena),
-            linking: LinkingSection::new(arena),
+            linking,
             relocations: RelocationSection::new(arena, "reloc.CODE"),
         };
 
@@ -137,7 +138,6 @@ impl<'a> WasmBackend<'a> {
             next_constant_addr: CONST_SEGMENT_BASE_ADDR,
             builtin_sym_index_map: MutMap::default(),
             proc_symbols,
-            linker_symbols,
             helper_proc_gen,
 
             // Function-level data
@@ -157,7 +157,7 @@ impl<'a> WasmBackend<'a> {
     fn register_helper_proc(&mut self, new_proc_info: (Symbol, ProcLayout<'a>)) {
         let (new_proc_sym, new_proc_layout) = new_proc_info;
         let wasm_fn_index = self.proc_symbols.len() as u32;
-        let linker_sym_index = self.linker_symbols.len() as u32;
+        let linker_sym_index = self.module.linking.symbol_table.len() as u32;
 
         let name = self
             .layout_ids
@@ -165,17 +165,15 @@ impl<'a> WasmBackend<'a> {
             .to_symbol_string(new_proc_sym, self.interns);
 
         self.proc_symbols.push((new_proc_sym, linker_sym_index));
-        self.linker_symbols
-            .push(SymInfo::Function(WasmObjectSymbol::Defined {
-                flags: 0,
-                index: wasm_fn_index,
-                name,
-            }));
+        let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
+            flags: 0,
+            index: wasm_fn_index,
+            name,
+        });
+        self.module.linking.symbol_table.push(linker_symbol);
     }
 
-    pub fn finalize_module(mut self) -> WasmModule<'a> {
-        let symbol_table = LinkingSubSection::SymbolTable(self.linker_symbols);
-        self.module.linking.subsections.push(symbol_table);
+    pub fn into_module(self) -> WasmModule<'a> {
         self.module
     }
 
@@ -1464,8 +1462,8 @@ impl<'a> WasmBackend<'a> {
             size: string.len() as u32,
         });
 
-        let linker_sym_index = self.linker_symbols.len();
-        self.linker_symbols.push(linker_symbol);
+        let linker_sym_index = self.module.linking.symbol_table.len();
+        self.module.linking.symbol_table.push(linker_symbol);
 
         (linker_sym_index as u32, elements_addr)
     }
@@ -1518,7 +1516,7 @@ impl<'a> WasmBackend<'a> {
         let has_return_val = ret_type.is_some();
 
         let (fn_index, linker_symbol_index) = match self.builtin_sym_index_map.get(name) {
-            Some(sym_idx) => match &self.linker_symbols[*sym_idx] {
+            Some(sym_idx) => match &self.module.linking.symbol_table[*sym_idx] {
                 SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
                     (*index, *sym_idx as u32)
                 }
@@ -1543,12 +1541,12 @@ impl<'a> WasmBackend<'a> {
                 self.module.import.entries.push(import);
 
                 // Provide symbol information for the linker
-                let sym_idx = self.linker_symbols.len();
+                let sym_idx = self.module.linking.symbol_table.len();
                 let sym_info = SymInfo::Function(WasmObjectSymbol::Imported {
                     flags: WASM_SYM_UNDEFINED,
                     index: import_index,
                 });
-                self.linker_symbols.push(sym_info);
+                self.module.linking.symbol_table.push(sym_info);
 
                 // Remember that we have created all of this data, and don't need to do it again
                 self.builtin_sym_index_map.insert(name, sym_idx);
@@ -1568,7 +1566,7 @@ impl<'a> WasmBackend<'a> {
     /// }
     fn _debug_current_proc_is(&self, linker_name: &'static str) -> bool {
         let (_, linker_sym_index) = self.proc_symbols[self.debug_current_proc_index];
-        let sym_info = &self.linker_symbols[linker_sym_index as usize];
+        let sym_info = &self.module.linking.symbol_table[linker_sym_index as usize];
         match sym_info {
             SymInfo::Function(WasmObjectSymbol::Defined { name, .. }) => name == linker_name,
             _ => false,

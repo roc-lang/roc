@@ -728,13 +728,11 @@ impl<'a> WasmModule<'a> {
         code_section_body_index: usize,
         n_imported_fns: u32,
     ) {
-        let symbol_table = self.linking.symbol_table_mut();
-
         // Lookup vector of symbol index to new function index
-        let mut new_index_lookup = std::vec::Vec::with_capacity(symbol_table.len());
+        let mut new_index_lookup = std::vec::Vec::with_capacity(self.linking.symbol_table.len());
 
         // Modify symbol table entries and fill the lookup vector
-        for sym_info in symbol_table.iter_mut() {
+        for sym_info in self.linking.symbol_table.iter_mut() {
             match sym_info {
                 SymInfo::Function(WasmObjectSymbol::Defined { index, .. }) => {
                     let new_fn_index = *index + n_imported_fns;
