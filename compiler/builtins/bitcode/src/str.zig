@@ -1924,7 +1924,7 @@ fn utf8BeginByte(byte: u8) bool {
     };
 }
 
-test "trim prefix: empty result" {
+test "trim prefix: full match" {
     const string_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
     const string = RocStr.init(string_bytes, string_bytes.len);
     // NOTE 'string' is deinitted by dropping the whole thing as a prefix
@@ -1938,6 +1938,39 @@ test "trim prefix: empty result" {
 
     const result = dropLeftNBytesUnsafe(string, prefix.len());
     try expect(result.eq(RocStr.empty()));
+}
+
+test "trim prefix: partial match" {
+    const string_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
+    const string = RocStr.init(string_bytes, string_bytes.len);
+    defer string.deinit();
+
+    const prefix_bytes = "this is";
+    const prefix = RocStr.init(prefix_bytes, prefix_bytes.len);
+    defer prefix.deinit();
+
+    const match = prefixMatch(string, prefix);
+    try expect(match);
+
+    const suffix = " a laaaaaaaaaaaaaaaaarge string";
+    const expected = RocStr.init(suffix, suffix.len);
+    defer expected.deinit();
+
+    const result = dropLeftNBytesUnsafe(string, prefix.len());
+    try expect(result.eq(expected));
+}
+
+test "trim prefix: no match" {
+    const string_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
+    const string = RocStr.init(string_bytes, string_bytes.len);
+    defer string.deinit();
+
+    const prefix_bytes = "nope";
+    const prefix = RocStr.init(prefix_bytes, prefix_bytes.len);
+    defer prefix.deinit();
+
+    const match = prefixMatch(string, prefix);
+    try expect(!match);
 }
 
 test "strTrim: empty" {
