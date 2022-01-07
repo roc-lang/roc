@@ -811,6 +811,39 @@ mod repl_eval {
         )
     }
 
+    #[test]
+    fn function_in_list() {
+        expect_success(
+            r#"[\x -> x + 1, \s -> s * 2]"#,
+            r#"[ <function>, <function> ] : List (Num a -> Num a)"#,
+        )
+    }
+
+    #[test]
+    fn function_in_record() {
+        expect_success(
+            r#"{ n: 1, adder: \x -> x + 1 }"#,
+            r#"{ adder: <function>, n: <function> } : { adder : Num a -> Num a, n : Num * }"#,
+        )
+    }
+
+    #[test]
+    #[ignore = "TODO"]
+    fn function_in_unwrapped_record() {
+        expect_success(
+            r#"{ adder: \x -> x + 1 }"#,
+            r#"{ adder: <function> } : { adder : Num a -> Num a }"#,
+        )
+    }
+
+    #[test]
+    fn function_in_tag() {
+        expect_success(
+            r#"Adder (\x -> x + 1)"#,
+            r#"Adder <function> : [ Adder (Num a -> Num a) ]*"#,
+        )
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently

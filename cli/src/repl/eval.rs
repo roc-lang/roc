@@ -219,6 +219,11 @@ fn tag_id_from_recursive_ptr(
     }
 }
 
+const OPAQUE_FUNCTION: Expr = Expr::Var {
+    module_name: "",
+    ident: "<function>",
+};
+
 fn jit_to_ast_help<'a>(
     env: &Env<'a, 'a>,
     lib: Library,
@@ -259,6 +264,7 @@ fn jit_to_ast_help<'a>(
                 I64 => helper!(i64),
                 I128 => helper!(i128),
             };
+            dbg!(&result);
 
             Ok(result)
         }
@@ -335,7 +341,7 @@ fn jit_to_ast_help<'a>(
                 }
                 Content::Structure(FlatType::Func(_, _, _)) => {
                     // a function with a struct as the closure environment
-                    Err(ToAstProblem::FunctionLayout)
+                    Ok(OPAQUE_FUNCTION)
                 }
                 other => {
                     unreachable!(
@@ -385,13 +391,7 @@ fn jit_to_ast_help<'a>(
         Layout::RecursivePointer => {
             unreachable!("RecursivePointers can only be inside structures")
         }
-        Layout::LambdaSet(lambda_set) => jit_to_ast_help(
-            env,
-            lib,
-            main_fn_name,
-            &lambda_set.runtime_representation(),
-            content,
-        ),
+        Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
     };
     result.map(|e| apply_newtypes(env, newtype_tags, e))
 }
@@ -435,15 +435,17 @@ fn ptr_to_ast<'a>(
 
     let (newtype_tags, content) = unroll_newtypes(env, content);
     let content = unroll_aliases(env, content);
-    let expr = match layout {
-        Layout::Builtin(Builtin::Bool) => {
+    let expr = match (content, layout) {
+        (Content::Structure(FlatType::Func(_, _, _)), _)
+        | (_, Layout::LambdaSet(_)) => OPAQUE_FUNCTION,
+        (_, Layout::Builtin(Builtin::Bool)) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
             let num = unsafe { *(ptr as *const bool) };
 
             bool_to_ast(env, num, content)
         }
-        Layout::Builtin(Builtin::Int(int_width)) => {
+        (_, Layout::Builtin(Builtin::Int(int_width))) => {
             use IntWidth::*;
 
             match int_width {
@@ -459,7 +461,7 @@ fn ptr_to_ast<'a>(
                 I128 => helper!(i128),
             }
         }
-        Layout::Builtin(Builtin::Float(float_width)) => {
+        (_, Layout::Builtin(Builtin::Float(float_width))) => {
             use FloatWidth::*;
 
             match float_width {
@@ -468,19 +470,19 @@ fn ptr_to_ast<'a>(
                 F128 => todo!("F128 not implemented"),
             }
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => {
+        (_, Layout::Builtin(Builtin::List(elem_layout))) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
             let ptr = unsafe { *(ptr as *const *const u8) };
 
             list_to_ast(env, ptr, len, elem_layout, content)
         }
-        Layout::Builtin(Builtin::Str) => {
+        (_, Layout::Builtin(Builtin::Str)) => {
             let arena_str = unsafe { *(ptr as *const &'static str) };
 
             str_to_ast(env.arena, arena_str)
         }
-        Layout::Struct(field_layouts) => match content {
+        (_, Layout::Struct(field_layouts)) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
                 struct_to_ast(env, ptr, field_layouts, *fields)
             }
@@ -504,7 +506,7 @@ fn ptr_to_ast<'a>(
                 );
             }
         },
-        Layout::RecursivePointer => {
+        (_, Layout::RecursivePointer) => {
             match (content, when_recursive) {
                 (Content::RecursionVar {
                     structure,
@@ -516,7 +518,7 @@ fn ptr_to_ast<'a>(
                 other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
             }
         }
-        Layout::Union(UnionLayout::NonRecursive(union_layouts)) => {
+        (_, Layout::Union(UnionLayout::NonRecursive(union_layouts))) => {
             let union_layout = UnionLayout::NonRecursive(union_layouts);
 
             let tags = match content {
@@ -552,7 +554,7 @@ fn ptr_to_ast<'a>(
                 WhenRecursive::Unreachable,
             )
         }
-        Layout::Union(union_layout @ UnionLayout::Recursive(union_layouts)) => {
+        (_, Layout::Union(union_layout @ UnionLayout::Recursive(union_layouts))) => {
             let (rec_var, tags) = match content {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 _ => unreachable!("any other content would have a different layout"),
@@ -581,7 +583,7 @@ fn ptr_to_ast<'a>(
                 when_recursive,
             )
         }
-        Layout::Union(UnionLayout::NonNullableUnwrapped(_)) => {
+        (_, Layout::Union(UnionLayout::NonNullableUnwrapped(_))) => {
             let (rec_var, tags) = match unroll_recursion_var(env, content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
@@ -608,7 +610,7 @@ fn ptr_to_ast<'a>(
                 when_recursive,
             )
         }
-        Layout::Union(UnionLayout::NullableUnwrapped { .. }) => {
+        (_, Layout::Union(UnionLayout::NullableUnwrapped { .. })) => {
             let (rec_var, tags) = match unroll_recursion_var(env, content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
@@ -641,7 +643,7 @@ fn ptr_to_ast<'a>(
                 )
             }
         }
-        Layout::Union(union_layout @ UnionLayout::NullableWrapped { .. }) => {
+        (_, Layout::Union(union_layout @ UnionLayout::NullableWrapped { .. })) => {
             let (rec_var, tags) = match unroll_recursion_var(env, content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
@@ -848,6 +850,7 @@ fn struct_to_ast<'a>(
             let var = field.into_inner();
 
             let content = subs.get_content_without_compacting(var);
+
             let loc_expr = &*arena.alloc(Loc {
                 value: ptr_to_ast(
                     env,
