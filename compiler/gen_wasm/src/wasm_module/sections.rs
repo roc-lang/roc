@@ -841,8 +841,6 @@ fn test_assert_types_preload<'a>(arena: &'a Bump, original: &TypeSection<'a>) {
     let body = &original_serialized[6..];
     let preloaded = TypeSection::preload(arena, body);
 
-    let mut preloaded_serialized = Vec::with_capacity_in(original.bytes.len() + 10, arena);
-    preloaded.serialize(&mut preloaded_serialized);
-
-    debug_assert_eq!(original_serialized, preloaded_serialized);
+    debug_assert_eq!(original.offsets, preloaded.offsets);
+    debug_assert_eq!(original.bytes, preloaded.bytes);
 }
