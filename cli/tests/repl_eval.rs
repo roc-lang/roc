@@ -851,13 +851,58 @@ mod repl_eval {
         )
     }
 
-    //    #[test]
-    //    fn parse_problem() {
-    //        // can't find something that won't parse currently
-    //    }
-    //
-    //    #[test]
-    //    fn mono_problem() {
-    //        // can't produce a mono error (non-exhaustive pattern) yet
-    //    }
+    #[test]
+    fn parse_problem() {
+        expect_failure(
+            "add m n = m + n",
+            indoc!(
+                r#"
+                ── ARGUMENTS BEFORE EQUALS ─────────────────────────────────────────────────────
+                
+                I am partway through parsing a definition, but I got stuck here:
+                
+                1│  app "app" provides [ replOutput ] to "./platform"
+                2│
+                3│  replOutput =
+                4│      add m n = m + n
+                            ^^^
+                
+                Looks like you are trying to define a function. In roc, functions are
+                always written as a lambda, like increment = \n -> n + 1.
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn mono_problem() {
+        expect_failure(
+            r#"
+            t : [A, B, C]
+            t = A
+
+            when t is
+                A -> "a"
+            "#,
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+                
+                This when does not cover all the possibilities:
+                
+                7│>                  when t is
+                8│>                      A -> "a"
+                
+                Other possibilities include:
+                
+                    B
+                    C
+                
+                I would have to crash if I saw one of those! Add branches for them!
+                
+                
+                Enter an expression, or :help, or :exit/:q."#
+            ),
+        );
+    }
 }
