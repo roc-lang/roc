@@ -1667,7 +1667,7 @@ you'd find a `*` in an open record.
 > a closed record consisting of all the fields in the closed record `User`, plus `a : Str` and `b : Str`.
 
 This function still returns the same record as it always did, it just needs to be annotated as
-`User {}` now instead of just `User`, becuase the `User` type alias has a variable in it that must be
+`User {}` now instead of just `User`, because the `User` type alias has a variable in it that must be
 specified.
 
 The third function might need to use a named type variable:
