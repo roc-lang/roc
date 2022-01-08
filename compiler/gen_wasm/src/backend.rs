@@ -23,11 +23,11 @@ use crate::wasm_module::linking::{
 };
 use crate::wasm_module::sections::{
     CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
-    Import, ImportDesc, ImportSection, MemorySection, OpaqueSection, TypeSection, WasmModule,
+    Import, ImportDesc, ImportSection, MemorySection, OpaqueSection, TypeSection,
 };
 use crate::wasm_module::{
     code_builder, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType, LocalId,
-    Signature, SymInfo, ValueType,
+    Signature, SymInfo, ValueType, WasmModule,
 };
 use crate::{
     copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME,
