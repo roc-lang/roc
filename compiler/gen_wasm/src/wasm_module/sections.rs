@@ -69,19 +69,6 @@ pub fn update_section_size<T: SerialBuffer>(buffer: &mut T, header_indices: Sect
     buffer.overwrite_padded_u32(header_indices.size_index, size as u32);
 }
 
-/// Serialize a section that is just a vector of some struct
-fn serialize_vector_section<B: SerialBuffer, T: Serialize>(
-    buffer: &mut B,
-    section_id: SectionId,
-    subsections: &[T],
-) {
-    if !subsections.is_empty() {
-        let header_indices = write_section_header(buffer, section_id);
-        subsections.serialize(buffer);
-        update_section_size(buffer, header_indices);
-    }
-}
-
 /// Serialize a section that is stored as bytes and a count
 fn serialize_bytes_section<B: SerialBuffer>(
     buffer: &mut B,
@@ -95,6 +82,15 @@ fn serialize_bytes_section<B: SerialBuffer>(
         buffer.append_slice(bytes);
         update_section_size(buffer, header_indices);
     }
+}
+
+/// Most Wasm sections consist of an ID, a byte length, an item count, and a payload
+fn size_of_bytes_section(payload: &[u8]) -> usize {
+    let id = 1;
+    let byte_length = 5;
+    let item_count = 5;
+
+    id + byte_length + item_count + payload.len()
 }
 
 /*******************************************************************
@@ -137,6 +133,10 @@ impl<'a> TypeSection<'a> {
             bytes: Vec::with_capacity_in(capacity * 4, arena),
             offsets: Vec::with_capacity_in(capacity, arena),
         }
+    }
+
+    pub fn size(&self) -> usize {
+        size_of_bytes_section(&self.bytes)
     }
 
     /// Find a matching signature or insert a new one. Return the index.
@@ -283,27 +283,31 @@ impl Serialize for Import {
 
 #[derive(Debug)]
 pub struct ImportSection<'a> {
-    pub entries: Vec<'a, Import>,
+    pub count: u32,
+    pub bytes: Vec<'a, u8>,
 }
 
 impl<'a> ImportSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         ImportSection {
-            entries: bumpalo::vec![in arena],
+            count: 0,
+            bytes: bumpalo::vec![in arena],
         }
     }
 
-    pub fn function_count(&self) -> usize {
-        self.entries
-            .iter()
-            .filter(|import| matches!(import.description, ImportDesc::Func { .. }))
-            .count()
+    pub fn append(&mut self, import: Import) {
+        import.serialize(&mut self.bytes);
+        self.count += 1;
+    }
+
+    pub fn size(&self) -> usize {
+        size_of_bytes_section(&self.bytes)
     }
 }
 
 impl<'a> Serialize for ImportSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_vector_section(buffer, SectionId::Import, &self.entries);
+        serialize_bytes_section(buffer, SectionId::Import, self.count, &self.bytes);
     }
 }
 
@@ -328,9 +332,13 @@ impl<'a> FunctionSection<'a> {
         }
     }
 
-    pub(super) fn add_sig(&mut self, sig_id: u32) {
+    pub fn add_sig(&mut self, sig_id: u32) {
         self.bytes.encode_u32(sig_id);
         self.count += 1;
+    }
+
+    pub fn size(&self) -> usize {
+        size_of_bytes_section(&self.bytes)
     }
 }
 impl<'a> Serialize for FunctionSection<'a> {
@@ -368,38 +376,39 @@ impl Serialize for Limits {
 }
 
 #[derive(Debug)]
-pub struct MemorySection(Option<Limits>);
+pub struct MemorySection<'a> {
+    pub count: u32,
+    pub bytes: Vec<'a, u8>,
+}
 
-impl MemorySection {
+impl<'a> MemorySection<'a> {
     pub const PAGE_SIZE: u32 = 64 * 1024;
 
-    pub fn new(bytes: u32) -> Self {
-        if bytes == 0 {
-            MemorySection(None)
+    pub fn new(arena: &'a Bump, memory_bytes: u32) -> Self {
+        if memory_bytes == 0 {
+            MemorySection {
+                count: 0,
+                bytes: bumpalo::vec![in arena],
+            }
         } else {
-            let pages = (bytes + Self::PAGE_SIZE - 1) / Self::PAGE_SIZE;
-            MemorySection(Some(Limits::Min(pages)))
+            let pages = (memory_bytes + Self::PAGE_SIZE - 1) / Self::PAGE_SIZE;
+            let limits = Limits::Min(pages);
+
+            let mut bytes = Vec::with_capacity_in(12, arena);
+            limits.serialize(&mut bytes);
+
+            MemorySection { count: 1, bytes }
         }
     }
 
-    pub fn min_size(&self) -> Option<u32> {
-        match self {
-            MemorySection(Some(Limits::Min(min))) | MemorySection(Some(Limits::MinMax(min, _))) => {
-                Some(min * Self::PAGE_SIZE)
-            }
-            MemorySection(None) => None,
-        }
+    pub fn size(&self) -> usize {
+        size_of_bytes_section(&self.bytes)
     }
 }
 
-impl Serialize for MemorySection {
+impl<'a> Serialize for MemorySection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if let Some(limits) = &self.0 {
-            let header_indices = write_section_header(buffer, SectionId::Memory);
-            buffer.append_u8(1);
-            limits.serialize(buffer);
-            update_section_size(buffer, header_indices);
-        }
+        serialize_bytes_section(buffer, SectionId::Memory, self.count, &self.bytes);
     }
 }
 
@@ -473,12 +482,36 @@ impl Serialize for Global {
 
 #[derive(Debug)]
 pub struct GlobalSection<'a> {
-    pub entries: Vec<'a, Global>,
+    pub count: u32,
+    pub bytes: Vec<'a, u8>,
+}
+
+impl<'a> GlobalSection<'a> {
+    pub fn new(arena: &'a Bump, globals: &[Global]) -> Self {
+        let capacity = 13 * globals.len();
+        let mut bytes = Vec::with_capacity_in(capacity, arena);
+        for global in globals {
+            global.serialize(&mut bytes);
+        }
+        GlobalSection {
+            count: globals.len() as u32,
+            bytes,
+        }
+    }
+
+    pub fn append(&mut self, global: Global) {
+        global.serialize(&mut self.bytes);
+        self.count += 1;
+    }
+
+    pub fn size(&self) -> usize {
+        size_of_bytes_section(&self.bytes)
+    }
 }
 
 impl<'a> Serialize for GlobalSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_vector_section(buffer, SectionId::Global, &self.entries);
+        serialize_bytes_section(buffer, SectionId::Global, self.count, &self.bytes);
     }
 }
 
@@ -503,6 +536,17 @@ pub struct Export {
     pub ty: ExportType,
     pub index: u32,
 }
+
+impl Export {
+    fn size(&self) -> usize {
+        let name_len = 5;
+        let ty = 1;
+        let index = 5;
+
+        self.name.len() + name_len + ty + index
+    }
+}
+
 impl Serialize for Export {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         self.name.serialize(buffer);
@@ -513,12 +557,36 @@ impl Serialize for Export {
 
 #[derive(Debug)]
 pub struct ExportSection<'a> {
-    pub entries: Vec<'a, Export>,
+    pub count: u32,
+    pub bytes: Vec<'a, u8>,
+}
+
+impl<'a> ExportSection<'a> {
+    pub fn new(arena: &'a Bump, exports: &[Export]) -> Self {
+        let capacity = exports.iter().map(|e| e.size()).sum();
+        let mut bytes = Vec::with_capacity_in(capacity, arena);
+        for export in exports {
+            export.serialize(&mut bytes);
+        }
+        ExportSection {
+            count: exports.len() as u32,
+            bytes,
+        }
+    }
+
+    pub fn append(&mut self, export: Export) {
+        export.serialize(&mut self.bytes);
+        self.count += 1;
+    }
+
+    pub fn size(&self) -> usize {
+        size_of_bytes_section(&self.bytes)
+    }
 }
 
 impl<'a> Serialize for ExportSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_vector_section(buffer, SectionId::Export, &self.entries);
+        serialize_bytes_section(buffer, SectionId::Export, self.count, &self.bytes);
     }
 }
 
@@ -554,6 +622,12 @@ impl<'a> CodeSection<'a> {
         let code_section_body_index = header_indices.body_index;
         update_section_size(buffer, header_indices);
         code_section_body_index
+    }
+
+    pub fn size(&self) -> usize {
+        let preloaded_size = size_of_bytes_section(&self.preloaded_bytes);
+        let builders_size: usize = self.code_builders.iter().map(|cb| cb.size()).sum();
+        preloaded_size + builders_size
     }
 }
 
@@ -636,6 +710,10 @@ impl<'a> DataSection<'a> {
         segment.serialize(&mut self.bytes);
         index
     }
+
+    pub fn size(&self) -> usize {
+        size_of_bytes_section(&self.bytes)
+    }
 }
 
 impl Serialize for DataSection<'_> {
@@ -664,6 +742,10 @@ pub struct OpaqueSection<'a> {
 impl<'a> OpaqueSection<'a> {
     pub fn new(bytes: &'a [u8]) -> Self {
         Self { bytes }
+    }
+
+    pub fn size(&self) -> usize {
+        self.bytes.len()
     }
 }
 

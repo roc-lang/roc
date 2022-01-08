@@ -21,7 +21,7 @@ pub trait Wasm32TestResult {
             ret_type: Some(ValueType::I32),
         });
 
-        module.export.entries.push(Export {
+        module.export.append(Export {
             name: wrapper_name.to_string(),
             ty: ExportType::Func,
             index,

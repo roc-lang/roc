@@ -109,11 +109,9 @@ impl<'a> WasmBackend<'a> {
             import: ImportSection::new(arena),
             function: FunctionSection::new(arena, num_procs),
             table: OpaqueSection::default(),
-            memory: MemorySection::new(MEMORY_INIT_SIZE),
-            global: GlobalSection {
-                entries: bumpalo::vec![in arena; stack_pointer],
-            },
-            export: ExportSection { entries: exports },
+            memory: MemorySection::new(arena, MEMORY_INIT_SIZE),
+            global: GlobalSection::new(arena, &[stack_pointer]),
+            export: ExportSection::new(arena, &exports),
             start: OpaqueSection::default(),
             element: OpaqueSection::default(),
             code: CodeSection {

@@ -21,7 +21,7 @@ pub struct WasmModule<'a> {
     pub import: ImportSection<'a>,
     pub function: FunctionSection<'a>,
     pub table: OpaqueSection<'a>,
-    pub memory: MemorySection,
+    pub memory: MemorySection<'a>,
     pub global: GlobalSection<'a>,
     pub export: ExportSection<'a>,
     pub start: OpaqueSection<'a>,
@@ -95,6 +95,22 @@ impl<'a> WasmModule<'a> {
 
         self.relocations.target_section_index = Some(code_section_index);
         self.relocations.serialize(buffer);
+    }
+
+    /// Module size in bytes (assuming no linker data)
+    /// May be slightly overestimated. Intended for allocating buffer capacity.
+    pub fn size(&self) -> usize {
+        self.types.size()
+            + self.import.size()
+            + self.function.size()
+            + self.table.size()
+            + self.memory.size()
+            + self.global.size()
+            + self.export.size()
+            + self.start.size()
+            + self.element.size()
+            + self.code.size()
+            + self.data.size()
     }
 }
 

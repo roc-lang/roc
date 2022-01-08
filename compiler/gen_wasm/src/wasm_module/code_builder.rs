@@ -476,6 +476,10 @@ impl<'a> CodeBuilder<'a> {
 
     ***********************************************************/
 
+    pub fn size(&self) -> usize {
+        self.inner_length.len() + self.preamble.len() + self.code.len() + self.insert_bytes.len()
+    }
+
     /// Serialize all byte vectors in the right order
     /// Also update relocation offsets relative to the base offset (code section body start)
     pub fn serialize_without_relocs<T: SerialBuffer>(&self, buffer: &mut T) {
