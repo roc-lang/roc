@@ -10,6 +10,7 @@ pub mod wasm;
 #[cfg(feature = "gen-wasm")]
 pub mod wasm32_test_result;
 
+#[allow(dead_code)]
 pub fn zig_executable() -> String {
     match std::env::var("ROC_ZIG") {
         Ok(path) => path,
