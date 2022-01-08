@@ -1089,22 +1089,138 @@ Here are the different fixed-size integer types that Roc supports:
 |  `-170_141_183_460_469_231_731_687_303_715_884_105_728`<br/>`170_141_183_460_469_231_731_687_303_715_884_105_727`  | `I128` | 16 Bytes |
 | `0`<br/>(over 340 undecillion) `340_282_366_920_938_463_463_374_607_431_768_211_455` | `U128` | 16 Bytes |
 
-Roc also has one variable-size integer type: [Nat]. The size of [Nat] is equal
-to the size of a memory address, which varies by system. For example, when
-compiling for a 64-bit system, [Nat] is the same as [U64]. When compiling for a
-32-bit system, it's the same as [U32].
+Roc also has one variable-size integer type: `Nat` (short for "natural number").
+The size of `Nat` is equal to the size of a memory address, which varies by system.
+For example, when compiling for a 64-bit system, `Nat` works the same way as `U64`.
+When compiling for a 32-bit system, it works the same way as `U32`. Most popular
+computing devices today are 64-bit, so `Nat` is usually the same as `U64`, but
+Web Assembly is typically 32-bit - so when running a Roc program built for Web Assembly,
+`Nat` will work like a `U32` in that program.
 
-A common use for [Nat] is to store the length ("len" for short) of a
-collection like a [List]. 64-bit systems can represent longer
-lists in memory than 32-bit systems can, which is why the length of a list
-is represented as a [Nat] in Roc.
+A common use for `Nat` is to store the length of a collection like a `List`;
+there's a function `List.len : List * -> Nat` which returns the length of the given list.
+64-bit systems can represent longer lists in memory than 32-bit systems can,
+which is why the length of a list is represented as a `Nat`.
 
-If any operation would result in an [Int] that is either too big
-or too small to fit in that range (e.g. calling `Int.maxI32 + 1`),
-then the operation will *overflow*. When an overflow occurs, the program will crash.
+If any operation would result in an integer that is either too big
+or too small to fit in that range (e.g. calling `Int.maxI32 + 1`, which adds 1 to
+the highest possible 32-bit integer), then the operation will *overflow*.
+When an overflow occurs, the program will crash.
 
-As such, it's very important to design your code not to exceed these bounds!
-If you need to do math outside these bounds, consider using a larger numeric size.
+As such, it's very important to design your integer operations not to exceed these bounds!
+
+### Fractions
+
+Roc has three fractional types:
+
+* `F32`, a 32-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
+* `F64`, a 32-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
+* `Dec`, a 128-bit decimal [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
+
+All of these are different from integers in that they can represent numbers with fractional components,
+such as 1.5 and -0.123.
+
+## [Dec] is the best default choice for representing base-10 decimal numbers
+## like currency, because it is base-10 under the hood. In contrast,
+## [F64] and [F32] are base-2 under the hood, which can lead to decimal
+## precision loss even when doing addition and subtraction. For example, when
+## using [F64], running 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125,
+## whereas when using [Dec], 0.1 + 0.2 returns 0.3.
+##
+## Under the hood, a [Dec] is an [I128], and operations on it perform
+## [base-10 fixed-point arithmetic](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
+## with 18 decimal places of precision.
+##
+## This means a [Dec] can represent whole numbers up to slightly over 170
+## quintillion, along with 18 decimal places. (To be precise, it can store
+## numbers betwween `-170_141_183_460_469_231_731.687303715884105728`
+## and `170_141_183_460_469_231_731.687303715884105727`.) Why 18
+## decimal places? It's the highest number of decimal places where you can still
+## convert any [U64] to a [Dec] without losing information.
+##
+## There are some use cases where [F64] and [F32] can be better choices than [Dec]
+## despite their precision issues. For example, in graphical applications they
+## can be a better choice for representing coordinates because they take up
+## less memory, certain relevant calculations run faster (see performance
+## details, below), and decimal precision loss isn't as big a concern when
+## dealing with screen coordinates as it is when dealing with currency.
+##
+## ## Performance
+##
+## [Dec] typically takes slightly less time than [F64] to perform addition and
+## subtraction, but 10-20 times longer to perform multiplication and division.
+## [sqrt] and trigonometry are massively slower with [Dec] than with [F64].
+Dec : Float [ @Decimal128 ]
+
+## A fixed-size number with a fractional component.
+##
+## Roc fractions come in two flavors: fixed-point base-10 and floating-point base-2.
+##
+## * [Dec] is a 128-bit [fixed-point](https://en.wikipedia.org/wiki/Fixed-point_arithmetic) base-10 number. It's a great default choice, especially when precision is important - for example when representing currency. With [Dec], 0.1 + 0.2 returns 0.3.
+## * [F64] and [F32] are [floating-point](https://en.wikipedia.org/wiki/Floating-point_arithmetic) base-2 numbers. They sacrifice precision for lower memory usage and improved performance on some operations. This makes them a good fit for representing graphical coordinates. With [F64], 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125.
+##
+## If you don't specify a type, Roc will default to using [Dec] because it's
+## the least error-prone overall. For example, suppose you write this:
+##
+##     wasItPrecise = 0.1 + 0.2 == 0.3
+##
+## The value of `wasItPrecise` here will be `True`, because Roc uses [Dec]
+## by default when there are no types specified.
+##
+## In contrast, suppose we use `f32` or `f64` for one of these numbers:
+##
+##     wasItPrecise = 0.1f64 + 0.2 == 0.3
+##
+## Here, `wasItPrecise` will be `False` because the entire calculation will have
+## been done in a base-2 floating point calculation, which causes noticeable
+## precision loss in this case.
+##
+## The floating-point numbers ([F32] and [F64]) also have three values which
+## are not ordinary [finite numbers](https://en.wikipedia.org/wiki/Finite_number).
+## They are:
+## * ∞ ([infinity](https://en.wikipedia.org/wiki/Infinity))
+## * -∞ (negative infinity)
+## * *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN))
+##
+## These values are different from ordinary numbers in that they only occur
+## when a floating-point calculation encounters an error. For example:
+## * Dividing a positive [F64] by `0.0` returns ∞.
+## * Dividing a negative [F64] by `0.0` returns -∞.
+## * Dividing a [F64] of `0.0` by `0.0` returns [*NaN*](Num.isNaN).
+##
+## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+## floating point standard. Because almost all modern processors are built to
+## this standard, deviating from these rules has a significant performance
+## cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
+## access to hardware-accelerated performance, Roc follows these rules exactly.
+##
+## There's no literal syntax for these error values, but you can check to see if
+## you ended up with one of them by using [isNaN], [isFinite], and [isInfinite].
+## Whenever a function in this module could return one of these values, that
+## possibility is noted in the function's documentation.
+##
+## ## Performance Notes
+##
+## On typical modern CPUs, performance is similar between [Dec], [F64], and [F32]
+## for addition and subtraction. For example, [F32] and [F64] do addition using
+## a single CPU floating-point addition instruction, which typically takes a
+## few clock cycles to complete. In contrast, [Dec] does addition using a few
+## CPU integer arithmetic instructions, each of which typically takes only one
+## clock cycle to complete. Exact numbers will vary by CPU, but they should be
+## similar overall.
+##
+## [Dec] is significantly slower for multiplication and division. It not only
+## needs to do more arithmetic instructions than [F32] and [F64] do, but also
+## those instructions typically take more clock cycles to complete.
+##
+## With [Num.sqrt] and trigonometry functions like [Num.cos], there is
+## an even bigger performance difference. [F32] and [F64] can do these in a
+## single instruction, whereas [Dec] needs entire custom procedures - which use
+## loops and conditionals. If you need to do performance-critical trigonometry
+## or square roots, either [F64] or [F32] is probably a better choice than the
+## usual default choice of [Dec], despite the precision problems they bring.
+Float a : Num [ @Fraction a ]
+
 
 ## Interface modules
 
