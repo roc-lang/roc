@@ -826,12 +826,10 @@ impl<'a> WasmModule<'a> {
 }
 
 /// Assertion to run on the generated Wasm module in every test
-#[cfg(debug_assertions)]
 pub fn test_assert_preload<'a>(arena: &'a Bump, wasm_module: &WasmModule<'a>) {
     test_assert_types_preload(arena, &wasm_module.types);
 }
 
-#[cfg(debug_assertions)]
 fn test_assert_types_preload<'a>(arena: &'a Bump, original: &TypeSection<'a>) {
     // Serialize the Type section that we built from Roc code
     let mut original_serialized = Vec::with_capacity_in(original.bytes.len() + 10, arena);
@@ -839,9 +837,8 @@ fn test_assert_types_preload<'a>(arena: &'a Bump, original: &TypeSection<'a>) {
 
     debug_assert!(original_serialized[0] == SectionId::Type as u8);
 
-    // Reconstruct a new TypeSection by "pre-loading" the bytes
+    // Reconstruct a new TypeSection by "pre-loading" the bytes of the original!
     let body = &original_serialized[6..];
-
     let preloaded = TypeSection::preload(arena, body);
 
     let mut preloaded_serialized = Vec::with_capacity_in(original.bytes.len() + 10, arena);
