@@ -828,7 +828,6 @@ mod repl_eval {
     }
 
     #[test]
-    #[ignore = "TODO"]
     fn function_in_unwrapped_record() {
         expect_success(
             r#"{ adder: \x -> x + 1 }"#,
@@ -841,6 +840,14 @@ mod repl_eval {
         expect_success(
             r#"Adder (\x -> x + 1)"#,
             r#"Adder <function> : [ Adder (Num a -> Num a) ]*"#,
+        )
+    }
+
+    #[test]
+    fn newtype_of_record_of_tag_of_record_of_tag() {
+        expect_success(
+            r#"A {b: C {d: 1}}"#,
+            r#"A { b: C { d: 1 } } : [ A { b : [ C { d : Num * } ]* } ]*"#,
         )
     }
 
