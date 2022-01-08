@@ -1888,7 +1888,7 @@ type before the `->` and another type after it; whenever you see a named value i
 the same type everywhere it appears in that scope.
 
 For this reason, any time you see a function that only runs a `when` on its only argument, and that `when`
-includes a branch like `x -> x` or `other -> other`, the function's argument type and reurn type must necessarily
+includes a branch like `x -> x` or `other -> other`, the function's argument type and return type must necessarily
 be equivalent.
 
 > **Note:** Just like with records, you can also replace the type variable in tag union types with a concrete type.
