@@ -18,8 +18,8 @@ use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
 use crate::low_level::{dispatch_low_level, LowlevelBuildResult};
 use crate::storage::{StackMemoryLocation, Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
-    DataSymbol, LinkingSection, RelocationSection, WasmObjectSymbol, WASM_SYM_BINDING_WEAK,
-    WASM_SYM_UNDEFINED,
+    DataSymbol, LinkingSection, LinkingSegment, RelocationSection, WasmObjectSymbol,
+    WASM_SYM_BINDING_WEAK, WASM_SYM_UNDEFINED,
 };
 use crate::wasm_module::sections::{
     CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
@@ -1403,7 +1403,7 @@ impl<'a> WasmBackend<'a> {
                             self.code_builder.i64_store(Align::Bytes4, offset);
                         } else {
                             let (linker_sym_index, elements_addr) =
-                                self.lookup_string_constant(string, sym, layout);
+                                self.create_string_constant(string, sym, layout);
 
                             self.code_builder.get_local(local_id);
                             self.code_builder
@@ -1423,9 +1423,9 @@ impl<'a> WasmBackend<'a> {
         };
     }
 
-    /// Look up a string constant in our internal data structures
+    /// Create a string constant in the module data section
     /// Return the data we need for code gen: linker symbol index and memory address
-    fn lookup_string_constant(
+    fn create_string_constant(
         &mut self,
         string: &'a str,
         sym: Symbol,
@@ -1449,17 +1449,25 @@ impl<'a> WasmBackend<'a> {
 
         let segment_index = self.module.data.append_segment(segment);
 
-        // Generate linker info
+        // Generate linker symbol
         let name = self
             .layout_ids
             .get(sym, layout)
             .to_symbol_string(sym, self.interns);
+
         let linker_symbol = SymInfo::Data(DataSymbol::Defined {
             flags: 0,
-            name,
+            name: name.clone(),
             segment_index,
             segment_offset: 4,
             size: string.len() as u32,
+        });
+
+        // Ensure the linker keeps the segment aligned when relocating it
+        self.module.linking.segment_info.push(LinkingSegment {
+            name,
+            alignment: Align::Bytes4,
+            flags: 0,
         });
 
         let linker_sym_index = self.module.linking.symbol_table.len();
