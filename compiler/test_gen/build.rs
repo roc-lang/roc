@@ -47,7 +47,11 @@ fn build_wasm_platform_and_builtins(out_dir: &str) {
         &format!("-femit-bin={}/{}.o", out_dir, PLATFORM_FILENAME),
     ];
 
-    run_command(Path::new("."), &zig_executable(), args);
+    let zig = zig_executable();
+
+    // println!("{} {}", zig, args.join(" "));
+
+    run_command(Path::new("."), &zig, args);
 }
 
 fn feature_is_enabled(feature_name: &str) -> bool {
