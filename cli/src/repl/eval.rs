@@ -69,14 +69,25 @@ pub unsafe fn jit_to_ast<'a>(
     }
 }
 
-// Unrolls tag unions that are newtypes (i.e. are singleton variants with one type argument).
-// This is sometimes important in synchronizing `Content`s with `Layout`s, since `Layout`s will
-// always unwrap newtypes and use the content of the underlying type.
+enum NewtypeKind<'a> {
+    Tag(&'a TagName),
+    RecordField(&'a str),
+}
+
+/// Unrolls types that are newtypes. These include
+///   - Singleton tags with one type argument (e.g. `Container Str`)
+///   - Records with exactly one field (e.g. `{ number: Nat }`)
+///
+/// This is important in synchronizing `Content`s with `Layout`s, since `Layout`s will
+/// always unwrap newtypes and use the content of the underlying type.
+///
+/// The returned list of newtype containers is ordered by increasing depth. As an example,
+/// `A ({b : C 123})` will have the unrolled list `[Tag(A), RecordField(b), Tag(C)]`.
 fn unroll_newtypes<'a>(
     env: &Env<'a, 'a>,
     mut content: &'a Content,
-) -> (Vec<'a, &'a TagName>, &'a Content) {
-    let mut newtype_tags = Vec::with_capacity_in(1, env.arena);
+) -> (Vec<'a, NewtypeKind<'a>>, &'a Content) {
+    let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
     loop {
         match content {
             Content::Structure(FlatType::TagUnion(tags, _))
@@ -86,26 +97,50 @@ fn unroll_newtypes<'a>(
                     .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
                     .next()
                     .unwrap();
-                newtype_tags.push(tag_name);
+                newtype_containers.push(NewtypeKind::Tag(tag_name));
                 let var = vars[0];
                 content = env.subs.get_content_without_compacting(var);
             }
-            _ => return (newtype_tags, content),
+            Content::Structure(FlatType::Record(fields, _)) if fields.len() == 1 => {
+                let (label, field) = fields
+                    .sorted_iterator(env.subs, Variable::EMPTY_RECORD)
+                    .next()
+                    .unwrap();
+                newtype_containers.push(NewtypeKind::RecordField(
+                    env.arena.alloc_str(label.as_str()),
+                ));
+                let field_var = *field.as_inner();
+                content = env.subs.get_content_without_compacting(field_var);
+            }
+            _ => return (newtype_containers, content),
         }
     }
 }
 
 fn apply_newtypes<'a>(
     env: &Env<'a, '_>,
-    newtype_tags: Vec<'a, &'a TagName>,
+    newtype_containers: Vec<'a, NewtypeKind<'a>>,
     mut expr: Expr<'a>,
 ) -> Expr<'a> {
-    for tag_name in newtype_tags.into_iter().rev() {
-        let tag_expr = tag_name_to_expr(env, tag_name);
-        let loc_tag_expr = &*env.arena.alloc(Loc::at_zero(tag_expr));
-        let loc_arg_expr = &*env.arena.alloc(Loc::at_zero(expr));
-        let loc_arg_exprs = env.arena.alloc_slice_copy(&[loc_arg_expr]);
-        expr = Expr::Apply(loc_tag_expr, loc_arg_exprs, CalledVia::Space);
+    let arena = env.arena;
+    // Reverse order of what we receieve from `unroll_newtypes` since we want the deepest
+    // container applied first.
+    for container in newtype_containers.into_iter().rev() {
+        match container {
+            NewtypeKind::Tag(tag_name) => {
+                let tag_expr = tag_name_to_expr(env, tag_name);
+                let loc_tag_expr = &*arena.alloc(Loc::at_zero(tag_expr));
+                let loc_arg_expr = &*arena.alloc(Loc::at_zero(expr));
+                let loc_arg_exprs = arena.alloc_slice_copy(&[loc_arg_expr]);
+                expr = Expr::Apply(loc_tag_expr, loc_arg_exprs, CalledVia::Space);
+            }
+            NewtypeKind::RecordField(field_name) => {
+                let label = Loc::at_zero(*arena.alloc(field_name));
+                let field_val = arena.alloc(Loc::at_zero(expr));
+                let field = Loc::at_zero(AssignedField::RequiredValue(label, &[], field_val));
+                expr = Expr::Record(Collection::with_items(&*arena.alloc([field])))
+            }
+        }
     }
     expr
 }
@@ -219,6 +254,11 @@ fn tag_id_from_recursive_ptr(
     }
 }
 
+const OPAQUE_FUNCTION: Expr = Expr::Var {
+    module_name: "",
+    ident: "<function>",
+};
+
 fn jit_to_ast_help<'a>(
     env: &Env<'a, 'a>,
     lib: Library,
@@ -226,7 +266,7 @@ fn jit_to_ast_help<'a>(
     layout: &Layout<'a>,
     content: &'a Content,
 ) -> Result<Expr<'a>, ToAstProblem> {
-    let (newtype_tags, content) = unroll_newtypes(env, content);
+    let (newtype_containers, content) = unroll_newtypes(env, content);
     let content = unroll_aliases(env, content);
     let result = match layout {
         Layout::Builtin(Builtin::Bool) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
@@ -335,7 +375,7 @@ fn jit_to_ast_help<'a>(
                 }
                 Content::Structure(FlatType::Func(_, _, _)) => {
                     // a function with a struct as the closure environment
-                    Err(ToAstProblem::FunctionLayout)
+                    Ok(OPAQUE_FUNCTION)
                 }
                 other => {
                     unreachable!(
@@ -385,15 +425,9 @@ fn jit_to_ast_help<'a>(
         Layout::RecursivePointer => {
             unreachable!("RecursivePointers can only be inside structures")
         }
-        Layout::LambdaSet(lambda_set) => jit_to_ast_help(
-            env,
-            lib,
-            main_fn_name,
-            &lambda_set.runtime_representation(),
-            content,
-        ),
+        Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
     };
-    result.map(|e| apply_newtypes(env, newtype_tags, e))
+    result.map(|e| apply_newtypes(env, newtype_containers, e))
 }
 
 fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
@@ -433,17 +467,19 @@ fn ptr_to_ast<'a>(
         }};
     }
 
-    let (newtype_tags, content) = unroll_newtypes(env, content);
+    let (newtype_containers, content) = unroll_newtypes(env, content);
     let content = unroll_aliases(env, content);
-    let expr = match layout {
-        Layout::Builtin(Builtin::Bool) => {
+    let expr = match (content, layout) {
+        (Content::Structure(FlatType::Func(_, _, _)), _)
+        | (_, Layout::LambdaSet(_)) => OPAQUE_FUNCTION,
+        (_, Layout::Builtin(Builtin::Bool)) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
             let num = unsafe { *(ptr as *const bool) };
 
             bool_to_ast(env, num, content)
         }
-        Layout::Builtin(Builtin::Int(int_width)) => {
+        (_, Layout::Builtin(Builtin::Int(int_width))) => {
             use IntWidth::*;
 
             match int_width {
@@ -459,7 +495,7 @@ fn ptr_to_ast<'a>(
                 I128 => helper!(i128),
             }
         }
-        Layout::Builtin(Builtin::Float(float_width)) => {
+        (_, Layout::Builtin(Builtin::Float(float_width))) => {
             use FloatWidth::*;
 
             match float_width {
@@ -468,19 +504,19 @@ fn ptr_to_ast<'a>(
                 F128 => todo!("F128 not implemented"),
             }
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => {
+        (_, Layout::Builtin(Builtin::List(elem_layout))) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
             let ptr = unsafe { *(ptr as *const *const u8) };
 
             list_to_ast(env, ptr, len, elem_layout, content)
         }
-        Layout::Builtin(Builtin::Str) => {
+        (_, Layout::Builtin(Builtin::Str)) => {
             let arena_str = unsafe { *(ptr as *const &'static str) };
 
             str_to_ast(env.arena, arena_str)
         }
-        Layout::Struct(field_layouts) => match content {
+        (_, Layout::Struct(field_layouts)) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
                 struct_to_ast(env, ptr, field_layouts, *fields)
             }
@@ -504,7 +540,7 @@ fn ptr_to_ast<'a>(
                 );
             }
         },
-        Layout::RecursivePointer => {
+        (_, Layout::RecursivePointer) => {
             match (content, when_recursive) {
                 (Content::RecursionVar {
                     structure,
@@ -516,7 +552,7 @@ fn ptr_to_ast<'a>(
                 other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
             }
         }
-        Layout::Union(UnionLayout::NonRecursive(union_layouts)) => {
+        (_, Layout::Union(UnionLayout::NonRecursive(union_layouts))) => {
             let union_layout = UnionLayout::NonRecursive(union_layouts);
 
             let tags = match content {
@@ -552,7 +588,7 @@ fn ptr_to_ast<'a>(
                 WhenRecursive::Unreachable,
             )
         }
-        Layout::Union(union_layout @ UnionLayout::Recursive(union_layouts)) => {
+        (_, Layout::Union(union_layout @ UnionLayout::Recursive(union_layouts))) => {
             let (rec_var, tags) = match content {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 _ => unreachable!("any other content would have a different layout"),
@@ -581,7 +617,7 @@ fn ptr_to_ast<'a>(
                 when_recursive,
             )
         }
-        Layout::Union(UnionLayout::NonNullableUnwrapped(_)) => {
+        (_, Layout::Union(UnionLayout::NonNullableUnwrapped(_))) => {
             let (rec_var, tags) = match unroll_recursion_var(env, content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
@@ -608,7 +644,7 @@ fn ptr_to_ast<'a>(
                 when_recursive,
             )
         }
-        Layout::Union(UnionLayout::NullableUnwrapped { .. }) => {
+        (_, Layout::Union(UnionLayout::NullableUnwrapped { .. })) => {
             let (rec_var, tags) = match unroll_recursion_var(env, content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
@@ -641,7 +677,7 @@ fn ptr_to_ast<'a>(
                 )
             }
         }
-        Layout::Union(union_layout @ UnionLayout::NullableWrapped { .. }) => {
+        (_, Layout::Union(union_layout @ UnionLayout::NullableWrapped { .. })) => {
             let (rec_var, tags) = match unroll_recursion_var(env, content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
@@ -684,7 +720,7 @@ fn ptr_to_ast<'a>(
             );
         }
     };
-    apply_newtypes(env, newtype_tags, expr)
+    apply_newtypes(env, newtype_containers, expr)
 }
 
 fn list_to_ast<'a>(
@@ -718,18 +754,17 @@ fn list_to_ast<'a>(
     for index in 0..len {
         let offset_bytes = index * elem_size;
         let elem_ptr = unsafe { ptr.add(offset_bytes) };
-        let loc_expr = &*arena.alloc(Loc {
-            value: ptr_to_ast(
-                env,
-                elem_ptr,
-                elem_layout,
-                WhenRecursive::Unreachable,
-                elem_content,
-            ),
-            region: Region::zero(),
-        });
+        let (newtype_containers, elem_content) = unroll_newtypes(env, elem_content);
+        let expr = ptr_to_ast(
+            env,
+            elem_ptr,
+            elem_layout,
+            WhenRecursive::Unreachable,
+            elem_content,
+        );
+        let expr = Loc::at_zero(apply_newtypes(env, newtype_containers, expr));
 
-        output.push(loc_expr);
+        output.push(&*arena.alloc(expr));
     }
 
     let output = output.into_bump_slice();
@@ -848,6 +883,7 @@ fn struct_to_ast<'a>(
             let var = field.into_inner();
 
             let content = subs.get_content_without_compacting(var);
+
             let loc_expr = &*arena.alloc(Loc {
                 value: ptr_to_ast(
                     env,
@@ -919,40 +955,6 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
     match content {
         Structure(flat_type) => {
             match flat_type {
-                FlatType::Record(fields, _) => {
-                    debug_assert_eq!(fields.len(), 1);
-
-                    let (label, field) = fields
-                        .sorted_iterator(env.subs, Variable::EMPTY_RECORD)
-                        .next()
-                        .unwrap();
-
-                    let loc_label = Loc {
-                        value: &*arena.alloc_str(label.as_str()),
-                        region: Region::zero(),
-                    };
-
-                    let assigned_field = {
-                        // We may be multiple levels deep in nested tag unions
-                        // and/or records (e.g. { a: { b: { c: True }  } }),
-                        // so we need to do this recursively on the field type.
-                        let field_var = *field.as_inner();
-                        let field_content = env.subs.get_content_without_compacting(field_var);
-                        let loc_expr = Loc {
-                            value: bool_to_ast(env, value, field_content),
-                            region: Region::zero(),
-                        };
-
-                        AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr))
-                    };
-
-                    let loc_assigned_field = Loc {
-                        value: assigned_field,
-                        region: Region::zero(),
-                    };
-
-                    Expr::Record(Collection::with_items(arena.alloc([loc_assigned_field])))
-                }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
@@ -1031,40 +1033,6 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
     match content {
         Structure(flat_type) => {
             match flat_type {
-                FlatType::Record(fields, _) => {
-                    debug_assert_eq!(fields.len(), 1);
-
-                    let (label, field) = fields
-                        .sorted_iterator(env.subs, Variable::EMPTY_RECORD)
-                        .next()
-                        .unwrap();
-
-                    let loc_label = Loc {
-                        value: &*arena.alloc_str(label.as_str()),
-                        region: Region::zero(),
-                    };
-
-                    let assigned_field = {
-                        // We may be multiple levels deep in nested tag unions
-                        // and/or records (e.g. { a: { b: { c: True }  } }),
-                        // so we need to do this recursively on the field type.
-                        let field_var = *field.as_inner();
-                        let field_content = env.subs.get_content_without_compacting(field_var);
-                        let loc_expr = Loc {
-                            value: byte_to_ast(env, value, field_content),
-                            region: Region::zero(),
-                        };
-
-                        AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr))
-                    };
-
-                    let loc_assigned_field = Loc {
-                        value: assigned_field,
-                        region: Region::zero(),
-                    };
-
-                    Expr::Record(Collection::with_items(arena.alloc([loc_assigned_field])))
-                }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
@@ -1147,43 +1115,6 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
         Structure(flat_type) => {
             match flat_type {
                 FlatType::Apply(Symbol::NUM_NUM, _) => num_expr,
-                FlatType::Record(fields, _) => {
-                    // This was a single-field record that got unwrapped at runtime.
-                    // Even if it was an i64 at runtime, we still need to report
-                    // it as a record with the correct field name!
-                    // Its type signature will tell us that.
-                    debug_assert_eq!(fields.len(), 1);
-
-                    let (label, field) = fields
-                        .sorted_iterator(env.subs, Variable::EMPTY_RECORD)
-                        .next()
-                        .unwrap();
-
-                    let loc_label = Loc {
-                        value: &*arena.alloc_str(label.as_str()),
-                        region: Region::zero(),
-                    };
-
-                    let assigned_field = {
-                        // We may be multiple levels deep in nested tag unions
-                        // and/or records (e.g. { a: { b: { c: 5 }  } }),
-                        // so we need to do this recursively on the field type.
-                        let field_var = *field.as_inner();
-                        let field_content = env.subs.get_content_without_compacting(field_var);
-                        let loc_expr = Loc {
-                            value: num_to_ast(env, num_expr, field_content),
-                            region: Region::zero(),
-                        };
-
-                        AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr))
-                    };
-                    let loc_assigned_field = Loc {
-                        value: assigned_field,
-                        region: Region::zero(),
-                    };
-
-                    Expr::Record(Collection::with_items(arena.alloc([loc_assigned_field])))
-                }
                 FlatType::TagUnion(tags, _) => {
                     // This was a single-tag union that got unwrapped at runtime.
                     debug_assert_eq!(tags.len(), 1);
