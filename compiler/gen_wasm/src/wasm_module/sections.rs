@@ -752,22 +752,48 @@ impl<'a> WasmModule<'a> {
     }
 }
 
-/// Assertion to run on the generated Wasm module in every test
-pub fn test_assert_preload<'a>(arena: &'a Bump, wasm_module: &WasmModule<'a>) {
-    test_assert_types_preload(arena, &wasm_module.types);
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bumpalo::{self, collections::Vec, Bump};
 
-fn test_assert_types_preload<'a>(arena: &'a Bump, original: &TypeSection<'a>) {
-    // Serialize the Type section that we built from Roc code
-    let mut original_serialized = Vec::with_capacity_in(original.bytes.len() + 10, arena);
-    original.serialize(&mut original_serialized);
+    fn test_assert_types_preload<'a>(arena: &'a Bump, original: &TypeSection<'a>) {
+        // Serialize the Type section that we built from Roc code
+        let mut original_serialized = Vec::with_capacity_in(6 + original.bytes.len(), arena);
+        original.serialize(&mut original_serialized);
 
-    debug_assert!(original_serialized[0] == SectionId::Type as u8);
+        debug_assert!(original_serialized[0] == SectionId::Type as u8);
 
-    // Reconstruct a new TypeSection by "pre-loading" the bytes of the original!
-    let body = &original_serialized[6..];
-    let preloaded = TypeSection::preload(arena, body);
+        // Reconstruct a new TypeSection by "pre-loading" the bytes of the original!
+        let body = &original_serialized[6..];
+        let preloaded = TypeSection::preload(arena, body);
 
-    debug_assert_eq!(original.offsets, preloaded.offsets);
-    debug_assert_eq!(original.bytes, preloaded.bytes);
+        debug_assert_eq!(original.offsets, preloaded.offsets);
+        debug_assert_eq!(original.bytes, preloaded.bytes);
+    }
+
+    #[test]
+    fn test_type_section() {
+        use ValueType::*;
+        let arena = &Bump::new();
+        let signatures = [
+            Signature {
+                param_types: bumpalo::vec![in arena],
+                ret_type: None,
+            },
+            Signature {
+                param_types: bumpalo::vec![in arena; I32, I64, F32, F64],
+                ret_type: None,
+            },
+            Signature {
+                param_types: bumpalo::vec![in arena; I32, I32, I32],
+                ret_type: Some(I32),
+            },
+        ];
+        let mut section = TypeSection::new(arena, signatures.len());
+        for sig in signatures {
+            section.insert(sig);
+        }
+        test_assert_types_preload(arena, &section);
+    }
 }
