@@ -5,7 +5,7 @@ use super::linking::{
     IndexRelocType, LinkingSection, RelocationEntry, RelocationSection, SymInfo, WasmObjectSymbol,
 };
 use super::opcodes::OpCode;
-use super::serialize::{SerialBuffer, Serialize};
+use super::serialize::{decode_u32_or_panic, SerialBuffer, Serialize};
 use super::{CodeBuilder, ValueType};
 
 /*******************************************************************
@@ -112,9 +112,13 @@ pub struct Signature<'a> {
     pub ret_type: Option<ValueType>,
 }
 
+impl Signature<'_> {
+    pub const SEPARATOR: u8 = 0x60;
+}
+
 impl<'a> Serialize for Signature<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_u8(0x60);
+        buffer.append_u8(Self::SEPARATOR);
         self.param_types.serialize(buffer);
         self.ret_type.serialize(buffer);
     }
@@ -160,6 +164,45 @@ impl<'a> TypeSection<'a> {
         self.bytes.extend_from_slice(&sig_bytes);
 
         sig_id as u32
+    }
+
+    pub fn preload(arena: &'a Bump, section_body: &[u8]) -> Self {
+        if section_body.is_empty() {
+            return TypeSection {
+                arena,
+                bytes: Vec::new_in(arena),
+                offsets: Vec::new_in(arena),
+            };
+        }
+
+        let (count, content_offset) = decode_u32_or_panic(section_body);
+
+        let mut bytes = Vec::with_capacity_in(section_body.len() * 2, arena);
+        bytes.extend_from_slice(&section_body[content_offset..]);
+
+        let mut offsets = Vec::with_capacity_in((count * 2) as usize, arena);
+
+        let mut i = 0;
+        while i < bytes.len() {
+            offsets.push(i);
+
+            let sep = bytes[i];
+            debug_assert!(sep == Signature::SEPARATOR);
+            i += 1;
+
+            let (n_params, n_params_size) = decode_u32_or_panic(&bytes[i..]);
+            i += n_params_size; // skip over the array length that we just decoded
+            i += n_params as usize; // skip over one byte per param type
+
+            let n_return_values = bytes[i];
+            i += 1 + n_return_values as usize;
+        }
+
+        TypeSection {
+            arena,
+            bytes,
+            offsets,
+        }
     }
 }
 
@@ -780,4 +823,29 @@ impl<'a> WasmModule<'a> {
             }
         }
     }
+}
+
+/// Assertion to run on the generated Wasm module in every test
+#[cfg(debug_assertions)]
+pub fn test_assert_preload<'a>(arena: &'a Bump, wasm_module: &WasmModule<'a>) {
+    test_assert_types_preload(arena, &wasm_module.types);
+}
+
+#[cfg(debug_assertions)]
+fn test_assert_types_preload<'a>(arena: &'a Bump, original: &TypeSection<'a>) {
+    // Serialize the Type section that we built from Roc code
+    let mut original_serialized = Vec::with_capacity_in(original.bytes.len() + 10, arena);
+    original.serialize(&mut original_serialized);
+
+    debug_assert!(original_serialized[0] == SectionId::Type as u8);
+
+    // Reconstruct a new TypeSection by "pre-loading" the bytes
+    let body = &original_serialized[6..];
+
+    let preloaded = TypeSection::preload(arena, body);
+
+    let mut preloaded_serialized = Vec::with_capacity_in(original.bytes.len() + 10, arena);
+    preloaded.serialize(&mut preloaded_serialized);
+
+    debug_assert_eq!(original_serialized, preloaded_serialized);
 }

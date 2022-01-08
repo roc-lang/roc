@@ -1,6 +1,7 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, iter::FromIterator};
 
 use bumpalo::collections::vec::Vec;
+use roc_reporting::internal_error;
 
 pub trait Serialize {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
@@ -229,6 +230,28 @@ impl<'a> SerialBuffer for Vec<'a, u8> {
     fn overwrite_padded_u32(&mut self, index: usize, value: u32) {
         overwrite_padded_u32_help(&mut self[index..(index + 5)], value);
     }
+}
+
+/// Decode an unsigned 32-bit integer from the provided buffer in LEB-128 format
+/// Return the integer itself and the offset after it ends
+pub fn decode_u32(bytes: &[u8]) -> Result<(u32, usize), String> {
+    let mut value = 0;
+    let mut shift = 0;
+    for (i, byte) in bytes.iter().take(5).enumerate() {
+        value += ((byte & 0x7f) as u32) << shift;
+        if (byte & 0x80) == 0 {
+            return Ok((value, i + 1));
+        }
+        shift += 7;
+    }
+    Err(format!(
+        "Failed to decode u32 as LEB-128 from bytes: {:2x?}",
+        std::vec::Vec::from_iter(bytes.iter().take(5))
+    ))
+}
+
+pub fn decode_u32_or_panic(bytes: &[u8]) -> (u32, usize) {
+    decode_u32(bytes).unwrap_or_else(|e| internal_error!("{}", e))
 }
 
 #[cfg(test)]
