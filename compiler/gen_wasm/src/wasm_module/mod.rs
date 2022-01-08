@@ -42,8 +42,28 @@ impl<'a> WasmModule<'a> {
     }
 
     /// Serialize the module to bytes
+    /// (not using Serialize trait because it's just one more thing to export)
+    pub fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_u8(0);
+        buffer.append_slice("asm".as_bytes());
+        buffer.write_unencoded_u32(Self::WASM_VERSION);
+
+        self.types.serialize(buffer);
+        self.import.serialize(buffer);
+        self.function.serialize(buffer);
+        self.table.serialize(buffer);
+        self.memory.serialize(buffer);
+        self.global.serialize(buffer);
+        self.export.serialize(buffer);
+        self.start.serialize(buffer);
+        self.element.serialize(buffer);
+        self.code.serialize(buffer);
+        self.data.serialize(buffer);
+    }
+
+    /// Serialize the module to bytes
     /// (Mutates some data related to linking)
-    pub fn serialize_mut<T: SerialBuffer>(&mut self, buffer: &mut T) {
+    pub fn serialize_with_linker_data_mut<T: SerialBuffer>(&mut self, buffer: &mut T) {
         buffer.append_u8(0);
         buffer.append_slice("asm".as_bytes());
         buffer.write_unencoded_u32(Self::WASM_VERSION);

@@ -557,6 +557,21 @@ impl<'a> CodeSection<'a> {
     }
 }
 
+impl<'a> Serialize for CodeSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        let header_indices = write_section_header(buffer, SectionId::Code);
+        buffer.encode_u32(self.preloaded_count + self.code_builders.len() as u32);
+
+        buffer.append_slice(&self.preloaded_bytes);
+
+        for code_builder in self.code_builders.iter() {
+            code_builder.serialize(buffer);
+        }
+
+        update_section_size(buffer, header_indices);
+    }
+}
+
 /*******************************************************************
  *
  * Data section

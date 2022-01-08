@@ -3,7 +3,7 @@ use std::{fmt::Debug, iter::FromIterator};
 use bumpalo::collections::vec::Vec;
 use roc_reporting::internal_error;
 
-pub trait Serialize {
+pub(super) trait Serialize {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
 }
 

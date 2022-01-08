@@ -40,9 +40,9 @@ pub fn build_module<'a>(
     interns: &'a mut Interns,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (mut wasm_module, _) = build_module_help(env, interns, procedures)?;
+    let (wasm_module, _) = build_module_help(env, interns, procedures)?;
     let mut buffer = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize_mut(&mut buffer);
+    wasm_module.serialize(&mut buffer);
     Ok(buffer)
 }
 

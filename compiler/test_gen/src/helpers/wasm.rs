@@ -138,7 +138,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
     let needs_linking = !wasm_module.import.entries.is_empty();
 
     let mut app_module_bytes = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize_mut(&mut app_module_bytes);
+    wasm_module.serialize(&mut app_module_bytes);
 
     (app_module_bytes, needs_linking)
 }
