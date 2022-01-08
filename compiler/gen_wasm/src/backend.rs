@@ -19,20 +19,19 @@ use crate::low_level::{dispatch_low_level, LowlevelBuildResult};
 use crate::storage::{StackMemoryLocation, Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
     DataSymbol, LinkingSection, LinkingSegment, RelocationSection, WasmObjectSymbol,
-    WASM_SYM_BINDING_WEAK, WASM_SYM_UNDEFINED,
+    WASM_SYM_BINDING_WEAK,
 };
 use crate::wasm_module::sections::{
     CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
-    Import, ImportDesc, ImportSection, MemorySection, OpaqueSection, TypeSection,
+    ImportSection, MemorySection, OpaqueSection, TypeSection,
 };
 use crate::wasm_module::{
     code_builder, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType, LocalId,
     Signature, SymInfo, ValueType, WasmModule,
 };
 use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME,
-    DEBUG_LOG_SETTINGS, MEMORY_NAME, PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID,
-    STACK_POINTER_NAME,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, MEMORY_NAME,
+    PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -48,7 +47,7 @@ pub struct WasmBackend<'a> {
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     next_constant_addr: u32,
-    builtin_sym_index_map: MutMap<&'a str, usize>,
+    preloaded_fn_index_map: MutMap<&'a str, u32>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
 
@@ -136,7 +135,7 @@ impl<'a> WasmBackend<'a> {
 
             layout_ids,
             next_constant_addr: CONST_SEGMENT_BASE_ADDR,
-            builtin_sym_index_map: MutMap::default(),
+            preloaded_fn_index_map: MutMap::default(),
             proc_symbols,
             helper_proc_gen,
 
@@ -1522,46 +1521,8 @@ impl<'a> WasmBackend<'a> {
     ) {
         let num_wasm_args = param_types.len();
         let has_return_val = ret_type.is_some();
-
-        let (fn_index, linker_symbol_index) = match self.builtin_sym_index_map.get(name) {
-            Some(sym_idx) => match &self.module.linking.symbol_table[*sym_idx] {
-                SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
-                    (*index, *sym_idx as u32)
-                }
-                x => internal_error!("Invalid linker symbol for builtin {}: {:?}", name, x),
-            },
-
-            None => {
-                // Wasm function signature
-                let signature = Signature {
-                    param_types,
-                    ret_type,
-                };
-                let signature_index = self.module.types.insert(signature);
-
-                // Declare it as an import since it comes from a different .o file
-                let import_index = self.module.import.entries.len() as u32;
-                let import = Import {
-                    module: BUILTINS_IMPORT_MODULE_NAME,
-                    name: name.to_string(),
-                    description: ImportDesc::Func { signature_index },
-                };
-                self.module.import.entries.push(import);
-
-                // Provide symbol information for the linker
-                let sym_idx = self.module.linking.symbol_table.len();
-                let sym_info = SymInfo::Function(WasmObjectSymbol::Imported {
-                    flags: WASM_SYM_UNDEFINED,
-                    index: import_index,
-                });
-                self.module.linking.symbol_table.push(sym_info);
-
-                // Remember that we have created all of this data, and don't need to do it again
-                self.builtin_sym_index_map.insert(name, sym_idx);
-
-                (import_index, sym_idx as u32)
-            }
-        };
+        let fn_index = self.preloaded_fn_index_map[name];
+        let linker_symbol_index = u32::MAX;
 
         self.code_builder
             .call(fn_index, linker_symbol_index, num_wasm_args, has_return_val);
