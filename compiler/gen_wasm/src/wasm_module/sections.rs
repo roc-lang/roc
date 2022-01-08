@@ -1,9 +1,7 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-use super::linking::{
-    IndexRelocType, LinkingSection, RelocationEntry, RelocationSection, SymInfo, WasmObjectSymbol,
-};
+use super::linking::{LinkingSection, RelocationEntry, RelocationSection};
 use super::opcodes::OpCode;
 use super::serialize::{decode_u32_or_panic, SerialBuffer, Serialize};
 use super::{CodeBuilder, ValueType};
@@ -730,13 +728,6 @@ impl<'a> WasmModule<'a> {
             section_index: 0,
         };
 
-        // If we have imports, then references to other functions need to be re-indexed.
-        // Modify exports before serializing them, since we don't have linker data for them
-        let n_imported_fns = self.import.function_count() as u32;
-        if n_imported_fns > 0 {
-            self.finalize_exported_fn_indices(n_imported_fns);
-        }
-
         counter.serialize_and_count(buffer, &self.types);
         counter.serialize_and_count(buffer, &self.import);
         counter.serialize_and_count(buffer, &self.function);
@@ -749,15 +740,8 @@ impl<'a> WasmModule<'a> {
 
         // Code section is the only one with relocations so we can stop counting
         let code_section_index = counter.section_index;
-        let code_section_body_index = self
-            .code
+        self.code
             .serialize_with_relocs(buffer, &mut self.relocations.entries);
-
-        // If we have imports, references to other functions need to be re-indexed.
-        // Simplest to do after serialization, using linker data
-        if n_imported_fns > 0 {
-            self.finalize_code_fn_indices(buffer, code_section_body_index, n_imported_fns);
-        }
 
         self.data.serialize(buffer);
 
@@ -765,63 +749,6 @@ impl<'a> WasmModule<'a> {
 
         self.relocations.target_section_index = Some(code_section_index);
         self.relocations.serialize(buffer);
-    }
-
-    /// Shift indices of exported functions to make room for imported functions,
-    /// which come first in the function index space.
-    /// Must be called after traversing the full IR, but before export section is serialized.
-    fn finalize_exported_fn_indices(&mut self, n_imported_fns: u32) {
-        for export in self.export.entries.iter_mut() {
-            if export.ty == ExportType::Func {
-                export.index += n_imported_fns;
-            }
-        }
-    }
-
-    /// Re-index internally-defined functions to make room for imported functions.
-    /// Imported functions come first in the index space, but we didn't know how many we needed until now.
-    /// We do this after serializing the code section, since we have linker data that is literally
-    /// *designed* for changing function indices in serialized code!
-    fn finalize_code_fn_indices<T: SerialBuffer>(
-        &mut self,
-        buffer: &mut T,
-        code_section_body_index: usize,
-        n_imported_fns: u32,
-    ) {
-        // Lookup vector of symbol index to new function index
-        let mut new_index_lookup = std::vec::Vec::with_capacity(self.linking.symbol_table.len());
-
-        // Modify symbol table entries and fill the lookup vector
-        for sym_info in self.linking.symbol_table.iter_mut() {
-            match sym_info {
-                SymInfo::Function(WasmObjectSymbol::Defined { index, .. }) => {
-                    let new_fn_index = *index + n_imported_fns;
-                    *index = new_fn_index;
-                    new_index_lookup.push(new_fn_index);
-                }
-                SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
-                    new_index_lookup.push(*index);
-                }
-                _ => {
-                    // Symbol is not a function, so we won't look it up. Use a dummy value.
-                    new_index_lookup.push(u32::MAX);
-                }
-            }
-        }
-
-        // Modify call instructions, using linker data
-        for reloc in &self.relocations.entries {
-            if let RelocationEntry::Index {
-                type_id: IndexRelocType::FunctionIndexLeb,
-                offset,
-                symbol_index,
-            } = reloc
-            {
-                let new_fn_index = new_index_lookup[*symbol_index as usize];
-                let buffer_index = code_section_body_index + (*offset as usize);
-                buffer.overwrite_padded_u32(buffer_index, new_fn_index);
-            }
-        }
     }
 }
 
