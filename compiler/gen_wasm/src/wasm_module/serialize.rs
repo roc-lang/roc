@@ -436,4 +436,18 @@ mod tests {
             &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f],
         );
     }
+
+    #[test]
+    fn test_decode_u32() {
+        assert_eq!(decode_u32(&[0]), Ok((0, 1)));
+        assert_eq!(decode_u32(&[64]), Ok((64, 1)));
+        assert_eq!(decode_u32(&[0x7f]), Ok((0x7f, 1)));
+        assert_eq!(decode_u32(&[0x80, 0x01]), Ok((0x80, 2)));
+        assert_eq!(decode_u32(&[0xff, 0x7f]), Ok((0x3fff, 2)));
+        assert_eq!(decode_u32(&[0x80, 0x80, 0x01]), Ok((0x4000, 3)));
+        assert_eq!(decode_u32(&[0xff, 0xff, 0xff, 0xff, 0x0f]), Ok((u32::MAX, 5)));
+        assert!(matches!(decode_u32(&[0x80; 6]), Err(_)));
+        assert!(matches!(decode_u32(&[0x80; 2]), Err(_)));
+        assert!(matches!(decode_u32(&[]), Err(_)));
+    }
 }
