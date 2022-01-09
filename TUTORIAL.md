@@ -1546,11 +1546,17 @@ The `*` in the type `{ firstName : Str, lastName : Str }*` is what makes it an o
 This `*` is the *wildcard type* we saw earlier with empty lists. (An empty list has the type `List *`,
 in contrast to something like `List Str` which is a list of strings.)
 
-This is because record types can optionally end in a type variable. If that variable is a `*`, then
+This is because record types can optionally end in a type variable. Just like how we can have `List *`
+or `List a -> List a`, we can also have `{ first : Str, last : Str }*` or
+`{ first : Str, last : Str }a -> { first: Str, last : Str }a`. The differences are that in `List a`,
+the type variable is required and appears with a space after `List`; in a record, the type variable
+is optional, and appears (with no space) immediately after `}`.
+
+If the type variable in a record type is a `*` (such as in `{ first : Str, last : Str }*`), then
 it's an open record. If the type variable is missing, then it's a closed record. You can also specify
-a closed type variable by putting a `{}` there (so for example, `{ email : Str }{}` is another way to write
-`{ email : Str }`). In practice, it's basically always written without the `{}` on the end, but later on
-we'll see a situation where putting types other than `*` in that spot can be useful.
+a closed record by putting a `{}` as the type variable (so for example, `{ email : Str }{}` is another way to write
+`{ email : Str }`). In practice, closed records are basically always written without the `{}` on the end,
+but later on we'll see a situation where putting types other than `*` in that spot can be useful.
 
 ## Constrained Records
 
@@ -1631,7 +1637,8 @@ This is a perfectly reasonable way to write all of these functions. However, I
 might decide that I really want the `isValid` function to take an open record -
 that is, a record with *at least* the fields of this `User` record, but possibly others as well.
 
-Since open records have a type variable, in order to do this I'd need to add a
+Since open records have a type variable (like `*` in `{ email : Str }` or `a` in
+`{ email : Str }a -> { email : Str }a`), in order to do this I'd need to add a
 type variable to the `User` type alias:
 
 ```coffee
@@ -1643,8 +1650,10 @@ User a :
     }a
 ```
 
-I can still write the same three functions, but now their types need to look different.
+Notice that the `a` type variable appears not only in `User a` but also in `}a` at the end of the
+record type!
 
+Using `User a` type alias, I can still write the same three functions, but now their types need to look different.
 This is what the first one would look like:
 
 ```elm
