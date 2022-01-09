@@ -359,47 +359,47 @@ Nat : Int [ @Natural ]
 ##
 ## | Range                                                  | Type  | Size     |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                -128` | #I8   | 1 Byte   |
+## | `                                                -128` | [I8]  | 1 Byte   |
 ## | `                                                 127` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U8   | 1 Byte   |
+## | `                                                   0` | [U8]  | 1 Byte   |
 ## | `                                                 255` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                             -32_768` | #I16  | 2 Bytes  |
+## | `                                             -32_768` | [I16] | 2 Bytes  |
 ## | `                                              32_767` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U16  | 2 Bytes  |
+## | `                                                   0` | [U16] | 2 Bytes  |
 ## | `                                              65_535` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                      -2_147_483_648` | #I32  | 4 Bytes  |
+## | `                                      -2_147_483_648` | [I32] | 4 Bytes  |
 ## | `                                       2_147_483_647` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U32  | 4 Bytes  |
+## | `                                                   0` | [U32] | 4 Bytes  |
 ## | ` (over 4 billion)                      4_294_967_295` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                          -9_223_372_036_854_775_808` | #I64  | 8 Bytes  |
+## | `                          -9_223_372_036_854_775_808` | [I64] | 8 Bytes  |
 ## | `                           9_223_372_036_854_775_807` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U64  | 8 Bytes  |
+## | `                                                   0` | [U64] | 8 Bytes  |
 ## | ` (over 18 quintillion)    18_446_744_073_709_551_615` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `-170_141_183_460_469_231_731_687_303_715_884_105_728` | #I128 | 16 Bytes |
+## | `-170_141_183_460_469_231_731_687_303_715_884_105_728` | [I128]| 16 Bytes |
 ## | ` 170_141_183_460_469_231_731_687_303_715_884_105_727` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | ` (over 340 undecillion)                            0` | #U128 | 16 Bytes |
+## | ` (over 340 undecillion)                            0` | [U128]| 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## Roc also has one variable-size integer type: #Nat. The size of #Nat is equal
+## Roc also has one variable-size integer type: [Nat]. The size of [Nat] is equal
 ## to the size of a memory address, which varies by system. For example, when
-## compiling for a 64-bit system, #Nat is the same as #U64. When compiling for a
-## 32-bit system, it's the same as #U32.
+## compiling for a 64-bit system, [Nat] is the same as [U64]. When compiling for a
+## 32-bit system, it's the same as [U32].
 ##
-## A common use for #Nat is to store the length ("len" for short) of a
-## collection like #List, #Set, or #Map. 64-bit systems can represent longer
+## A common use for [Nat] is to store the length ("len" for short) of a
+## collection like a [List]. 64-bit systems can represent longer
 ## lists in memory than 32-bit systems can, which is why the length of a list
-## is represented as a #Nat in Roc.
+## is represented as a [Nat] in Roc.
 ##
-## If any operation would result in an #Int that is either too big
+## If any operation would result in an [Int] that is either too big
 ## or too small to fit in that range (e.g. calling `Int.maxI32 + 1`),
 ## then the operation will *overflow*. When an overflow occurs, the program will crash.
 ##
