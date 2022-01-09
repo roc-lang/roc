@@ -1,10 +1,13 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
+use roc_reporting::internal_error;
 
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
-use super::serialize::{decode_u32_or_panic, parse_u32_or_panic, SerialBuffer, Serialize};
+use super::serialize::{
+    decode_u32_or_panic, parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes,
+};
 use super::{CodeBuilder, ValueType};
 
 /*******************************************************************
@@ -276,6 +279,13 @@ impl Serialize for TableType {
     }
 }
 
+impl SkipBytes for TableType {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        u8::skip_bytes(bytes, cursor);
+        Limits::skip_bytes(bytes, cursor);
+    }
+}
+
 #[derive(Debug)]
 pub enum ImportDesc {
     Func { signature_index: u32 },
@@ -291,25 +301,48 @@ pub struct Import {
     pub description: ImportDesc,
 }
 
+#[repr(u8)]
+enum ImportTypeId {
+    Func = 0,
+    Table = 1,
+    Mem = 2,
+    Global = 3,
+}
+
+impl From<u8> for ImportTypeId {
+    fn from(x: u8) -> Self {
+        match x {
+            0 => Self::Func,
+            1 => Self::Table,
+            2 => Self::Mem,
+            3 => Self::Global,
+            _ => internal_error!(
+                "Invalid ImportTypeId {} in platform/builtins object file",
+                x
+            ),
+        }
+    }
+}
+
 impl Serialize for Import {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         self.module.serialize(buffer);
         self.name.serialize(buffer);
         match &self.description {
             ImportDesc::Func { signature_index } => {
-                buffer.append_u8(0);
+                buffer.append_u8(ImportTypeId::Func as u8);
                 buffer.encode_u32(*signature_index);
             }
             ImportDesc::Table { ty } => {
-                buffer.append_u8(1);
+                buffer.append_u8(ImportTypeId::Table as u8);
                 ty.serialize(buffer);
             }
             ImportDesc::Mem { limits } => {
-                buffer.append_u8(2);
+                buffer.append_u8(ImportTypeId::Mem as u8);
                 limits.serialize(buffer);
             }
             ImportDesc::Global { ty } => {
-                buffer.append_u8(3);
+                buffer.append_u8(ImportTypeId::Global as u8);
                 ty.serialize(buffer);
             }
         }
@@ -326,6 +359,36 @@ impl<'a> ImportSection<'a> {
     pub fn append(&mut self, import: Import) {
         import.serialize(&mut self.bytes);
         self.count += 1;
+    }
+
+    pub fn function_count(&self) -> u32 {
+        let mut f_count = 0;
+        let mut cursor = 0;
+        while cursor < self.bytes.len() {
+            String::skip_bytes(&self.bytes, &mut cursor);
+            String::skip_bytes(&self.bytes, &mut cursor);
+
+            let type_id = self.bytes[cursor];
+            cursor += 1;
+
+            match ImportTypeId::from(type_id) {
+                ImportTypeId::Func => {
+                    f_count += 1;
+                    u32::skip_bytes(&self.bytes, &mut cursor);
+                }
+                ImportTypeId::Table => {
+                    TableType::skip_bytes(&self.bytes, &mut cursor);
+                }
+                ImportTypeId::Mem => {
+                    Limits::skip_bytes(&self.bytes, &mut cursor);
+                }
+                ImportTypeId::Global => {
+                    GlobalType::skip_bytes(&self.bytes, &mut cursor);
+                }
+            }
+        }
+
+        f_count
     }
 }
 
@@ -381,6 +444,19 @@ impl Serialize for Limits {
     }
 }
 
+impl SkipBytes for Limits {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        if bytes[*cursor] == 0 {
+            u8::skip_bytes(bytes, cursor);
+            u32::skip_bytes(bytes, cursor);
+        } else {
+            u8::skip_bytes(bytes, cursor);
+            u32::skip_bytes(bytes, cursor);
+            u32::skip_bytes(bytes, cursor);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct MemorySection<'a> {
     pub count: u32,
@@ -426,6 +502,12 @@ impl Serialize for GlobalType {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_u8(self.value_type as u8);
         buffer.append_u8(self.is_mutable as u8);
+    }
+}
+
+impl SkipBytes for GlobalType {
+    fn skip_bytes(_bytes: &[u8], cursor: &mut usize) {
+        *cursor += 2;
     }
 }
 

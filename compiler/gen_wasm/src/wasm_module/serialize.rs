@@ -260,6 +260,31 @@ pub fn parse_u32_or_panic(bytes: &[u8], cursor: &mut usize) -> u32 {
     value
 }
 
+/// Skip over serialized bytes for a type
+/// This may, or may not, require looking at the byte values
+pub trait SkipBytes {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize);
+}
+
+impl SkipBytes for u32 {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        parse_u32_or_panic(bytes, cursor);
+    }
+}
+
+impl SkipBytes for u8 {
+    fn skip_bytes(_bytes: &[u8], cursor: &mut usize) {
+        *cursor += 1;
+    }
+}
+
+impl SkipBytes for String {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        let len = parse_u32_or_panic(bytes, cursor);
+        *cursor += len as usize;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
