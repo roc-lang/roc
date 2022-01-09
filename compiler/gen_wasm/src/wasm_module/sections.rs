@@ -32,8 +32,8 @@ pub enum SectionId {
     DataCount = 12,
 }
 
-const SIZE_ENCODED_U32: usize = 5;
-const SIZE_SECTION_HEADER: usize = std::mem::size_of::<SectionId>() + 2 * SIZE_ENCODED_U32;
+const MAX_SIZE_ENCODED_U32: usize = 5;
+const MAX_SIZE_SECTION_HEADER: usize = std::mem::size_of::<SectionId>() + 2 * MAX_SIZE_ENCODED_U32;
 
 pub trait Section<'a>: Sized {
     const ID: SectionId;
@@ -42,7 +42,7 @@ pub trait Section<'a>: Sized {
     fn get_count(&self) -> u32;
 
     fn size(&self) -> usize {
-        SIZE_SECTION_HEADER + self.get_bytes().len()
+        MAX_SIZE_SECTION_HEADER + self.get_bytes().len()
     }
 
     fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self;
@@ -608,7 +608,7 @@ impl<'a> CodeSection<'a> {
     pub fn size(&self) -> usize {
         let builders_size: usize = self.code_builders.iter().map(|cb| cb.size()).sum();
 
-        SIZE_SECTION_HEADER + self.preloaded_bytes.len() + builders_size
+        MAX_SIZE_SECTION_HEADER + self.preloaded_bytes.len() + builders_size
     }
 
     pub fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
