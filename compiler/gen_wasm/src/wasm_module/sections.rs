@@ -760,11 +760,10 @@ mod tests {
         let mut original_serialized = Vec::with_capacity_in(6 + original.bytes.len(), arena);
         original.serialize(&mut original_serialized);
 
-        debug_assert!(original_serialized[0] == SectionId::Type as u8);
-
-        // Reconstruct a new TypeSection by "pre-loading" the bytes of the original!
-        let body = &original_serialized[6..];
-        let preloaded = TypeSection::cache_offsets(arena, body);
+        // Reconstruct a new TypeSection by "pre-loading" the bytes of the original
+        let mut cursor = 0;
+        let mut preloaded = TypeSection::preload(arena, &original_serialized, &mut cursor);
+        preloaded.cache_offsets();
 
         debug_assert_eq!(original.offsets, preloaded.offsets);
         debug_assert_eq!(original.bytes, preloaded.bytes);

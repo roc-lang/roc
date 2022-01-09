@@ -255,9 +255,8 @@ pub fn decode_u32_or_panic(bytes: &[u8]) -> (u32, usize) {
 }
 
 pub fn parse_u32_or_panic(bytes: &[u8], cursor: &mut usize) -> u32 {
-    let (value, new_offset) =
-        decode_u32(&bytes[*cursor..]).unwrap_or_else(|e| internal_error!("{}", e));
-    *cursor = new_offset;
+    let (value, len) = decode_u32(&bytes[*cursor..]).unwrap_or_else(|e| internal_error!("{}", e));
+    *cursor += len;
     value
 }
 
@@ -445,9 +444,28 @@ mod tests {
         assert_eq!(decode_u32(&[0x80, 0x01]), Ok((0x80, 2)));
         assert_eq!(decode_u32(&[0xff, 0x7f]), Ok((0x3fff, 2)));
         assert_eq!(decode_u32(&[0x80, 0x80, 0x01]), Ok((0x4000, 3)));
-        assert_eq!(decode_u32(&[0xff, 0xff, 0xff, 0xff, 0x0f]), Ok((u32::MAX, 5)));
+        assert_eq!(
+            decode_u32(&[0xff, 0xff, 0xff, 0xff, 0x0f]),
+            Ok((u32::MAX, 5))
+        );
         assert!(matches!(decode_u32(&[0x80; 6]), Err(_)));
         assert!(matches!(decode_u32(&[0x80; 2]), Err(_)));
         assert!(matches!(decode_u32(&[]), Err(_)));
+    }
+
+    #[test]
+    fn test_parse_u32_sequence() {
+        let bytes = &[0, 0x80, 0x01, 0xff, 0xff, 0xff, 0xff, 0x0f];
+        let expected = [0, 128, u32::MAX];
+        let mut cursor = 0;
+
+        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[0]);
+        assert_eq!(cursor, 1);
+
+        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[1]);
+        assert_eq!(cursor, 3);
+
+        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[2]);
+        assert_eq!(cursor, 8);
     }
 }
