@@ -48,7 +48,10 @@ pub fn compile_and_load<'a, T: Wasm32TestResult>(
     _test_wrapper_type_info: PhantomData<T>,
     _test_type: TestType,
 ) -> wasmer::Instance {
-    let compiled_bytes = compile_roc_to_wasm_bytes(arena, src, stdlib, _test_wrapper_type_info);
+    let platform_bytes = load_platform_and_builtins();
+
+    let compiled_bytes =
+        compile_roc_to_wasm_bytes(arena, stdlib, &platform_bytes, src, _test_wrapper_type_info);
 
     if DEBUG_LOG_SETTINGS.keep_test_binary {
         let build_dir_hash = src_hash(src);
@@ -56,6 +59,12 @@ pub fn compile_and_load<'a, T: Wasm32TestResult>(
     };
 
     load_bytes_into_runtime(compiled_bytes)
+}
+
+fn load_platform_and_builtins() -> std::vec::Vec<u8> {
+    let out_dir = std::env::var(OUT_DIR_VAR).unwrap();
+    let platform_path = Path::new(&out_dir).join([PLATFORM_FILENAME, "o"].join("."));
+    std::fs::read(&platform_path).unwrap()
 }
 
 fn src_hash(src: &str) -> u64 {
@@ -66,8 +75,9 @@ fn src_hash(src: &str) -> u64 {
 
 fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
     arena: &'a bumpalo::Bump,
-    src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
+    preload_bytes: &[u8],
+    src: &str,
     _test_wrapper_type_info: PhantomData<T>,
 ) -> Vec<u8> {
     let filename = PathBuf::from("Test.roc");
@@ -119,7 +129,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
     };
 
     let (mut wasm_module, main_fn_index) =
-        roc_gen_wasm::build_module_help(&env, &mut interns, procedures).unwrap();
+        roc_gen_wasm::build_module_help(&env, &mut interns, platform_bytes, procedures).unwrap();
 
     T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
 
@@ -137,7 +147,10 @@ fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
     std::fs::create_dir_all(debug_dir_path).unwrap();
     std::fs::write(&final_wasm_file, app_module_bytes).unwrap();
 
-    println!("Debug command:\n\twasm-objdump -dx {}", final_wasm_file.to_str().unwrap());
+    println!(
+        "Debug command:\n\twasm-objdump -dx {}",
+        final_wasm_file.to_str().unwrap()
+    );
 }
 
 fn load_bytes_into_runtime(bytes: Vec<u8>) -> wasmer::Instance {
