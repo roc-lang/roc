@@ -513,7 +513,15 @@ fn gen_from_mono_module_dev_wasm32(
         exposed_to_host,
     };
 
-    let bytes = roc_gen_wasm::build_module(&env, &mut interns, procedures).unwrap();
+    let todo_platform_and_builtins_object_file_bytes = &[];
+
+    let bytes = roc_gen_wasm::build_module(
+        &env,
+        &mut interns,
+        todo_platform_and_builtins_object_file_bytes,
+        procedures,
+    )
+    .unwrap();
 
     std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
 

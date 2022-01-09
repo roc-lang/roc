@@ -129,7 +129,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
     };
 
     let (mut wasm_module, main_fn_index) =
-        roc_gen_wasm::build_module_help(&env, &mut interns, platform_bytes, procedures).unwrap();
+        roc_gen_wasm::build_module_help(&env, &mut interns, preload_bytes, procedures).unwrap();
 
     T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
 

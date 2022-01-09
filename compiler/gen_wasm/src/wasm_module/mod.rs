@@ -4,14 +4,16 @@ pub mod opcodes;
 pub mod sections;
 pub mod serialize;
 
+use bumpalo::Bump;
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 pub use linking::SymInfo;
+use roc_reporting::internal_error;
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
 use self::linking::{LinkingSection, RelocationSection};
 use self::sections::{
     CodeSection, DataSection, ExportSection, FunctionSection, GlobalSection, ImportSection,
-    MemorySection, OpaqueSection, Section, TypeSection,
+    MemorySection, OpaqueSection, Section, SectionId, TypeSection,
 };
 use self::serialize::{SerialBuffer, Serialize};
 
@@ -111,6 +113,47 @@ impl<'a> WasmModule<'a> {
             + self.element.size()
             + self.code.size()
             + self.data.size()
+    }
+
+    pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Self {
+        let is_valid_magic_number = &bytes[0..4] == "\0asm".as_bytes();
+        let is_valid_version = &bytes[4..8] == Self::WASM_VERSION.to_le_bytes();
+        if !is_valid_magic_number || !is_valid_version {
+            internal_error!("Invalid Wasm object file header for platform & builtins");
+        }
+
+        let mut cursor: usize = 8;
+
+        let mut types = TypeSection::preload(arena, bytes, &mut cursor);
+        types.cache_offsets();
+        let import = ImportSection::preload(arena, bytes, &mut cursor);
+        let function = FunctionSection::preload(arena, bytes, &mut cursor);
+        let table = OpaqueSection::preload(SectionId::Table, arena, bytes, &mut cursor);
+        let memory = MemorySection::preload(arena, bytes, &mut cursor);
+        let global = GlobalSection::preload(arena, bytes, &mut cursor);
+        let export = ExportSection::preload(arena, bytes, &mut cursor);
+        let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
+        let element = OpaqueSection::preload(SectionId::Element, arena, bytes, &mut cursor);
+        let code = CodeSection::preload(arena, bytes, &mut cursor);
+        let data = DataSection::preload(arena, bytes, &mut cursor);
+        let linking = LinkingSection::new(arena);
+        let relocations = RelocationSection::new(arena, "reloc.CODE");
+
+        WasmModule {
+            types,
+            import,
+            function,
+            table,
+            memory,
+            global,
+            export,
+            start,
+            element,
+            code,
+            data,
+            linking,
+            relocations,
+        }
     }
 }
 

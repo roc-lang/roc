@@ -254,6 +254,13 @@ pub fn decode_u32_or_panic(bytes: &[u8]) -> (u32, usize) {
     decode_u32(bytes).unwrap_or_else(|e| internal_error!("{}", e))
 }
 
+pub fn parse_u32_or_panic(bytes: &[u8], cursor: &mut usize) -> u32 {
+    let (value, new_offset) =
+        decode_u32(&bytes[*cursor..]).unwrap_or_else(|e| internal_error!("{}", e));
+    *cursor = new_offset;
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

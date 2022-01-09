@@ -17,21 +17,14 @@ use roc_reporting::internal_error;
 use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
 use crate::low_level::{dispatch_low_level, LowlevelBuildResult};
 use crate::storage::{StackMemoryLocation, Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{
-    DataSymbol, LinkingSection, LinkingSegment, RelocationSection, WasmObjectSymbol,
-    WASM_SYM_BINDING_WEAK,
-};
-use crate::wasm_module::sections::{
-    CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
-    ImportSection, MemorySection, OpaqueSection, TypeSection,
-};
+use crate::wasm_module::linking::{DataSymbol, LinkingSegment, WasmObjectSymbol};
+use crate::wasm_module::sections::{DataMode, DataSegment};
 use crate::wasm_module::{
-    code_builder, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType, LocalId,
-    Signature, SymInfo, ValueType, WasmModule,
+    code_builder, CodeBuilder, LocalId, Signature, SymInfo, ValueType, WasmModule,
 };
 use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, MEMORY_NAME,
-    PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, PTR_SIZE,
+    PTR_TYPE,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -68,62 +61,9 @@ impl<'a> WasmBackend<'a> {
         interns: &'a mut Interns,
         layout_ids: LayoutIds<'a>,
         proc_symbols: Vec<'a, (Symbol, u32)>,
-        mut linker_symbols: Vec<'a, SymInfo>,
-        mut exports: Vec<'a, Export>,
+        module: WasmModule<'a>,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
-        const MEMORY_INIT_SIZE: u32 = 1024 * 1024;
-        let arena = env.arena;
-        let num_procs = proc_symbols.len();
-
-        exports.push(Export {
-            name: MEMORY_NAME.to_string(),
-            ty: ExportType::Mem,
-            index: 0,
-        });
-
-        let stack_pointer = Global {
-            ty: GlobalType {
-                value_type: ValueType::I32,
-                is_mutable: true,
-            },
-            init: ConstExpr::I32(MEMORY_INIT_SIZE as i32),
-        };
-
-        exports.push(Export {
-            name: STACK_POINTER_NAME.to_string(),
-            ty: ExportType::Global,
-            index: STACK_POINTER_GLOBAL_ID,
-        });
-
-        linker_symbols.push(SymInfo::Global(WasmObjectSymbol::Defined {
-            flags: WASM_SYM_BINDING_WEAK, // TODO: this works but means external .o files decide how much stack we have!
-            index: STACK_POINTER_GLOBAL_ID,
-            name: STACK_POINTER_NAME.to_string(),
-        }));
-        let mut linking = LinkingSection::new(arena);
-        linking.symbol_table = linker_symbols;
-
-        let module = WasmModule {
-            types: TypeSection::new(arena, num_procs),
-            import: ImportSection::new(arena),
-            function: FunctionSection::new(arena, num_procs),
-            table: OpaqueSection::default(),
-            memory: MemorySection::new(arena, MEMORY_INIT_SIZE),
-            global: GlobalSection::new(arena, &[stack_pointer]),
-            export: ExportSection::new(arena, &exports),
-            start: OpaqueSection::default(),
-            element: OpaqueSection::default(),
-            code: CodeSection {
-                preloaded_count: 0,
-                preloaded_bytes: Vec::with_capacity_in(0, arena),
-                code_builders: Vec::with_capacity_in(num_procs, arena),
-            },
-            data: DataSection::new(arena),
-            linking,
-            relocations: RelocationSection::new(arena, "reloc.CODE"),
-        };
-
         WasmBackend {
             env,
             interns,
@@ -140,8 +80,8 @@ impl<'a> WasmBackend<'a> {
             // Function-level data
             block_depth: 0,
             joinpoint_label_map: MutMap::default(),
-            code_builder: CodeBuilder::new(arena),
-            storage: Storage::new(arena),
+            code_builder: CodeBuilder::new(env.arena),
+            storage: Storage::new(env.arena),
 
             debug_current_proc_index: 0,
         }

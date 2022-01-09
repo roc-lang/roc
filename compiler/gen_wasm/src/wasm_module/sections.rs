@@ -100,12 +100,12 @@ fn parse_section<'a>(id: SectionId, module_bytes: &'a [u8], cursor: &mut usize) 
     *cursor += 1;
 
     let section_size = parse_u32_or_panic(module_bytes, cursor);
-    let count_offset = *cursor;
+    let count_start = *cursor;
     let count = parse_u32_or_panic(module_bytes, cursor);
-    let body_offset = *cursor;
+    let body_start = *cursor;
 
-    let next_section_start = count_offset + section_size as usize;
-    let body = &module_bytes[body_offset..next_section_start];
+    let next_section_start = count_start + section_size as usize;
+    let body = &module_bytes[body_start..next_section_start];
 
     *cursor = next_section_start;
 
@@ -183,14 +183,6 @@ pub struct TypeSection<'a> {
 }
 
 impl<'a> TypeSection<'a> {
-    pub fn new(arena: &'a Bump, capacity: usize) -> Self {
-        TypeSection {
-            arena,
-            bytes: Vec::with_capacity_in(capacity * 4, arena),
-            offsets: Vec::with_capacity_in(capacity, arena),
-        }
-    }
-
     /// Find a matching signature or insert a new one. Return the index.
     pub fn insert(&mut self, signature: Signature<'a>) -> u32 {
         let mut sig_bytes = Vec::with_capacity_in(signature.param_types.len() + 4, self.arena);
@@ -216,7 +208,7 @@ impl<'a> TypeSection<'a> {
         sig_id as u32
     }
 
-    fn populate_offsets(&mut self) {
+    pub fn cache_offsets(&mut self) {
         self.offsets.clear();
         let mut i = 0;
         while i < self.bytes.len() {
@@ -330,13 +322,6 @@ pub struct ImportSection<'a> {
 }
 
 impl<'a> ImportSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
-        ImportSection {
-            count: 0,
-            bytes: bumpalo::vec![in arena],
-        }
-    }
-
     pub fn append(&mut self, import: Import) {
         import.serialize(&mut self.bytes);
         self.count += 1;
@@ -359,13 +344,6 @@ pub struct FunctionSection<'a> {
 }
 
 impl<'a> FunctionSection<'a> {
-    pub fn new(arena: &'a Bump, capacity: usize) -> Self {
-        FunctionSection {
-            count: 0,
-            bytes: Vec::with_capacity_in(capacity, arena),
-        }
-    }
-
     pub fn add_sig(&mut self, sig_id: u32) {
         self.bytes.encode_u32(sig_id);
         self.count += 1;
@@ -633,7 +611,16 @@ impl<'a> CodeSection<'a> {
         SIZE_SECTION_HEADER + self.preloaded_bytes.len() + builders_size
     }
 
-    // fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {}
+    pub fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+        let (preloaded_count, initial_bytes) = parse_section(SectionId::Code, module_bytes, cursor);
+        let mut preloaded_bytes = Vec::with_capacity_in(initial_bytes.len() * 2, arena);
+        preloaded_bytes.extend_from_slice(initial_bytes);
+        CodeSection {
+            preloaded_count,
+            preloaded_bytes,
+            code_builders: Vec::with_capacity_in(0, arena),
+        }
+    }
 }
 
 impl<'a> Serialize for CodeSection<'a> {
@@ -702,13 +689,6 @@ pub struct DataSection<'a> {
 }
 
 impl<'a> DataSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
-        DataSection {
-            count: 0,
-            bytes: bumpalo::vec![in arena],
-        }
-    }
-
     pub fn append_segment(&mut self, segment: DataSegment<'a>) -> u32 {
         let index = self.count;
         self.count += 1;
@@ -735,20 +715,38 @@ pub struct OpaqueSection<'a> {
 }
 
 impl<'a> OpaqueSection<'a> {
-    pub fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes }
-    }
-
     pub fn size(&self) -> usize {
         self.bytes.len()
+    }
+
+    pub fn preload(
+        id: SectionId,
+        arena: &'a Bump,
+        module_bytes: &[u8],
+        cursor: &mut usize,
+    ) -> Self {
+        let bytes: &[u8];
+
+        if module_bytes[*cursor] != id as u8 {
+            bytes = &[];
+        } else {
+            let section_start = *cursor;
+            *cursor += 1;
+            let section_size = parse_u32_or_panic(module_bytes, cursor);
+            let next_section_start = *cursor + section_size as usize;
+            bytes = &module_bytes[section_start..next_section_start];
+            *cursor = next_section_start;
+        };
+
+        OpaqueSection {
+            bytes: arena.alloc_slice_clone(bytes),
+        }
     }
 }
 
 impl Serialize for OpaqueSection<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if !self.bytes.is_empty() {
-            buffer.append_slice(self.bytes);
-        }
+        buffer.append_slice(self.bytes);
     }
 }
 
@@ -766,7 +764,7 @@ mod tests {
 
         // Reconstruct a new TypeSection by "pre-loading" the bytes of the original!
         let body = &original_serialized[6..];
-        let preloaded = TypeSection::populate_offsets(arena, body);
+        let preloaded = TypeSection::cache_offsets(arena, body);
 
         debug_assert_eq!(original.offsets, preloaded.offsets);
         debug_assert_eq!(original.bytes, preloaded.bytes);
@@ -790,7 +788,13 @@ mod tests {
                 ret_type: Some(I32),
             },
         ];
-        let mut section = TypeSection::new(arena, signatures.len());
+        let capacity = signatures.len();
+        let mut section = TypeSection {
+            arena,
+            bytes: Vec::with_capacity_in(capacity * 4, arena),
+            offsets: Vec::with_capacity_in(capacity, arena),
+        };
+
         for sig in signatures {
             section.insert(sig);
         }

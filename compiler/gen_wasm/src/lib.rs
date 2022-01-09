@@ -38,10 +38,10 @@ pub struct Env<'a> {
 pub fn build_module<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    platform_bytes: &[u8],
+    preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (wasm_module, _) = build_module_help(env, interns, platform_bytes, procedures)?;
+    let (wasm_module, _) = build_module_help(env, interns, preload_bytes, procedures)?;
     let mut buffer = std::vec::Vec::with_capacity(4096);
     wasm_module.serialize(&mut buffer);
     Ok(buffer)
@@ -50,7 +50,7 @@ pub fn build_module<'a>(
 pub fn build_module_help<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    platform_bytes: &[u8],
+    preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<(WasmModule<'a>, u32), String> {
     let mut layout_ids = LayoutIds::default();
@@ -97,8 +97,7 @@ pub fn build_module_help<'a>(
         interns,
         layout_ids,
         proc_symbols,
-        linker_symbols,
-        exports,
+        WasmModule::preload(env.arena, preload_bytes),
         CodeGenHelp::new(env.arena, IntWidth::I32, env.module_id),
     );
 
