@@ -58,7 +58,7 @@ pub fn build_module_help<'a>(
     let mut proc_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut exports = Vec::with_capacity_in(4, env.arena);
-    let mut main_fn_index = None;
+    let mut maybe_main_fn_index = None;
 
     // Collect the symbols & names for the procedures,
     // and filter out procs we're going to inline
@@ -92,12 +92,15 @@ pub fn build_module_help<'a>(
         fn_index += 1;
     }
 
+    let initial_module = WasmModule::preload(env.arena, preload_bytes);
+    let main_function_index = maybe_main_fn_index.unwrap() + initial_module.code.preloaded_count;
+
     let mut backend = WasmBackend::new(
         env,
         interns,
         layout_ids,
         proc_symbols,
-        WasmModule::preload(env.arena, preload_bytes),
+        initial_module,
         CodeGenHelp::new(env.arena, IntWidth::I32, env.module_id),
     );
 
@@ -134,7 +137,7 @@ pub fn build_module_help<'a>(
 
     let module = backend.into_module();
 
-    Ok((module, main_fn_index.unwrap()))
+    Ok((module, main_function_index))
 }
 
 pub struct CopyMemoryConfig {

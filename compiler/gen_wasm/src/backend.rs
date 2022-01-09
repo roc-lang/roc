@@ -539,14 +539,16 @@ impl<'a> WasmBackend<'a> {
                         CallConv::C,
                     );
 
-                    for (func_index, (ir_sym, linker_sym_index)) in
+                    for (roc_proc_index, (ir_sym, linker_sym_index)) in
                         self.proc_symbols.iter().enumerate()
                     {
+                        let wasm_fn_index =
+                            self.module.code.preloaded_count + roc_proc_index as u32;
                         if ir_sym == func_sym {
                             let num_wasm_args = param_types.len();
                             let has_return_val = ret_type.is_some();
                             self.code_builder.call(
-                                func_index as u32,
+                                wasm_fn_index,
                                 *linker_sym_index,
                                 num_wasm_args,
                                 has_return_val,
