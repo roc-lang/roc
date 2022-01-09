@@ -14,7 +14,8 @@ pub trait Wasm32TestResult {
         wrapper_name: &str,
         main_function_index: u32,
     ) {
-        let index = module.code.code_builders.len() as u32;
+        // Assumes the main function was the first one to be generated
+        let index = main_function_index + module.code.code_builders.len() as u32;
 
         module.add_function_signature(Signature {
             param_types: Vec::with_capacity_in(0, arena),
