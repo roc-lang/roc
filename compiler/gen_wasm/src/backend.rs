@@ -40,7 +40,8 @@ pub struct WasmBackend<'a> {
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     next_constant_addr: u32,
-    preloaded_fn_index_map: MutMap<&'a str, u32>,
+    fn_index_offset: u32,
+    preloaded_functions_map: MutMap<&'a [u8], u32>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
 
@@ -62,6 +63,8 @@ impl<'a> WasmBackend<'a> {
         layout_ids: LayoutIds<'a>,
         proc_symbols: Vec<'a, (Symbol, u32)>,
         module: WasmModule<'a>,
+        fn_index_offset: u32,
+        preloaded_functions_map: MutMap<&'a [u8], u32>,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
         WasmBackend {
@@ -73,7 +76,8 @@ impl<'a> WasmBackend<'a> {
 
             layout_ids,
             next_constant_addr: CONST_SEGMENT_BASE_ADDR,
-            preloaded_fn_index_map: MutMap::default(),
+            fn_index_offset,
+            preloaded_functions_map,
             proc_symbols,
             helper_proc_gen,
 
@@ -542,8 +546,7 @@ impl<'a> WasmBackend<'a> {
                     for (roc_proc_index, (ir_sym, linker_sym_index)) in
                         self.proc_symbols.iter().enumerate()
                     {
-                        let wasm_fn_index =
-                            self.module.code.preloaded_count + roc_proc_index as u32;
+                        let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
                         if ir_sym == func_sym {
                             let num_wasm_args = param_types.len();
                             let has_return_val = ret_type.is_some();
@@ -1461,7 +1464,7 @@ impl<'a> WasmBackend<'a> {
     ) {
         let num_wasm_args = param_types.len();
         let has_return_val = ret_type.is_some();
-        let fn_index = self.preloaded_fn_index_map[name];
+        let fn_index = self.preloaded_functions_map[name.as_bytes()];
         let linker_symbol_index = u32::MAX;
 
         self.code_builder

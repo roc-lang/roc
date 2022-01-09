@@ -92,8 +92,17 @@ pub fn build_module_help<'a>(
         fn_index += 1;
     }
 
+    // Pre-load the WasmModule with data from the platform & builtins object file
     let initial_module = WasmModule::preload(env.arena, preload_bytes);
-    let main_function_index = maybe_main_fn_index.unwrap() + initial_module.code.preloaded_count;
+
+    // Adjust Wasm function indices to account for functions from the object file
+    let runtime_import_fn_count: u32 = initial_module.import.function_count(); // to be imported at runtime (e.g. WASI)
+    let fn_index_offset: u32 = runtime_import_fn_count + initial_module.code.preloaded_count;
+
+    // Get a map of name to index for the preloaded functions
+    // Assumes the preloaded object file has all symbols exported, as per `zig build-lib -dymamic`
+    let preloaded_functions_map: MutMap<&'a [u8], u32> =
+        initial_module.export.function_index_map(env.arena);
 
     let mut backend = WasmBackend::new(
         env,
@@ -101,6 +110,8 @@ pub fn build_module_help<'a>(
         layout_ids,
         proc_symbols,
         initial_module,
+        fn_index_offset,
+        preloaded_functions_map,
         CodeGenHelp::new(env.arena, IntWidth::I32, env.module_id),
     );
 
@@ -137,6 +148,7 @@ pub fn build_module_help<'a>(
 
     let module = backend.into_module();
 
+    let main_function_index = maybe_main_fn_index.unwrap() + fn_index_offset;
     Ok((module, main_function_index))
 }
 
