@@ -117,7 +117,7 @@ impl<'a> WasmModule<'a> {
 
     pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Self {
         let is_valid_magic_number = &bytes[0..4] == "\0asm".as_bytes();
-        let is_valid_version = &bytes[4..8] == Self::WASM_VERSION.to_le_bytes();
+        let is_valid_version = bytes[4..8] == Self::WASM_VERSION.to_le_bytes();
         if !is_valid_magic_number || !is_valid_version {
             internal_error!("Invalid Wasm object file header for platform & builtins");
         }
