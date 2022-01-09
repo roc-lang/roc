@@ -1637,7 +1637,7 @@ This is a perfectly reasonable way to write all of these functions. However, I
 might decide that I really want the `isValid` function to take an open record -
 that is, a record with *at least* the fields of this `User` record, but possibly others as well.
 
-Since open records have a type variable (like `*` in `{ email : Str }` or `a` in
+Since open records have a type variable (like `*` in `{ email : Str }*` or `a` in
 `{ email : Str }a -> { email : Str }a`), in order to do this I'd need to add a
 type variable to the `User` type alias:
 
