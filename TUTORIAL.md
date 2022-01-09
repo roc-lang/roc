@@ -546,6 +546,10 @@ This makes two changes to our earlier `stoplightColor` / `stoplightStr` example.
 Any tag can be given a payload like this. A payload doesn't have to be a string; we could also have said (for example) `Custom { r: 40, g: 60, b: 80 }` to specify an RGB color instead of a string. Then in our `when` we could have written `Custom record ->` and then after the `->` used `record.r`, `record.g`, and `record.b` to access the `40`, `60`, `80` values. We could also have written `Custom { r, g, b } ->` to *destructure* the record, and then
 accessed these `r`, `g`, and `b` defs after the `->` instead.
 
+A tag can also have a payload with more than one value. Instead of `Custom { r: 40, g: 60, b: 80 }` we could
+write `Custom 40 60 80`. If we did that, then instead of destructuring a record with `Custom { r, g, b } ->`
+inside a `when`, we would write `Custom r g b ->` to destructure the values directly out of the payload.
+
 We refer to whatever comes before a `->` in a `when` expression as a *pattern* - so for example, in the
 `Custom description -> description` branch, `Custom description` would be a pattern. In programming, using
 patterns in branching conditionals like `when` is known as [pattern matching](https://en.wikipedia.org/wiki/Pattern_matching). You may hear people say things like "let's pattern match on `Custom` here" as a way to
