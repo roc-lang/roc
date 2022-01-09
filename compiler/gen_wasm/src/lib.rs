@@ -77,9 +77,9 @@ pub fn build_module_help<'a>(
             .to_symbol_string(sym, interns);
 
         if env.exposed_to_host.contains(&sym) {
-            main_fn_index = Some(fn_index);
+            maybe_main_fn_index = Some(fn_index);
             exports.push(Export {
-                name: fn_name.clone(),
+                name: env.arena.alloc_slice_copy(fn_name.as_bytes()),
                 ty: ExportType::Func,
                 index: fn_index,
             });

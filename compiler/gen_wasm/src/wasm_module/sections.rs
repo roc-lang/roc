@@ -1,5 +1,6 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_collections::all::MutMap;
 
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
@@ -520,23 +521,13 @@ pub enum ExportType {
 }
 
 #[derive(Debug)]
-pub struct Export {
-    pub name: String,
+pub struct Export<'a> {
+    pub name: &'a [u8],
     pub ty: ExportType,
     pub index: u32,
 }
 
-impl Export {
-    fn size(&self) -> usize {
-        let name_len = 5;
-        let ty = 1;
-        let index = 5;
-
-        self.name.len() + name_len + ty + index
-    }
-}
-
-impl Serialize for Export {
+impl Serialize for Export<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         self.name.serialize(buffer);
         buffer.append_u8(self.ty as u8);
@@ -551,21 +542,31 @@ pub struct ExportSection<'a> {
 }
 
 impl<'a> ExportSection<'a> {
-    pub fn new(arena: &'a Bump, exports: &[Export]) -> Self {
-        let capacity = exports.iter().map(|e| e.size()).sum();
-        let mut bytes = Vec::with_capacity_in(capacity, arena);
-        for export in exports {
-            export.serialize(&mut bytes);
-        }
-        ExportSection {
-            count: exports.len() as u32,
-            bytes,
-        }
-    }
-
     pub fn append(&mut self, export: Export) {
         export.serialize(&mut self.bytes);
         self.count += 1;
+    }
+
+    pub fn function_index_map(&self, arena: &'a Bump) -> MutMap<&'a [u8], u32> {
+        let mut map = MutMap::default();
+
+        let mut cursor = 0;
+        while cursor < self.bytes.len() {
+            let name_len = parse_u32_or_panic(&self.bytes, &mut cursor);
+            let name_end = cursor + name_len as usize;
+            let name_bytes = &self.bytes[cursor..name_end];
+            let ty = self.bytes[name_end];
+
+            cursor = name_end + 1;
+            let index = parse_u32_or_panic(&self.bytes, &mut cursor);
+
+            if ty == ExportType::Func as u8 {
+                let name: &'a [u8] = arena.alloc_slice_clone(name_bytes);
+                map.insert(name, index);
+            }
+        }
+
+        map
     }
 }
 

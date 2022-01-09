@@ -22,7 +22,7 @@ pub trait Wasm32TestResult {
         });
 
         module.export.append(Export {
-            name: wrapper_name.to_string(),
+            name: arena.alloc_slice_copy(wrapper_name.as_bytes()),
             ty: ExportType::Func,
             index,
         });
