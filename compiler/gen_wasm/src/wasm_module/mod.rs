@@ -11,7 +11,7 @@ pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature}
 use self::linking::{LinkingSection, RelocationSection};
 use self::sections::{
     CodeSection, DataSection, ExportSection, FunctionSection, GlobalSection, ImportSection,
-    MemorySection, OpaqueSection, TypeSection,
+    MemorySection, OpaqueSection, Section, TypeSection,
 };
 use self::serialize::{SerialBuffer, Serialize};
 

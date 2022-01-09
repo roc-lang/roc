@@ -3,7 +3,7 @@ use bumpalo::Bump;
 
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
-use super::serialize::{decode_u32_or_panic, SerialBuffer, Serialize};
+use super::serialize::{decode_u32_or_panic, parse_u32_or_panic, SerialBuffer, Serialize};
 use super::{CodeBuilder, ValueType};
 
 /*******************************************************************
@@ -30,6 +30,86 @@ pub enum SectionId {
     /// DataCount section is unused. Only needed for single-pass validation of
     /// memory.init and data.drop, which we don't use
     DataCount = 12,
+}
+
+const SIZE_ENCODED_U32: usize = 5;
+const SIZE_SECTION_HEADER: usize = std::mem::size_of::<SectionId>() + 2 * SIZE_ENCODED_U32;
+
+pub trait Section<'a>: Sized {
+    const ID: SectionId;
+
+    fn get_bytes(&self) -> &[u8];
+    fn get_count(&self) -> u32;
+
+    fn size(&self) -> usize {
+        SIZE_SECTION_HEADER + self.get_bytes().len()
+    }
+
+    fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self;
+}
+
+macro_rules! section_impl {
+    ($structname: ident, $id: expr) => {
+        impl<'a> Section<'a> for $structname<'a> {
+            const ID: SectionId = $id;
+
+            fn get_bytes(&self) -> &[u8] {
+                &self.bytes
+            }
+
+            fn get_count(&self) -> u32 {
+                self.count
+            }
+
+            fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+                let (count, initial_bytes) = parse_section(Self::ID, module_bytes, cursor);
+                let mut bytes = Vec::with_capacity_in(initial_bytes.len() * 2, arena);
+                bytes.extend_from_slice(initial_bytes);
+                $structname { bytes, count }
+            }
+
+            fn size(&self) -> usize {
+                let id = 1;
+                let encoded_length = 5;
+                let encoded_count = 5;
+
+                id + encoded_length + encoded_count + self.bytes.len()
+            }
+        }
+    };
+}
+
+impl<'a, Sec> Serialize for Sec
+where
+    Sec: Section<'a>,
+{
+    fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
+        if !self.get_bytes().is_empty() {
+            let header_indices = write_section_header(buffer, Self::ID);
+            buffer.encode_u32(self.get_count());
+            buffer.append_slice(self.get_bytes());
+            update_section_size(buffer, header_indices);
+        }
+    }
+}
+
+fn parse_section<'a>(id: SectionId, module_bytes: &'a [u8], cursor: &mut usize) -> (u32, &'a [u8]) {
+    if module_bytes[*cursor] != id as u8 {
+        return (0, &[]);
+    }
+    *cursor += 1;
+
+    let section_size = parse_u32_or_panic(module_bytes, cursor);
+    let count_offset = *cursor;
+    let count = parse_u32_or_panic(module_bytes, cursor);
+    let body_offset = *cursor;
+
+    let next_section_start = count_offset + section_size as usize;
+    let body = &module_bytes[body_offset..next_section_start];
+
+    *cursor = next_section_start;
+
+    (count, body)
 }
 
 pub struct SectionHeaderIndices {
@@ -67,30 +147,6 @@ pub fn write_custom_section_header<T: SerialBuffer>(
 pub fn update_section_size<T: SerialBuffer>(buffer: &mut T, header_indices: SectionHeaderIndices) {
     let size = buffer.size() - header_indices.body_index;
     buffer.overwrite_padded_u32(header_indices.size_index, size as u32);
-}
-
-/// Serialize a section that is stored as bytes and a count
-fn serialize_bytes_section<B: SerialBuffer>(
-    buffer: &mut B,
-    section_id: SectionId,
-    count: u32,
-    bytes: &[u8],
-) {
-    if !bytes.is_empty() {
-        let header_indices = write_section_header(buffer, section_id);
-        buffer.encode_u32(count);
-        buffer.append_slice(bytes);
-        update_section_size(buffer, header_indices);
-    }
-}
-
-/// Most Wasm sections consist of an ID, a byte length, an item count, and a payload
-fn size_of_bytes_section(payload: &[u8]) -> usize {
-    let id = 1;
-    let byte_length = 5;
-    let item_count = 5;
-
-    id + byte_length + item_count + payload.len()
 }
 
 /*******************************************************************
@@ -135,10 +191,6 @@ impl<'a> TypeSection<'a> {
         }
     }
 
-    pub fn size(&self) -> usize {
-        size_of_bytes_section(&self.bytes)
-    }
-
     /// Find a matching signature or insert a new one. Return the index.
     pub fn insert(&mut self, signature: Signature<'a>) -> u32 {
         let mut sig_bytes = Vec::with_capacity_in(signature.param_types.len() + 4, self.arena);
@@ -164,54 +216,44 @@ impl<'a> TypeSection<'a> {
         sig_id as u32
     }
 
-    pub fn preload(arena: &'a Bump, section_body: &[u8]) -> Self {
-        if section_body.is_empty() {
-            return TypeSection {
-                arena,
-                bytes: Vec::new_in(arena),
-                offsets: Vec::new_in(arena),
-            };
-        }
-
-        let (count, content_offset) = decode_u32_or_panic(section_body);
-
-        let mut bytes = Vec::with_capacity_in(section_body.len() * 2, arena);
-        bytes.extend_from_slice(&section_body[content_offset..]);
-
-        let mut offsets = Vec::with_capacity_in((count * 2) as usize, arena);
-
+    fn populate_offsets(&mut self) {
+        self.offsets.clear();
         let mut i = 0;
-        while i < bytes.len() {
-            offsets.push(i);
+        while i < self.bytes.len() {
+            self.offsets.push(i);
 
-            let sep = bytes[i];
-            debug_assert!(sep == Signature::SEPARATOR);
+            debug_assert!(self.bytes[i] == Signature::SEPARATOR);
             i += 1;
 
-            let (n_params, n_params_size) = decode_u32_or_panic(&bytes[i..]);
+            let (n_params, n_params_size) = decode_u32_or_panic(&self.bytes[i..]);
             i += n_params_size; // skip over the array length that we just decoded
             i += n_params as usize; // skip over one byte per param type
 
-            let n_return_values = bytes[i];
+            let n_return_values = self.bytes[i];
             i += 1 + n_return_values as usize;
-        }
-
-        TypeSection {
-            arena,
-            bytes,
-            offsets,
         }
     }
 }
 
-impl<'a> Serialize for TypeSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_bytes_section(
-            buffer,
-            SectionId::Type,
-            self.offsets.len() as u32,
-            &self.bytes,
-        );
+impl<'a> Section<'a> for TypeSection<'a> {
+    const ID: SectionId = SectionId::Type;
+
+    fn get_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    fn get_count(&self) -> u32 {
+        self.offsets.len() as u32
+    }
+
+    fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+        let (count, initial_bytes) = parse_section(Self::ID, module_bytes, cursor);
+        let mut bytes = Vec::with_capacity_in(initial_bytes.len() * 2, arena);
+        bytes.extend_from_slice(initial_bytes);
+        TypeSection {
+            arena,
+            bytes,
+            offsets: Vec::with_capacity_in(2 * count as usize, arena),
+        }
     }
 }
 
@@ -299,17 +341,9 @@ impl<'a> ImportSection<'a> {
         import.serialize(&mut self.bytes);
         self.count += 1;
     }
-
-    pub fn size(&self) -> usize {
-        size_of_bytes_section(&self.bytes)
-    }
 }
 
-impl<'a> Serialize for ImportSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_bytes_section(buffer, SectionId::Import, self.count, &self.bytes);
-    }
-}
+section_impl!(ImportSection, SectionId::Import);
 
 /*******************************************************************
  *
@@ -336,16 +370,9 @@ impl<'a> FunctionSection<'a> {
         self.bytes.encode_u32(sig_id);
         self.count += 1;
     }
+}
 
-    pub fn size(&self) -> usize {
-        size_of_bytes_section(&self.bytes)
-    }
-}
-impl<'a> Serialize for FunctionSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_bytes_section(buffer, SectionId::Function, self.count, &self.bytes);
-    }
-}
+section_impl!(FunctionSection, SectionId::Function);
 
 /*******************************************************************
  *
@@ -400,17 +427,9 @@ impl<'a> MemorySection<'a> {
             MemorySection { count: 1, bytes }
         }
     }
-
-    pub fn size(&self) -> usize {
-        size_of_bytes_section(&self.bytes)
-    }
 }
 
-impl<'a> Serialize for MemorySection<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_bytes_section(buffer, SectionId::Memory, self.count, &self.bytes);
-    }
-}
+section_impl!(MemorySection, SectionId::Memory);
 
 /*******************************************************************
  *
@@ -503,17 +522,9 @@ impl<'a> GlobalSection<'a> {
         global.serialize(&mut self.bytes);
         self.count += 1;
     }
-
-    pub fn size(&self) -> usize {
-        size_of_bytes_section(&self.bytes)
-    }
 }
 
-impl<'a> Serialize for GlobalSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_bytes_section(buffer, SectionId::Global, self.count, &self.bytes);
-    }
-}
+section_impl!(GlobalSection, SectionId::Global);
 
 /*******************************************************************
  *
@@ -578,17 +589,9 @@ impl<'a> ExportSection<'a> {
         export.serialize(&mut self.bytes);
         self.count += 1;
     }
-
-    pub fn size(&self) -> usize {
-        size_of_bytes_section(&self.bytes)
-    }
 }
 
-impl<'a> Serialize for ExportSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_bytes_section(buffer, SectionId::Export, self.count, &self.bytes);
-    }
-}
+section_impl!(ExportSection, SectionId::Export);
 
 /*******************************************************************
  *
@@ -625,10 +628,12 @@ impl<'a> CodeSection<'a> {
     }
 
     pub fn size(&self) -> usize {
-        let preloaded_size = size_of_bytes_section(&self.preloaded_bytes);
         let builders_size: usize = self.code_builders.iter().map(|cb| cb.size()).sum();
-        preloaded_size + builders_size
+
+        SIZE_SECTION_HEADER + self.preloaded_bytes.len() + builders_size
     }
+
+    // fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {}
 }
 
 impl<'a> Serialize for CodeSection<'a> {
@@ -692,37 +697,27 @@ impl Serialize for DataSegment<'_> {
 
 #[derive(Debug)]
 pub struct DataSection<'a> {
-    segment_count: u32,
+    count: u32,
     bytes: Vec<'a, u8>,
 }
 
 impl<'a> DataSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         DataSection {
-            segment_count: 0,
+            count: 0,
             bytes: bumpalo::vec![in arena],
         }
     }
 
     pub fn append_segment(&mut self, segment: DataSegment<'a>) -> u32 {
-        let index = self.segment_count;
-        self.segment_count += 1;
+        let index = self.count;
+        self.count += 1;
         segment.serialize(&mut self.bytes);
         index
     }
-
-    pub fn size(&self) -> usize {
-        size_of_bytes_section(&self.bytes)
-    }
 }
 
-impl Serialize for DataSection<'_> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if !self.bytes.is_empty() {
-            serialize_bytes_section(buffer, SectionId::Data, self.segment_count, &self.bytes);
-        }
-    }
-}
+section_impl!(DataSection, SectionId::Data);
 
 /*******************************************************************
  *
@@ -771,7 +766,7 @@ mod tests {
 
         // Reconstruct a new TypeSection by "pre-loading" the bytes of the original!
         let body = &original_serialized[6..];
-        let preloaded = TypeSection::preload(arena, body);
+        let preloaded = TypeSection::populate_offsets(arena, body);
 
         debug_assert_eq!(original.offsets, preloaded.offsets);
         debug_assert_eq!(original.bytes, preloaded.bytes);
