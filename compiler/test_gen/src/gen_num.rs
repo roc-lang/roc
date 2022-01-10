@@ -2101,3 +2101,57 @@ fn num_to_str() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn u8_addition_greater_than_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : U8
+            x = 100
+            y : U8
+            y = 100
+            x + y
+            "#
+        ),
+        200,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn u8_sub_greater_than_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : U8
+            x = 255
+            y : U8
+            y = 55
+            x - y
+            "#
+        ),
+        200,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn u8_mul_greater_than_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : U8
+            x = 40
+            y : U8
+            y = 5
+            x * y
+            "#
+        ),
+        200,
+        u8
+    )
+}

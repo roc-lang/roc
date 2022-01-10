@@ -562,19 +562,19 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     });
     add_float_intrinsic(ctx, module, &LLVM_FLOOR, |t| t.fn_type(&[t.into()], false));
 
-    add_int_intrinsic(ctx, module, &LLVM_SADD_WITH_OVERFLOW, |t| {
+    add_int_intrinsic(ctx, module, &LLVM_ADD_WITH_OVERFLOW, |t| {
         let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
             .fn_type(&[t.into(), t.into()], false)
     });
 
-    add_int_intrinsic(ctx, module, &LLVM_SSUB_WITH_OVERFLOW, |t| {
+    add_int_intrinsic(ctx, module, &LLVM_SUB_WITH_OVERFLOW, |t| {
         let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
             .fn_type(&[t.into(), t.into()], false)
     });
 
-    add_int_intrinsic(ctx, module, &LLVM_SMUL_WITH_OVERFLOW, |t| {
+    add_int_intrinsic(ctx, module, &LLVM_MUL_WITH_OVERFLOW, |t| {
         let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
             .fn_type(&[t.into(), t.into()], false)
@@ -602,9 +602,12 @@ static LLVM_STACK_SAVE: &str = "llvm.stacksave";
 static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";
 pub static LLVM_LONGJMP: &str = "llvm.eh.sjlj.longjmp";
 
-const LLVM_SADD_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.sadd.with.overflow");
-const LLVM_SSUB_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.ssub.with.overflow");
-const LLVM_SMUL_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.smul.with.overflow");
+const LLVM_ADD_WITH_OVERFLOW: IntrinsicName =
+    int_intrinsic!("llvm.sadd.with.overflow", "llvm.uadd.with.overflow");
+const LLVM_SUB_WITH_OVERFLOW: IntrinsicName =
+    int_intrinsic!("llvm.ssub.with.overflow", "llvm.usub.with.overflow");
+const LLVM_MUL_WITH_OVERFLOW: IntrinsicName =
+    int_intrinsic!("llvm.smul.with.overflow", "llvm.umul.with.overflow");
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -6366,7 +6369,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumAdd => {
             let result = env
                 .call_intrinsic(
-                    &LLVM_SADD_WITH_OVERFLOW[int_width],
+                    &LLVM_ADD_WITH_OVERFLOW[int_width],
                     &[lhs.into(), rhs.into()],
                 )
                 .into_struct_value();
@@ -6375,13 +6378,13 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
         NumAddChecked => env.call_intrinsic(
-            &LLVM_SADD_WITH_OVERFLOW[int_width],
+            &LLVM_ADD_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
         NumSub => {
             let result = env
                 .call_intrinsic(
-                    &LLVM_SSUB_WITH_OVERFLOW[int_width],
+                    &LLVM_SUB_WITH_OVERFLOW[int_width],
                     &[lhs.into(), rhs.into()],
                 )
                 .into_struct_value();
@@ -6390,13 +6393,13 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
         NumSubChecked => env.call_intrinsic(
-            &LLVM_SSUB_WITH_OVERFLOW[int_width],
+            &LLVM_SUB_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
         NumMul => {
             let result = env
                 .call_intrinsic(
-                    &LLVM_SMUL_WITH_OVERFLOW[int_width],
+                    &LLVM_MUL_WITH_OVERFLOW[int_width],
                     &[lhs.into(), rhs.into()],
                 )
                 .into_struct_value();
@@ -6405,7 +6408,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
         NumMulChecked => env.call_intrinsic(
-            &LLVM_SMUL_WITH_OVERFLOW[int_width],
+            &LLVM_MUL_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
         NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
