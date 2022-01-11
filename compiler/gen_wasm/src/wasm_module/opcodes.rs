@@ -1,5 +1,7 @@
 use roc_reporting::internal_error;
 
+use super::serialize::{parse_u32_or_panic, SkipBytes};
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpCode {
@@ -196,8 +198,8 @@ enum OpImmediates {
 
 impl From<OpCode> for OpImmediates {
     fn from(op: OpCode) -> Self {
-        use OpImmediates::*;
         use OpCode::*;
+        use OpImmediates::*;
 
         match op {
             UNREACHABLE => NoImmediate,
@@ -251,4 +253,63 @@ impl From<OpCode> for OpImmediates {
             _ => internal_error!("Unknown Wasm instruction 0x{:02x}", op as u8),
         }
     }
+}
+
+impl SkipBytes for OpCode {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        use OpImmediates::*;
+
+        let opcode_byte: u8 = bytes[*cursor];
+
+        let opcode: OpCode = unsafe { std::mem::transmute(opcode_byte) };
+        let immediates = OpImmediates::from(opcode); // will panic if transmute was invalid
+
+        match immediates {
+            NoImmediate => {
+                *cursor += 1;
+            }
+            Byte1 => {
+                *cursor += 1 + 1;
+            }
+            Bytes4 => {
+                *cursor += 1 + 4;
+            }
+            Bytes8 => {
+                *cursor += 1 + 8;
+            }
+            Leb32x1 => {
+                let i = *cursor + 1;
+                *cursor = skip_leb(bytes, i, 5);
+            }
+            Leb64x1 => {
+                let i = *cursor + 1;
+                *cursor = skip_leb(bytes, i, 10);
+            }
+            Leb32x2 => {
+                let mut i = *cursor + 1;
+                i = skip_leb(bytes, i, 5);
+                i = skip_leb(bytes, i, 5);
+                *cursor = i;
+            }
+            BrTable => {
+                *cursor += 1;
+                let n_labels = 1 + parse_u32_or_panic(bytes, cursor);
+                let mut i = *cursor;
+                for _ in 0..n_labels {
+                    i = skip_leb(bytes, i, 5);
+                }
+                *cursor = i;
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn skip_leb(bytes: &[u8], mut i: usize, max_len: usize) -> usize {
+    let imax = i + max_len;
+    while (bytes[i] & 0x80 != 0) && (i < imax) {
+        i += 1;
+    }
+    debug_assert!(i < imax);
+    i + 1
 }
