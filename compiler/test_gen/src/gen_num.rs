@@ -2155,3 +2155,39 @@ fn u8_mul_greater_than_i8() {
         u8
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn add_saturated() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : U8
+            x = 200
+            y : U8
+            y = 200
+            Num.addSaturated x y
+            "#
+        ),
+        255,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn sub_saturated() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : U8
+            x = 10
+            y : U8
+            y = 20
+            Num.subSaturated x y
+            "#
+        ),
+        0,
+        u8
+    )
+}

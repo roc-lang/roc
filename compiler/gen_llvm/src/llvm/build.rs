@@ -493,6 +493,12 @@ fn add_int_intrinsic<'ctx, F>(
         };
     }
 
+    check!(IntWidth::U8, ctx.i8_type());
+    check!(IntWidth::U16, ctx.i16_type());
+    check!(IntWidth::U32, ctx.i32_type());
+    check!(IntWidth::U64, ctx.i64_type());
+    check!(IntWidth::U128, ctx.i128_type());
+
     check!(IntWidth::I8, ctx.i8_type());
     check!(IntWidth::I16, ctx.i16_type());
     check!(IntWidth::I32, ctx.i32_type());
@@ -579,6 +585,14 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ctx.struct_type(&fields, false)
             .fn_type(&[t.into(), t.into()], false)
     });
+
+    add_int_intrinsic(ctx, module, &LLVM_ADD_SATURATED, |t| {
+        t.fn_type(&[t.into(), t.into()], false)
+    });
+
+    add_int_intrinsic(ctx, module, &LLVM_SUB_SATURATED, |t| {
+        t.fn_type(&[t.into(), t.into()], false)
+    });
 }
 
 const LLVM_POW: IntrinsicName = float_intrinsic!("llvm.pow");
@@ -608,6 +622,9 @@ const LLVM_SUB_WITH_OVERFLOW: IntrinsicName =
     int_intrinsic!("llvm.ssub.with.overflow", "llvm.usub.with.overflow");
 const LLVM_MUL_WITH_OVERFLOW: IntrinsicName =
     int_intrinsic!("llvm.smul.with.overflow", "llvm.umul.with.overflow");
+
+const LLVM_ADD_SATURATED: IntrinsicName = int_intrinsic!("llvm.sadd.sat", "llvm.uadd.sat");
+const LLVM_SUB_SATURATED: IntrinsicName = int_intrinsic!("llvm.ssub.sat", "llvm.usub.sat");
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -5809,8 +5826,9 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumDivUnchecked | NumDivCeilUnchecked
-        | NumPow | NumPowInt | NumSubWrap | NumSubChecked | NumMulWrap | NumMulChecked => {
+        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumAddSaturated | NumDivUnchecked
+        | NumDivCeilUnchecked | NumPow | NumPowInt | NumSubWrap | NumSubChecked
+        | NumSubSaturated | NumMulWrap | NumMulChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -6381,6 +6399,9 @@ fn build_int_binop<'a, 'ctx, 'env>(
             &LLVM_ADD_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
+        NumAddSaturated => {
+            env.call_intrinsic(&LLVM_ADD_SATURATED[int_width], &[lhs.into(), rhs.into()])
+        }
         NumSub => {
             let result = env
                 .call_intrinsic(
@@ -6396,6 +6417,9 @@ fn build_int_binop<'a, 'ctx, 'env>(
             &LLVM_SUB_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
+        NumSubSaturated => {
+            env.call_intrinsic(&LLVM_SUB_SATURATED[int_width], &[lhs.into(), rhs.into()])
+        }
         NumMul => {
             let result = env
                 .call_intrinsic(

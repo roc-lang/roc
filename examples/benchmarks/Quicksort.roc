@@ -30,10 +30,7 @@ quicksortHelp = \list, order, low, high ->
         when partition low high list order is
             Pair partitionIndex partitioned ->
                 partitioned
-                    |> \lst ->
-                            # TODO: this will be nicer if we have Num.subSaturated
-                            high1 = if partitionIndex == 0 then 0 else partitionIndex - 1
-                            quicksortHelp lst order low high1
+                    |> quicksortHelp order low (Num.subSaturated partitionIndex 1)
                     |> quicksortHelp order (partitionIndex + 1) high
     else
         list
