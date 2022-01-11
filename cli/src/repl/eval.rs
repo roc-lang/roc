@@ -1036,6 +1036,12 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
+                    // If this tag union represents a number, skip right to
+                    // returning it as an Expr::Num
+                    if let TagName::Private(Symbol::NUM_AT_NUM) = &tag_name {
+                        return Expr::Num(env.arena.alloc_str(&value.to_string()));
+                    }
+
                     let loc_tag_expr = {
                         let tag_name = &tag_name.as_ident_str(env.interns, env.home);
                         let tag_expr = if tag_name.starts_with('@') {
@@ -1122,7 +1128,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
                     // If this tag union represents a number, skip right to
-                    // returning tis as an Expr::Num
+                    // returning it as an Expr::Num
                     if let TagName::Private(Symbol::NUM_AT_NUM) = &tag_name {
                         return num_expr;
                     }

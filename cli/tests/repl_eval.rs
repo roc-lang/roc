@@ -852,6 +852,20 @@ mod repl_eval {
     }
 
     #[test]
+    fn print_u8s() {
+        expect_success(
+            indoc!(
+                r#"
+                x : U8
+                x = 129
+                x
+                "#
+            ),
+            "129 : U8",
+        )
+    }
+
+    #[test]
     fn parse_problem() {
         expect_failure(
             "add m n = m + n",
