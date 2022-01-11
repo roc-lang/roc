@@ -329,6 +329,21 @@ values - including other records, or even functions!
 { birds: 4, nestedRecord: { someFunction: (\arg -> arg + 1), name: "Sam" } }
 ```
 
+### Record shorthands
+
+Roc has a couple of shorthands you can use to express some record-related operations more concisely.
+
+Instead of writing `\record -> record.x` we can write `.x` and it will evaluate to the same thing:
+a function that takes a record and returns its `x` field. You can do this with any field you want.
+For example:
+
+```elm
+returnFoo = .foo
+
+returnFoo { foo: "hi!", bar: "blah" }
+# returns "hi!"
+```
+
 Whenever we're setting a field to be a def that has the same name as the field -
 for example, `{ x: x }` - we can shorten it to just writing the name of the def alone -
 for example, `{ x }`. We can do this with as many fields as we like, e.g.

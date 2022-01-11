@@ -32,6 +32,12 @@ enum HelperOp {
     Eq,
 }
 
+impl HelperOp {
+    fn is_decref(&self) -> bool {
+        matches!(self, Self::DecRef(_))
+    }
+}
+
 #[derive(Debug)]
 struct Specialization<'a> {
     op: HelperOp,
@@ -174,7 +180,7 @@ impl<'a> CodeGenHelp<'a> {
     ) -> Option<Expr<'a>> {
         use HelperOp::*;
 
-        debug_assert!(self.debug_recursion_depth < 10);
+        // debug_assert!(self.debug_recursion_depth < 100);
         self.debug_recursion_depth += 1;
 
         let layout = if matches!(called_layout, Layout::RecursivePointer) {
@@ -224,6 +230,8 @@ impl<'a> CodeGenHelp<'a> {
         layout: Layout<'a>,
     ) -> Symbol {
         use HelperOp::*;
+
+        let layout = self.replace_rec_ptr(ctx, layout);
 
         let found = self
             .specializations
@@ -322,6 +330,98 @@ impl<'a> CodeGenHelp<'a> {
     fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
         let ident_id = ident_ids.add(Ident::from(debug_name));
         Symbol::new(self.home, ident_id)
+    }
+
+    // When creating or looking up Specializations, we need to replace RecursivePointer
+    // with the particular Union layout it represents at this point in the tree.
+    // For example if a program uses `RoseTree a : [ Tree a (List (RoseTree a)) ]`
+    // then it could have both `RoseTree I64` and `RoseTree Str`. In this case it
+    // needs *two* specializations for `List(RecursivePointer)`, not just one.
+    fn replace_rec_ptr(&self, ctx: &Context<'a>, layout: Layout<'a>) -> Layout<'a> {
+        match layout {
+            Layout::Builtin(Builtin::Dict(k, v)) => Layout::Builtin(Builtin::Dict(
+                self.arena.alloc(self.replace_rec_ptr(ctx, *k)),
+                self.arena.alloc(self.replace_rec_ptr(ctx, *v)),
+            )),
+
+            Layout::Builtin(Builtin::Set(k)) => Layout::Builtin(Builtin::Set(
+                self.arena.alloc(self.replace_rec_ptr(ctx, *k)),
+            )),
+
+            Layout::Builtin(Builtin::List(v)) => Layout::Builtin(Builtin::List(
+                self.arena.alloc(self.replace_rec_ptr(ctx, *v)),
+            )),
+
+            Layout::Builtin(_) => layout,
+
+            Layout::Struct(fields) => {
+                let new_fields_iter = fields.iter().map(|f| self.replace_rec_ptr(ctx, *f));
+                Layout::Struct(self.arena.alloc_slice_fill_iter(new_fields_iter))
+            }
+
+            Layout::Union(UnionLayout::NonRecursive(tags)) => {
+                let mut new_tags = Vec::with_capacity_in(tags.len(), self.arena);
+                for fields in tags {
+                    let mut new_fields = Vec::with_capacity_in(fields.len(), self.arena);
+                    for field in fields.iter() {
+                        new_fields.push(self.replace_rec_ptr(ctx, *field))
+                    }
+                    new_tags.push(new_fields.into_bump_slice());
+                }
+                Layout::Union(UnionLayout::NonRecursive(new_tags.into_bump_slice()))
+            }
+
+            Layout::Union(_) => layout,
+
+            Layout::LambdaSet(lambda_set) => {
+                self.replace_rec_ptr(ctx, lambda_set.runtime_representation())
+            }
+
+            // This line is the whole point of the function
+            Layout::RecursivePointer => Layout::Union(ctx.recursive_union.unwrap()),
+        }
+    }
+
+    fn union_tail_recursion_fields(
+        &self,
+        union: UnionLayout<'a>,
+    ) -> (bool, Vec<'a, Option<usize>>) {
+        use UnionLayout::*;
+        match union {
+            NonRecursive(_) => return (false, bumpalo::vec![in self.arena]),
+
+            Recursive(tags) => self.union_tail_recursion_fields_help(tags),
+
+            NonNullableUnwrapped(field_layouts) => {
+                self.union_tail_recursion_fields_help(&[field_layouts])
+            }
+
+            NullableWrapped {
+                other_tags: tags, ..
+            } => self.union_tail_recursion_fields_help(tags),
+
+            NullableUnwrapped { other_fields, .. } => {
+                self.union_tail_recursion_fields_help(&[other_fields])
+            }
+        }
+    }
+
+    fn union_tail_recursion_fields_help(
+        &self,
+        tags: &[&'a [Layout<'a>]],
+    ) -> (bool, Vec<'a, Option<usize>>) {
+        let mut can_use_tailrec = false;
+        let mut tailrec_indices = Vec::with_capacity_in(tags.len(), self.arena);
+
+        for fields in tags.iter() {
+            let found_index = fields
+                .iter()
+                .position(|f| matches!(f, Layout::RecursivePointer));
+            tailrec_indices.push(found_index);
+            can_use_tailrec |= found_index.is_some();
+        }
+
+        (can_use_tailrec, tailrec_indices)
     }
 }
 
