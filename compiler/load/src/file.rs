@@ -1647,6 +1647,23 @@ fn start_tasks<'a>(
     Ok(())
 }
 
+#[cfg(debug_assertions)]
+fn debug_print_ir(state: &State, flag: &str) {
+    if env::var(flag) != Ok("1".into()) {
+        return;
+    }
+
+    let procs_string = state
+        .procedures
+        .values()
+        .map(|proc| proc.to_pretty(200))
+        .collect::<Vec<_>>();
+
+    let result = procs_string.join("\n");
+
+    println!("{}", result);
+}
+
 fn update<'a>(
     mut state: State<'a>,
     msg: Msg<'a>,
@@ -2075,6 +2092,9 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
+                #[cfg(debug_assertions)]
+                debug_print_ir(&state, "PRINT_IR_AFTER_SPECIALIZATION");
+
                 Proc::insert_reset_reuse_operations(
                     arena,
                     module_id,
@@ -2083,20 +2103,13 @@ fn update<'a>(
                     &mut state.procedures,
                 );
 
-                // Uncomment to display the mono IR of the module, for debug purposes
-                if false {
-                    let procs_string = state
-                        .procedures
-                        .values()
-                        .map(|proc| proc.to_pretty(200))
-                        .collect::<Vec<_>>();
-
-                    let result = procs_string.join("\n");
-
-                    println!("{}", result);
-                }
+                #[cfg(debug_assertions)]
+                debug_print_ir(&state, "PRINT_IR_AFTER_RESET_REUSE");
 
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
+
+                #[cfg(debug_assertions)]
+                debug_print_ir(&state, "PRINT_IR_AFTER_REFCOUNT");
 
                 // This is not safe with the new non-recursive RC updates that we do for tag unions
                 //
