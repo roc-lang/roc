@@ -2083,8 +2083,8 @@ fn update<'a>(
                     &mut state.procedures,
                 );
 
-                // display the mono IR of the module, for debug purposes
-                if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
+                // Uncomment to display the mono IR of the module, for debug purposes
+                if false {
                     let procs_string = state
                         .procedures
                         .values()

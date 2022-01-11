@@ -1,6 +1,6 @@
 procedure Test.0 ():
-    let Test.10 = Z ;
-    let Test.9 = S Test.10;
-    let Test.8 = S Test.9;
-    let Test.2 = S Test.8;
+    let Test.10 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = Z ;
+    let Test.9 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = S Test.10;
+    let Test.8 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = S Test.9;
+    let Test.2 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = S Test.8;
     ret Test.2;

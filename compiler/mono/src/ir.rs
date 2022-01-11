@@ -1632,19 +1632,16 @@ impl<'a> Stmt<'a> {
         use Stmt::*;
 
         match self {
-            Let(symbol, expr, layout, cont) => {
-                let mut doc = alloc.text("let ").append(symbol_to_doc(alloc, *symbol));
-                if PRETTY_PRINT_IR_SYMBOLS {
-                    doc = doc
-                        .append(" : ")
-                        .append(alloc.text(format!("{:?}", layout)));
-                }
-                doc.append(" = ")
-                    .append(expr.to_doc(alloc))
-                    .append(";")
-                    .append(alloc.hardline())
-                    .append(cont.to_doc(alloc))
-            }
+            Let(symbol, expr, _layout, cont) => alloc
+                .text("let ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(" : ")
+                .append(alloc.text(format!("{:?}", _layout)))
+                .append(" = ")
+                .append(expr.to_doc(alloc))
+                .append(";")
+                .append(alloc.hardline())
+                .append(cont.to_doc(alloc)),
 
             Refcounting(modify, cont) => modify
                 .to_doc(alloc)
