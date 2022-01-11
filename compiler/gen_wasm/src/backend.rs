@@ -2,7 +2,7 @@ use bumpalo::{self, collections::Vec};
 
 use code_builder::Align;
 use roc_builtins::bitcode::{self, IntWidth};
-use roc_collections::all::MutMap;
+use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::Ident;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
@@ -42,6 +42,7 @@ pub struct WasmBackend<'a> {
     next_constant_addr: u32,
     fn_index_offset: u32,
     preloaded_functions_map: MutMap<&'a [u8], u32>,
+    called_preload_fns: MutSet<u32>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
 
@@ -79,6 +80,7 @@ impl<'a> WasmBackend<'a> {
             next_constant_addr: CONST_SEGMENT_BASE_ADDR,
             fn_index_offset,
             preloaded_functions_map,
+            called_preload_fns: MutSet::default(),
             proc_symbols,
             helper_proc_gen,
 
@@ -115,7 +117,12 @@ impl<'a> WasmBackend<'a> {
         self.module.linking.symbol_table.push(linker_symbol);
     }
 
-    pub fn into_module(self) -> WasmModule<'a> {
+    pub fn into_module(mut self, remove_dead_preloads: bool) -> WasmModule<'a> {
+        if remove_dead_preloads {
+            self.module
+                .code
+                .remove_dead_preloads(self.env.arena, self.called_preload_fns)
+        }
         self.module
     }
 
@@ -1466,6 +1473,7 @@ impl<'a> WasmBackend<'a> {
         let num_wasm_args = param_types.len();
         let has_return_val = ret_type.is_some();
         let fn_index = self.preloaded_functions_map[name.as_bytes()];
+        self.called_preload_fns.insert(fn_index);
         let linker_symbol_index = u32::MAX;
 
         self.code_builder

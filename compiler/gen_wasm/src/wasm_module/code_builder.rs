@@ -37,6 +37,18 @@ impl Serialize for ValueType {
     }
 }
 
+impl From<u8> for ValueType {
+    fn from(x: u8) -> Self {
+        match x {
+            0x7f => Self::I32,
+            0x7e => Self::I64,
+            0x7d => Self::F32,
+            0x7c => Self::F64,
+            _ => internal_error!("Invalid ValueType 0x{:02x}", x),
+        }
+    }
+}
+
 const BLOCK_NO_RESULT: u8 = 0x40;
 
 /// A control block in our model of the VM

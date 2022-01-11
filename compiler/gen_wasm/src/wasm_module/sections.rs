@@ -3,6 +3,9 @@ use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_reporting::internal_error;
 
+use super::dead_code::{
+    copy_live_and_replace_dead, parse_dead_code_metadata, trace_function_deps, DeadCodeMetadata,
+};
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
 use super::serialize::{
@@ -212,8 +215,10 @@ impl<'a> TypeSection<'a> {
         sig_id as u32
     }
 
-    pub fn cache_offsets(&mut self) {
+    pub fn parse_preloaded_data(&mut self, arena: &'a Bump) -> Vec<'a, Option<ValueType>> {
         self.offsets.clear();
+        let mut ret_types = Vec::with_capacity_in(self.offsets.capacity(), arena);
+
         let mut i = 0;
         while i < self.bytes.len() {
             self.offsets.push(i);
@@ -226,8 +231,18 @@ impl<'a> TypeSection<'a> {
             i += n_params as usize; // skip over one byte per param type
 
             let n_return_values = self.bytes[i];
-            i += 1 + n_return_values as usize;
+            i += 1;
+
+            ret_types.push(if n_return_values == 0 {
+                None
+            } else {
+                Some(ValueType::from(self.bytes[i]))
+            });
+
+            i += n_return_values as usize;
         }
+
+        ret_types
     }
 }
 
@@ -411,6 +426,15 @@ impl<'a> FunctionSection<'a> {
     pub fn add_sig(&mut self, sig_id: u32) {
         self.bytes.encode_u32(sig_id);
         self.count += 1;
+    }
+
+    pub fn parse_preloaded_data(&self, arena: &'a Bump) -> Vec<'a, u32> {
+        let mut preload_signature_ids = Vec::with_capacity_in(self.count as usize, arena);
+        let mut cursor = 0;
+        while cursor < self.bytes.len() {
+            preload_signature_ids.push(parse_u32_or_panic(&self.bytes, &mut cursor));
+        }
+        preload_signature_ids
     }
 }
 
@@ -663,8 +687,9 @@ section_impl!(ExportSection, SectionId::Export);
 #[derive(Debug)]
 pub struct CodeSection<'a> {
     pub preloaded_count: u32,
-    pub preloaded_bytes: Vec<'a, u8>,
+    pub preloaded_bytes: &'a [u8],
     pub code_builders: Vec<'a, CodeBuilder<'a>>,
+    dead_code_metadata: DeadCodeMetadata<'a>,
 }
 
 impl<'a> CodeSection<'a> {
@@ -676,8 +701,6 @@ impl<'a> CodeSection<'a> {
     ) -> usize {
         let header_indices = write_section_header(buffer, SectionId::Code);
         buffer.encode_u32(self.preloaded_count + self.code_builders.len() as u32);
-
-        buffer.append_slice(&self.preloaded_bytes);
 
         for code_builder in self.code_builders.iter() {
             code_builder.serialize_with_relocs(buffer, relocations, header_indices.body_index);
@@ -694,15 +717,51 @@ impl<'a> CodeSection<'a> {
         MAX_SIZE_SECTION_HEADER + self.preloaded_bytes.len() + builders_size
     }
 
-    pub fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+    pub fn preload(
+        arena: &'a Bump,
+        module_bytes: &[u8],
+        cursor: &mut usize,
+        ret_types: Vec<'a, Option<ValueType>>,
+        signature_ids: Vec<'a, u32>,
+    ) -> Self {
         let (preloaded_count, initial_bytes) = parse_section(SectionId::Code, module_bytes, cursor);
-        let mut preloaded_bytes = Vec::with_capacity_in(initial_bytes.len() * 2, arena);
-        preloaded_bytes.extend_from_slice(initial_bytes);
+        let preloaded_bytes = arena.alloc_slice_copy(initial_bytes);
+
+        // TODO: Try to move this metadata preparation to platform build time
+        let dead_code_metadata = parse_dead_code_metadata(
+            arena,
+            preloaded_count,
+            initial_bytes,
+            ret_types,
+            signature_ids,
+        );
+
         CodeSection {
             preloaded_count,
             preloaded_bytes,
             code_builders: Vec::with_capacity_in(0, arena),
+            dead_code_metadata,
         }
+    }
+
+    pub fn remove_dead_preloads<T>(&mut self, arena: &'a Bump, called_preload_fns: T)
+    where
+        T: IntoIterator<Item = u32>,
+    {
+        let mut live_ext_fn_indices =
+            trace_function_deps(arena, &self.dead_code_metadata, called_preload_fns);
+
+        let mut buffer = Vec::with_capacity_in(self.preloaded_bytes.len(), arena);
+
+        copy_live_and_replace_dead(
+            arena,
+            &mut buffer,
+            &self.dead_code_metadata,
+            self.preloaded_bytes,
+            &mut live_ext_fn_indices,
+        );
+
+        self.preloaded_bytes = buffer.into_bump_slice();
     }
 }
 
@@ -711,7 +770,7 @@ impl<'a> Serialize for CodeSection<'a> {
         let header_indices = write_section_header(buffer, SectionId::Code);
         buffer.encode_u32(self.preloaded_count + self.code_builders.len() as u32);
 
-        buffer.append_slice(&self.preloaded_bytes);
+        buffer.append_slice(self.preloaded_bytes);
 
         for code_builder in self.code_builders.iter() {
             code_builder.serialize(buffer);
@@ -846,7 +905,7 @@ mod tests {
         // Reconstruct a new TypeSection by "pre-loading" the bytes of the original
         let mut cursor = 0;
         let mut preloaded = TypeSection::preload(arena, &original_serialized, &mut cursor);
-        preloaded.cache_offsets();
+        preloaded.parse_preloaded_data(arena);
 
         debug_assert_eq!(original.offsets, preloaded.offsets);
         debug_assert_eq!(original.bytes, preloaded.bytes);

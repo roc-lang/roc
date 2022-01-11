@@ -1,4 +1,5 @@
 pub mod code_builder;
+mod dead_code;
 pub mod linking;
 pub mod opcodes;
 pub mod sections;
@@ -44,7 +45,6 @@ impl<'a> WasmModule<'a> {
     }
 
     /// Serialize the module to bytes
-    /// (not using Serialize trait because it's just one more thing to export)
     pub fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_u8(0);
         buffer.append_slice("asm".as_bytes());
@@ -125,16 +125,19 @@ impl<'a> WasmModule<'a> {
         let mut cursor: usize = 8;
 
         let mut types = TypeSection::preload(arena, bytes, &mut cursor);
-        types.cache_offsets();
+        let ret_types = types.parse_preloaded_data(arena);
+
         let import = ImportSection::preload(arena, bytes, &mut cursor);
         let function = FunctionSection::preload(arena, bytes, &mut cursor);
+        let signature_ids = function.parse_preloaded_data(arena);
+
         let table = OpaqueSection::preload(SectionId::Table, arena, bytes, &mut cursor);
         let memory = MemorySection::preload(arena, bytes, &mut cursor);
         let global = GlobalSection::preload(arena, bytes, &mut cursor);
         let export = ExportSection::preload(arena, bytes, &mut cursor);
         let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
         let element = OpaqueSection::preload(SectionId::Element, arena, bytes, &mut cursor);
-        let code = CodeSection::preload(arena, bytes, &mut cursor);
+        let code = CodeSection::preload(arena, bytes, &mut cursor, ret_types, signature_ids);
         let data = DataSection::preload(arena, bytes, &mut cursor);
         let linking = LinkingSection::new(arena);
         let relocations = RelocationSection::new(arena, "reloc.CODE");
