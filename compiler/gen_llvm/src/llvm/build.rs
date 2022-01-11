@@ -6238,7 +6238,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                     .void_type()
                     .fn_type(&function_arguments(env, &cc_argument_types), false),
                 CCReturn::ByPointer => {
-                    cc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
+                    cc_argument_types.insert(0, return_type.ptr_type(AddressSpace::Generic).into());
                     env.context
                         .void_type()
                         .fn_type(&function_arguments(env, &cc_argument_types), false)
@@ -6285,6 +6285,11 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                     RocReturn::ByPointer => fastcc_parameters.pop().unwrap().into_pointer_value(),
                 };
 
+                if let CCReturn::ByPointer = cc_return {
+                    cc_arguments.push(return_pointer.into());
+                    cc_argument_types.remove(0);
+                }
+
                 let it = fastcc_parameters.into_iter().zip(cc_argument_types.iter());
                 for (param, cc_type) in it {
                     if param.get_type() == *cc_type {
@@ -6294,10 +6299,6 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                             complex_bitcast(env.builder, param, *cc_type, "to_cc_type");
                         cc_arguments.push(as_cc_type.into());
                     }
-                }
-
-                if let CCReturn::ByPointer = cc_return {
-                    cc_arguments.push(return_pointer.into());
                 }
 
                 let call = env.builder.build_call(cc_function, &cc_arguments, "tmp");
