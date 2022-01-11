@@ -2,7 +2,7 @@ platform "examples/cli"
     requires {} { main : Task {} [] }
     exposes []
     packages {}
-    imports [ Task.{ Task }, File.{ ReadErr } ]
+    imports [ Task.{ Task }, File.{ ReadErr, ReadErrTag } ]
     provides [ mainForHost ]
     effects fx.Effect
         {

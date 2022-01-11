@@ -135,6 +135,7 @@ pub struct ReadErr {
 }
 
 #[repr(u64)] // TODO this will be a u8 after Ayaz's PR merges
+/// === THIS MUST BE MANUALLY KEPT IN SYNC WITH THE ONE IN File.roc ===
 pub enum ReadErrTag {
     ////// THESE MUST BE ALPHABETIZED!!! //////
     FileBusy = 0,

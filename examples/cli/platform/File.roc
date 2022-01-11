@@ -2,6 +2,17 @@ interface File
     exposes [ Path, OpenErr, ReadErr, ReadUtf8Err, WriteErr, DirReadErr, readBytes, readUtf8, readUtf8Infallible, writeBytes, writeUtf8 ]
     imports [ fx.Effect, Task.{ Task }, Stdout ]
 
+## TODO move this to an internal module; this should not be exposed in userspace
+##
+## === THIS MUST BE MANUALLY KEPT IN SYNC WITH THE ONE IN lib.rs ===
+ReadErrTag :
+    [
+        FileBusy,
+        FileWasDir,
+        IllegalByteSequence,
+        InvalidSeek,
+    ]
+
 ## A file path. This is an alias for an ordinary string; it isn't guaranteed to be
 ## a valid file path or anything, it's just to make types that deal with file paths
 ## more self-documenting.
