@@ -3,35 +3,41 @@
 // Makes test runs take 50% longer, due to linking
 #define ENABLE_PRINTF 0
 
+typedef struct
+{
+    size_t length;
+    size_t *elements[]; // flexible array member
+} Vector;
+
 // Globals for refcount testing
-size_t **rc_pointers; // array of pointers to refcount values
-size_t rc_pointers_len;
-size_t rc_pointers_index;
+Vector *rc_pointers;
+size_t rc_pointers_capacity;
 
 // The rust test passes us the max number of allocations it expects to make,
 // and we tell it where we're going to write the refcount pointers.
 // It won't actually read that memory until later, when the test is done.
-size_t **init_refcount_test(size_t max_allocs)
+Vector *init_refcount_test(size_t capacity)
 {
-    rc_pointers = malloc(max_allocs * sizeof(size_t *));
-    rc_pointers_len = max_allocs;
-    rc_pointers_index = 0;
-    for (size_t i = 0; i < max_allocs; ++i)
-        rc_pointers[i] = NULL;
+    rc_pointers_capacity = capacity;
+
+    rc_pointers = malloc((1 + capacity) * sizeof(size_t *));
+    rc_pointers->length = 0;
+    for (size_t i = 0; i < capacity; ++i)
+        rc_pointers->elements[i] = NULL;
 
     return rc_pointers;
 }
 
 #if ENABLE_PRINTF
-#define ASSERT(x)                   \
-    if (!(x))                       \
-    {                               \
-        printf("FAILED: " #x "\n"); \
-        abort();                    \
+#define ASSERT(condition, format, ...)                       \
+    if (!(condition))                                        \
+    {                                                        \
+        printf("ASSERT FAILED: " #format "\n", __VA_ARGS__); \
+        abort();                                             \
     }
 #else
-#define ASSERT(x) \
-    if (!(x))     \
+#define ASSERT(condition, format, ...) \
+    if (!(condition))                  \
         abort();
 #endif
 
@@ -50,12 +56,13 @@ void *roc_alloc(size_t size, unsigned int alignment)
 
     if (rc_pointers)
     {
-        ASSERT(alignment >= sizeof(size_t));
-        ASSERT(rc_pointers_index < rc_pointers_len);
+        ASSERT(alignment >= sizeof(size_t), "alignment %zd != %zd", alignment, sizeof(size_t));
+        size_t num_alloc = rc_pointers->length + 1;
+        ASSERT(num_alloc <= rc_pointers_capacity, "Too many allocations %zd > %zd", num_alloc, rc_pointers_capacity);
 
         size_t *rc_ptr = alloc_ptr_to_rc_ptr(allocated, alignment);
-        rc_pointers[rc_pointers_index] = rc_ptr;
-        rc_pointers_index++;
+        rc_pointers->elements[rc_pointers->length] = rc_ptr;
+        rc_pointers->length++;
     }
 
 #if ENABLE_PRINTF
@@ -94,16 +101,16 @@ void roc_dealloc(void *ptr, unsigned int alignment)
         // Then even if malloc reuses the space, everything still works
         size_t *rc_ptr = alloc_ptr_to_rc_ptr(ptr, alignment);
         int i = 0;
-        for (; i < rc_pointers_index; ++i)
+        for (; i < rc_pointers->length; ++i)
         {
-            if (rc_pointers[i] == rc_ptr)
+            if (rc_pointers->elements[i] == rc_ptr)
             {
-                rc_pointers[i] = NULL;
+                rc_pointers->elements[i] = NULL;
                 break;
             }
         }
-        int was_found = i < rc_pointers_index;
-        ASSERT(was_found);
+        int was_found = i < rc_pointers->length;
+        ASSERT(was_found, "RC pointer not found %p", rc_ptr);
     }
 
 #if ENABLE_PRINTF
