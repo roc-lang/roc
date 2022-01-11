@@ -23,12 +23,12 @@ partition : Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]
 partition = \low, high, initialList ->
     when List.get initialList high is
         Ok pivot ->
-            when partitionHelp (low - 1) low initialList high pivot is
+            when partitionHelp low low initialList high pivot is
                 Pair newI newList ->
-                    Pair (newI + 1) (swap (newI + 1) high newList)
+                    Pair newI (swap newI high newList)
 
         Err _ ->
-            Pair (low - 1) initialList
+            Pair low initialList
 
 partitionHelp : Nat, Nat, List (Num c), Nat, Num c -> [ Pair Nat (List (Num c)) ]
 partitionHelp = \i, j, list, high, pivot ->
@@ -36,7 +36,7 @@ partitionHelp = \i, j, list, high, pivot ->
         when List.get list j is
             Ok value ->
                 if value <= pivot then
-                    partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                    partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
                 else
                     partitionHelp i (j + 1) list high pivot
 
