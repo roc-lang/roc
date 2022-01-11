@@ -95,7 +95,8 @@ readUtf8 = \path ->
                 # TODO FIXME replace with:  -> Task.fail (ReadUtf8 (BadUtf8 problem index))
                 Err (BadUtf8 problem index) -> Task.succeed ""
 
-        Err (ReadBytes problem) -> Task.fail (ReadUtf8 problem)
+        #Err (ReadBytes problem) -> Task.fail (ReadUtf8 problem)
+        Err str -> Task.fail (ReadUtf8 (FileWasDir str))
 
 readBytesInfallible : Path -> Task (List U8) *
 readBytesInfallible = \path ->
@@ -113,11 +114,13 @@ readBytesInfallible = \path ->
 #         when result is
 #             Ok answer -> Task.succeed answer
 #             Err readErr -> Task.fail (ReadBytes readErr)
-readBytes : Path -> Task (List U8) *
-readBytes = \path ->
-    Effect.after (Effect.readAllBytes path) \answer ->
-        Task.succeed answer
 
+readBytes : Path -> Task (List U8) Str
+readBytes = \path ->
+    Effect.after (Effect.readAllBytes path) \result ->
+        when result is
+            Ok answer -> Task.succeed answer
+            Err str -> Task.fail str
 
 writeUtf8 : Path, Str -> Task {} [ WriteUtf8 WriteErr ]*
 writeUtf8 = \path, str ->

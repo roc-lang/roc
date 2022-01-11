@@ -18,7 +18,7 @@ platform "examples/cli"
            #                    ]
            #                ),
             # readAllBytes : Str -> Effect (Result (List U8) *),
-            readAllBytes : Str -> Effect (List U8),
+            readAllBytes : Str -> Effect (Result (List U8) Str),
             # TODO FIXME moving this to the end of the list (even after removing trailing comma)
             # gives a parse error on the `Str, Str` arguments
             writeAllBytes : Str, List U8 -> Effect I32,
