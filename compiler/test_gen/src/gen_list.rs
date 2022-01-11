@@ -1319,7 +1319,7 @@ fn list_reverse_empty_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn foobarbaz() {
+fn list_concat() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -2069,7 +2069,7 @@ fn gen_quicksort() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn foobar2() {
+fn quicksort() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
@@ -2143,7 +2143,7 @@ fn foobar2() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn foobar() {
+fn quicksort_singleton() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
