@@ -96,12 +96,16 @@ readBytesInfallible = \path ->
     #         Err err -> Task.succeed []
 
 
-readBytes : Path -> Task (List U8) [ ReadBytes ReadErr ]*
+# readBytes : Path -> Task (List U8) [ ReadBytes ReadErr ]*
+# readBytes = \path ->
+#     Effect.after (Effect.readAllBytes path) \result ->
+#         when result is
+#             Ok answer -> Task.succeed answer
+#             Err readErr -> Task.fail (ReadBytes readErr)
+readBytes : Path -> Task (List U8) *
 readBytes = \path ->
-    Effect.after (Effect.readAllBytes path) \result ->
-        when result is
-            Ok answer -> Task.succeed answer
-            Err readErr -> Task.fail (ReadBytes readErr)
+    Effect.after (Effect.readAllBytes path) \answer ->
+        Task.succeed answer
 
 
 writeUtf8 : Path, Str -> Task {} [ WriteUtf8 WriteErr ]*

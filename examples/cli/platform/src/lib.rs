@@ -4,11 +4,11 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use libc;
-use roc_std::{RocStr, RocList, RocResult};
+use roc_std::{RocList, RocResult, RocStr};
 use std::ffi::CStr;
-use std::os::raw::c_char;
-use std::io::{self, Read, BufReader};
 use std::fs::File;
+use std::io::{self, BufReader, Read};
+use std::os::raw::c_char;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
@@ -128,23 +128,25 @@ pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) {
 }
 
 #[repr(C)]
-struct ReadErr {
+pub struct ReadErr {
     path: RocStr,
     // errno: i32, // needed once OpenErr is in the mix
     tag: ReadErrTag,
 }
 
-#[repr(C, u64)] // TODO this will be a u8 after Ayaz's PR merges
-struct ReadErrTag {
+#[repr(u64)] // TODO this will be a u8 after Ayaz's PR merges
+pub enum ReadErrTag {
     ////// THESE MUST BE ALPHABETIZED!!! //////
-    FileBusy=0,
+    FileBusy = 0,
     FileWasDir,
     IllegalByteSequence,
     InvalidSeek,
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_readAllBytes(path: ManuallyDrop<RocStr>) -> RocResult<RocList<u8>, ReadErr> {
+pub extern "C" fn roc_fx_readAllBytes(
+    path: ManuallyDrop<RocStr>,
+) -> RocResult<RocList<u8>, ReadErr> {
     println!("in roc_fx_readAllBytes({})", path.as_str());
     let result = read_bytes(path.as_str());
 
@@ -152,13 +154,20 @@ pub extern "C" fn roc_fx_readAllBytes(path: ManuallyDrop<RocStr>) -> RocResult<R
         Ok(list) => {
             println!("Read this list of bytes: {:?}", list);
 
-            RocFileResult { answer: list, error: u8::MAX }
-        },
+            RocResult::ok(list)
+        }
         Err(err) => {
             println!("Error reading file: {:?}", err);
 
             // TODO give a more helpful error
-            RocFileResult { answer: RocList::default(), error: 1 }
+            let tag = ReadErrTag::FileBusy;
+            let path = "TODO roc read result error".into();
+
+            RocResult::err(ReadErr {
+                path,
+                // errno: i32, // needed once OpenErr is in the mix
+                tag,
+            })
         }
     }
 }
