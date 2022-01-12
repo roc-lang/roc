@@ -6212,6 +6212,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
             // - a FAST_CALL_CONV wrapper that we make here, e.g. `roc_fx_putLine_fastcc_wrapper`
 
             let return_type = basic_type_from_layout(env, ret_layout);
+            let roc_return = RocReturn::from_layout(env, ret_layout);
             let cc_return = to_cc_return(env, ret_layout);
 
             let mut cc_argument_types =
@@ -6237,7 +6238,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                     .void_type()
                     .fn_type(&function_arguments(env, &cc_argument_types), false),
                 CCReturn::ByPointer => {
-                    cc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
+                    cc_argument_types.insert(0, return_type.ptr_type(AddressSpace::Generic).into());
                     env.context
                         .void_type()
                         .fn_type(&function_arguments(env, &cc_argument_types), false)
@@ -6249,8 +6250,17 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
 
             let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
 
-            let fastcc_type =
-                return_type.fn_type(&function_arguments(env, &fastcc_argument_types), false);
+            let fastcc_type = match roc_return {
+                RocReturn::Return => {
+                    return_type.fn_type(&function_arguments(env, &fastcc_argument_types), false)
+                }
+                RocReturn::ByPointer => {
+                    fastcc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
+                    env.context
+                        .void_type()
+                        .fn_type(&function_arguments(env, &fastcc_argument_types), false)
+                }
+            };
 
             let fastcc_function = add_func(
                 env.module,
@@ -6265,11 +6275,20 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
             let entry = context.append_basic_block(fastcc_function, "entry");
             {
                 builder.position_at_end(entry);
-                let return_pointer = env.builder.build_alloca(return_type, "return_value");
 
-                let fastcc_parameters = fastcc_function.get_params();
+                let mut fastcc_parameters = fastcc_function.get_params();
                 let mut cc_arguments =
                     Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
+
+                let return_pointer = match roc_return {
+                    RocReturn::Return => env.builder.build_alloca(return_type, "return_value"),
+                    RocReturn::ByPointer => fastcc_parameters.pop().unwrap().into_pointer_value(),
+                };
+
+                if let CCReturn::ByPointer = cc_return {
+                    cc_arguments.push(return_pointer.into());
+                    cc_argument_types.remove(0);
+                }
 
                 let it = fastcc_parameters.into_iter().zip(cc_argument_types.iter());
                 for (param, cc_type) in it {
@@ -6282,21 +6301,28 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                     }
                 }
 
-                if let CCReturn::ByPointer = cc_return {
-                    cc_arguments.push(return_pointer.into());
-                }
-
                 let call = env.builder.build_call(cc_function, &cc_arguments, "tmp");
                 call.set_call_convention(C_CALL_CONV);
 
-                let return_value = match cc_return {
-                    CCReturn::Return => call.try_as_basic_value().left().unwrap(),
+                match roc_return {
+                    RocReturn::Return => {
+                        let return_value = match cc_return {
+                            CCReturn::Return => call.try_as_basic_value().left().unwrap(),
 
-                    CCReturn::ByPointer => env.builder.build_load(return_pointer, "read_result"),
-                    CCReturn::Void => return_type.const_zero(),
-                };
+                            CCReturn::ByPointer => {
+                                env.builder.build_load(return_pointer, "read_result")
+                            }
+                            CCReturn::Void => return_type.const_zero(),
+                        };
 
-                builder.build_return(Some(&return_value));
+                        builder.build_return(Some(&return_value));
+                    }
+                    RocReturn::ByPointer => {
+                        debug_assert!(matches!(cc_return, CCReturn::ByPointer));
+
+                        builder.build_return(None);
+                    }
+                }
             }
 
             builder.position_at_end(old);
