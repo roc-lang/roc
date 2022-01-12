@@ -268,7 +268,25 @@ pub trait SkipBytes {
 
 impl SkipBytes for u32 {
     fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        parse_u32_or_panic(bytes, cursor);
+        let imax = 5;
+        let mut i = *cursor;
+        while (bytes[i] & 0x80 != 0) && (i < imax) {
+            i += 1;
+        }
+        debug_assert!(i < imax);
+        *cursor = i + 1
+    }
+}
+
+impl SkipBytes for u64 {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        let imax = 10;
+        let mut i = *cursor;
+        while (bytes[i] & 0x80 != 0) && (i < imax) {
+            i += 1;
+        }
+        debug_assert!(i < imax);
+        *cursor = i + 1
     }
 }
 

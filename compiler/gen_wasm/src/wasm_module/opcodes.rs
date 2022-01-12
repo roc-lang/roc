@@ -278,38 +278,25 @@ impl SkipBytes for OpCode {
                 *cursor += 1 + 8;
             }
             Leb32x1 => {
-                let i = *cursor + 1;
-                *cursor = skip_leb(bytes, i, 5);
+                *cursor += 1;
+                u32::skip_bytes(bytes, cursor);
             }
             Leb64x1 => {
-                let i = *cursor + 1;
-                *cursor = skip_leb(bytes, i, 10);
+                *cursor += 1;
+                u64::skip_bytes(bytes, cursor);
             }
             Leb32x2 => {
-                let mut i = *cursor + 1;
-                i = skip_leb(bytes, i, 5);
-                i = skip_leb(bytes, i, 5);
-                *cursor = i;
+                *cursor += 1;
+                u32::skip_bytes(bytes, cursor);
+                u32::skip_bytes(bytes, cursor);
             }
             BrTable => {
                 *cursor += 1;
                 let n_labels = 1 + parse_u32_or_panic(bytes, cursor);
-                let mut i = *cursor;
                 for _ in 0..n_labels {
-                    i = skip_leb(bytes, i, 5);
+                    u32::skip_bytes(bytes, cursor);
                 }
-                *cursor = i;
             }
         }
     }
-}
-
-#[inline(always)]
-fn skip_leb(bytes: &[u8], mut i: usize, max_len: usize) -> usize {
-    let imax = i + max_len;
-    while (bytes[i] & 0x80 != 0) && (i < imax) {
-        i += 1;
-    }
-    debug_assert!(i < imax);
-    i + 1
 }
