@@ -14,7 +14,7 @@ pub trait Wasm32TestResult {
         wrapper_name: &str,
         main_function_index: u32,
     ) {
-        let index = module.import.function_count()
+        let index = module.import.function_count
             + module.code.preloaded_count
             + module.code.code_builders.len() as u32;
 

@@ -56,7 +56,7 @@ pub trait Section<'a>: Sized {
 }
 
 macro_rules! section_impl {
-    ($structname: ident, $id: expr) => {
+    ($structname: ident, $id: expr, $from_count_and_bytes: expr) => {
         impl<'a> Section<'a> for $structname<'a> {
             const ID: SectionId = $id;
 
@@ -72,7 +72,7 @@ macro_rules! section_impl {
                 let (count, initial_bytes) = parse_section(Self::ID, module_bytes, cursor);
                 let mut bytes = Vec::with_capacity_in(initial_bytes.len() * 2, arena);
                 bytes.extend_from_slice(initial_bytes);
-                $structname { bytes, count }
+                $from_count_and_bytes(count, bytes)
             }
 
             fn size(&self) -> usize {
@@ -83,6 +83,13 @@ macro_rules! section_impl {
                 id + encoded_length + encoded_count + self.bytes.len()
             }
         }
+    };
+
+    ($structname: ident, $id: expr) => {
+        section_impl!($structname, $id, |count, bytes| $structname {
+            bytes,
+            count
+        });
     };
 }
 
@@ -367,6 +374,7 @@ impl Serialize for Import {
 #[derive(Debug)]
 pub struct ImportSection<'a> {
     pub count: u32,
+    pub function_count: u32,
     pub bytes: Vec<'a, u8>,
 }
 
@@ -376,7 +384,7 @@ impl<'a> ImportSection<'a> {
         self.count += 1;
     }
 
-    pub fn function_count(&self) -> u32 {
+    fn update_function_count(&mut self) {
         let mut f_count = 0;
         let mut cursor = 0;
         while cursor < self.bytes.len() {
@@ -403,11 +411,21 @@ impl<'a> ImportSection<'a> {
             }
         }
 
-        f_count
+        self.function_count = f_count;
+    }
+
+    pub fn from_count_and_bytes(count: u32, bytes: Vec<'a, u8>) -> Self {
+        let mut created = ImportSection {
+            bytes,
+            count,
+            function_count: 0,
+        };
+        created.update_function_count();
+        created
     }
 }
 
-section_impl!(ImportSection, SectionId::Import);
+section_impl!(ImportSection, SectionId::Import, ImportSection::from_count_and_bytes);
 
 /*******************************************************************
  *
