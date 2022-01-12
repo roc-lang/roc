@@ -96,7 +96,8 @@ pub fn build_module_help<'a>(
     let initial_module = WasmModule::preload(env.arena, preload_bytes);
 
     // Adjust Wasm function indices to account for functions from the object file
-    let fn_index_offset: u32 = initial_module.import.function_count + initial_module.code.preloaded_count;
+    let fn_index_offset: u32 =
+        initial_module.import.function_count + initial_module.code.preloaded_count;
 
     // Get a map of name to index for the preloaded functions
     // Assumes the preloaded object file has all symbols exported, as per `zig build-lib -dymamic`

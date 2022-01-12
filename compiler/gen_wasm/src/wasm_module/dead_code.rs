@@ -140,6 +140,9 @@ pub fn trace_function_deps<'a, Indices: IntoIterator<Item = u32>>(
         if next_trace.is_empty() {
             break;
         }
+        next_trace.sort_unstable();
+        next_trace.dedup();
+
         current_trace.clone_from(&next_trace);
         next_trace.clear();
     }
