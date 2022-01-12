@@ -1319,7 +1319,7 @@ fn list_reverse_empty_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn foobarbaz() {
+fn list_concat() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1903,98 +1903,6 @@ fn gen_swap() {
     );
 }
 
-//    #[test]
-#[cfg(any(feature = "gen-llvm"))]
-//    fn gen_partition() {
-//        assert_evals_to!(
-//            indoc!(
-//                r#"
-//                    swap : I64, I64, List a -> List a
-//                    swap = \i, j, list ->
-//                        when Pair (List.get list i) (List.get list j) is
-//                            Pair (Ok atI) (Ok atJ) ->
-//                                list
-//                                    |> List.set i atJ
-//                                    |> List.set j atI
-//
-//                            _ ->
-//                                []
-//                    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
-//                    partition = \low, high, initialList ->
-//                        when List.get initialList high is
-//                            Ok pivot ->
-//                                when partitionHelp (low - 1) low initialList high pivot is
-//                                    Pair newI newList ->
-//                                        Pair (newI + 1) (swap (newI + 1) high newList)
-//
-//                            Err _ ->
-//                                Pair (low - 1) initialList
-//
-//
-//                    partitionHelp : I64, I64, List (Num a), I64, I64 -> [ Pair I64 (List (Num a)) ]
-//                    partitionHelp = \i, j, list, high, pivot ->
-//                        if j < high then
-//                            when List.get list j is
-//                                Ok value ->
-//                                    if value <= pivot then
-//                                        partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
-//                                    else
-//                                        partitionHelp i (j + 1) list high pivot
-//
-//                                Err _ ->
-//                                    Pair i list
-//                        else
-//                            Pair i list
-//
-//                    # when partition 0 0 [ 1,2,3,4,5 ] is
-//                    # Pair list _ -> list
-//                    [ 1,3 ]
-//                "#
-//            ),
-//            RocList::from_slice(&[2, 1]),
-//            RocList<i64>
-//        );
-//    }
-
-//    #[test]
-#[cfg(any(feature = "gen-llvm"))]
-//    fn gen_partition() {
-//        assert_evals_to!(
-//            indoc!(
-//                r#"
-//                    swap : I64, I64, List a -> List a
-//                    swap = \i, j, list ->
-//                        when Pair (List.get list i) (List.get list j) is
-//                            Pair (Ok atI) (Ok atJ) ->
-//                                list
-//                                    |> List.set i atJ
-//                                    |> List.set j atI
-//
-//                            _ ->
-//                                []
-//                    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
-//                    partition = \low, high, initialList ->
-//                        when List.get initialList high is
-//                            Ok pivot ->
-//                                when partitionHelp (low - 1) low initialList high pivot is
-//                                    Pair newI newList ->
-//                                        Pair (newI + 1) (swap (newI + 1) high newList)
-//
-//                            Err _ ->
-//                                Pair (low - 1) initialList
-//
-//
-//                    partitionHelp : I64, I64, List (Num a), I64, I64 -> [ Pair I64 (List (Num a)) ]
-//
-//                    # when partition 0 0 [ 1,2,3,4,5 ] is
-//                    # Pair list _ -> list
-//                    [ 1,3 ]
-//                "#
-//            ),
-//            RocList::from_slice(&[2, 1]),
-//            RocList<i64>
-//        );
-//    }
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_quicksort() {
@@ -2014,7 +1922,7 @@ fn gen_quicksort() {
                         when partition low high list is
                             Pair partitionIndex partitioned ->
                                 partitioned
-                                    |> quicksortHelp low (partitionIndex - 1)
+                                    |> quicksortHelp low (Num.subSaturated partitionIndex 1)
                                     |> quicksortHelp (partitionIndex + 1) high
                     else
                         list
@@ -2035,12 +1943,12 @@ fn gen_quicksort() {
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
-                            when partitionHelp (low - 1) low initialList high pivot is
+                            when partitionHelp low low initialList high pivot is
                                 Pair newI newList ->
-                                    Pair (newI + 1) (swap (newI + 1) high newList)
+                                    Pair newI (swap newI high newList)
 
                         Err _ ->
-                            Pair (low - 1) initialList
+                            Pair low initialList
 
 
                 partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [ Pair Nat (List (Num a)) ]
@@ -2049,7 +1957,7 @@ fn gen_quicksort() {
                         when List.get list j is
                             Ok value ->
                                 if value <= pivot then
-                                    partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                    partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
                                 else
                                     partitionHelp i (j + 1) list high pivot
 
@@ -2069,7 +1977,7 @@ fn gen_quicksort() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn foobar2() {
+fn quicksort() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
@@ -2085,7 +1993,7 @@ fn foobar2() {
                            when partition low high list is
                                Pair partitionIndex partitioned ->
                                    partitioned
-                                       |> quicksortHelp low (partitionIndex - 1)
+                                       |> quicksortHelp low (Num.subSaturated partitionIndex 1)
                                        |> quicksortHelp (partitionIndex + 1) high
                        else
                            list
@@ -2106,12 +2014,12 @@ fn foobar2() {
                    partition = \low, high, initialList ->
                        when List.get initialList high is
                            Ok pivot ->
-                               when partitionHelp (low - 1) low initialList high pivot is
+                               when partitionHelp low low initialList high pivot is
                                    Pair newI newList ->
-                                       Pair (newI + 1) (swap (newI + 1) high newList)
+                                       Pair newI (swap newI high newList)
 
                            Err _ ->
-                               Pair (low - 1) initialList
+                               Pair low initialList
 
 
                    partitionHelp : Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]
@@ -2121,7 +2029,7 @@ fn foobar2() {
                            when List.get list j is
                                Ok value ->
                                    if value <= pivot then
-                                       partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                       partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
                                    else
                                        partitionHelp i (j + 1) list high pivot
 
@@ -2143,7 +2051,7 @@ fn foobar2() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn foobar() {
+fn quicksort_singleton() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
@@ -2159,7 +2067,7 @@ fn foobar() {
                            when partition low high list is
                                Pair partitionIndex partitioned ->
                                    partitioned
-                                       |> quicksortHelp low (partitionIndex - 1)
+                                       |> quicksortHelp low (Num.subSaturated partitionIndex 1)
                                        |> quicksortHelp (partitionIndex + 1) high
                        else
                            list
@@ -2180,12 +2088,12 @@ fn foobar() {
                    partition = \low, high, initialList ->
                        when List.get initialList high is
                            Ok pivot ->
-                               when partitionHelp (low - 1) low initialList high pivot is
+                               when partitionHelp low low initialList high pivot is
                                    Pair newI newList ->
-                                       Pair (newI + 1) (swap (newI + 1) high newList)
+                                       Pair newI (swap newI high newList)
 
                            Err _ ->
-                               Pair (low - 1) initialList
+                               Pair low initialList
 
 
                    partitionHelp : Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]
@@ -2194,7 +2102,7 @@ fn foobar() {
                            when List.get list j is
                                Ok value ->
                                    if value <= pivot then
-                                       partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                       partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
                                    else
                                        partitionHelp i (j + 1) list high pivot
 

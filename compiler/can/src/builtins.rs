@@ -156,9 +156,11 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
+        NUM_ADD_SATURATED => num_add_saturated,
         NUM_SUB => num_sub,
         NUM_SUB_WRAP => num_sub_wrap,
         NUM_SUB_CHECKED => num_sub_checked,
+        NUM_SUB_SATURATED => num_sub_saturated,
         NUM_MUL => num_mul,
         NUM_MUL_WRAP => num_mul_wrap,
         NUM_MUL_CHECKED => num_mul_checked,
@@ -641,6 +643,11 @@ fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_overflow_checked(symbol, var_store, LowLevel::NumAddChecked)
 }
 
+/// Num.addSaturated : Int a, Int a -> Int a
+fn num_add_saturated(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumAddSaturated)
+}
+
 /// Num.sub : Num a, Num a -> Num a
 fn num_sub(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumSub)
@@ -654,6 +661,11 @@ fn num_sub_wrap(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 fn num_sub_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_overflow_checked(symbol, var_store, LowLevel::NumSubChecked)
+}
+
+/// Num.subSaturated : Int a, Int a -> Int a
+fn num_sub_saturated(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumSubSaturated)
 }
 
 /// Num.mul : Num a, Num a -> Num a

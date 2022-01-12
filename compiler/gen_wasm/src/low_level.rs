@@ -136,6 +136,7 @@ pub fn dispatch_low_level<'a>(
         },
         NumToStr => return NotImplemented,
         NumAddChecked => return NotImplemented,
+        NumAddSaturated => return NotImplemented,
         NumSub => match ret_layout {
             WasmLayout::Primitive(value_type, _) => match value_type {
                 I32 => code_builder.i32_sub(),
@@ -168,6 +169,7 @@ pub fn dispatch_low_level<'a>(
             },
         },
         NumSubChecked => return NotImplemented,
+        NumSubSaturated => return NotImplemented,
         NumMul => match ret_layout {
             WasmLayout::Primitive(value_type, _) => match value_type {
                 I32 => code_builder.i32_mul(),

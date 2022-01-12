@@ -141,6 +141,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(int_type(flex(TVAR1))),
     );
 
+    // addSaturated : Num a, Num a -> Num a
+    add_top_level_function_type!(
+        Symbol::NUM_ADD_SATURATED,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(int_type(flex(TVAR1))),
+    );
+
     // sub or (-) : Num a, Num a -> Num a
     add_top_level_function_type!(
         Symbol::NUM_SUB,
@@ -160,6 +167,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::NUM_SUB_CHECKED,
         vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
         Box::new(result_type(num_type(flex(TVAR1)), overflow())),
+    );
+
+    // subSaturated : Num a, Num a -> Num a
+    add_top_level_function_type!(
+        Symbol::NUM_SUB_SATURATED,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(int_type(flex(TVAR1))),
     );
 
     // mul or (*) : Num a, Num a -> Num a

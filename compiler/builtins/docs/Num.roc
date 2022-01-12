@@ -501,7 +501,16 @@ add : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.add] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-addCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
+addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+
+## Add two numbers, clamping on the maximum representable number rather than
+## overflowing.
+##
+## This is the same as [Num.add] except for the saturating behavior if the
+## addition is to overflow.
+## For example, if `x : U8` is 200 and `y : U8` is 100, `addSaturated x y` will
+## yield 255, the maximum value of a `U8`.
+addSaturated : Num a, Num a -> Num a
 
 ## Subtract two numbers of the same type.
 ##
@@ -528,7 +537,16 @@ sub : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.sub] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-subCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
+subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+
+## Subtract two numbers, clamping on the minimum representable number rather
+## than overflowing.
+##
+## This is the same as [Num.sub] except for the saturating behavior if the
+## subtraction is to overflow.
+## For example, if `x : U8` is 10 and `y : U8` is 20, `subSaturated x y` will
+## yield 0, the minimum value of a `U8`.
+subSaturated : Num a, Num a -> Num a
 
 ## Multiply two numbers of the same type.
 ##
