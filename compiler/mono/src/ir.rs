@@ -25,7 +25,7 @@ fn pretty_print_ir_symbols() -> bool {
     if std::env::var("PRETTY_PRINT_IR_SYMBOLS") == Ok("1".into()) {
         return true;
     }
-    return false;
+    false
 }
 
 // if your changes cause this number to go down, great!
