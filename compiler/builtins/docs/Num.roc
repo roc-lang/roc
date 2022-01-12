@@ -102,7 +102,7 @@ interface Num
 ##
 ## The number 1.5 technically has the type `Num (Fraction *)`, so when you pass
 ## two of them to [Num.add], the answer you get is `3.0 : Num (Fraction *)`.
-#
+##
 ## Similarly, the number 0x1 (that is, the integer 1 in hexadecimal notation)
 ## technically has the type `Num (Integer *)`, so when you pass two of them to
 ## [Num.add], the answer you get is `2 : Num (Integer *)`.
