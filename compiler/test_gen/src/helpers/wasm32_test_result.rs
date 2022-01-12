@@ -27,12 +27,12 @@ pub trait Wasm32TestResult {
             index,
         });
 
-        let symbol_table = module.linking.symbol_table_mut();
-        symbol_table.push(SymInfo::Function(WasmObjectSymbol::Defined {
+        let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
             flags: 0,
             index,
             name: wrapper_name.to_string(),
-        }));
+        });
+        module.linking.symbol_table.push(linker_symbol);
 
         let mut code_builder = CodeBuilder::new(arena);
         Self::build_wrapper_body(&mut code_builder, main_function_index);

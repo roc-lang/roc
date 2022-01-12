@@ -9,6 +9,7 @@ use roc_std::{RocList, RocStr};
 
 // A "good enough" representation of a pointer for these tests, because
 // we ignore the return value. As long as it's the right stack size, it's fine.
+#[allow(dead_code)]
 type Pointer = usize;
 
 #[test]

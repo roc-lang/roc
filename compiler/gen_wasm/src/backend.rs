@@ -18,29 +18,27 @@ use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
 use crate::low_level::{dispatch_low_level, LowlevelBuildResult};
 use crate::storage::{StackMemoryLocation, Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
-    DataSymbol, LinkingSection, RelocationSection, WasmObjectSymbol, WASM_SYM_BINDING_WEAK,
-    WASM_SYM_UNDEFINED,
+    DataSymbol, LinkingSection, LinkingSegment, RelocationSection, WasmObjectSymbol,
+    WASM_SYM_BINDING_WEAK, WASM_SYM_UNDEFINED,
 };
 use crate::wasm_module::sections::{
     CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
-    Import, ImportDesc, ImportSection, MemorySection, TypeSection, WasmModule,
+    Import, ImportDesc, ImportSection, MemorySection, OpaqueSection, TypeSection, WasmModule,
 };
 use crate::wasm_module::{
-    code_builder, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
-    LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
+    code_builder, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType, LocalId,
+    Signature, SymInfo, ValueType,
 };
 use crate::{
-    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, DEBUG_LOG_SETTINGS,
-    MEMORY_NAME, PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME,
+    DEBUG_LOG_SETTINGS, MEMORY_NAME, PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID,
+    STACK_POINTER_NAME,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
 /// We avoid address zero and anywhere near it. They're valid addresses but maybe bug-prone.
 /// Follow Emscripten's example by leaving 1kB unused (though 4 bytes would probably do!)
 const CONST_SEGMENT_BASE_ADDR: u32 = 1024;
-
-/// Index of the data segment where we store constants
-const CONST_SEGMENT_INDEX: usize = 0;
 
 pub struct WasmBackend<'a> {
     env: &'a Env<'a>,
@@ -49,10 +47,9 @@ pub struct WasmBackend<'a> {
     // Module-level data
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
-    constant_sym_index_map: MutMap<&'a str, usize>,
+    next_constant_addr: u32,
     builtin_sym_index_map: MutMap<&'a str, usize>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
-    linker_symbols: Vec<'a, SymInfo>,
     helper_proc_gen: CodeGenHelp<'a>,
 
     // Function-level data
@@ -105,33 +102,28 @@ impl<'a> WasmBackend<'a> {
             index: STACK_POINTER_GLOBAL_ID,
             name: STACK_POINTER_NAME.to_string(),
         }));
-
-        let const_segment = DataSegment {
-            mode: DataMode::Active {
-                offset: ConstExpr::I32(CONST_SEGMENT_BASE_ADDR as i32),
-            },
-            init: Vec::with_capacity_in(64, arena),
-        };
+        let mut linking = LinkingSection::new(arena);
+        linking.symbol_table = linker_symbols;
 
         let module = WasmModule {
             types: TypeSection::new(arena, num_procs),
             import: ImportSection::new(arena),
             function: FunctionSection::new(arena, num_procs),
-            table: (),
+            table: OpaqueSection::default(),
             memory: MemorySection::new(MEMORY_INIT_SIZE),
             global: GlobalSection {
                 entries: bumpalo::vec![in arena; stack_pointer],
             },
             export: ExportSection { entries: exports },
-            start: (),
-            element: (),
+            start: OpaqueSection::default(),
+            element: OpaqueSection::default(),
             code: CodeSection {
+                preloaded_count: 0,
+                preloaded_bytes: Vec::with_capacity_in(0, arena),
                 code_builders: Vec::with_capacity_in(num_procs, arena),
             },
-            data: DataSection {
-                segments: bumpalo::vec![in arena; const_segment],
-            },
-            linking: LinkingSection::new(arena),
+            data: DataSection::new(arena),
+            linking,
             relocations: RelocationSection::new(arena, "reloc.CODE"),
         };
 
@@ -143,10 +135,9 @@ impl<'a> WasmBackend<'a> {
             module,
 
             layout_ids,
-            constant_sym_index_map: MutMap::default(),
+            next_constant_addr: CONST_SEGMENT_BASE_ADDR,
             builtin_sym_index_map: MutMap::default(),
             proc_symbols,
-            linker_symbols,
             helper_proc_gen,
 
             // Function-level data
@@ -166,7 +157,7 @@ impl<'a> WasmBackend<'a> {
     fn register_helper_proc(&mut self, new_proc_info: (Symbol, ProcLayout<'a>)) {
         let (new_proc_sym, new_proc_layout) = new_proc_info;
         let wasm_fn_index = self.proc_symbols.len() as u32;
-        let linker_sym_index = self.linker_symbols.len() as u32;
+        let linker_sym_index = self.module.linking.symbol_table.len() as u32;
 
         let name = self
             .layout_ids
@@ -174,17 +165,15 @@ impl<'a> WasmBackend<'a> {
             .to_symbol_string(new_proc_sym, self.interns);
 
         self.proc_symbols.push((new_proc_sym, linker_sym_index));
-        self.linker_symbols
-            .push(SymInfo::Function(WasmObjectSymbol::Defined {
-                flags: 0,
-                index: wasm_fn_index,
-                name,
-            }));
+        let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
+            flags: 0,
+            index: wasm_fn_index,
+            name,
+        });
+        self.module.linking.symbol_table.push(linker_symbol);
     }
 
-    pub fn finalize_module(mut self) -> WasmModule<'a> {
-        let symbol_table = LinkingSubSection::SymbolTable(self.linker_symbols);
-        self.module.linking.subsections.push(symbol_table);
+    pub fn into_module(self) -> WasmModule<'a> {
         self.module
     }
 
@@ -1414,7 +1403,7 @@ impl<'a> WasmBackend<'a> {
                             self.code_builder.i64_store(Align::Bytes4, offset);
                         } else {
                             let (linker_sym_index, elements_addr) =
-                                self.lookup_string_constant(string, sym, layout);
+                                self.create_string_constant(string, sym, layout);
 
                             self.code_builder.get_local(local_id);
                             self.code_builder
@@ -1434,65 +1423,57 @@ impl<'a> WasmBackend<'a> {
         };
     }
 
-    /// Look up a string constant in our internal data structures
+    /// Create a string constant in the module data section
     /// Return the data we need for code gen: linker symbol index and memory address
-    fn lookup_string_constant(
+    fn create_string_constant(
         &mut self,
         string: &'a str,
         sym: Symbol,
         layout: &Layout<'a>,
     ) -> (u32, u32) {
-        match self.constant_sym_index_map.get(string) {
-            Some(linker_sym_index) => {
-                // We've seen this string before. The linker metadata has a reference
-                // to its offset in the constants data segment.
-                let syminfo = &self.linker_symbols[*linker_sym_index];
-                match syminfo {
-                    SymInfo::Data(DataSymbol::Defined { segment_offset, .. }) => {
-                        let elements_addr = *segment_offset + CONST_SEGMENT_BASE_ADDR;
-                        (*linker_sym_index as u32, elements_addr)
-                    }
-                    _ => internal_error!(
-                        "Compiler bug: Invalid linker symbol info for string {:?}:\n{:?}",
-                        string,
-                        syminfo
-                    ),
-                }
-            }
+        // Place the segment at a 4-byte aligned offset
+        let segment_addr = round_up_to_alignment!(self.next_constant_addr, PTR_SIZE);
+        let elements_addr = segment_addr + PTR_SIZE;
+        let length_with_refcount = 4 + string.len();
+        self.next_constant_addr = segment_addr + length_with_refcount as u32;
 
-            None => {
-                let const_segment_bytes = &mut self.module.data.segments[CONST_SEGMENT_INDEX].init;
+        let mut segment = DataSegment {
+            mode: DataMode::active_at(segment_addr),
+            init: Vec::with_capacity_in(length_with_refcount, self.env.arena),
+        };
 
-                // Store the string in the data section
-                // Prefix it with a special refcount value (treated as "infinity")
-                // The string's `elements` field points at the data after the refcount
-                let refcount_max_bytes: [u8; 4] = (REFCOUNT_MAX as i32).to_le_bytes();
-                const_segment_bytes.extend_from_slice(&refcount_max_bytes);
-                let elements_offset = const_segment_bytes.len() as u32;
-                let elements_addr = elements_offset + CONST_SEGMENT_BASE_ADDR;
-                const_segment_bytes.extend_from_slice(string.as_bytes());
+        // Prefix the string bytes with "infinite" refcount
+        let refcount_max_bytes: [u8; 4] = (REFCOUNT_MAX as i32).to_le_bytes();
+        segment.init.extend_from_slice(&refcount_max_bytes);
+        segment.init.extend_from_slice(string.as_bytes());
 
-                // Generate linker info
-                // Just pick the symbol name from the first usage
-                let name = self
-                    .layout_ids
-                    .get(sym, layout)
-                    .to_symbol_string(sym, self.interns);
-                let linker_symbol = SymInfo::Data(DataSymbol::Defined {
-                    flags: 0,
-                    name,
-                    segment_index: CONST_SEGMENT_INDEX as u32,
-                    segment_offset: elements_offset,
-                    size: string.len() as u32,
-                });
+        let segment_index = self.module.data.append_segment(segment);
 
-                let linker_sym_index = self.linker_symbols.len();
-                self.constant_sym_index_map.insert(string, linker_sym_index);
-                self.linker_symbols.push(linker_symbol);
+        // Generate linker symbol
+        let name = self
+            .layout_ids
+            .get(sym, layout)
+            .to_symbol_string(sym, self.interns);
 
-                (linker_sym_index as u32, elements_addr)
-            }
-        }
+        let linker_symbol = SymInfo::Data(DataSymbol::Defined {
+            flags: 0,
+            name: name.clone(),
+            segment_index,
+            segment_offset: 4,
+            size: string.len() as u32,
+        });
+
+        // Ensure the linker keeps the segment aligned when relocating it
+        self.module.linking.segment_info.push(LinkingSegment {
+            name,
+            alignment: Align::Bytes4,
+            flags: 0,
+        });
+
+        let linker_sym_index = self.module.linking.symbol_table.len();
+        self.module.linking.symbol_table.push(linker_symbol);
+
+        (linker_sym_index as u32, elements_addr)
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
@@ -1543,7 +1524,7 @@ impl<'a> WasmBackend<'a> {
         let has_return_val = ret_type.is_some();
 
         let (fn_index, linker_symbol_index) = match self.builtin_sym_index_map.get(name) {
-            Some(sym_idx) => match &self.linker_symbols[*sym_idx] {
+            Some(sym_idx) => match &self.module.linking.symbol_table[*sym_idx] {
                 SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
                     (*index, *sym_idx as u32)
                 }
@@ -1568,12 +1549,12 @@ impl<'a> WasmBackend<'a> {
                 self.module.import.entries.push(import);
 
                 // Provide symbol information for the linker
-                let sym_idx = self.linker_symbols.len();
+                let sym_idx = self.module.linking.symbol_table.len();
                 let sym_info = SymInfo::Function(WasmObjectSymbol::Imported {
                     flags: WASM_SYM_UNDEFINED,
                     index: import_index,
                 });
-                self.linker_symbols.push(sym_info);
+                self.module.linking.symbol_table.push(sym_info);
 
                 // Remember that we have created all of this data, and don't need to do it again
                 self.builtin_sym_index_map.insert(name, sym_idx);
@@ -1593,7 +1574,7 @@ impl<'a> WasmBackend<'a> {
     /// }
     fn _debug_current_proc_is(&self, linker_name: &'static str) -> bool {
         let (_, linker_sym_index) = self.proc_symbols[self.debug_current_proc_index];
-        let sym_info = &self.linker_symbols[linker_sym_index as usize];
+        let sym_info = &self.module.linking.symbol_table[linker_sym_index as usize];
         match sym_info {
             SymInfo::Function(WasmObjectSymbol::Defined { name, .. }) => name == linker_name,
             _ => false,

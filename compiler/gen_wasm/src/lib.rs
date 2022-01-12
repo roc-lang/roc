@@ -131,7 +131,7 @@ pub fn build_module_help<'a>(
         backend.build_proc(proc);
     }
 
-    let module = backend.finalize_module();
+    let module = backend.into_module();
 
     Ok((module, main_fn_index.unwrap()))
 }

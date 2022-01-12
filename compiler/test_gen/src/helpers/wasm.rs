@@ -138,6 +138,8 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
 
     T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
 
+    roc_gen_wasm::wasm_module::sections::test_assert_preload(arena, &wasm_module);
+
     let needs_linking = !wasm_module.import.entries.is_empty();
 
     let mut app_module_bytes = std::vec::Vec::with_capacity(4096);
@@ -156,6 +158,8 @@ fn run_linker(
 
     let wasm_build_dir: &Path = if let Some(src_hash) = build_dir_hash {
         debug_dir = format!("/tmp/roc/gen_wasm/{:016x}", src_hash);
+        std::fs::remove_file(format!("{}/app.o", debug_dir)).unwrap_or_else(|_| {});
+        std::fs::remove_file(format!("{}/final.wasm", debug_dir)).unwrap_or_else(|_| {});
         std::fs::create_dir_all(&debug_dir).unwrap();
         println!(
             "Debug commands:\n\twasm-objdump -dx {}/app.o\n\twasm-objdump -dx {}/final.wasm",
