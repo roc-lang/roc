@@ -268,25 +268,27 @@ pub trait SkipBytes {
 
 impl SkipBytes for u32 {
     fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        let imax = 5;
-        let mut i = *cursor;
-        while (bytes[i] & 0x80 != 0) && (i < imax) {
-            i += 1;
+        const MAX_LEN: usize = 5;
+        for (i, byte) in bytes.iter().enumerate().skip(*cursor).take(MAX_LEN) {
+            if byte & 0x80 == 0 {
+                *cursor = i + 1;
+                return;
+            }
         }
-        debug_assert!(i < imax);
-        *cursor = i + 1
+        internal_error!("Invalid LEB encoding");
     }
 }
 
 impl SkipBytes for u64 {
     fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        let imax = 10;
-        let mut i = *cursor;
-        while (bytes[i] & 0x80 != 0) && (i < imax) {
-            i += 1;
+        const MAX_LEN: usize = 10;
+        for (i, byte) in bytes.iter().enumerate().skip(*cursor).take(MAX_LEN) {
+            if byte & 0x80 == 0 {
+                *cursor = i + 1;
+                return;
+            }
         }
-        debug_assert!(i < imax);
-        *cursor = i + 1
+        internal_error!("Invalid LEB encoding");
     }
 }
 
@@ -299,6 +301,15 @@ impl SkipBytes for u8 {
 impl SkipBytes for String {
     fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
         let len = parse_u32_or_panic(bytes, cursor);
+
+        if false {
+            let str_bytes = &bytes[*cursor..(*cursor + len as usize)];
+            println!(
+                "Skipping String {:?}",
+                String::from_utf8(str_bytes.to_vec()).unwrap()
+            );
+        }
+
         *cursor += len as usize;
     }
 }

@@ -324,6 +324,7 @@ pub struct Import {
 }
 
 #[repr(u8)]
+#[derive(Debug)]
 enum ImportTypeId {
     Func = 0,
     Table = 1,
@@ -391,10 +392,10 @@ impl<'a> ImportSection<'a> {
             String::skip_bytes(&self.bytes, &mut cursor);
             String::skip_bytes(&self.bytes, &mut cursor);
 
-            let type_id = self.bytes[cursor];
+            let type_id = ImportTypeId::from(self.bytes[cursor]);
             cursor += 1;
 
-            match ImportTypeId::from(type_id) {
+            match type_id {
                 ImportTypeId::Func => {
                     f_count += 1;
                     u32::skip_bytes(&self.bytes, &mut cursor);
@@ -425,7 +426,11 @@ impl<'a> ImportSection<'a> {
     }
 }
 
-section_impl!(ImportSection, SectionId::Import, ImportSection::from_count_and_bytes);
+section_impl!(
+    ImportSection,
+    SectionId::Import,
+    ImportSection::from_count_and_bytes
+);
 
 /*******************************************************************
  *
@@ -740,7 +745,8 @@ impl<'a> CodeSection<'a> {
         module_bytes: &[u8],
         cursor: &mut usize,
         ret_types: Vec<'a, Option<ValueType>>,
-        signature_ids: Vec<'a, u32>,
+        internal_fn_sig_ids: Vec<'a, u32>,
+        import_fn_count: u32,
     ) -> Self {
         let (preloaded_count, initial_bytes) = parse_section(SectionId::Code, module_bytes, cursor);
         let preloaded_bytes = arena.alloc_slice_copy(initial_bytes);
@@ -751,7 +757,8 @@ impl<'a> CodeSection<'a> {
             preloaded_count,
             initial_bytes,
             ret_types,
-            signature_ids,
+            internal_fn_sig_ids,
+            import_fn_count,
         );
 
         CodeSection {
@@ -762,11 +769,13 @@ impl<'a> CodeSection<'a> {
         }
     }
 
-    pub fn remove_dead_preloads<T>(&mut self, arena: &'a Bump, called_preload_fns: T)
-    where
-        T: IntoIterator<Item = u32>,
-    {
-        let mut live_ext_fn_indices =
+    pub fn remove_dead_preloads<T: IntoIterator<Item = u32>>(
+        &mut self,
+        arena: &'a Bump,
+        import_fn_count: u32,
+        called_preload_fns: T,
+    ) {
+        let live_ext_fn_indices =
             trace_function_deps(arena, &self.dead_code_metadata, called_preload_fns);
 
         let mut buffer = Vec::with_capacity_in(self.preloaded_bytes.len(), arena);
@@ -776,7 +785,8 @@ impl<'a> CodeSection<'a> {
             &mut buffer,
             &self.dead_code_metadata,
             self.preloaded_bytes,
-            &mut live_ext_fn_indices,
+            import_fn_count,
+            live_ext_fn_indices,
         );
 
         self.preloaded_bytes = buffer.into_bump_slice();

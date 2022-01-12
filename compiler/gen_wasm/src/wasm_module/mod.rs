@@ -137,7 +137,14 @@ impl<'a> WasmModule<'a> {
         let export = ExportSection::preload(arena, bytes, &mut cursor);
         let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
         let element = OpaqueSection::preload(SectionId::Element, arena, bytes, &mut cursor);
-        let code = CodeSection::preload(arena, bytes, &mut cursor, ret_types, signature_ids);
+        let code = CodeSection::preload(
+            arena,
+            bytes,
+            &mut cursor,
+            ret_types,
+            signature_ids,
+            import.function_count,
+        );
         let data = DataSection::preload(arena, bytes, &mut cursor);
         let linking = LinkingSection::new(arena);
         let relocations = RelocationSection::new(arena, "reloc.CODE");

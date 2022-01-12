@@ -119,9 +119,11 @@ impl<'a> WasmBackend<'a> {
 
     pub fn into_module(mut self, remove_dead_preloads: bool) -> WasmModule<'a> {
         if remove_dead_preloads {
-            self.module
-                .code
-                .remove_dead_preloads(self.env.arena, self.called_preload_fns)
+            self.module.code.remove_dead_preloads(
+                self.env.arena,
+                self.module.import.function_count,
+                self.called_preload_fns,
+            )
         }
         self.module
     }
