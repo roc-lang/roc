@@ -20,7 +20,7 @@ use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSu
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-fn pretty_print_ir_symbols() -> bool {
+pub fn pretty_print_ir_symbols() -> bool {
     #[cfg(debug_assertions)]
     if std::env::var("PRETTY_PRINT_IR_SYMBOLS") == Ok("1".into()) {
         return true;
