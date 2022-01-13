@@ -7034,4 +7034,44 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn issue_2326() {
+        report_problem_as(
+            indoc!(
+                r#"
+                C a b : a -> D a b
+                D a b : { a, b }
+                
+                f : C a Nat -> D a Nat
+                f = \c -> c 6
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                
+                The 1st argument to `c` is not what I expect:
+                
+                5│  f = \c -> c 6
+                                ^
+                
+                This argument is a number of type:
+                
+                    Num a
+                
+                But `c` needs the 1st argument to be:
+                
+                    a
+                
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `Num` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
 }
