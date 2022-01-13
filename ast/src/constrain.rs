@@ -1985,7 +1985,7 @@ pub mod test_constrain {
         ident::Lowercase,
         symbol::{IdentIds, Interns, ModuleIds, Symbol},
     };
-    use roc_parse::parser::SyntaxError;
+    use roc_parse::parser::{SourceError, SyntaxError};
     use roc_region::all::Region;
     use roc_types::{
         pretty_print::{content_to_string, name_all_type_vars},
@@ -2128,7 +2128,7 @@ pub mod test_constrain {
         env: &mut Env<'a>,
         scope: &mut Scope,
         region: Region,
-    ) -> Result<(Expr2, Output), SyntaxError<'a>> {
+    ) -> Result<(Expr2, Output), SourceError<'a, SyntaxError<'a>>> {
         match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
             Ok(loc_expr) => Ok(loc_expr_to_expr2(arena, loc_expr, env, scope, region)),
             Err(fail) => Err(fail),

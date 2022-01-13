@@ -1,20 +1,18 @@
 #[macro_use]
-extern crate pretty_assertions;
-
-#[macro_use]
 extern crate indoc;
 
 #[cfg(test)]
 mod repl_eval {
     use cli_utils::helpers;
+    use roc_test_utils::assert_multiline_str_eq;
 
     const ERROR_MESSAGE_START: char = '─';
 
     fn expect_success(input: &str, expected: &str) {
         let out = helpers::repl_eval(input);
 
-        assert_eq!(&out.stderr, "");
-        assert_eq!(&out.stdout, expected);
+        assert_multiline_str_eq!("", out.stderr.as_str());
+        assert_multiline_str_eq!(expected, out.stdout.as_str());
         assert!(out.status.success());
     }
 
@@ -25,12 +23,12 @@ mod repl_eval {
         // so skip till the header of the first error
         match out.stdout.find(ERROR_MESSAGE_START) {
             Some(index) => {
-                assert_eq!(&out.stderr, "");
-                assert_eq!(&out.stdout[index..], expected);
+                assert_multiline_str_eq!("", out.stderr.as_str());
+                assert_multiline_str_eq!(expected, &out.stdout[index..]);
                 assert!(out.status.success());
             }
             None => {
-                assert_eq!(&out.stderr, "");
+                assert_multiline_str_eq!("", out.stderr.as_str());
                 assert!(out.status.success());
                 panic!(
                     "I expected a failure, but there is no error message in stdout:\n\n{}",
@@ -813,13 +811,112 @@ mod repl_eval {
         )
     }
 
-    //    #[test]
-    //    fn parse_problem() {
-    //        // can't find something that won't parse currently
-    //    }
-    //
-    //    #[test]
-    //    fn mono_problem() {
-    //        // can't produce a mono error (non-exhaustive pattern) yet
-    //    }
+    #[test]
+    fn function_in_list() {
+        expect_success(
+            r#"[\x -> x + 1, \s -> s * 2]"#,
+            r#"[ <function>, <function> ] : List (Num a -> Num a)"#,
+        )
+    }
+
+    #[test]
+    fn function_in_record() {
+        expect_success(
+            r#"{ n: 1, adder: \x -> x + 1 }"#,
+            r#"{ adder: <function>, n: <function> } : { adder : Num a -> Num a, n : Num * }"#,
+        )
+    }
+
+    #[test]
+    fn function_in_unwrapped_record() {
+        expect_success(
+            r#"{ adder: \x -> x + 1 }"#,
+            r#"{ adder: <function> } : { adder : Num a -> Num a }"#,
+        )
+    }
+
+    #[test]
+    fn function_in_tag() {
+        expect_success(
+            r#"Adder (\x -> x + 1)"#,
+            r#"Adder <function> : [ Adder (Num a -> Num a) ]*"#,
+        )
+    }
+
+    #[test]
+    fn newtype_of_record_of_tag_of_record_of_tag() {
+        expect_success(
+            r#"A {b: C {d: 1}}"#,
+            r#"A { b: C { d: 1 } } : [ A { b : [ C { d : Num * } ]* } ]*"#,
+        )
+    }
+
+    #[test]
+    fn print_u8s() {
+        expect_success(
+            indoc!(
+                r#"
+                x : U8
+                x = 129
+                x
+                "#
+            ),
+            "129 : U8",
+        )
+    }
+
+    #[test]
+    fn parse_problem() {
+        expect_failure(
+            "add m n = m + n",
+            indoc!(
+                r#"
+                ── ARGUMENTS BEFORE EQUALS ─────────────────────────────────────────────────────
+                
+                I am partway through parsing a definition, but I got stuck here:
+                
+                1│  app "app" provides [ replOutput ] to "./platform"
+                2│
+                3│  replOutput =
+                4│      add m n = m + n
+                            ^^^
+                
+                Looks like you are trying to define a function. In roc, functions are
+                always written as a lambda, like increment = \n -> n + 1.
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn mono_problem() {
+        expect_failure(
+            r#"
+            t : [A, B, C]
+            t = A
+
+            when t is
+                A -> "a"
+            "#,
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+                
+                This when does not cover all the possibilities:
+                
+                7│>                  when t is
+                8│>                      A -> "a"
+                
+                Other possibilities include:
+                
+                    B
+                    C
+                
+                I would have to crash if I saw one of those! Add branches for them!
+                
+                
+                Enter an expression, or :help, or :exit/:q."#
+            ),
+        );
+    }
 }

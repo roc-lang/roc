@@ -16,7 +16,7 @@ use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::parser::SyntaxError;
 use roc_parse::state::State;
-use roc_region::all::Region;
+use roc_region::all::{Position, Region};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -128,7 +128,7 @@ pub fn syntax_highlight_expr<'a>(
 
             Ok(buf.to_string())
         }
-        Err(fail) => Err(SyntaxError::Expr(fail)),
+        Err(fail) => Err(SyntaxError::Expr(fail, Position::default())),
     }
 }
 

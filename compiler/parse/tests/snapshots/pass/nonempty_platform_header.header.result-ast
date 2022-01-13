@@ -1,19 +1,19 @@
 Platform {
     header: PlatformHeader {
-        name: |L 0-0, C 9-21| PackageName(
+        name: @9-21 PackageName(
             "foo/barbaz",
         ),
         requires: PlatformRequires {
             rigids: [
-                |L 1-1, C 14-26| PlatformRigid {
+                @36-48 PlatformRigid {
                     rigid: "model",
                     alias: "Model",
                 },
             ],
-            signature: |L 1-1, C 30-39| TypedIdent {
-                ident: |L 1-1, C 30-34| "main",
+            signature: @52-61 TypedIdent {
+                ident: @52-56 "main",
                 spaces_before_colon: [],
-                ann: |L 1-1, C 37-39| Record {
+                ann: @59-61 Record {
                     fields: [],
                     ext: None,
                 },
@@ -21,17 +21,17 @@ Platform {
         },
         exposes: [],
         packages: [
-            |L 3-3, C 15-27| PackageEntry {
+            @94-106 PackageEntry {
                 shorthand: "foo",
                 spaces_after_shorthand: [],
-                package_name: |L 3-3, C 20-27| PackageName(
+                package_name: @99-106 PackageName(
                     "./foo",
                 ),
             },
         ],
         imports: [],
         provides: [
-            |L 5-5, C 15-26| ExposedName(
+            @139-150 ExposedName(
                 "mainForHost",
             ),
         ],

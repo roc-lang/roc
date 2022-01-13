@@ -1,21 +1,21 @@
 Defs(
     [
-        |L 0-6, C 0-5| Annotation(
-            |L 0-0, C 0-1| Identifier(
+        @0-122 Annotation(
+            @0-1 Identifier(
                 "f",
             ),
-            |L 1-6, C 4-5| SpaceBefore(
+            @8-122 SpaceBefore(
                 Record {
                     fields: [
-                        |L 2-2, C 8-28| SpaceBefore(
+                        @18-38 SpaceBefore(
                             RequiredValue(
-                                |L 2-2, C 8-15| "getLine",
+                                @18-25 "getLine",
                                 [],
-                                |L 2-2, C 18-28| Apply(
+                                @28-38 Apply(
                                     "",
                                     "Effect",
                                     [
-                                        |L 2-2, C 25-28| Apply(
+                                        @35-38 Apply(
                                             "",
                                             "Str",
                                             [],
@@ -27,23 +27,23 @@ Defs(
                                 Newline,
                             ],
                         ),
-                        |L 3-3, C 8-35| SpaceBefore(
+                        @48-75 SpaceBefore(
                             RequiredValue(
-                                |L 3-3, C 8-15| "putLine",
+                                @48-55 "putLine",
                                 [],
-                                |L 3-3, C 25-35| Function(
+                                @65-75 Function(
                                     [
-                                        |L 3-3, C 18-21| Apply(
+                                        @58-61 Apply(
                                             "",
                                             "Str",
                                             [],
                                         ),
                                     ],
-                                    |L 3-3, C 25-35| Apply(
+                                    @65-75 Apply(
                                         "",
                                         "Effect",
                                         [
-                                            |L 3-3, C 32-35| Apply(
+                                            @72-75 Apply(
                                                 "",
                                                 "Int",
                                                 [],
@@ -56,11 +56,11 @@ Defs(
                                 Newline,
                             ],
                         ),
-                        |L 4-4, C 8-17| SpaceBefore(
+                        @85-94 SpaceBefore(
                             RequiredValue(
-                                |L 4-4, C 8-12| "text",
+                                @85-89 "text",
                                 [],
-                                |L 4-4, C 14-17| Apply(
+                                @91-94 Apply(
                                     "",
                                     "Str",
                                     [],
@@ -70,16 +70,16 @@ Defs(
                                 Newline,
                             ],
                         ),
-                        |L 5-5, C 8-20| SpaceBefore(
+                        @104-116 SpaceBefore(
                             SpaceAfter(
                                 RequiredValue(
-                                    |L 5-5, C 8-13| "value",
+                                    @104-109 "value",
                                     [],
-                                    |L 5-5, C 15-20| Apply(
+                                    @111-116 Apply(
                                         "",
                                         "Int",
                                         [
-                                            |L 5-5, C 19-20| Wildcard,
+                                            @115-116 Wildcard,
                                         ],
                                     ),
                                 ),
@@ -100,7 +100,7 @@ Defs(
             ),
         ),
     ],
-    |L 8-8, C 0-2| SpaceBefore(
+    @124-126 SpaceBefore(
         Num(
             "42",
         ),

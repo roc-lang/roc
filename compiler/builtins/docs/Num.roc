@@ -102,7 +102,7 @@ interface Num
 ##
 ## The number 1.5 technically has the type `Num (Fraction *)`, so when you pass
 ## two of them to [Num.add], the answer you get is `3.0 : Num (Fraction *)`.
-#
+##
 ## Similarly, the number 0x1 (that is, the integer 1 in hexadecimal notation)
 ## technically has the type `Num (Integer *)`, so when you pass two of them to
 ## [Num.add], the answer you get is `2 : Num (Integer *)`.
@@ -359,47 +359,47 @@ Nat : Int [ @Natural ]
 ##
 ## | Range                                                  | Type  | Size     |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                -128` | #I8   | 1 Byte   |
+## | `                                                -128` | [I8]  | 1 Byte   |
 ## | `                                                 127` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U8   | 1 Byte   |
+## | `                                                   0` | [U8]  | 1 Byte   |
 ## | `                                                 255` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                             -32_768` | #I16  | 2 Bytes  |
+## | `                                             -32_768` | [I16] | 2 Bytes  |
 ## | `                                              32_767` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U16  | 2 Bytes  |
+## | `                                                   0` | [U16] | 2 Bytes  |
 ## | `                                              65_535` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                      -2_147_483_648` | #I32  | 4 Bytes  |
+## | `                                      -2_147_483_648` | [I32] | 4 Bytes  |
 ## | `                                       2_147_483_647` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U32  | 4 Bytes  |
+## | `                                                   0` | [U32] | 4 Bytes  |
 ## | ` (over 4 billion)                      4_294_967_295` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                          -9_223_372_036_854_775_808` | #I64  | 8 Bytes  |
+## | `                          -9_223_372_036_854_775_808` | [I64] | 8 Bytes  |
 ## | `                           9_223_372_036_854_775_807` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U64  | 8 Bytes  |
+## | `                                                   0` | [U64] | 8 Bytes  |
 ## | ` (over 18 quintillion)    18_446_744_073_709_551_615` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `-170_141_183_460_469_231_731_687_303_715_884_105_728` | #I128 | 16 Bytes |
+## | `-170_141_183_460_469_231_731_687_303_715_884_105_728` | [I128]| 16 Bytes |
 ## | ` 170_141_183_460_469_231_731_687_303_715_884_105_727` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | ` (over 340 undecillion)                            0` | #U128 | 16 Bytes |
+## | ` (over 340 undecillion)                            0` | [U128]| 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## Roc also has one variable-size integer type: #Nat. The size of #Nat is equal
+## Roc also has one variable-size integer type: [Nat]. The size of [Nat] is equal
 ## to the size of a memory address, which varies by system. For example, when
-## compiling for a 64-bit system, #Nat is the same as #U64. When compiling for a
-## 32-bit system, it's the same as #U32.
+## compiling for a 64-bit system, [Nat] is the same as [U64]. When compiling for a
+## 32-bit system, it's the same as [U32].
 ##
-## A common use for #Nat is to store the length ("len" for short) of a
-## collection like #List, #Set, or #Map. 64-bit systems can represent longer
+## A common use for [Nat] is to store the length ("len" for short) of a
+## collection like a [List]. 64-bit systems can represent longer
 ## lists in memory than 32-bit systems can, which is why the length of a list
-## is represented as a #Nat in Roc.
+## is represented as a [Nat] in Roc.
 ##
-## If any operation would result in an #Int that is either too big
+## If any operation would result in an [Int] that is either too big
 ## or too small to fit in that range (e.g. calling `Int.maxI32 + 1`),
 ## then the operation will *overflow*. When an overflow occurs, the program will crash.
 ##
@@ -501,7 +501,16 @@ add : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.add] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-addCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
+addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+
+## Add two numbers, clamping on the maximum representable number rather than
+## overflowing.
+##
+## This is the same as [Num.add] except for the saturating behavior if the
+## addition is to overflow.
+## For example, if `x : U8` is 200 and `y : U8` is 100, `addSaturated x y` will
+## yield 255, the maximum value of a `U8`.
+addSaturated : Num a, Num a -> Num a
 
 ## Subtract two numbers of the same type.
 ##
@@ -528,7 +537,16 @@ sub : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.sub] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-subCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
+subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+
+## Subtract two numbers, clamping on the minimum representable number rather
+## than overflowing.
+##
+## This is the same as [Num.sub] except for the saturating behavior if the
+## subtraction is to overflow.
+## For example, if `x : U8` is 10 and `y : U8` is 20, `subSaturated x y` will
+## yield 0, the minimum value of a `U8`.
+subSaturated : Num a, Num a -> Num a
 
 ## Multiply two numbers of the same type.
 ##

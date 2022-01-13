@@ -1,12 +1,12 @@
 Apply(
-    |L 0-0, C 0-5| PrivateTag(
+    @0-5 PrivateTag(
         "@Whee",
     ),
     [
-        |L 0-0, C 6-8| Num(
+        @6-8 Num(
             "12",
         ),
-        |L 0-0, C 9-11| Num(
+        @9-11 Num(
             "34",
         ),
     ],

@@ -758,13 +758,13 @@ pub fn canonicalize_expr<'a>(
 
             let region1 = Region::new(
                 *binop1_position,
-                binop1_position.bump_column(binop1.width()),
+                binop1_position.bump_column(binop1.width() as u32),
             );
             let loc_binop1 = Loc::at(region1, *binop1);
 
             let region2 = Region::new(
                 *binop2_position,
-                binop2_position.bump_column(binop2.width()),
+                binop2_position.bump_column(binop2.width() as u32),
             );
             let loc_binop2 = Loc::at(region2, *binop2);
 
@@ -1680,22 +1680,22 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
 
     let mut iter = segments.into_iter().rev();
     let mut loc_expr = match iter.next() {
-        Some(Plaintext(string)) => Loc::new(0, 0, 0, 0, Expr::Str(string)),
+        Some(Plaintext(string)) => Loc::at(Region::zero(), Expr::Str(string)),
         Some(Interpolation(loc_expr)) => loc_expr,
         None => {
             // No segments? Empty string!
 
-            Loc::new(0, 0, 0, 0, Expr::Str("".into()))
+            Loc::at(Region::zero(), Expr::Str("".into()))
         }
     };
 
     for seg in iter {
         let loc_new_expr = match seg {
-            Plaintext(string) => Loc::new(0, 0, 0, 0, Expr::Str(string)),
+            Plaintext(string) => Loc::at(Region::zero(), Expr::Str(string)),
             Interpolation(loc_interpolated_expr) => loc_interpolated_expr,
         };
 
-        let fn_expr = Loc::new(0, 0, 0, 0, Expr::Var(Symbol::STR_CONCAT));
+        let fn_expr = Loc::at(Region::zero(), Expr::Var(Symbol::STR_CONCAT));
         let expr = Expr::Call(
             Box::new((
                 var_store.fresh(),
@@ -1710,7 +1710,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
             CalledVia::StringInterpolation,
         );
 
-        loc_expr = Loc::new(0, 0, 0, 0, expr);
+        loc_expr = Loc::at(Region::zero(), expr);
     }
 
     loc_expr.value

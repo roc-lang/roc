@@ -7,8 +7,8 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, specialize, word1, word2, EEffects, EExposes, EHeader, EImports, EPackages,
-    EProvides, ERequires, ETypedIdent, Parser, SyntaxError,
+    backtrackable, specialize, specialize_region, word1, word2, EEffects, EExposes, EHeader,
+    EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser, SourceError, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal;
@@ -21,7 +21,7 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {
-            Err((NoProgress, SyntaxError::NotEndOfFile(state.pos), state))
+            Err((NoProgress, SyntaxError::NotEndOfFile(state.pos()), state))
         }
     }
 }
@@ -31,7 +31,10 @@ pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, SyntaxError<'
     // force that we parse until the end of the input
     let min_indent = 0;
     skip_second!(
-        specialize(|e, _| SyntaxError::Expr(e), crate::expr::defs(min_indent),),
+        specialize_region(
+            |e, r| SyntaxError::Expr(e, r.start()),
+            crate::expr::defs(min_indent),
+        ),
         end_of_file()
     )
 }
@@ -39,10 +42,10 @@ pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, SyntaxError<'
 pub fn parse_header<'a>(
     arena: &'a bumpalo::Bump,
     state: State<'a>,
-) -> Result<(Module<'a>, State<'a>), EHeader<'a>> {
+) -> Result<(Module<'a>, State<'a>), SourceError<'a, EHeader<'a>>> {
     match header().parse(arena, state) {
         Ok((_, module, state)) => Ok((module, state)),
-        Err((_, fail, _)) => Err(fail),
+        Err((_, fail, state)) => Err(SourceError::new(fail, &state)),
     }
 }
 
@@ -167,7 +170,6 @@ fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
     |_, mut state: State<'a>| match chomp_module_name(state.bytes()) {
         Ok(name) => {
             let width = name.len();
-            state.pos.column += width as u16;
             state = state.advance(width);
 
             Ok((MadeProgress, ModuleName::new(name), state))
@@ -436,7 +438,7 @@ fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a
 
 #[inline(always)]
 fn requires_rigids<'a>(
-    min_indent: u16,
+    min_indent: u32,
 ) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, PlatformRigid<'a>>>>, ERequires<'a>> {
     collection_trailing_sep_e!(
         word1(b'{', ERequires::ListStart),
@@ -514,7 +516,7 @@ fn exposes_values<'a>() -> impl Parser<
 }
 
 fn spaces_around_keyword<'a, E>(
-    min_indent: u16,
+    min_indent: u32,
     keyword: &'static str,
     expectation: fn(Position) -> E,
     space_problem: fn(crate::parser::BadInputError, Position) -> E,

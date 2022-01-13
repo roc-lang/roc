@@ -1,11 +1,11 @@
 If(
     [
         (
-            |L 0-0, C 3-5| Var {
+            @3-5 Var {
                 module_name: "",
                 ident: "t1",
             },
-            |L 1-1, C 2-3| SpaceBefore(
+            @13-14 SpaceBefore(
                 SpaceAfter(
                     Num(
                         "1",
@@ -20,11 +20,11 @@ If(
             ),
         ),
         (
-            |L 2-2, C 8-10| Var {
+            @23-25 Var {
                 module_name: "",
                 ident: "t2",
             },
-            |L 3-3, C 2-3| SpaceBefore(
+            @33-34 SpaceBefore(
                 SpaceAfter(
                     Num(
                         "2",
@@ -39,7 +39,7 @@ If(
             ),
         ),
     ],
-    |L 5-5, C 2-3| SpaceBefore(
+    @42-43 SpaceBefore(
         Num(
             "3",
         ),

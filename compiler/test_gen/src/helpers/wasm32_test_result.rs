@@ -27,12 +27,12 @@ pub trait Wasm32TestResult {
             index,
         });
 
-        let symbol_table = module.linking.symbol_table_mut();
-        symbol_table.push(SymInfo::Function(WasmObjectSymbol::Defined {
+        let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
             flags: 0,
             index,
             name: wrapper_name.to_string(),
-        }));
+        });
+        module.linking.symbol_table.push(linker_symbol);
 
         let mut code_builder = CodeBuilder::new(arena);
         Self::build_wrapper_body(&mut code_builder, main_function_index);
@@ -114,7 +114,7 @@ wasm_test_result_primitive!(u64, i64_store, Align::Bytes8);
 wasm_test_result_primitive!(i64, i64_store, Align::Bytes8);
 wasm_test_result_primitive!(usize, i32_store, Align::Bytes4);
 
-wasm_test_result_primitive!(f32, f32_store, Align::Bytes8);
+wasm_test_result_primitive!(f32, f32_store, Align::Bytes4);
 wasm_test_result_primitive!(f64, f64_store, Align::Bytes8);
 
 wasm_test_result_stack_memory!(u128);

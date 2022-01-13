@@ -1,12 +1,12 @@
 When(
-    |L 0-0, C 5-6| Var {
+    @5-6 Var {
         module_name: "",
         ident: "x",
     },
     [
         WhenBranch {
             patterns: [
-                |L 1-1, C 4-5| SpaceBefore(
+                @14-15 SpaceBefore(
                     NumLiteral(
                         "1",
                     ),
@@ -15,13 +15,13 @@ When(
                     ],
                 ),
             ],
-            value: |L 1-2, C 9-6| Apply(
-                |L 1-1, C 9-16| Var {
+            value: @19-33 Apply(
+                @19-26 Var {
                     module_name: "Num",
                     ident: "neg",
                 },
                 [
-                    |L 2-2, C 5-6| SpaceBefore(
+                    @32-33 SpaceBefore(
                         Num(
                             "2",
                         ),
@@ -36,7 +36,7 @@ When(
         },
         WhenBranch {
             patterns: [
-                |L 3-3, C 4-5| SpaceBefore(
+                @39-40 SpaceBefore(
                     Underscore(
                         "",
                     ),
@@ -45,7 +45,7 @@ When(
                     ],
                 ),
             ],
-            value: |L 3-3, C 9-10| Num(
+            value: @44-45 Num(
                 "4",
             ),
             guard: None,

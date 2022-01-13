@@ -493,6 +493,12 @@ fn add_int_intrinsic<'ctx, F>(
         };
     }
 
+    check!(IntWidth::U8, ctx.i8_type());
+    check!(IntWidth::U16, ctx.i16_type());
+    check!(IntWidth::U32, ctx.i32_type());
+    check!(IntWidth::U64, ctx.i64_type());
+    check!(IntWidth::U128, ctx.i128_type());
+
     check!(IntWidth::I8, ctx.i8_type());
     check!(IntWidth::I16, ctx.i16_type());
     check!(IntWidth::I32, ctx.i32_type());
@@ -562,22 +568,30 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     });
     add_float_intrinsic(ctx, module, &LLVM_FLOOR, |t| t.fn_type(&[t.into()], false));
 
-    add_int_intrinsic(ctx, module, &LLVM_SADD_WITH_OVERFLOW, |t| {
+    add_int_intrinsic(ctx, module, &LLVM_ADD_WITH_OVERFLOW, |t| {
         let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
             .fn_type(&[t.into(), t.into()], false)
     });
 
-    add_int_intrinsic(ctx, module, &LLVM_SSUB_WITH_OVERFLOW, |t| {
+    add_int_intrinsic(ctx, module, &LLVM_SUB_WITH_OVERFLOW, |t| {
         let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
             .fn_type(&[t.into(), t.into()], false)
     });
 
-    add_int_intrinsic(ctx, module, &LLVM_SMUL_WITH_OVERFLOW, |t| {
+    add_int_intrinsic(ctx, module, &LLVM_MUL_WITH_OVERFLOW, |t| {
         let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
             .fn_type(&[t.into(), t.into()], false)
+    });
+
+    add_int_intrinsic(ctx, module, &LLVM_ADD_SATURATED, |t| {
+        t.fn_type(&[t.into(), t.into()], false)
+    });
+
+    add_int_intrinsic(ctx, module, &LLVM_SUB_SATURATED, |t| {
+        t.fn_type(&[t.into(), t.into()], false)
     });
 }
 
@@ -602,9 +616,15 @@ static LLVM_STACK_SAVE: &str = "llvm.stacksave";
 static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";
 pub static LLVM_LONGJMP: &str = "llvm.eh.sjlj.longjmp";
 
-const LLVM_SADD_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.sadd.with.overflow");
-const LLVM_SSUB_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.ssub.with.overflow");
-const LLVM_SMUL_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.smul.with.overflow");
+const LLVM_ADD_WITH_OVERFLOW: IntrinsicName =
+    int_intrinsic!("llvm.sadd.with.overflow", "llvm.uadd.with.overflow");
+const LLVM_SUB_WITH_OVERFLOW: IntrinsicName =
+    int_intrinsic!("llvm.ssub.with.overflow", "llvm.usub.with.overflow");
+const LLVM_MUL_WITH_OVERFLOW: IntrinsicName =
+    int_intrinsic!("llvm.smul.with.overflow", "llvm.umul.with.overflow");
+
+const LLVM_ADD_SATURATED: IntrinsicName = int_intrinsic!("llvm.sadd.sat", "llvm.uadd.sat");
+const LLVM_SUB_SATURATED: IntrinsicName = int_intrinsic!("llvm.ssub.sat", "llvm.usub.sat");
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -5321,24 +5341,23 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            if let Layout::Struct(struct_layout) = layout {
-                // match on the return layout to figure out which zig builtin we need
-                let intrinsic = match struct_layout[0] {
-                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
-                    Layout::Builtin(Builtin::Float(float_width)) => {
-                        &bitcode::STR_TO_FLOAT[float_width]
-                    }
-                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
-                    _ => unreachable!(),
-                };
+            let number_layout = match layout {
+                Layout::Struct(fields) => fields[0], // TODO: why is it sometimes a struct?
+                _ => unreachable!(),
+            };
 
-                let string =
-                    complex_bitcast(env.builder, string, env.str_list_c_abi().into(), "to_utf8");
+            // match on the return layout to figure out which zig builtin we need
+            let intrinsic = match number_layout {
+                Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                Layout::Builtin(Builtin::Float(float_width)) => &bitcode::STR_TO_FLOAT[float_width],
+                Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                _ => unreachable!(),
+            };
 
-                call_bitcode_fn(env, &[string], intrinsic)
-            } else {
-                unreachable!()
-            }
+            let string =
+                complex_bitcast(env.builder, string, env.str_list_c_abi().into(), "to_utf8");
+
+            call_bitcode_fn(env, &[string], intrinsic)
         }
         StrFromInt => {
             // Str.fromInt : Int -> Str
@@ -5807,8 +5826,9 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumDivUnchecked | NumDivCeilUnchecked
-        | NumPow | NumPowInt | NumSubWrap | NumSubChecked | NumMulWrap | NumMulChecked => {
+        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumAddSaturated | NumDivUnchecked
+        | NumDivCeilUnchecked | NumPow | NumPowInt | NumSubWrap | NumSubChecked
+        | NumSubSaturated | NumMulWrap | NumMulChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -6213,6 +6233,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
             // - a FAST_CALL_CONV wrapper that we make here, e.g. `roc_fx_putLine_fastcc_wrapper`
 
             let return_type = basic_type_from_layout(env, ret_layout);
+            let roc_return = RocReturn::from_layout(env, ret_layout);
             let cc_return = to_cc_return(env, ret_layout);
 
             let mut cc_argument_types =
@@ -6238,7 +6259,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                     .void_type()
                     .fn_type(&function_arguments(env, &cc_argument_types), false),
                 CCReturn::ByPointer => {
-                    cc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
+                    cc_argument_types.insert(0, return_type.ptr_type(AddressSpace::Generic).into());
                     env.context
                         .void_type()
                         .fn_type(&function_arguments(env, &cc_argument_types), false)
@@ -6250,8 +6271,17 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
 
             let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
 
-            let fastcc_type =
-                return_type.fn_type(&function_arguments(env, &fastcc_argument_types), false);
+            let fastcc_type = match roc_return {
+                RocReturn::Return => {
+                    return_type.fn_type(&function_arguments(env, &fastcc_argument_types), false)
+                }
+                RocReturn::ByPointer => {
+                    fastcc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
+                    env.context
+                        .void_type()
+                        .fn_type(&function_arguments(env, &fastcc_argument_types), false)
+                }
+            };
 
             let fastcc_function = add_func(
                 env.module,
@@ -6266,11 +6296,20 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
             let entry = context.append_basic_block(fastcc_function, "entry");
             {
                 builder.position_at_end(entry);
-                let return_pointer = env.builder.build_alloca(return_type, "return_value");
 
-                let fastcc_parameters = fastcc_function.get_params();
+                let mut fastcc_parameters = fastcc_function.get_params();
                 let mut cc_arguments =
                     Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
+
+                let return_pointer = match roc_return {
+                    RocReturn::Return => env.builder.build_alloca(return_type, "return_value"),
+                    RocReturn::ByPointer => fastcc_parameters.pop().unwrap().into_pointer_value(),
+                };
+
+                if let CCReturn::ByPointer = cc_return {
+                    cc_arguments.push(return_pointer.into());
+                    cc_argument_types.remove(0);
+                }
 
                 let it = fastcc_parameters.into_iter().zip(cc_argument_types.iter());
                 for (param, cc_type) in it {
@@ -6283,21 +6322,28 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                     }
                 }
 
-                if let CCReturn::ByPointer = cc_return {
-                    cc_arguments.push(return_pointer.into());
-                }
-
                 let call = env.builder.build_call(cc_function, &cc_arguments, "tmp");
                 call.set_call_convention(C_CALL_CONV);
 
-                let return_value = match cc_return {
-                    CCReturn::Return => call.try_as_basic_value().left().unwrap(),
+                match roc_return {
+                    RocReturn::Return => {
+                        let return_value = match cc_return {
+                            CCReturn::Return => call.try_as_basic_value().left().unwrap(),
 
-                    CCReturn::ByPointer => env.builder.build_load(return_pointer, "read_result"),
-                    CCReturn::Void => return_type.const_zero(),
-                };
+                            CCReturn::ByPointer => {
+                                env.builder.build_load(return_pointer, "read_result")
+                            }
+                            CCReturn::Void => return_type.const_zero(),
+                        };
 
-                builder.build_return(Some(&return_value));
+                        builder.build_return(Some(&return_value));
+                    }
+                    RocReturn::ByPointer => {
+                        debug_assert!(matches!(cc_return, CCReturn::ByPointer));
+
+                        builder.build_return(None);
+                    }
+                }
             }
 
             builder.position_at_end(old);
@@ -6367,7 +6413,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumAdd => {
             let result = env
                 .call_intrinsic(
-                    &LLVM_SADD_WITH_OVERFLOW[int_width],
+                    &LLVM_ADD_WITH_OVERFLOW[int_width],
                     &[lhs.into(), rhs.into()],
                 )
                 .into_struct_value();
@@ -6376,13 +6422,16 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
         NumAddChecked => env.call_intrinsic(
-            &LLVM_SADD_WITH_OVERFLOW[int_width],
+            &LLVM_ADD_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
+        NumAddSaturated => {
+            env.call_intrinsic(&LLVM_ADD_SATURATED[int_width], &[lhs.into(), rhs.into()])
+        }
         NumSub => {
             let result = env
                 .call_intrinsic(
-                    &LLVM_SSUB_WITH_OVERFLOW[int_width],
+                    &LLVM_SUB_WITH_OVERFLOW[int_width],
                     &[lhs.into(), rhs.into()],
                 )
                 .into_struct_value();
@@ -6391,13 +6440,16 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
         NumSubChecked => env.call_intrinsic(
-            &LLVM_SSUB_WITH_OVERFLOW[int_width],
+            &LLVM_SUB_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
+        NumSubSaturated => {
+            env.call_intrinsic(&LLVM_SUB_SATURATED[int_width], &[lhs.into(), rhs.into()])
+        }
         NumMul => {
             let result = env
                 .call_intrinsic(
-                    &LLVM_SMUL_WITH_OVERFLOW[int_width],
+                    &LLVM_MUL_WITH_OVERFLOW[int_width],
                     &[lhs.into(), rhs.into()],
                 )
                 .into_struct_value();
@@ -6406,7 +6458,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
         NumMulChecked => env.call_intrinsic(
-            &LLVM_SMUL_WITH_OVERFLOW[int_width],
+            &LLVM_MUL_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
         NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),

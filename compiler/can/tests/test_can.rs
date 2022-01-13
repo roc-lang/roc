@@ -943,14 +943,8 @@ mod test_can {
 
         let problem = Problem::RuntimeError(RuntimeError::CircularDef(vec![CycleEntry {
             symbol: interns.symbol(home, "x".into()),
-            symbol_region: Region::new(
-                Position { line: 0, column: 0 },
-                Position { line: 0, column: 1 },
-            ),
-            expr_region: Region::new(
-                Position { line: 0, column: 4 },
-                Position { line: 0, column: 5 },
-            ),
+            symbol_region: Region::new(Position::new(0), Position::new(1)),
+            expr_region: Region::new(Position::new(4), Position::new(5)),
         }]));
 
         assert_eq!(is_circular_def, true);
@@ -980,36 +974,18 @@ mod test_can {
         let problem = Problem::RuntimeError(RuntimeError::CircularDef(vec![
             CycleEntry {
                 symbol: interns.symbol(home, "x".into()),
-                symbol_region: Region::new(
-                    Position { line: 0, column: 0 },
-                    Position { line: 0, column: 1 },
-                ),
-                expr_region: Region::new(
-                    Position { line: 0, column: 4 },
-                    Position { line: 0, column: 5 },
-                ),
+                symbol_region: Region::new(Position::new(0), Position::new(1)),
+                expr_region: Region::new(Position::new(4), Position::new(5)),
             },
             CycleEntry {
                 symbol: interns.symbol(home, "y".into()),
-                symbol_region: Region::new(
-                    Position { line: 1, column: 0 },
-                    Position { line: 1, column: 1 },
-                ),
-                expr_region: Region::new(
-                    Position { line: 1, column: 4 },
-                    Position { line: 1, column: 5 },
-                ),
+                symbol_region: Region::new(Position::new(6), Position::new(7)),
+                expr_region: Region::new(Position::new(10), Position::new(11)),
             },
             CycleEntry {
                 symbol: interns.symbol(home, "z".into()),
-                symbol_region: Region::new(
-                    Position { line: 2, column: 0 },
-                    Position { line: 2, column: 1 },
-                ),
-                expr_region: Region::new(
-                    Position { line: 2, column: 4 },
-                    Position { line: 2, column: 5 },
-                ),
+                symbol_region: Region::new(Position::new(12), Position::new(13)),
+                expr_region: Region::new(Position::new(16), Position::new(17)),
             },
         ]));
 

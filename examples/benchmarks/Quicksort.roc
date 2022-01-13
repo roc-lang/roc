@@ -30,7 +30,7 @@ quicksortHelp = \list, order, low, high ->
         when partition low high list order is
             Pair partitionIndex partitioned ->
                 partitioned
-                    |> quicksortHelp order low (partitionIndex - 1)
+                    |> quicksortHelp order low (Num.subSaturated partitionIndex 1)
                     |> quicksortHelp order (partitionIndex + 1) high
     else
         list
@@ -39,12 +39,12 @@ partition : Nat, Nat, List a, Order a -> [ Pair Nat (List a) ]
 partition = \low, high, initialList, order ->
     when List.get initialList high is
         Ok pivot ->
-            when partitionHelp (low - 1) low initialList order high pivot is
+            when partitionHelp low low initialList order high pivot is
                 Pair newI newList ->
-                    Pair (newI + 1) (swap (newI + 1) high newList)
+                    Pair newI (swap newI high newList)
 
         Err _ ->
-            Pair (low - 1) initialList
+            Pair low initialList
 
 partitionHelp : Nat, Nat, List c, Order c, Nat, c -> [ Pair Nat (List c) ]
 partitionHelp = \i, j, list, order, high, pivot ->
@@ -53,7 +53,7 @@ partitionHelp = \i, j, list, order, high, pivot ->
             Ok value ->
                 when order value pivot is
                     LT | EQ ->
-                        partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) order high pivot
+                        partitionHelp (i + 1) (j + 1) (swap i j list) order high pivot
 
                     GT ->
                         partitionHelp i (j + 1) list order high pivot

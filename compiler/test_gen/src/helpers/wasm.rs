@@ -138,6 +138,8 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
 
     T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
 
+    roc_gen_wasm::wasm_module::sections::test_assert_preload(arena, &wasm_module);
+
     let needs_linking = !wasm_module.import.entries.is_empty();
 
     let mut app_module_bytes = std::vec::Vec::with_capacity(4096);
@@ -156,6 +158,8 @@ fn run_linker(
 
     let wasm_build_dir: &Path = if let Some(src_hash) = build_dir_hash {
         debug_dir = format!("/tmp/roc/gen_wasm/{:016x}", src_hash);
+        std::fs::remove_file(format!("{}/app.o", debug_dir)).unwrap_or_else(|_| {});
+        std::fs::remove_file(format!("{}/final.wasm", debug_dir)).unwrap_or_else(|_| {});
         std::fs::create_dir_all(&debug_dir).unwrap();
         println!(
             "Debug commands:\n\twasm-objdump -dx {}/app.o\n\twasm-objdump -dx {}/final.wasm",
@@ -303,27 +307,37 @@ where
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
+    let expected_len = num_refcounts as i32;
     let init_refcount_test = instance.exports.get_function("init_refcount_test").unwrap();
-    let init_result = init_refcount_test.call(&[wasmer::Value::I32(num_refcounts as i32)]);
-    let refcount_array_addr = match init_result {
+    let init_result = init_refcount_test.call(&[wasmer::Value::I32(expected_len)]);
+    let refcount_vector_addr = match init_result {
         Err(e) => return Err(format!("{:?}", e)),
         Ok(result) => match result[0] {
             wasmer::Value::I32(a) => a,
             _ => panic!(),
         },
     };
-    // An array of refcount pointers
-    let refcount_ptr_array: WasmPtr<WasmPtr<i32>, wasmer::Array> =
-        WasmPtr::new(refcount_array_addr as u32);
-    let refcount_ptrs: &[Cell<WasmPtr<i32>>] = refcount_ptr_array
-        .deref(memory, 0, num_refcounts as u32)
-        .unwrap();
 
+    // Run the test
     let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
     match test_wrapper.call(&[]) {
         Err(e) => return Err(format!("{:?}", e)),
         Ok(_) => {}
     }
+
+    // Check we got the right number of refcounts
+    let refcount_vector_len: WasmPtr<i32> = WasmPtr::new(refcount_vector_addr as u32);
+    let actual_len = refcount_vector_len.deref(memory).unwrap().get();
+    if actual_len != expected_len {
+        panic!("Expected {} refcounts but got {}", expected_len, actual_len);
+    }
+
+    // Read the actual refcount values
+    let refcount_ptr_array: WasmPtr<WasmPtr<i32>, wasmer::Array> =
+        WasmPtr::new(4 + refcount_vector_addr as u32);
+    let refcount_ptrs: &[Cell<WasmPtr<i32>>] = refcount_ptr_array
+        .deref(memory, 0, num_refcounts as u32)
+        .unwrap();
 
     let mut refcounts = Vec::with_capacity(num_refcounts);
     for i in 0..num_refcounts {
@@ -417,24 +431,21 @@ pub fn identity<T>(value: T) -> T {
 
 #[allow(unused_macros)]
 macro_rules! assert_refcounts {
-    ($src: expr, $ty: ty, $expected_refcounts: expr) => {
-        // Same as above, except with an additional transformation argument.
-        {
-            let phantom = std::marker::PhantomData;
-            let num_refcounts = $expected_refcounts.len();
-            let result = $crate::helpers::wasm::assert_wasm_refcounts_help::<$ty>(
-                $src,
-                phantom,
-                num_refcounts,
-            );
-            match result {
-                Err(msg) => panic!("{:?}", msg),
-                Ok(actual_refcounts) => {
-                    assert_eq!(&actual_refcounts, $expected_refcounts)
-                }
+    // We need the result type to generate the test_wrapper, even though we ignore the value!
+    // We can't just call `main` with no args, because some tests return structs, via pointer arg!
+    // Also we need to know how much stack space to reserve for the struct.
+    ($src: expr, $ty: ty, $expected_refcounts: expr) => {{
+        let phantom = std::marker::PhantomData;
+        let num_refcounts = $expected_refcounts.len();
+        let result =
+            $crate::helpers::wasm::assert_wasm_refcounts_help::<$ty>($src, phantom, num_refcounts);
+        match result {
+            Err(msg) => panic!("{:?}", msg),
+            Ok(actual_refcounts) => {
+                assert_eq!(&actual_refcounts, $expected_refcounts)
             }
         }
-    };
+    }};
 }
 
 #[allow(unused_imports)]

@@ -1,14 +1,14 @@
 BinOps(
     [
         (
-            |L 0-0, C 0-1| Var {
+            @0-1 Var {
                 module_name: "",
                 ident: "x",
             },
-            |L 0-0, C 2-4| Equals,
+            @2-4 Equals,
         ),
     ],
-    |L 0-0, C 5-6| Var {
+    @5-6 Var {
         module_name: "",
         ident: "y",
     },

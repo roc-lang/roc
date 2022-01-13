@@ -5,7 +5,7 @@ use super::linking::{
     IndexRelocType, LinkingSection, RelocationEntry, RelocationSection, SymInfo, WasmObjectSymbol,
 };
 use super::opcodes::OpCode;
-use super::serialize::{SerialBuffer, Serialize};
+use super::serialize::{decode_u32_or_panic, SerialBuffer, Serialize};
 use super::{CodeBuilder, ValueType};
 
 /*******************************************************************
@@ -84,6 +84,21 @@ fn serialize_vector_section<B: SerialBuffer, T: Serialize>(
     }
 }
 
+/// Serialize a section that is stored as bytes and a count
+fn serialize_bytes_section<B: SerialBuffer>(
+    buffer: &mut B,
+    section_id: SectionId,
+    count: u32,
+    bytes: &[u8],
+) {
+    if !bytes.is_empty() {
+        let header_indices = write_section_header(buffer, section_id);
+        buffer.encode_u32(count);
+        buffer.append_slice(bytes);
+        update_section_size(buffer, header_indices);
+    }
+}
+
 /*******************************************************************
  *
  * Type section
@@ -97,9 +112,13 @@ pub struct Signature<'a> {
     pub ret_type: Option<ValueType>,
 }
 
+impl Signature<'_> {
+    pub const SEPARATOR: u8 = 0x60;
+}
+
 impl<'a> Serialize for Signature<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_u8(0x60);
+        buffer.append_u8(Self::SEPARATOR);
         self.param_types.serialize(buffer);
         self.ret_type.serialize(buffer);
     }
@@ -108,35 +127,93 @@ impl<'a> Serialize for Signature<'a> {
 #[derive(Debug)]
 pub struct TypeSection<'a> {
     /// Private. See WasmModule::add_function_signature
-    signatures: Vec<'a, Signature<'a>>,
+    arena: &'a Bump,
+    bytes: Vec<'a, u8>,
+    offsets: Vec<'a, usize>,
 }
 
 impl<'a> TypeSection<'a> {
     pub fn new(arena: &'a Bump, capacity: usize) -> Self {
         TypeSection {
-            signatures: Vec::with_capacity_in(capacity, arena),
+            arena,
+            bytes: Vec::with_capacity_in(capacity * 4, arena),
+            offsets: Vec::with_capacity_in(capacity, arena),
         }
     }
 
     /// Find a matching signature or insert a new one. Return the index.
     pub fn insert(&mut self, signature: Signature<'a>) -> u32 {
-        // Using linear search because we need to preserve indices stored in
-        // the Function section. (Also for practical sizes it's fast)
-        let maybe_index = self.signatures.iter().position(|s| *s == signature);
-        match maybe_index {
-            Some(index) => index as u32,
-            None => {
-                let index = self.signatures.len();
-                self.signatures.push(signature);
-                index as u32
+        let mut sig_bytes = Vec::with_capacity_in(signature.param_types.len() + 4, self.arena);
+        signature.serialize(&mut sig_bytes);
+
+        let sig_len = sig_bytes.len();
+        let bytes_len = self.bytes.len();
+
+        for (i, offset) in self.offsets.iter().enumerate() {
+            let end = offset + sig_len;
+            if end > bytes_len {
+                break;
             }
+            if &self.bytes[*offset..end] == sig_bytes.as_slice() {
+                return i as u32;
+            }
+        }
+
+        let sig_id = self.offsets.len();
+        self.offsets.push(bytes_len);
+        self.bytes.extend_from_slice(&sig_bytes);
+
+        sig_id as u32
+    }
+
+    pub fn preload(arena: &'a Bump, section_body: &[u8]) -> Self {
+        if section_body.is_empty() {
+            return TypeSection {
+                arena,
+                bytes: Vec::new_in(arena),
+                offsets: Vec::new_in(arena),
+            };
+        }
+
+        let (count, content_offset) = decode_u32_or_panic(section_body);
+
+        let mut bytes = Vec::with_capacity_in(section_body.len() * 2, arena);
+        bytes.extend_from_slice(&section_body[content_offset..]);
+
+        let mut offsets = Vec::with_capacity_in((count * 2) as usize, arena);
+
+        let mut i = 0;
+        while i < bytes.len() {
+            offsets.push(i);
+
+            let sep = bytes[i];
+            debug_assert!(sep == Signature::SEPARATOR);
+            i += 1;
+
+            let (n_params, n_params_size) = decode_u32_or_panic(&bytes[i..]);
+            i += n_params_size; // skip over the array length that we just decoded
+            i += n_params as usize; // skip over one byte per param type
+
+            let n_return_values = bytes[i];
+            i += 1 + n_return_values as usize;
+        }
+
+        TypeSection {
+            arena,
+            bytes,
+            offsets,
         }
     }
 }
 
 impl<'a> Serialize for TypeSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_vector_section(buffer, SectionId::Type, &self.signatures);
+        serialize_bytes_section(
+            buffer,
+            SectionId::Type,
+            self.offsets.len() as u32,
+            &self.bytes,
+        );
     }
 }
 
@@ -241,19 +318,26 @@ impl<'a> Serialize for ImportSection<'a> {
 
 #[derive(Debug)]
 pub struct FunctionSection<'a> {
-    pub signature_indices: Vec<'a, u32>,
+    pub count: u32,
+    pub bytes: Vec<'a, u8>,
 }
 
 impl<'a> FunctionSection<'a> {
     pub fn new(arena: &'a Bump, capacity: usize) -> Self {
         FunctionSection {
-            signature_indices: Vec::with_capacity_in(capacity, arena),
+            count: 0,
+            bytes: Vec::with_capacity_in(capacity, arena),
         }
+    }
+
+    fn add_sig(&mut self, sig_id: u32) {
+        self.bytes.encode_u32(sig_id);
+        self.count += 1;
     }
 }
 impl<'a> Serialize for FunctionSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_vector_section(buffer, SectionId::Function, &self.signature_indices);
+        serialize_bytes_section(buffer, SectionId::Function, self.count, &self.bytes);
     }
 }
 
@@ -448,6 +532,8 @@ impl<'a> Serialize for ExportSection<'a> {
 
 #[derive(Debug)]
 pub struct CodeSection<'a> {
+    pub preloaded_count: u32,
+    pub preloaded_bytes: Vec<'a, u8>,
     pub code_builders: Vec<'a, CodeBuilder<'a>>,
 }
 
@@ -459,7 +545,9 @@ impl<'a> CodeSection<'a> {
         relocations: &mut Vec<'a, RelocationEntry>,
     ) -> usize {
         let header_indices = write_section_header(buffer, SectionId::Code);
-        buffer.encode_u32(self.code_builders.len() as u32);
+        buffer.encode_u32(self.preloaded_count + self.code_builders.len() as u32);
+
+        buffer.append_slice(&self.preloaded_bytes);
 
         for code_builder in self.code_builders.iter() {
             code_builder.serialize_with_relocs(buffer, relocations, header_indices.body_index);
@@ -483,6 +571,14 @@ pub enum DataMode {
     Active { offset: ConstExpr },
     /// A data segment that can be loaded with the `memory.init` instruction
     Passive,
+}
+
+impl DataMode {
+    pub fn active_at(offset: u32) -> Self {
+        DataMode::Active {
+            offset: ConstExpr::I32(offset as i32),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -509,19 +605,30 @@ impl Serialize for DataSegment<'_> {
 
 #[derive(Debug)]
 pub struct DataSection<'a> {
-    pub segments: Vec<'a, DataSegment<'a>>,
+    segment_count: u32,
+    bytes: Vec<'a, u8>,
 }
 
 impl<'a> DataSection<'a> {
-    fn is_empty(&self) -> bool {
-        self.segments.is_empty() || self.segments.iter().all(|seg| seg.init.is_empty())
+    pub fn new(arena: &'a Bump) -> Self {
+        DataSection {
+            segment_count: 0,
+            bytes: bumpalo::vec![in arena],
+        }
+    }
+
+    pub fn append_segment(&mut self, segment: DataSegment<'a>) -> u32 {
+        let index = self.segment_count;
+        self.segment_count += 1;
+        segment.serialize(&mut self.bytes);
+        index
     }
 }
 
 impl Serialize for DataSection<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if !self.is_empty() {
-            serialize_vector_section(buffer, SectionId::Data, &self.segments);
+        if !self.bytes.is_empty() {
+            serialize_bytes_section(buffer, SectionId::Data, self.segment_count, &self.bytes);
         }
     }
 }
@@ -563,20 +670,38 @@ impl SectionCounter {
     }
 }
 
+/// A Wasm module section that we don't use for Roc code,
+/// but may be present in a preloaded binary
+#[derive(Debug, Default)]
+pub struct OpaqueSection<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> OpaqueSection<'a> {
+    pub fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+}
+
+impl Serialize for OpaqueSection<'_> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        if !self.bytes.is_empty() {
+            buffer.append_slice(self.bytes);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct WasmModule<'a> {
     pub types: TypeSection<'a>,
     pub import: ImportSection<'a>,
     pub function: FunctionSection<'a>,
-    /// Dummy placeholder for tables (used for function pointers and host references)
-    pub table: (),
+    pub table: OpaqueSection<'a>,
     pub memory: MemorySection,
     pub global: GlobalSection<'a>,
     pub export: ExportSection<'a>,
-    /// Dummy placeholder for start function. In Roc, this would be part of the platform.
-    pub start: (),
-    /// Dummy placeholder for table elements. Roc does not use tables.
-    pub element: (),
+    pub start: OpaqueSection<'a>,
+    pub element: OpaqueSection<'a>,
     pub code: CodeSection<'a>,
     pub data: DataSection<'a>,
     pub linking: LinkingSection<'a>,
@@ -589,12 +714,11 @@ impl<'a> WasmModule<'a> {
     /// Create entries in the Type and Function sections for a function signature
     pub fn add_function_signature(&mut self, signature: Signature<'a>) {
         let index = self.types.insert(signature);
-        self.function.signature_indices.push(index);
+        self.function.add_sig(index);
     }
 
     /// Serialize the module to bytes
     /// (Mutates some data related to linking)
-    #[allow(clippy::unit_arg)]
     pub fn serialize_mut<T: SerialBuffer>(&mut self, buffer: &mut T) {
         buffer.append_u8(0);
         buffer.append_slice("asm".as_bytes());
@@ -664,13 +788,11 @@ impl<'a> WasmModule<'a> {
         code_section_body_index: usize,
         n_imported_fns: u32,
     ) {
-        let symbol_table = self.linking.symbol_table_mut();
-
         // Lookup vector of symbol index to new function index
-        let mut new_index_lookup = std::vec::Vec::with_capacity(symbol_table.len());
+        let mut new_index_lookup = std::vec::Vec::with_capacity(self.linking.symbol_table.len());
 
         // Modify symbol table entries and fill the lookup vector
-        for sym_info in symbol_table.iter_mut() {
+        for sym_info in self.linking.symbol_table.iter_mut() {
             match sym_info {
                 SymInfo::Function(WasmObjectSymbol::Defined { index, .. }) => {
                     let new_fn_index = *index + n_imported_fns;
@@ -701,4 +823,24 @@ impl<'a> WasmModule<'a> {
             }
         }
     }
+}
+
+/// Assertion to run on the generated Wasm module in every test
+pub fn test_assert_preload<'a>(arena: &'a Bump, wasm_module: &WasmModule<'a>) {
+    test_assert_types_preload(arena, &wasm_module.types);
+}
+
+fn test_assert_types_preload<'a>(arena: &'a Bump, original: &TypeSection<'a>) {
+    // Serialize the Type section that we built from Roc code
+    let mut original_serialized = Vec::with_capacity_in(original.bytes.len() + 10, arena);
+    original.serialize(&mut original_serialized);
+
+    debug_assert!(original_serialized[0] == SectionId::Type as u8);
+
+    // Reconstruct a new TypeSection by "pre-loading" the bytes of the original!
+    let body = &original_serialized[6..];
+    let preloaded = TypeSection::preload(arena, body);
+
+    debug_assert_eq!(original.offsets, preloaded.offsets);
+    debug_assert_eq!(original.bytes, preloaded.bytes);
 }

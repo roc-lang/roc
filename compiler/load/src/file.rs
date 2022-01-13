@@ -27,8 +27,8 @@ use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::PackageName;
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::module::module_defs;
-use roc_parse::parser::{ParseProblem, Parser, SyntaxError};
-use roc_region::all::{Loc, Region};
+use roc_parse::parser::{FileError, Parser, SyntaxError};
+use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_types::solved_types::Solved;
@@ -843,7 +843,7 @@ enum Msg<'a> {
         exposed_to_host: MutMap<Symbol, Variable>,
     },
 
-    FailedToParse(ParseProblem<'a, SyntaxError<'a>>),
+    FailedToParse(FileError<'a, SyntaxError<'a>>),
     FailedToReadFile {
         filename: PathBuf,
         error: io::ErrorKind,
@@ -1035,7 +1035,7 @@ pub enum LoadingProblem<'a> {
         filename: PathBuf,
         error: io::ErrorKind,
     },
-    ParsingFailed(ParseProblem<'a, SyntaxError<'a>>),
+    ParsingFailed(FileError<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
 
     MsgChannelDied,
@@ -2352,7 +2352,7 @@ fn load_pkg_config<'a>(
             let parse_start = SystemTime::now();
             let bytes = arena.alloc(bytes_vec);
             let parse_state = roc_parse::state::State::new(bytes);
-            let parsed = roc_parse::module::parse_header(arena, parse_state);
+            let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
             let parse_header_duration = parse_start.elapsed().unwrap();
 
             // Insert the first entries for this module's timings
@@ -2411,7 +2411,8 @@ fn load_pkg_config<'a>(
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
-                    SyntaxError::Header(fail).into_parse_problem(filename, "", bytes),
+                    fail.map_problem(SyntaxError::Header)
+                        .into_file_error(filename),
                 )),
             }
         }
@@ -2518,7 +2519,7 @@ fn parse_header<'a>(
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let parse_start = SystemTime::now();
     let parse_state = roc_parse::state::State::new(src_bytes);
-    let parsed = roc_parse::module::parse_header(arena, parse_state);
+    let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
     let parse_header_duration = parse_start.elapsed().unwrap();
 
     // Insert the first entries for this module's timings
@@ -2654,7 +2655,8 @@ fn parse_header<'a>(
             module_timing,
         )),
         Err(fail) => Err(LoadingProblem::ParsingFailed(
-            SyntaxError::Header(fail).into_parse_problem(filename, "", src_bytes),
+            fail.map_problem(SyntaxError::Header)
+                .into_file_error(filename),
         )),
     }
 }
@@ -3705,12 +3707,10 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let parse_state = header.parse_state;
     let parsed_defs = match module_defs().parse(arena, parse_state) {
         Ok((_, success, _state)) => success,
-        Err((_, fail, _)) => {
-            return Err(LoadingProblem::ParsingFailed(fail.into_parse_problem(
-                header.module_path,
-                header.header_src,
-                source,
-            )));
+        Err((_, fail, state)) => {
+            return Err(LoadingProblem::ParsingFailed(
+                fail.into_file_error(header.module_path, &state),
+            ));
         }
     };
 
@@ -4309,16 +4309,17 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
 }
 
 fn to_parse_problem_report<'a>(
-    problem: ParseProblem<'a, SyntaxError<'a>>,
+    problem: FileError<'a, SyntaxError<'a>>,
     mut module_ids: ModuleIds,
     all_ident_ids: MutMap<ModuleId, IdentIds>,
 ) -> String {
     use roc_reporting::report::{parse_problem, RocDocAllocator, DEFAULT_PALETTE};
 
     // TODO this is not in fact safe
-    let src = unsafe { from_utf8_unchecked(problem.bytes) };
-    let mut src_lines: Vec<&str> = problem.prefix.lines().collect();
-    src_lines.extend(src.lines().skip(1));
+    let src = unsafe { from_utf8_unchecked(problem.problem.bytes) };
+    let src_lines = src.lines().collect::<Vec<_>>();
+    // let mut src_lines: Vec<&str> = problem.prefix.lines().collect();
+    // src_lines.extend(src.lines().skip(1));
 
     let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
 
@@ -4331,7 +4332,16 @@ fn to_parse_problem_report<'a>(
     let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
 
     let starting_line = 0;
-    let report = parse_problem(&alloc, problem.filename.clone(), starting_line, problem);
+
+    let lines = LineInfo::new(src);
+
+    let report = parse_problem(
+        &alloc,
+        &lines,
+        problem.filename.clone(),
+        starting_line,
+        problem,
+    );
 
     let mut buf = String::new();
     let palette = DEFAULT_PALETTE;

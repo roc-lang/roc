@@ -1,13 +1,13 @@
 Defs(
     [
-        |L 0-1, C 0-7| Body(
-            |L 0-0, C 0-1| Identifier(
+        @0-13 Body(
+            @0-1 Identifier(
                 "x",
             ),
-            |L 0-1, C 4-7| BinOps(
+            @4-13 BinOps(
                 [
                     (
-                        |L 0-0, C 4-5| SpaceAfter(
+                        @4-5 SpaceAfter(
                             Num(
                                 "1",
                             ),
@@ -15,16 +15,16 @@ Defs(
                                 Newline,
                             ],
                         ),
-                        |L 1-1, C 4-5| LessThan,
+                        @10-11 LessThan,
                     ),
                 ],
-                |L 1-1, C 6-7| Num(
+                @12-13 Num(
                     "2",
                 ),
             ),
         ),
     ],
-    |L 3-3, C 0-2| SpaceBefore(
+    @15-17 SpaceBefore(
         Num(
             "42",
         ),

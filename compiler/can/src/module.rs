@@ -263,8 +263,8 @@ where
 
                 let runtime_error = RuntimeError::ExposedButNotDefined(symbol);
                 let def = Def {
-                    loc_pattern: Loc::new(0, 0, 0, 0, Pattern::Identifier(symbol)),
-                    loc_expr: Loc::new(0, 0, 0, 0, Expr::RuntimeError(runtime_error)),
+                    loc_pattern: Loc::at(Region::zero(), Pattern::Identifier(symbol)),
+                    loc_expr: Loc::at(Region::zero(), Expr::RuntimeError(runtime_error)),
                     expr_var: var_store.fresh(),
                     pattern_vars,
                     annotation: None,
