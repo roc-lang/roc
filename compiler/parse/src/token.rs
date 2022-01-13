@@ -4,10 +4,10 @@
 /// very fast.
 /// Some bits have specific meanings: 
 /// * 0b_001*_****: "Identifier-like" things
-/// * 0b_0100_****: "Punctuation"
-///     * 0b_0100_1***: []{}()
-///         * 0b_0100_1**0 [{(
-///         * 0b_0100_1**1 ]})
+/// * 0b_01**_****: "Punctuation"
+///     * 0b_0100_1***: []{}() INDENT/DEDENT
+///         * 0b_0100_1**0 [{(INDENT
+///         * 0b_0100_1**1 ]})DEDENT
 ///     * 0b_011*_**** Operators
 pub enum Token {
     Ident               = 0b_0010_0000,
@@ -40,6 +40,8 @@ pub enum Token {
     CloseCurly          = 0b_0100_1011,
     OpenSquare          = 0b_0100_1100,
     CloseSquare         = 0b_0100_1101,
+    OpenIndent          = 0b_0100_1110,
+    CloseIndent         = 0b_0100_1111,
 
     OpPlus              = 0b_0110_0000,
     OpMinus             = 0b_0110_0001,
@@ -65,12 +67,6 @@ pub enum Token {
     Malformed,
     MalformedOperator,
 
-    // PackageName, // TODO: this seems to be a combo of two idents, i.e. "rtfeldman/blah"
-    // LowercaseIdent, // TODO: maybe this should just be Ident, then checked afterwards?
-    // UppercaseIdent, // TODO: maybe this should just be Ident, then checked afterwards?
-    // UnqualifiedIdent, // TODO: maybe this should just be Ident, then checked afterwards?
-    // ModuleName, // TODO: maybe this should just be Ident, then checked afterwards?
-    // ConcreteType, // TODO: made of two idents separated by a '.'
     PrivateTag,
 
     String,
@@ -102,53 +98,72 @@ pub struct LexState {
     indents: Vec<usize>,
 }
 
-impl Token {
-    pub fn lex_single(state: &mut LexState, mut bytes: &[u8]) -> Option<(Token, usize, usize)> {
-        let mut skip = 0;
-        loop {
-            let bytes = &bytes[skip..];
-            // println!("at {:?}", std::str::from_utf8(bytes).unwrap());
-            if bytes.len() == 0 {
-                // println!("return");
-                return None;
+trait ConsumeToken {
+    fn token(&mut self, token: Token, offset: usize, length: usize);
+}
+
+fn tokenize(
+    state: &mut LexState,
+    bytes: &[u8],
+    consumer: &mut impl ConsumeToken,
+) {
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let bytes = &bytes[i..];
+
+        let (token, len) = match bytes[0] {
+            b'(' => (Token::OpenParen, 1),
+            b')' => (Token::CloseParen, 1),
+            b'{' => (Token::OpenCurly, 1),
+            b'}' => (Token::CloseCurly, 1),
+            b'[' => (Token::OpenSquare, 1),
+            b']' => (Token::CloseSquare, 1),
+            b',' => (Token::Comma, 1),
+            b'_' => lex_underscore(bytes),
+            b'@' => lex_private_tag(bytes),
+            b'a'..=b'z' => lex_ident(false, bytes),
+            b'A'..=b'Z' => lex_ident(true, bytes),
+            b'0'..=b'9' => lex_number(bytes),
+            b'-' | b':' | b'!' | b'.' | b'*' | b'/' | b'&' |
+            b'%' | b'^' | b'+' | b'<' | b'=' | b'>' | b'|' | b'\\' => lex_operator(bytes),
+            b' ' => {
+                i += skip_whitespace(bytes);
+                continue;
             }
+            b'\n' => {
+                // TODO: add newline to side_table
+                let (new_skip, width) = skip_newlines(bytes);
+                i += new_skip;
+                
+                if Some(width) > state.indents.last().copied() {
+                    state.indents.push(width);
+                    (Token::OpenIndent, width)
+                } else {
+                    i += width;
 
-            let (token, len) = match bytes[0] {
-                b'(' => (Token::OpenParen, 1),
-                b')' => (Token::CloseParen, 1),
-                b'{' => (Token::OpenCurly, 1),
-                b'}' => (Token::CloseCurly, 1),
-                b'[' => (Token::OpenSquare, 1),
-                b']' => (Token::CloseSquare, 1),
-                b',' => (Token::Comma, 1),
-                b'_' => lex_underscore(bytes),
-                b'@' => lex_private_tag(bytes),
-                b'a'..=b'z' => lex_ident(false, bytes),
-                b'A'..=b'Z' => lex_ident(true, bytes),
-                b'0'..=b'9' => lex_number(bytes),
-                b'-' | b':' | b'!' | b'.' | b'*' | b'/' | b'&' |
-                b'%' | b'^' | b'+' | b'<' | b'=' | b'>' | b'|' | b'\\' => lex_operator(bytes),
-                b' ' => {
-                    skip += skip_whitespace(bytes);
-                    continue;
-                }
-                b'\n' => {
-                    // TODO: add newline to side_table
-                    skip += skip_newlines(bytes);
-                    continue;
-                }
-                b'#' => {
-                    // TODO: add comment to side_table
-                    skip += skip_comment(bytes);
-                    continue;
-                }
-                b'"' => lex_string(bytes),
-                b => todo!("handle {:?}", b as char),
-            };
+                    while let Some(last) = state.indents.pop() {
+                        if last < width {
+                            consumer.token(Token::CloseIndent, i, 0);
+                        } else {
+                            state.indents.push(last);
+                        }
+                    }
 
-            // println!("return");
-            return Some((token, skip, len))
-        }
+                    continue;
+                }
+            }
+            b'#' => {
+                // TODO: add comment to side_table
+                i += skip_comment(bytes);
+                continue;
+            }
+            b'"' => lex_string(bytes),
+            b => todo!("handle {:?}", b as char),
+        };
+
+        consumer.token(token, i, len);
+        i += len;
     }
 }
 
@@ -163,13 +178,13 @@ impl TokenTable {
         let mut offset = 0;
         let mut state = LexState::new();
 
-        while let Some((token, skip, length)) = Token::lex_single(&mut state, &text.as_bytes()[offset..]) {
-            tt.tokens.push(token);
-            offset += skip;
-            tt.offsets.push(offset);
-            offset += length;
-            tt.lengths.push(length);
-        }
+        // while let Some((token, skip, length)) = Token::lex_single(&mut state, &text.as_bytes()[offset..]) {
+        //     tt.tokens.push(token);
+        //     offset += skip;
+        //     tt.offsets.push(offset);
+        //     offset += length;
+        //     tt.lengths.push(length);
+        // }
 
         tt
     }
@@ -194,7 +209,12 @@ fn skip_comment(bytes: &[u8]) -> usize {
     skip
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
+struct Indent(usize);
+
 fn skip_whitespace(bytes: &[u8]) -> usize {
+    debug_assert!(bytes[0] == b' ');
+
     let mut skip = 0;
     while skip < bytes.len() && bytes[skip] == b' ' {
         skip += 1;
@@ -202,12 +222,17 @@ fn skip_whitespace(bytes: &[u8]) -> usize {
     skip
 }
 
-fn skip_newlines(bytes: &[u8]) -> usize {
+fn skip_newlines(bytes: &[u8]) -> (usize, usize) {
     let mut skip = 0;
-    while skip < bytes.len() && (bytes[skip] == b'\n' || bytes[skip] == b' ') {
-        skip += 1;
+    let mut indent = 0;
+
+    while skip < bytes.len() && bytes[skip] == b'\n' {
+        skip += indent + 1;
+        let spaces = skip_whitespace(&bytes[1..]);
+        indent = spaces;
     }
-    skip
+
+    (skip, indent)
 }
 
 fn is_op_continue(ch: u8) -> bool {
