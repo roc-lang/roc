@@ -5,6 +5,32 @@ use super::opcodes::OpCode;
 use super::serialize::{parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes};
 use super::{CodeBuilder, ValueType};
 
+/*
+
+DEAD CODE ELIMINATION
+
+Or, more specifically, "dead function replacement"
+
+- On pre-loading the object file:
+    - Analyse its call graph by finding all `call` instructions in the Code section,
+        and checking which function index they refer to. Store this in a `DeadCodeMetadata`
+    - Later we will need to know the return type of each function, so scan the Type and Function
+        sections to get that information and store it in `DeadCodeMetadata` too.
+- While compiling Roc code:
+    - Run the backend as usual, adding more data into various sections of the Wasm module
+    - Whenever a call to a builtin or platform function is made, record its index in a Set.
+        These are the "live" preloaded functions that we are not allowed to eliminate.
+- Call graph analysis:
+    - Starting with the set of live preloaded functions, trace their call graphs using the info we
+        collected earlier in `DeadCodeMetadata`. Mark all function indices in the call graph as "live".
+- Dead function replacement:
+    - We actually don't want to just *delete* dead functions, because that would change the *indices*
+        of the live functions, invalidating all references to them, such as `call` instructions.
+    - Instead, we replace the dead functions with a tiny but *valid* function that has the same return type!
+        For example the minimal function returning `i32` contains just one instruction: `i32.const 0`
+    - This replacement happens during the final serialization phase
+*/
+
 #[derive(Debug)]
 pub struct DeadCodeMetadata<'a> {
     /// Byte offset where each function body can be found
