@@ -34,24 +34,28 @@ pub struct Env<'a> {
     pub exposed_to_host: MutSet<Symbol>,
 }
 
+/// Entry point for production
 pub fn build_module<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
     preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (wasm_module, _) = build_module_help(env, interns, preload_bytes, procedures)?;
+    // In production we don't want the test wrapper, just serialize it
+    let (wasm_module, _) =
+        build_module_without_test_wrapper(env, interns, preload_bytes, procedures);
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
     Ok(buffer)
 }
 
-pub fn build_module_help<'a>(
+/// Entry point for integration tests (test_gen)
+pub fn build_module_without_test_wrapper<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
     preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<(WasmModule<'a>, u32), String> {
+) -> (WasmModule<'a>, u32) {
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
@@ -149,7 +153,7 @@ pub fn build_module_help<'a>(
     let module = backend.into_module(eliminate_dead_preloads);
 
     let main_function_index = maybe_main_fn_index.unwrap() + fn_index_offset;
-    Ok((module, main_function_index))
+    (module, main_function_index)
 }
 
 pub struct CopyMemoryConfig {
