@@ -4,7 +4,8 @@ use roc_collections::all::MutMap;
 use roc_reporting::internal_error;
 
 use super::dead_code::{
-    copy_live_and_replace_dead, parse_dead_code_metadata, trace_function_deps, DeadCodeMetadata,
+    copy_live_and_replace_dead_preloads, parse_dead_code_metadata, trace_function_deps,
+    DeadCodeMetadata,
 };
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
@@ -800,7 +801,7 @@ impl<'a> CodeSection<'a> {
 
         let mut buffer = Vec::with_capacity_in(self.preloaded_bytes.len(), arena);
 
-        copy_live_and_replace_dead(
+        copy_live_and_replace_dead_preloads(
             arena,
             &mut buffer,
             &self.dead_code_metadata,

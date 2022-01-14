@@ -224,62 +224,45 @@ fn create_dummy_functions(arena: &Bump) -> [Vec<'_, u8>; 5] {
     [dummy_i32, dummy_i64, dummy_f32, dummy_f64, dummy_nil]
 }
 
-/// Copy used functions from an external module into our Code section
+/// Copy used functions from preloaded object file into our Code section
 /// Replace unused functions with very small dummies, to avoid changing any indices
-pub fn copy_live_and_replace_dead<'a, T: SerialBuffer>(
+pub fn copy_live_and_replace_dead_preloads<'a, T: SerialBuffer>(
     arena: &'a Bump,
     buffer: &mut T,
     metadata: &DeadCodeMetadata<'a>,
     external_code: &[u8],
     import_fn_count: u32,
-    mut live_ext_fn_indices: Vec<'a, u32>,
+    mut live_preload_indices: Vec<'a, u32>,
 ) {
-    live_ext_fn_indices.sort_unstable();
+    let preload_idx_start = import_fn_count as usize;
+    let preload_idx_end = metadata.ret_types.len();
 
     let [dummy_i32, dummy_i64, dummy_f32, dummy_f64, dummy_nil] = create_dummy_functions(arena);
 
-    let mut prev = import_fn_count as usize;
-    for live32 in live_ext_fn_indices.into_iter() {
-        if live32 < import_fn_count {
-            continue;
+    live_preload_indices.sort_unstable();
+    live_preload_indices.dedup();
+
+    let mut live_iter = live_preload_indices.iter();
+    let mut next_live_idx = live_iter.next();
+    for i in preload_idx_start..preload_idx_end {
+        match next_live_idx {
+            Some(live) if *live as usize == i => {
+                next_live_idx = live_iter.next();
+                let live_body_start = metadata.code_offsets[i] as usize;
+                let live_body_end = metadata.code_offsets[i + 1] as usize;
+                buffer.append_slice(&external_code[live_body_start..live_body_end]);
+            }
+            _ => {
+                let ret_type = metadata.ret_types[i];
+                let dummy_bytes = match ret_type {
+                    Some(ValueType::I32) => &dummy_i32,
+                    Some(ValueType::I64) => &dummy_i64,
+                    Some(ValueType::F32) => &dummy_f32,
+                    Some(ValueType::F64) => &dummy_f64,
+                    None => &dummy_nil,
+                };
+                buffer.append_slice(dummy_bytes);
+            }
         }
-
-        let live = live32 as usize;
-
-        // Replace dead functions with the minimal code body that will pass validation checks
-        for dead in prev..live {
-            let dummy_bytes = match metadata.ret_types[dead] {
-                Some(ValueType::I32) => &dummy_i32,
-                Some(ValueType::I64) => &dummy_i64,
-                Some(ValueType::F32) => &dummy_f32,
-                Some(ValueType::F64) => &dummy_f64,
-                None => &dummy_nil,
-            };
-            buffer.append_slice(dummy_bytes);
-        }
-
-        // Copy the body of the live function from the external module
-        let live_body_start = metadata.code_offsets[live] as usize;
-        let live_body_end = metadata.code_offsets[live + 1] as usize;
-        buffer.append_slice(&external_code[live_body_start..live_body_end]);
-
-        prev = live + 1;
-    }
-
-    let num_preloaded_fns = metadata.ret_types.len();
-    // Replace dead functions with the minimal code body that will pass validation checks
-    for dead in prev..num_preloaded_fns {
-        if dead < import_fn_count as usize {
-            continue;
-        }
-        let ret_type = metadata.ret_types[dead];
-        let dummy_bytes = match ret_type {
-            Some(ValueType::I32) => &dummy_i32,
-            Some(ValueType::I64) => &dummy_i64,
-            Some(ValueType::F32) => &dummy_f32,
-            Some(ValueType::F64) => &dummy_f64,
-            None => &dummy_nil,
-        };
-        buffer.append_slice(dummy_bytes);
     }
 }
