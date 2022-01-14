@@ -14,20 +14,28 @@ procedure Test.1 (Test.6):
         ret Test.10;
 
 procedure Test.1 (Test.6):
-    let Test.33 : Builtin(Bool) = false;
-    let Test.34 : Builtin(Bool) = lowlevel Eq Test.33 Test.6;
-    if Test.34 then
-        let Test.8 : Builtin(Int(I64)) = 3i64;
+    let Test.35 : Builtin(Bool) = false;
+    let Test.36 : Builtin(Bool) = lowlevel Eq Test.35 Test.6;
+    if Test.36 then
+        let Test.8 : Builtin(Int(I64)) = CallByName Test.8;
         ret Test.8;
     else
-        let Test.10 : Builtin(Int(I64)) = 5i64;
+        let Test.10 : Builtin(Int(I64)) = CallByName Test.10;
         ret Test.10;
 
+procedure Test.10 ():
+    let Test.34 : Builtin(Int(I64)) = 5i64;
+    ret Test.34;
+
+procedure Test.8 ():
+    let Test.32 : Builtin(Int(I64)) = 3i64;
+    ret Test.32;
+
 procedure Test.0 ():
-    let Test.37 : Builtin(Bool) = true;
-    let Test.5 : Builtin(Int(I64)) = CallByName Test.1 Test.37;
-    let Test.35 : Builtin(Bool) = false;
-    let Test.3 : Builtin(Int(I64)) = CallByName Test.1 Test.35;
+    let Test.39 : Builtin(Bool) = true;
+    let Test.5 : Builtin(Int(I64)) = CallByName Test.1 Test.39;
+    let Test.37 : Builtin(Bool) = false;
+    let Test.3 : Builtin(Int(I64)) = CallByName Test.1 Test.37;
     let Test.28 : Builtin(Int(I64)) = 11i64;
     let Test.29 : Builtin(Bool) = true;
     let Test.27 : Struct([Builtin(Int(I64)), Builtin(Bool)]) = Struct {Test.28, Test.29};

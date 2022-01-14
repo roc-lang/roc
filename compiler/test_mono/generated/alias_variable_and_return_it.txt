@@ -1,3 +1,7 @@
+procedure Test.1 ():
+    let Test.4 : Builtin(Int(I64)) = 5i64;
+    ret Test.4;
+
 procedure Test.0 ():
-    let Test.1 : Builtin(Int(I64)) = 5i64;
+    let Test.1 : Builtin(Int(I64)) = CallByName Test.1;
     ret Test.1;

@@ -1,8 +1,14 @@
+procedure Test.2 ():
+    let Test.8 : Builtin(Int(I64)) = 1337i64;
+    ret Test.8;
+
+procedure Test.4 ():
+    let Test.9 : Builtin(Int(I64)) = 17i64;
+    ret Test.9;
+
 procedure Test.0 ():
-    let Test.1 : Builtin(Int(I64)) = 5i64;
-    let Test.4 : Builtin(Int(I64)) = 17i64;
-    let Test.5 : Builtin(Int(I64)) = 1i64;
-    let Test.2 : Builtin(Int(I64)) = 1337i64;
+    let Test.4 : Builtin(Int(I64)) = CallByName Test.4;
+    let Test.2 : Builtin(Int(I64)) = CallByName Test.2;
     let Test.7 : Struct([Builtin(Int(I64)), Builtin(Int(I64))]) = Struct {Test.2, Test.4};
     let Test.6 : Builtin(Int(I64)) = StructAtIndex 0 Test.7;
     ret Test.6;

@@ -1262,3 +1262,20 @@ fn recursive_tag_union_into_flat_tag_union() {
         |_| 0
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            b = False
+            f : Bool, [True, False, Idk] -> U8
+            f = \_, _ -> 18
+            f b b
+            "#
+        ),
+        18,
+        u8
+    )
+}

@@ -5019,6 +5019,47 @@ fn register_capturing_closure<'a>(
     }
 }
 
+fn is_flex_or_rigid(c: &Content) -> bool {
+    matches!(c, Content::FlexVar(_) | Content::RigidVar(_))
+}
+
+fn is_simple_literal(expr: &roc_can::expr::Expr) -> bool {
+    use roc_can::expr::Expr::*;
+    match expr {
+        Num(_, _, _) | Int(_, _, _, _) | Float(_, _, _, _) => true,
+        List { loc_elems, .. } => loc_elems
+            .iter()
+            .map(|loc_expr| &loc_expr.value)
+            .all(is_simple_literal),
+        ZeroArgumentTag { .. } => true,
+        Tag { arguments, .. } if arguments.len() == 0 => true,
+        _ => false,
+    }
+}
+
+fn needs_specialization<'a>(
+    env: &mut Env<'a, '_>,
+    expr: &roc_can::expr::Expr,
+    expr_var: Variable,
+) -> bool {
+    // TODO: handle more complicated scenarios that demand specialization
+    //
+    // 1. Aliasing
+    //    y = 100  # specialized
+    //    x = y    # must also be specialized
+    //
+    // 2. Non-singleon tags
+    //    m = 100  # specialized
+    //    n = 100  # specialized
+    //    Add m n  # must also be specialized
+    //
+    // 3. Record literals
+    //    m = 100  # specialized
+    //    n = 100  # specialized
+    //    { m, n } # must also be specialized
+    is_simple_literal(expr) && env.subs.var_contains_content(expr_var, is_flex_or_rigid)
+}
+
 pub fn from_can<'a>(
     env: &mut Env<'a, '_>,
     variable: Variable,
@@ -5028,6 +5069,7 @@ pub fn from_can<'a>(
 ) -> Stmt<'a> {
     use roc_can::expr::Expr::*;
 
+    // dbg!(&can_expr);
     match can_expr {
         When {
             cond_var,
@@ -5269,6 +5311,21 @@ pub fn from_can<'a>(
 
                         return from_can(env, variable, new_outer, procs, layout_cache);
                     }
+                    body if needs_specialization(env, &body, def.expr_var) => {
+                        let proc = PartialProc {
+                            annotation: def.expr_var,
+                            pattern_symbols: &[], // zero-argument thunk
+                            // TODO fix me for aliases, tags, and records
+                            captured_symbols: CapturedSymbols::None,
+                            body,
+                            is_self_recursive: false,
+                        };
+                        // dbg!(&symbol, &proc, &cont.value);
+
+                        procs.partial_procs.insert(*symbol, proc);
+
+                        return from_can(env, variable, cont.value, procs, layout_cache);
+                    }
                     _ => {
                         let rest = from_can(env, variable, cont.value, procs, layout_cache);
                         return with_hole(
@@ -5285,6 +5342,7 @@ pub fn from_can<'a>(
             }
 
             // this may be a destructure pattern
+            // dbg!(&def.loc_pattern.value, &def.loc_expr);
             let (mono_pattern, assignments) =
                 match from_can_pattern(env, layout_cache, &def.loc_pattern.value) {
                     Ok(v) => v,
@@ -5391,7 +5449,9 @@ fn to_opt_branches<'a>(
             Guard::NoGuard
         };
 
+        // dbg!(&when_branch);
         for loc_pattern in when_branch.patterns {
+            // dbg!(&loc_pattern.value);
             match from_can_pattern(env, layout_cache, &loc_pattern.value) {
                 Ok((mono_pattern, assignments)) => {
                     loc_branches.push((
@@ -7914,6 +7974,7 @@ fn from_can_pattern_help<'a>(
                                             variable,
                                             loc_expr.value.clone(),
                                         ));
+                                        // dbg!(&assignments);
                                     }
                                     _ => unreachable!(
                                         "only optional destructs can be optional fields"
