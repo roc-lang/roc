@@ -4,8 +4,8 @@ use roc_collections::all::MutMap;
 use roc_reporting::internal_error;
 
 use super::dead_code::{
-    copy_live_and_replace_dead_preloads, parse_dead_code_metadata, trace_function_deps,
-    DeadCodeMetadata,
+    copy_preloads_shrinking_dead_fns, parse_preloads_call_graph, trace_call_graph,
+    PreloadsCallGraph,
 };
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
@@ -705,7 +705,7 @@ pub struct CodeSection<'a> {
     pub preloaded_count: u32,
     pub preloaded_bytes: &'a [u8],
     pub code_builders: Vec<'a, CodeBuilder<'a>>,
-    dead_code_metadata: DeadCodeMetadata<'a>,
+    dead_code_metadata: PreloadsCallGraph<'a>,
 }
 
 impl<'a> CodeSection<'a> {
@@ -742,9 +742,9 @@ impl<'a> CodeSection<'a> {
         let (preloaded_count, initial_bytes) = parse_section(SectionId::Code, module_bytes, cursor);
         let preloaded_bytes = arena.alloc_slice_copy(initial_bytes);
 
-        // TODO: Try to move this metadata preparation to platform build time
+        // TODO: Try to move this call_graph preparation to platform build time
         let dead_code_metadata =
-            parse_dead_code_metadata(arena, preloaded_count, initial_bytes, import_fn_count);
+            parse_preloads_call_graph(arena, preloaded_count, initial_bytes, import_fn_count);
 
         CodeSection {
             preloaded_count,
@@ -761,7 +761,7 @@ impl<'a> CodeSection<'a> {
         exported_fns: &[u32],
         called_preload_fns: T,
     ) {
-        let live_ext_fn_indices = trace_function_deps(
+        let live_ext_fn_indices = trace_call_graph(
             arena,
             &self.dead_code_metadata,
             exported_fns,
@@ -770,7 +770,7 @@ impl<'a> CodeSection<'a> {
 
         let mut buffer = Vec::with_capacity_in(self.preloaded_bytes.len(), arena);
 
-        copy_live_and_replace_dead_preloads(
+        copy_preloads_shrinking_dead_fns(
             arena,
             &mut buffer,
             &self.dead_code_metadata,
