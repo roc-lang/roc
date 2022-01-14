@@ -1,30 +1,30 @@
 procedure Test.3 (Test.29):
     joinpoint Test.13 Test.4:
-        let Test.23 = 1i64;
-        let Test.24 = GetTagId Test.4;
-        let Test.25 = lowlevel Eq Test.23 Test.24;
+        let Test.23 : Builtin(Bool) = 1i64;
+        let Test.24 : Builtin(Bool) = GetTagId Test.4;
+        let Test.25 : Builtin(Bool) = lowlevel Eq Test.23 Test.24;
         if Test.25 then
-            let Test.14 = false;
+            let Test.14 : Builtin(Bool) = false;
             ret Test.14;
         else
-            let Test.19 = UnionAtIndex (Id 0) (Index 0) Test.4;
-            let Test.20 = 1i64;
-            let Test.21 = GetTagId Test.19;
-            let Test.22 = lowlevel Eq Test.20 Test.21;
+            let Test.19 : Union(NonRecursive([[Builtin(Int(I64))], []])) = UnionAtIndex (Id 0) (Index 0) Test.4;
+            let Test.20 : Builtin(Int(U8)) = 1i64;
+            let Test.21 : Builtin(Int(U8)) = GetTagId Test.19;
+            let Test.22 : Builtin(Bool) = lowlevel Eq Test.20 Test.21;
             if Test.22 then
-                let Test.15 = true;
+                let Test.15 : Builtin(Bool) = true;
                 ret Test.15;
             else
-                let Test.7 = UnionAtIndex (Id 0) (Index 1) Test.4;
+                let Test.7 : Union(NullableUnwrapped { nullable_id: true, other_fields: [Union(NonRecursive([[Builtin(Int(I64))], []])), RecursivePointer] }) = UnionAtIndex (Id 0) (Index 1) Test.4;
                 jump Test.13 Test.7;
     in
     jump Test.13 Test.29;
 
 procedure Test.0 ():
-    let Test.28 = 3i64;
-    let Test.26 = Just Test.28;
-    let Test.27 = Nil ;
-    let Test.12 = Cons Test.26 Test.27;
-    let Test.11 = CallByName Test.3 Test.12;
+    let Test.28 : Builtin(Int(I64)) = 3i64;
+    let Test.26 : Union(NonRecursive([[Builtin(Int(I64))], []])) = Just Test.28;
+    let Test.27 : Union(NullableUnwrapped { nullable_id: true, other_fields: [Union(NonRecursive([[Builtin(Int(I64))], []])), RecursivePointer] }) = Nil ;
+    let Test.12 : Union(NullableUnwrapped { nullable_id: true, other_fields: [Union(NonRecursive([[Builtin(Int(I64))], []])), RecursivePointer] }) = Cons Test.26 Test.27;
+    let Test.11 : Builtin(Bool) = CallByName Test.3 Test.12;
     dec Test.12;
     ret Test.11;

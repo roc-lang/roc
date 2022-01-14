@@ -19,9 +19,6 @@ const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
 const COMPILER_RT_PATH_VAR: &str = "TEST_GEN_WASM_COMPILER_RT_PATH";
 
-#[allow(unused_imports)]
-use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
-
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
 fn promote_expr_to_module(src: &str) -> String {
