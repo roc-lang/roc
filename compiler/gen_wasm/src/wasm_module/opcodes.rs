@@ -185,6 +185,9 @@ pub enum OpCode {
     F64REINTERPRETI64 = 0xbf,
 }
 
+/// The format of the *immediate* operands of an operator
+/// Immediates appear directly in the byte stream after the opcode,
+/// rather than being popped off the value stack. These are the possible forms.
 enum OpImmediates {
     NoImmediate,
     Byte1,
@@ -248,7 +251,7 @@ impl From<OpCode> for OpImmediates {
             | I64REINTERPRETF64 | F32REINTERPRETI32 | F64REINTERPRETI64 => NoImmediate,
 
             // Catch-all in case of an invalid cast from u8 to OpCode while parsing binary
-            // (rustc keeps this code, it has been verified in Compiler Explorer)
+            // (rustc keeps this code, I verified in Compiler Explorer)
             #[allow(unreachable_patterns)]
             _ => internal_error!("Unknown Wasm instruction 0x{:02x}", op as u8),
         }

@@ -75,11 +75,7 @@ macro_rules! section_impl {
             }
 
             fn size(&self) -> usize {
-                let id = 1;
-                let encoded_length = 5;
-                let encoded_count = 5;
-
-                id + encoded_length + encoded_count + self.bytes.len()
+                section_size(self.get_bytes())
             }
         }
     };
@@ -104,6 +100,14 @@ where
             update_section_size(buffer, header_indices);
         }
     }
+}
+
+fn section_size(bytes: &[u8]) -> usize {
+    let id = 1;
+    let encoded_length = 5;
+    let encoded_count = 5;
+
+    id + encoded_length + encoded_count + bytes.len()
 }
 
 fn parse_section<'a>(id: SectionId, module_bytes: &'a [u8], cursor: &mut usize) -> (u32, &'a [u8]) {
@@ -661,11 +665,7 @@ impl<'a> ExportSection<'a> {
     }
 
     pub fn size(&self) -> usize {
-        let id = 1;
-        let encoded_length = 5;
-        let encoded_count = 5;
-
-        id + encoded_length + encoded_count + self.bytes.len()
+        section_size(&self.bytes)
     }
 
     pub fn empty(arena: &'a Bump) -> Self {

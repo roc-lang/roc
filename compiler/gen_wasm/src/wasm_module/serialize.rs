@@ -294,6 +294,7 @@ impl SkipBytes for u8 {
     }
 }
 
+/// Note: This is just for skipping over Wasm bytes. We don't actually care about String vs str!
 impl SkipBytes for String {
     fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
         let len = parse_u32_or_panic(bytes, cursor);
@@ -301,8 +302,8 @@ impl SkipBytes for String {
         if false {
             let str_bytes = &bytes[*cursor..(*cursor + len as usize)];
             println!(
-                "Skipping String {:?}",
-                String::from_utf8(str_bytes.to_vec()).unwrap()
+                "Skipping string {:?}",
+                std::str::from_utf8(str_bytes).unwrap()
             );
         }
 
