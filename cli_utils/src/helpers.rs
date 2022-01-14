@@ -295,6 +295,19 @@ pub fn fixture_file(dir_name: &str, file_name: &str) -> PathBuf {
 }
 
 #[allow(dead_code)]
+pub fn known_bad_file(file_name: &str) -> PathBuf {
+    let mut path = root_dir();
+
+    // Descend into cli/tests/known_bad/{file_name}
+    path.push("cli");
+    path.push("tests");
+    path.push("known_bad");
+    path.push(file_name);
+
+    path
+}
+
+#[allow(dead_code)]
 pub fn repl_eval(input: &str) -> Out {
     let mut cmd = Command::new(path_to_roc_binary());
 

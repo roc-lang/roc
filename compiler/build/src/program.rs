@@ -82,7 +82,7 @@ fn report_problems_help(
             src_lines.extend(src.split('\n'));
         }
 
-        let lines = LineInfo::new(src);
+        let lines = LineInfo::new(&src_lines.join("\n"));
 
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, *home, interns);
