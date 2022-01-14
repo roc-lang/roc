@@ -5032,7 +5032,7 @@ fn is_simple_literal(expr: &roc_can::expr::Expr) -> bool {
             .map(|loc_expr| &loc_expr.value)
             .all(is_simple_literal),
         ZeroArgumentTag { .. } => true,
-        Tag { arguments, .. } if arguments.len() == 0 => true,
+        Tag { arguments, .. } if arguments.is_empty() => true,
         _ => false,
     }
 }
