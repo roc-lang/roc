@@ -34,7 +34,7 @@ impl<'a> State<'a> {
         self.original_bytes
     }
 
-    pub fn bytes(&self) -> &'a [u8] {
+    pub(crate) fn bytes(&self) -> &'a [u8] {
         &self.original_bytes[self.offset..]
     }
 
@@ -43,7 +43,7 @@ impl<'a> State<'a> {
     }
 
     #[must_use]
-    pub fn advance(&self, offset: usize) -> State<'a> {
+    pub(crate) fn advance(&self, offset: usize) -> State<'a> {
         let mut state = self.clone();
         debug_assert!(!state.bytes()[..offset].iter().any(|b| *b == b'\n'));
         state.offset += offset;
@@ -51,7 +51,7 @@ impl<'a> State<'a> {
     }
 
     #[must_use]
-    pub fn advance_newline(&self) -> State<'a> {
+    pub(crate) fn advance_newline(&self) -> State<'a> {
         let mut state = self.clone();
         state.offset += 1;
         state.line_start = state.pos();

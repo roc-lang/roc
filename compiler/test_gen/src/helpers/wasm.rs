@@ -11,9 +11,6 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
 
-#[allow(unused_imports)]
-use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
-
 // Should manually match build.rs
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
 const OUT_DIR_VAR: &str = "TEST_GEN_OUT";

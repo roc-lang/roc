@@ -9,7 +9,6 @@ use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
 use std::path::PathBuf;
 
-use crate::internal_error;
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use ven_pretty::DocAllocator;
 
@@ -2721,7 +2720,7 @@ fn type_problem_to_pretty<'b>(
             alloc.tip().append(line)
         }
 
-        (BadRigidVar(x, tipe), ExpectationContext::Annotation { on }) => {
+        (BadRigidVar(x, tipe), expectation) => {
             use ErrorType::*;
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
@@ -2735,17 +2734,23 @@ fn type_problem_to_pretty<'b>(
             };
 
             let bad_double_wildcard = || {
-                alloc.tip().append(alloc.concat(vec![
+                let mut hints_lines = vec![
                     alloc.reflow(
                         "Any connection between types must use a named type variable, not a ",
                     ),
                     alloc.type_variable(WILDCARD.into()),
-                    alloc.reflow("! Maybe the annotation "),
-                    on,
-                    alloc.reflow(" should have a named type variable in place of the "),
-                    alloc.type_variable(WILDCARD.into()),
-                    alloc.reflow("?"),
-                ]))
+                    alloc.reflow("!"),
+                ];
+                if let ExpectationContext::Annotation { on } = expectation {
+                    hints_lines.append(&mut vec![
+                        alloc.reflow(" Maybe the annotation "),
+                        on,
+                        alloc.reflow(" should have a named type variable in place of the "),
+                        alloc.type_variable(WILDCARD.into()),
+                        alloc.reflow("?"),
+                    ]);
+                }
+                alloc.tip().append(alloc.concat(hints_lines))
             };
 
             let bad_double_rigid = |a: Lowercase, b: Lowercase| {
@@ -2780,9 +2785,6 @@ fn type_problem_to_pretty<'b>(
                     ]),
                 ),
             }
-        }
-        (BadRigidVar(_, _), expectation_context) => {
-            internal_error!("I thought mismatches between rigid vars could only happen in the context of a type annotation, but here they're happening with a {:?}!", expectation_context)
         }
 
         (IntFloat, _) => alloc.tip().append(alloc.concat(vec![

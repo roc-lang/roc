@@ -6,12 +6,16 @@ extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
 
+#[macro_use]
+extern crate indoc;
+
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        example_file, examples_dir, extract_valgrind_errors, fixture_file, run_cmd, run_roc,
-        run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
+        example_file, examples_dir, extract_valgrind_errors, fixture_file, known_bad_file, run_cmd,
+        run_roc, run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
     };
+    use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::path::{Path, PathBuf};
 
@@ -42,6 +46,27 @@ mod cli_run {
         input_file: Option<&'a str>,
         expected_ending: &'a str,
         use_valgrind: bool,
+    }
+
+    fn strip_colors(str: &str) -> String {
+        use roc_reporting::report::*;
+        str.replace(RED_CODE, "")
+            .replace(WHITE_CODE, "")
+            .replace(BLUE_CODE, "")
+            .replace(YELLOW_CODE, "")
+            .replace(GREEN_CODE, "")
+            .replace(CYAN_CODE, "")
+            .replace(MAGENTA_CODE, "")
+            .replace(RESET_CODE, "")
+            .replace(BOLD_CODE, "")
+            .replace(UNDERLINE_CODE, "")
+    }
+
+    fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
+        let compile_out = run_roc(&[&["check", file.to_str().unwrap()], &flags[..]].concat());
+        let err = compile_out.stdout.trim();
+        let err = strip_colors(&err);
+        assert_multiline_str_eq!(err, expected.into());
     }
 
     fn check_output_with_stdin(
@@ -738,6 +763,32 @@ mod cli_run {
             None,
             "I am Dep2.value2\n",
             true,
+        );
+    }
+
+    #[test]
+    fn known_type_error() {
+        check_compile_error(
+            &known_bad_file("TypeError.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                
+                I cannot find a `d` value
+                
+                10│      _ <- await (line d)
+                                          ^
+                
+                Did you mean one of these?
+                
+                    U8
+                    Ok
+                    I8
+                    F64
+                
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
         );
     }
 }

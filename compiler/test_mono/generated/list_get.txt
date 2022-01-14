@@ -1,23 +1,23 @@
 procedure List.3 (#Attr.2, #Attr.3):
-    let Test.13 = lowlevel ListLen #Attr.2;
-    let Test.10 = lowlevel NumLt #Attr.3 Test.13;
+    let Test.13 : Builtin(Int(U64)) = lowlevel ListLen #Attr.2;
+    let Test.10 : Builtin(Bool) = lowlevel NumLt #Attr.3 Test.13;
     if Test.10 then
-        let Test.12 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-        let Test.11 = Ok Test.12;
+        let Test.12 : Builtin(Int(I64)) = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+        let Test.11 : Union(NonRecursive([[Struct([])], [Builtin(Int(I64))]])) = Ok Test.12;
         ret Test.11;
     else
-        let Test.9 = Struct {};
-        let Test.8 = Err Test.9;
+        let Test.9 : Struct([]) = Struct {};
+        let Test.8 : Union(NonRecursive([[Struct([])], [Builtin(Int(I64))]])) = Err Test.9;
         ret Test.8;
 
 procedure Test.1 (Test.2):
-    let Test.6 = Array [1i64, 2i64, 3i64];
-    let Test.7 = 0i64;
-    let Test.5 = CallByName List.3 Test.6 Test.7;
+    let Test.6 : Builtin(List(Builtin(Int(I64)))) = Array [1i64, 2i64, 3i64];
+    let Test.7 : Builtin(Int(U64)) = 0i64;
+    let Test.5 : Union(NonRecursive([[Struct([])], [Builtin(Int(I64))]])) = CallByName List.3 Test.6 Test.7;
     dec Test.6;
     ret Test.5;
 
 procedure Test.0 ():
-    let Test.4 = Struct {};
-    let Test.3 = CallByName Test.1 Test.4;
+    let Test.4 : Struct([]) = Struct {};
+    let Test.3 : Union(NonRecursive([[Struct([])], [Builtin(Int(I64))]])) = CallByName Test.1 Test.4;
     ret Test.3;

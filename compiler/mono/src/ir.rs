@@ -20,7 +20,13 @@ use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSu
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
+pub fn pretty_print_ir_symbols() -> bool {
+    #[cfg(debug_assertions)]
+    if std::env::var("PRETTY_PRINT_IR_SYMBOLS") == Ok("1".into()) {
+        return true;
+    }
+    false
+}
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
@@ -268,7 +274,7 @@ impl<'a> Proc<'a> {
             .iter()
             .map(|(_, symbol)| symbol_to_doc(alloc, *symbol));
 
-        if PRETTY_PRINT_IR_SYMBOLS {
+        if pretty_print_ir_symbols() {
             alloc
                 .text("procedure : ")
                 .append(symbol_to_doc(alloc, self.name))
@@ -1119,7 +1125,7 @@ impl<'a> BranchInfo<'a> {
                 tag_id,
                 scrutinee,
                 layout: _,
-            } if PRETTY_PRINT_IR_SYMBOLS => alloc
+            } if pretty_print_ir_symbols() => alloc
                 .hardline()
                 .append("    BranchInfo: { scrutinee: ")
                 .append(symbol_to_doc(alloc, *scrutinee))
@@ -1128,7 +1134,7 @@ impl<'a> BranchInfo<'a> {
                 .append("} "),
 
             _ => {
-                if PRETTY_PRINT_IR_SYMBOLS {
+                if pretty_print_ir_symbols() {
                     alloc.text(" <no branch info>")
                 } else {
                     alloc.text("")
@@ -1463,7 +1469,7 @@ where
 {
     use roc_module::ident::ModuleName;
 
-    if PRETTY_PRINT_IR_SYMBOLS {
+    if pretty_print_ir_symbols() {
         alloc.text(format!("{:?}", symbol))
     } else {
         let text = format!("{}", symbol);
@@ -1632,19 +1638,16 @@ impl<'a> Stmt<'a> {
         use Stmt::*;
 
         match self {
-            Let(symbol, expr, layout, cont) => {
-                let mut doc = alloc.text("let ").append(symbol_to_doc(alloc, *symbol));
-                if PRETTY_PRINT_IR_SYMBOLS {
-                    doc = doc
-                        .append(" : ")
-                        .append(alloc.text(format!("{:?}", layout)));
-                }
-                doc.append(" = ")
-                    .append(expr.to_doc(alloc))
-                    .append(";")
-                    .append(alloc.hardline())
-                    .append(cont.to_doc(alloc))
-            }
+            Let(symbol, expr, _layout, cont) => alloc
+                .text("let ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(" : ")
+                .append(alloc.text(format!("{:?}", _layout)))
+                .append(" = ")
+                .append(expr.to_doc(alloc))
+                .append(";")
+                .append(alloc.hardline())
+                .append(cont.to_doc(alloc)),
 
             Refcounting(modify, cont) => modify
                 .to_doc(alloc)
@@ -1806,33 +1809,9 @@ fn patterns_to_when<'a>(
     for (pattern_var, pattern) in patterns.into_iter() {
         let context = crate::exhaustive::Context::BadArg;
         let mono_pattern = match from_can_pattern(env, layout_cache, &pattern.value) {
-            Ok((pat, assignments)) => {
-                for (symbol, variable, expr) in assignments.into_iter().rev() {
-                    if let Ok(old_body) = body {
-                        let def = roc_can::def::Def {
-                            annotation: None,
-                            expr_var: variable,
-                            loc_expr: Loc::at(pattern.region, expr),
-                            loc_pattern: Loc::at(
-                                pattern.region,
-                                roc_can::pattern::Pattern::Identifier(symbol),
-                            ),
-                            pattern_vars: std::iter::once((symbol, variable)).collect(),
-                        };
-                        let new_expr = roc_can::expr::Expr::LetNonRec(
-                            Box::new(def),
-                            Box::new(old_body),
-                            variable,
-                        );
-                        let new_body = Loc {
-                            region: pattern.region,
-                            value: new_expr,
-                        };
-
-                        body = Ok(new_body);
-                    }
-                }
-
+            Ok((pat, _assignments)) => {
+                // Don't apply any assignments (e.g. to initialize optional variables) yet.
+                // We'll take care of that later when expanding the new "when" branch.
                 pat
             }
             Err(runtime_error) => {
