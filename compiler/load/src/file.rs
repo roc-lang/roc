@@ -366,7 +366,6 @@ struct ModuleCache<'a> {
     mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
-    header_sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
 
 fn start_phase<'a>(
@@ -625,7 +624,6 @@ pub struct LoadedModule {
     pub dep_idents: MutMap<ModuleId, IdentIds>,
     pub exposed_aliases: MutMap<Symbol, Alias>,
     pub exposed_values: Vec<Symbol>,
-    pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
@@ -672,7 +670,6 @@ struct ModuleHeader<'a> {
     package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    header_src: &'a str,
     parse_state: roc_parse::state::State<'a>,
     module_timing: ModuleTiming,
 }
@@ -740,7 +737,6 @@ pub struct MonomorphizedModule<'a> {
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
-    pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
@@ -1758,11 +1754,6 @@ fn update<'a>(
 
             state
                 .module_cache
-                .header_sources
-                .insert(home, (header.module_path.clone(), header.header_src));
-
-            state
-                .module_cache
                 .imports
                 .entry(header.module_id)
                 .or_default()
@@ -2211,16 +2202,10 @@ fn finish_specialization(
         type_problems,
         can_problems,
         sources,
-        header_sources,
         ..
     } = module_cache;
 
     let sources: MutMap<ModuleId, (PathBuf, Box<str>)> = sources
-        .into_iter()
-        .map(|(id, (path, src))| (id, (path, src.into())))
-        .collect();
-
-    let header_sources: MutMap<ModuleId, (PathBuf, Box<str>)> = header_sources
         .into_iter()
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
@@ -2287,7 +2272,6 @@ fn finish_specialization(
         procedures,
         entry_point,
         sources,
-        header_sources,
         timings: state.timings,
     })
 }
@@ -2318,13 +2302,6 @@ fn finish(
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
 
-    let header_sources = state
-        .module_cache
-        .header_sources
-        .into_iter()
-        .map(|(id, (path, src))| (id, (path, src.into())))
-        .collect();
-
     LoadedModule {
         module_id: state.root_id,
         interns,
@@ -2336,7 +2313,6 @@ fn finish(
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
-        header_sources,
         sources,
         timings: state.timings,
         documentation,
@@ -2392,10 +2368,6 @@ fn load_pkg_config<'a>(
                     )))
                 }
                 Ok((ast::Module::Platform { header }, parser_state)) => {
-                    let delta = bytes.len() - parser_state.bytes().len();
-                    let chomped = &bytes[..delta];
-                    let header_src = unsafe { std::str::from_utf8_unchecked(chomped) };
-
                     // make a Package-Config module that ultimately exposes `main` to the host
                     let pkg_config_module_msg = fabricate_pkg_config_module(
                         arena,
@@ -2406,7 +2378,6 @@ fn load_pkg_config<'a>(
                         module_ids.clone(),
                         ident_ids_by_module.clone(),
                         &header,
-                        header_src,
                         pkg_module_timing,
                     )
                     .1;
@@ -2543,11 +2514,6 @@ fn parse_header<'a>(
 
     match parsed {
         Ok((ast::Module::Interface { header }, parse_state)) => {
-            let header_src = unsafe {
-                let chomped = src_bytes.len() - parse_state.bytes().len();
-                std::str::from_utf8_unchecked(&src_bytes[..chomped])
-            };
-
             let info = HeaderInfo {
                 loc_name: Loc {
                     region: header.name.region,
@@ -2556,7 +2522,6 @@ fn parse_header<'a>(
                 filename,
                 is_root_module,
                 opt_shorthand,
-                header_src,
                 packages: &[],
                 exposes: unspace(arena, header.exposes.items),
                 imports: unspace(arena, header.imports.items),
@@ -2575,11 +2540,6 @@ fn parse_header<'a>(
             let mut pkg_config_dir = filename.clone();
             pkg_config_dir.pop();
 
-            let header_src = unsafe {
-                let chomped = src_bytes.len() - parse_state.bytes().len();
-                std::str::from_utf8_unchecked(&src_bytes[..chomped])
-            };
-
             let packages = unspace(arena, header.packages.items);
 
             let info = HeaderInfo {
@@ -2590,7 +2550,6 @@ fn parse_header<'a>(
                 filename,
                 is_root_module,
                 opt_shorthand,
-                header_src,
                 packages,
                 exposes: unspace(arena, header.provides.items),
                 imports: unspace(arena, header.imports.items),
@@ -2749,7 +2708,6 @@ struct HeaderInfo<'a> {
     filename: PathBuf,
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
-    header_src: &'a str,
     packages: &'a [Loc<PackageEntry<'a>>],
     exposes: &'a [Loc<ExposedName<'a>>],
     imports: &'a [Loc<ImportsEntry<'a>>],
@@ -2775,7 +2733,6 @@ fn send_header<'a>(
         exposes,
         imports,
         to_platform,
-        header_src,
     } = info;
 
     let declared_name: ModuleName = match &loc_name.value {
@@ -2945,7 +2902,6 @@ fn send_header<'a>(
                 package_qualified_imported_modules,
                 deps_by_name,
                 exposes: exposed,
-                header_src,
                 parse_state,
                 exposed_imports: scope,
                 module_timing,
@@ -2960,7 +2916,6 @@ struct PlatformHeaderInfo<'a> {
     filename: PathBuf,
     is_root_module: bool,
     shorthand: &'a str,
-    header_src: &'a str,
     app_module_id: ModuleId,
     packages: &'a [Loc<PackageEntry<'a>>],
     provides: &'a [Loc<ExposedName<'a>>],
@@ -2981,7 +2936,6 @@ fn send_header_two<'a>(
         filename,
         shorthand,
         is_root_module,
-        header_src,
         app_module_id,
         packages,
         provides,
@@ -3175,7 +3129,6 @@ fn send_header_two<'a>(
                 package_qualified_imported_modules,
                 deps_by_name,
                 exposes: exposed,
-                header_src,
                 parse_state,
                 exposed_imports: scope,
                 module_timing,
@@ -3323,14 +3276,12 @@ fn fabricate_pkg_config_module<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     header: &PlatformHeader<'a>,
-    header_src: &'a str,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     let info = PlatformHeaderInfo {
         filename,
         is_root_module: false,
         shorthand,
-        header_src,
         app_module_id,
         packages: &[],
         provides: unspace(arena, header.provides.items),
@@ -3716,7 +3667,7 @@ where
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let mut module_timing = header.module_timing;
     let parse_start = SystemTime::now();
-    let source = header.parse_state.bytes();
+    let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
     let parsed_defs = match module_defs().parse(arena, parse_state) {
         Ok((_, success, _state)) => success,
