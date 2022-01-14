@@ -130,34 +130,20 @@ impl<'a> WasmModule<'a> {
         let mut cursor: usize = 8;
 
         let mut types = TypeSection::preload(arena, bytes, &mut cursor);
-        let ret_types = types.parse_preloaded_data(arena);
+        types.parse_offsets();
 
         let import = ImportSection::preload(arena, bytes, &mut cursor);
-
         let function = FunctionSection::preload(arena, bytes, &mut cursor);
-        let signature_ids = function.parse_preloaded_data(arena);
-
         let table = OpaqueSection::preload(SectionId::Table, arena, bytes, &mut cursor);
-
         let memory = MemorySection::preload(arena, bytes, &mut cursor);
-
         let global = GlobalSection::preload(arena, bytes, &mut cursor);
 
         ExportSection::skip_bytes(bytes, &mut cursor);
         let export = ExportSection::empty(arena);
 
         let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
-
         let element = OpaqueSection::preload(SectionId::Element, arena, bytes, &mut cursor);
-
-        let code = CodeSection::preload(
-            arena,
-            bytes,
-            &mut cursor,
-            ret_types,
-            signature_ids,
-            import.function_count,
-        );
+        let code = CodeSection::preload(arena, bytes, &mut cursor, import.function_count);
 
         let data = DataSection::preload(arena, bytes, &mut cursor);
 

@@ -9,9 +9,7 @@ use super::dead_code::{
 };
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
-use super::serialize::{
-    decode_u32_or_panic, parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes,
-};
+use super::serialize::{parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes};
 use super::{CodeBuilder, ValueType};
 
 /*******************************************************************
@@ -223,9 +221,8 @@ impl<'a> TypeSection<'a> {
         sig_id as u32
     }
 
-    pub fn parse_preloaded_data(&mut self, arena: &'a Bump) -> Vec<'a, Option<ValueType>> {
+    pub fn parse_offsets(&mut self) {
         self.offsets.clear();
-        let mut ret_types = Vec::with_capacity_in(self.offsets.capacity(), arena);
 
         let mut i = 0;
         while i < self.bytes.len() {
@@ -234,23 +231,12 @@ impl<'a> TypeSection<'a> {
             debug_assert!(self.bytes[i] == Signature::SEPARATOR);
             i += 1;
 
-            let (n_params, n_params_size) = decode_u32_or_panic(&self.bytes[i..]);
-            i += n_params_size; // skip over the array length that we just decoded
+            let n_params = parse_u32_or_panic(&self.bytes, &mut i);
             i += n_params as usize; // skip over one byte per param type
 
             let n_return_values = self.bytes[i];
-            i += 1;
-
-            ret_types.push(if n_return_values == 0 {
-                None
-            } else {
-                Some(ValueType::from(self.bytes[i]))
-            });
-
-            i += n_return_values as usize;
+            i += 1 + n_return_values as usize;
         }
-
-        ret_types
     }
 }
 
@@ -450,15 +436,6 @@ impl<'a> FunctionSection<'a> {
     pub fn add_sig(&mut self, sig_id: u32) {
         self.bytes.encode_u32(sig_id);
         self.count += 1;
-    }
-
-    pub fn parse_preloaded_data(&self, arena: &'a Bump) -> Vec<'a, u32> {
-        let mut preload_signature_ids = Vec::with_capacity_in(self.count as usize, arena);
-        let mut cursor = 0;
-        while cursor < self.bytes.len() {
-            preload_signature_ids.push(parse_u32_or_panic(&self.bytes, &mut cursor));
-        }
-        preload_signature_ids
     }
 }
 
@@ -760,22 +737,14 @@ impl<'a> CodeSection<'a> {
         arena: &'a Bump,
         module_bytes: &[u8],
         cursor: &mut usize,
-        ret_types: Vec<'a, Option<ValueType>>,
-        internal_fn_sig_ids: Vec<'a, u32>,
         import_fn_count: u32,
     ) -> Self {
         let (preloaded_count, initial_bytes) = parse_section(SectionId::Code, module_bytes, cursor);
         let preloaded_bytes = arena.alloc_slice_copy(initial_bytes);
 
         // TODO: Try to move this metadata preparation to platform build time
-        let dead_code_metadata = parse_dead_code_metadata(
-            arena,
-            preloaded_count,
-            initial_bytes,
-            ret_types,
-            internal_fn_sig_ids,
-            import_fn_count,
-        );
+        let dead_code_metadata =
+            parse_dead_code_metadata(arena, preloaded_count, initial_bytes, import_fn_count);
 
         CodeSection {
             preloaded_count,
@@ -1053,7 +1022,7 @@ mod tests {
         // Reconstruct a new TypeSection by "pre-loading" the bytes of the original
         let mut cursor = 0;
         let mut preloaded = TypeSection::preload(arena, &original_serialized, &mut cursor);
-        preloaded.parse_preloaded_data(arena);
+        preloaded.parse_offsets();
 
         debug_assert_eq!(original.offsets, preloaded.offsets);
         debug_assert_eq!(original.bytes, preloaded.bytes);
