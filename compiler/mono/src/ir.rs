@@ -1806,33 +1806,9 @@ fn patterns_to_when<'a>(
     for (pattern_var, pattern) in patterns.into_iter() {
         let context = crate::exhaustive::Context::BadArg;
         let mono_pattern = match from_can_pattern(env, layout_cache, &pattern.value) {
-            Ok((pat, assignments)) => {
-                for (symbol, variable, expr) in assignments.into_iter().rev() {
-                    if let Ok(old_body) = body {
-                        let def = roc_can::def::Def {
-                            annotation: None,
-                            expr_var: variable,
-                            loc_expr: Loc::at(pattern.region, expr),
-                            loc_pattern: Loc::at(
-                                pattern.region,
-                                roc_can::pattern::Pattern::Identifier(symbol),
-                            ),
-                            pattern_vars: std::iter::once((symbol, variable)).collect(),
-                        };
-                        let new_expr = roc_can::expr::Expr::LetNonRec(
-                            Box::new(def),
-                            Box::new(old_body),
-                            variable,
-                        );
-                        let new_body = Loc {
-                            region: pattern.region,
-                            value: new_expr,
-                        };
-
-                        body = Ok(new_body);
-                    }
-                }
-
+            Ok((pat, _assignments)) => {
+                // Don't apply any assignments (e.g. to initialize optional variables) yet.
+                // We'll take care of that later when expanding the new "when" branch.
                 pat
             }
             Err(runtime_error) => {
