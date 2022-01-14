@@ -668,38 +668,53 @@ impl Serialize for Export<'_> {
 pub struct ExportSection<'a> {
     pub count: u32,
     pub bytes: Vec<'a, u8>,
+    pub function_indices: Vec<'a, u32>,
 }
 
 impl<'a> ExportSection<'a> {
+    const ID: SectionId = SectionId::Export;
+
     pub fn append(&mut self, export: Export) {
         export.serialize(&mut self.bytes);
         self.count += 1;
+        if matches!(export.ty, ExportType::Func) {
+            self.function_indices.push(export.index);
+        }
     }
 
-    pub fn function_index_map(&self, arena: &'a Bump) -> MutMap<&'a [u8], u32> {
-        let mut map = MutMap::default();
+    pub fn size(&self) -> usize {
+        let id = 1;
+        let encoded_length = 5;
+        let encoded_count = 5;
 
-        let mut cursor = 0;
-        while cursor < self.bytes.len() {
-            let name_len = parse_u32_or_panic(&self.bytes, &mut cursor);
-            let name_end = cursor + name_len as usize;
-            let name_bytes = &self.bytes[cursor..name_end];
-            let ty = self.bytes[name_end];
+        id + encoded_length + encoded_count + self.bytes.len()
+    }
 
-            cursor = name_end + 1;
-            let index = parse_u32_or_panic(&self.bytes, &mut cursor);
-
-            if ty == ExportType::Func as u8 {
-                let name: &'a [u8] = arena.alloc_slice_clone(name_bytes);
-                map.insert(name, index);
-            }
+    pub fn empty(arena: &'a Bump) -> Self {
+        ExportSection {
+            count: 0,
+            bytes: Vec::with_capacity_in(256, arena),
+            function_indices: Vec::with_capacity_in(4, arena),
         }
-
-        map
     }
 }
 
-section_impl!(ExportSection, SectionId::Export);
+impl SkipBytes for ExportSection<'_> {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        parse_section(Self::ID, bytes, cursor);
+    }
+}
+
+impl<'a> Serialize for ExportSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        if !self.bytes.is_empty() {
+            let header_indices = write_section_header(buffer, Self::ID);
+            buffer.encode_u32(self.count);
+            buffer.append_slice(&self.bytes);
+            update_section_size(buffer, header_indices);
+        }
+    }
+}
 
 /*******************************************************************
  *
@@ -769,14 +784,19 @@ impl<'a> CodeSection<'a> {
         }
     }
 
-    pub fn remove_dead_preloads<T: IntoIterator<Item = u32>>(
+    pub(super) fn remove_dead_preloads<T: IntoIterator<Item = u32>>(
         &mut self,
         arena: &'a Bump,
         import_fn_count: u32,
+        exported_fns: &[u32],
         called_preload_fns: T,
     ) {
-        let live_ext_fn_indices =
-            trace_function_deps(arena, &self.dead_code_metadata, called_preload_fns);
+        let live_ext_fn_indices = trace_function_deps(
+            arena,
+            &self.dead_code_metadata,
+            exported_fns,
+            called_preload_fns,
+        );
 
         let mut buffer = Vec::with_capacity_in(self.preloaded_bytes.len(), arena);
 
@@ -871,9 +891,7 @@ section_impl!(DataSection, SectionId::Data);
 
 /*******************************************************************
  *
- * Module
- *
- * https://webassembly.github.io/spec/core/binary/modules.html
+ * Opaque section
  *
  *******************************************************************/
 
@@ -919,6 +937,107 @@ impl Serialize for OpaqueSection<'_> {
         buffer.append_slice(self.bytes);
     }
 }
+
+/*******************************************************************
+ *
+ * Name section
+ * https://webassembly.github.io/spec/core/appendix/custom.html#name-section
+ *
+ *******************************************************************/
+
+#[repr(u8)]
+#[allow(dead_code)]
+enum NameSubSections {
+    ModuleName = 0,
+    FunctionNames = 1,
+    LocalNames = 2,
+}
+
+#[derive(Debug, Default)]
+pub struct NameSection<'a> {
+    pub functions: MutMap<&'a [u8], u32>,
+}
+
+impl<'a> NameSection<'a> {
+    const ID: SectionId = SectionId::Custom;
+    const NAME: &'static str = "name";
+
+    pub fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+        let functions = MutMap::default();
+        let mut section = NameSection { functions };
+        section.parse_help(arena, module_bytes, cursor);
+        section
+    }
+
+    fn parse_help(&mut self, arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) {
+        // Custom section ID
+        let section_id_byte = module_bytes[*cursor];
+        if section_id_byte != Self::ID as u8 {
+            internal_error!(
+                "Expected section ID 0x{:x}, but found 0x{:x} at offset 0x{:x}",
+                Self::ID as u8,
+                section_id_byte,
+                *cursor
+            );
+        }
+        *cursor += 1;
+
+        // Section size
+        let section_size = parse_u32_or_panic(module_bytes, cursor);
+        let section_end = *cursor + section_size as usize;
+
+        // Custom section name
+        let section_name_len = parse_u32_or_panic(module_bytes, cursor);
+        let section_name_end = *cursor + section_name_len as usize;
+        let section_name = &module_bytes[*cursor..section_name_end];
+        if section_name != Self::NAME.as_bytes() {
+            internal_error!(
+                "Expected Custon section {:?}, found {:?}",
+                Self::NAME,
+                std::str::from_utf8(section_name)
+            );
+        }
+        *cursor = section_name_end;
+
+        // Find function names subsection
+        let mut found_function_names = false;
+        for _possible_subsection_id in 0..2 {
+            let subsection_id = module_bytes[*cursor];
+            *cursor += 1;
+            let subsection_size = parse_u32_or_panic(module_bytes, cursor);
+            if subsection_id == NameSubSections::FunctionNames as u8 {
+                found_function_names = true;
+                break;
+            }
+            *cursor += subsection_size as usize;
+            if *cursor >= section_end {
+                internal_error!("Failed to parse Name section");
+            }
+        }
+        if !found_function_names {
+            internal_error!("Failed to parse Name section");
+        }
+
+        // Function names
+        let num_entries = parse_u32_or_panic(module_bytes, cursor) as usize;
+        for _ in 0..num_entries {
+            let fn_index = parse_u32_or_panic(module_bytes, cursor);
+            let name_len = parse_u32_or_panic(module_bytes, cursor);
+            let name_end = *cursor + name_len as usize;
+            let name_bytes: &[u8] = &module_bytes[*cursor..name_end];
+            *cursor = name_end;
+
+            self.functions
+                .insert(arena.alloc_slice_copy(name_bytes), fn_index);
+        }
+    }
+}
+
+/*******************************************************************
+ *
+ * Unit tests
+ *
+ *******************************************************************/
 
 #[cfg(test)]
 mod tests {

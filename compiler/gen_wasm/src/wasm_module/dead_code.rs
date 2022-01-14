@@ -131,22 +131,32 @@ pub fn parse_dead_code_metadata<'a>(
 pub fn trace_function_deps<'a, Indices: IntoIterator<Item = u32>>(
     arena: &'a Bump,
     metadata: &DeadCodeMetadata<'a>,
+    exported_fns: &[u32],
     called_from_app: Indices,
 ) -> Vec<'a, u32> {
-    let num_funcs = metadata.ret_types.len();
+    let num_preloads = metadata.ret_types.len();
 
     // All functions that get called from the app, directly or indirectly
-    let mut live_fn_indices = Vec::with_capacity_in(num_funcs, arena);
+    let mut live_fn_indices = Vec::with_capacity_in(num_preloads, arena);
 
     // Current & next batch of functions whose call graphs we want to trace through the metadata
     // (2 separate vectors so that we're not iterating over the same one we're changing)
     // If the max call depth is N then we will do N traces or less
-    let mut current_trace = Vec::with_capacity_in(num_funcs, arena);
+    let mut current_trace = Vec::with_capacity_in(num_preloads, arena);
+    let mut next_trace = Vec::with_capacity_in(num_preloads, arena);
+
+    // Start with preloaded functions called from the app or exported directly to Wasm host
     current_trace.extend(called_from_app);
-    let mut next_trace = Vec::with_capacity_in(num_funcs, arena);
+    current_trace.extend(
+        exported_fns
+            .iter()
+            .filter(|idx| **idx < num_preloads as u32),
+    );
+    current_trace.sort_unstable();
+    current_trace.dedup();
 
     // Fast per-function lookup table to see if its dependencies have already been traced
-    let mut already_traced = Vec::from_iter_in(std::iter::repeat(false).take(num_funcs), arena);
+    let mut already_traced = Vec::from_iter_in(std::iter::repeat(false).take(num_preloads), arena);
 
     loop {
         live_fn_indices.extend_from_slice(&current_trace);

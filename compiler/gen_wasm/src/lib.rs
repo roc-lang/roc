@@ -41,9 +41,11 @@ pub fn build_module<'a>(
     preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    // In production we don't want the test wrapper, just serialize it
-    let (wasm_module, _) =
+    let (mut wasm_module, called_preload_fns, _) =
         build_module_without_test_wrapper(env, interns, preload_bytes, procedures);
+
+    wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
+
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
     Ok(buffer)
@@ -55,14 +57,13 @@ pub fn build_module_without_test_wrapper<'a>(
     interns: &'a mut Interns,
     preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> (WasmModule<'a>, u32) {
+) -> (WasmModule<'a>, MutSet<u32>, u32) {
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut exports = Vec::with_capacity_in(4, env.arena);
     let mut maybe_main_fn_index = None;
-    let eliminate_dead_preloads = true;
 
     // Collect the symbols & names for the procedures,
     // and filter out procs we're going to inline
@@ -103,11 +104,6 @@ pub fn build_module_without_test_wrapper<'a>(
     let fn_index_offset: u32 =
         initial_module.import.function_count + initial_module.code.preloaded_count;
 
-    // Get a map of name to index for the preloaded functions
-    // Assumes the preloaded object file has all symbols exported, as per `zig build-lib -dymamic`
-    let preloaded_functions_map: MutMap<&'a [u8], u32> =
-        initial_module.export.function_index_map(env.arena);
-
     let mut backend = WasmBackend::new(
         env,
         interns,
@@ -115,7 +111,6 @@ pub fn build_module_without_test_wrapper<'a>(
         proc_symbols,
         initial_module,
         fn_index_offset,
-        preloaded_functions_map,
         CodeGenHelp::new(env.arena, IntWidth::I32, env.module_id),
     );
 
@@ -150,10 +145,10 @@ pub fn build_module_without_test_wrapper<'a>(
         backend.build_proc(proc);
     }
 
-    let module = backend.into_module(eliminate_dead_preloads);
-
+    let (module, called_preload_fns) = backend.finalize();
     let main_function_index = maybe_main_fn_index.unwrap() + fn_index_offset;
-    (module, main_function_index)
+
+    (module, called_preload_fns, main_function_index)
 }
 
 pub struct CopyMemoryConfig {
