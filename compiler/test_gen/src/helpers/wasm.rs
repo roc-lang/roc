@@ -1,4 +1,5 @@
 use core::cell::Cell;
+use roc_gen_wasm::wasm_module::{Export, ExportType};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -16,6 +17,7 @@ const PLATFORM_FILENAME: &str = "wasm_test_platform";
 const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
+const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -125,13 +127,29 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
         exposed_to_host,
     };
 
-    let (mut wasm_module, main_fn_index) =
-        roc_gen_wasm::build_module_help(&env, &mut interns, preload_bytes, procedures).unwrap();
+    let (mut module, called_preload_fns, main_fn_index) =
+        roc_gen_wasm::build_module_without_test_wrapper(
+            &env,
+            &mut interns,
+            preload_bytes,
+            procedures,
+        );
 
-    T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
+    T::insert_test_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
 
-    let mut app_module_bytes = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize(&mut app_module_bytes);
+    // Export the initialiser function for refcount tests
+    let init_refcount_bytes = INIT_REFCOUNT_NAME.as_bytes();
+    let init_refcount_idx = module.names.functions[init_refcount_bytes];
+    module.export.append(Export {
+        name: arena.alloc_slice_copy(init_refcount_bytes),
+        ty: ExportType::Func,
+        index: init_refcount_idx,
+    });
+
+    module.remove_dead_preloads(env.arena, called_preload_fns);
+
+    let mut app_module_bytes = std::vec::Vec::with_capacity(module.size());
+    module.serialize(&mut app_module_bytes);
 
     app_module_bytes
 }
@@ -231,7 +249,7 @@ where
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
     let expected_len = num_refcounts as i32;
-    let init_refcount_test = instance.exports.get_function("init_refcount_test").unwrap();
+    let init_refcount_test = instance.exports.get_function(INIT_REFCOUNT_NAME).unwrap();
     let init_result = init_refcount_test.call(&[wasmer::Value::I32(expected_len)]);
     let refcount_vector_addr = match init_result {
         Err(e) => return Err(format!("{:?}", e)),

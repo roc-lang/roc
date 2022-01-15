@@ -2,7 +2,7 @@ use bumpalo::{self, collections::Vec};
 
 use code_builder::Align;
 use roc_builtins::bitcode::{self, IntWidth};
-use roc_collections::all::MutMap;
+use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::Ident;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
@@ -20,11 +20,12 @@ use crate::storage::{StackMemoryLocation, Storage, StoredValue, StoredValueKind}
 use crate::wasm_module::linking::{DataSymbol, LinkingSegment, WasmObjectSymbol};
 use crate::wasm_module::sections::{DataMode, DataSegment};
 use crate::wasm_module::{
-    code_builder, CodeBuilder, LocalId, Signature, SymInfo, ValueType, WasmModule,
+    code_builder, CodeBuilder, Export, ExportType, LocalId, Signature, SymInfo, ValueType,
+    WasmModule,
 };
 use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, PTR_SIZE,
-    PTR_TYPE,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, MEMORY_NAME,
+    PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -41,7 +42,7 @@ pub struct WasmBackend<'a> {
     layout_ids: LayoutIds<'a>,
     next_constant_addr: u32,
     fn_index_offset: u32,
-    preloaded_functions_map: MutMap<&'a [u8], u32>,
+    called_preload_fns: MutSet<u32>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
 
@@ -63,11 +64,21 @@ impl<'a> WasmBackend<'a> {
         interns: &'a mut Interns,
         layout_ids: LayoutIds<'a>,
         proc_symbols: Vec<'a, (Symbol, u32)>,
-        module: WasmModule<'a>,
+        mut module: WasmModule<'a>,
         fn_index_offset: u32,
-        preloaded_functions_map: MutMap<&'a [u8], u32>,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
+        module.export.append(Export {
+            name: MEMORY_NAME.as_bytes(),
+            ty: ExportType::Mem,
+            index: 0,
+        });
+        module.export.append(Export {
+            name: STACK_POINTER_NAME.as_bytes(),
+            ty: ExportType::Global,
+            index: STACK_POINTER_GLOBAL_ID,
+        });
+
         WasmBackend {
             env,
             interns,
@@ -78,7 +89,7 @@ impl<'a> WasmBackend<'a> {
             layout_ids,
             next_constant_addr: CONST_SEGMENT_BASE_ADDR,
             fn_index_offset,
-            preloaded_functions_map,
+            called_preload_fns: MutSet::default(),
             proc_symbols,
             helper_proc_gen,
 
@@ -115,8 +126,8 @@ impl<'a> WasmBackend<'a> {
         self.module.linking.symbol_table.push(linker_symbol);
     }
 
-    pub fn into_module(self) -> WasmModule<'a> {
-        self.module
+    pub fn finalize(self) -> (WasmModule<'a>, MutSet<u32>) {
+        (self.module, self.called_preload_fns)
     }
 
     /// Register the debug names of Symbols in a global lookup table
@@ -1465,7 +1476,8 @@ impl<'a> WasmBackend<'a> {
     ) {
         let num_wasm_args = param_types.len();
         let has_return_val = ret_type.is_some();
-        let fn_index = self.preloaded_functions_map[name.as_bytes()];
+        let fn_index = self.module.names.functions[name.as_bytes()];
+        self.called_preload_fns.insert(fn_index);
         let linker_symbol_index = u32::MAX;
 
         self.code_builder

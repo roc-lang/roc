@@ -250,10 +250,6 @@ pub fn decode_u32(bytes: &[u8]) -> Result<(u32, usize), String> {
     ))
 }
 
-pub fn decode_u32_or_panic(bytes: &[u8]) -> (u32, usize) {
-    decode_u32(bytes).unwrap_or_else(|e| internal_error!("{}", e))
-}
-
 pub fn parse_u32_or_panic(bytes: &[u8], cursor: &mut usize) -> u32 {
     let (value, len) = decode_u32(&bytes[*cursor..]).unwrap_or_else(|e| internal_error!("{}", e));
     *cursor += len;
@@ -268,7 +264,27 @@ pub trait SkipBytes {
 
 impl SkipBytes for u32 {
     fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        parse_u32_or_panic(bytes, cursor);
+        const MAX_LEN: usize = 5;
+        for (i, byte) in bytes.iter().enumerate().skip(*cursor).take(MAX_LEN) {
+            if byte & 0x80 == 0 {
+                *cursor = i + 1;
+                return;
+            }
+        }
+        internal_error!("Invalid LEB encoding");
+    }
+}
+
+impl SkipBytes for u64 {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        const MAX_LEN: usize = 10;
+        for (i, byte) in bytes.iter().enumerate().skip(*cursor).take(MAX_LEN) {
+            if byte & 0x80 == 0 {
+                *cursor = i + 1;
+                return;
+            }
+        }
+        internal_error!("Invalid LEB encoding");
     }
 }
 
@@ -278,9 +294,19 @@ impl SkipBytes for u8 {
     }
 }
 
+/// Note: This is just for skipping over Wasm bytes. We don't actually care about String vs str!
 impl SkipBytes for String {
     fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
         let len = parse_u32_or_panic(bytes, cursor);
+
+        if false {
+            let str_bytes = &bytes[*cursor..(*cursor + len as usize)];
+            println!(
+                "Skipping string {:?}",
+                std::str::from_utf8(str_bytes).unwrap()
+            );
+        }
+
         *cursor += len as usize;
     }
 }

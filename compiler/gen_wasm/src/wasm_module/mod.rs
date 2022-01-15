@@ -1,4 +1,5 @@
 pub mod code_builder;
+mod dead_code;
 pub mod linking;
 pub mod opcodes;
 pub mod sections;
@@ -10,13 +11,17 @@ pub use linking::SymInfo;
 use roc_reporting::internal_error;
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
+use crate::wasm_module::serialize::SkipBytes;
+
 use self::linking::{LinkingSection, RelocationSection};
 use self::sections::{
     CodeSection, DataSection, ExportSection, FunctionSection, GlobalSection, ImportSection,
-    MemorySection, OpaqueSection, Section, SectionId, TypeSection,
+    MemorySection, NameSection, OpaqueSection, Section, SectionId, TypeSection,
 };
 use self::serialize::{SerialBuffer, Serialize};
 
+/// A representation of the WebAssembly binary file format
+/// https://webassembly.github.io/spec/core/binary/modules.html
 #[derive(Debug)]
 pub struct WasmModule<'a> {
     pub types: TypeSection<'a>,
@@ -30,6 +35,7 @@ pub struct WasmModule<'a> {
     pub element: OpaqueSection<'a>,
     pub code: CodeSection<'a>,
     pub data: DataSection<'a>,
+    pub names: NameSection<'a>,
     pub linking: LinkingSection<'a>,
     pub relocations: RelocationSection<'a>,
 }
@@ -44,7 +50,6 @@ impl<'a> WasmModule<'a> {
     }
 
     /// Serialize the module to bytes
-    /// (not using Serialize trait because it's just one more thing to export)
     pub fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_u8(0);
         buffer.append_slice("asm".as_bytes());
@@ -125,17 +130,25 @@ impl<'a> WasmModule<'a> {
         let mut cursor: usize = 8;
 
         let mut types = TypeSection::preload(arena, bytes, &mut cursor);
-        types.cache_offsets();
+        types.parse_offsets();
+
         let import = ImportSection::preload(arena, bytes, &mut cursor);
         let function = FunctionSection::preload(arena, bytes, &mut cursor);
         let table = OpaqueSection::preload(SectionId::Table, arena, bytes, &mut cursor);
         let memory = MemorySection::preload(arena, bytes, &mut cursor);
         let global = GlobalSection::preload(arena, bytes, &mut cursor);
-        let export = ExportSection::preload(arena, bytes, &mut cursor);
+
+        ExportSection::skip_bytes(bytes, &mut cursor);
+        let export = ExportSection::empty(arena);
+
         let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
         let element = OpaqueSection::preload(SectionId::Element, arena, bytes, &mut cursor);
-        let code = CodeSection::preload(arena, bytes, &mut cursor);
+        let code = CodeSection::preload(arena, bytes, &mut cursor, import.function_count);
+
         let data = DataSection::preload(arena, bytes, &mut cursor);
+
+        // Metadata sections
+        let names = NameSection::parse(arena, bytes, &mut cursor);
         let linking = LinkingSection::new(arena);
         let relocations = RelocationSection::new(arena, "reloc.CODE");
 
@@ -151,9 +164,23 @@ impl<'a> WasmModule<'a> {
             element,
             code,
             data,
+            names,
             linking,
             relocations,
         }
+    }
+
+    pub fn remove_dead_preloads<T: IntoIterator<Item = u32>>(
+        &mut self,
+        arena: &'a Bump,
+        called_preload_fns: T,
+    ) {
+        self.code.remove_dead_preloads(
+            arena,
+            self.import.function_count,
+            &self.export.function_indices,
+            called_preload_fns,
+        )
     }
 }
 
