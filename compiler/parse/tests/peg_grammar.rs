@@ -98,6 +98,9 @@ peg::parser!{
         rule number() = [T::Number] {}
         rule string() = [T::String] {}
 
+        rule tag() =
+          private_tag()
+          / [T::UppercaseIdent]
         rule private_tag() = [T::PrivateTag] {}
 
         rule list() = empty_list()
@@ -106,6 +109,11 @@ peg::parser!{
 
         rule record() = empty_record() // TODO non-empty
         rule empty_record() = [T::OpenCurly] [T::CloseCurly]
+        rule record_type() =
+          empty_record()
+          / [T::OpenCurly] (record_field_type() [T::Comma])* record_field_type() [T::Comma]? [T::CloseCurly]
+        rule record_field_type() =
+          ident() [T::Colon] type_annotation()
 
         rule parens_around() = [T::OpenParen] expr() [T::CloseParen]
 
@@ -121,6 +129,11 @@ peg::parser!{
           [T::LowercaseIdent]
           / [T::Underscore]
 
+        pub rule header() =
+          app_header()
+          / interface_header()
+          / platform_header()
+
         rule app_header() =
           [T::KeywordApp] [T::String] packages() imports() provides()// TODO String should be checked to not be empty
         
@@ -134,7 +147,7 @@ peg::parser!{
           [T::KeywordPackages] record()
 
         rule imports() =
-          [T::KeywordImports]
+          [T::KeywordImports] imports_list()
         rule imports_list() =
           empty_list()
           / [T::OpenSquare] (imports_entry() [T::Comma])* imports_entry()? [T::Comma]? [T::CloseSquare]
@@ -144,7 +157,7 @@ peg::parser!{
           ([T::Dot] exposes_list() )?
 
         rule exposes_list() =
-          [T::OpenCurly] (exposes_entry() [T::Comma])* exposes_entry? [T::Comma]? [T::CloseCurly]
+          [T::OpenCurly] (exposes_entry() [T::Comma])* exposes_entry()? [T::Comma]? [T::CloseCurly]
         rule exposes_entry() =
           ident()
 
@@ -162,7 +175,7 @@ peg::parser!{
           [T::KeywordExposes] [T::OpenSquare] exposed_names() [T::CloseSquare]
 
         rule exposed_names() =
-          (ident() [T::Comma])* ident? [T::Comma]?
+          (ident() [T::Comma])* ident()? [T::Comma]?
 
         rule requires() =
           [T::KeywordRequires] requires_rigids() [T::OpenCurly] typed_ident() [T::CloseCurly]
@@ -174,12 +187,68 @@ peg::parser!{
         rule requires_rigid() =
           [T::LowercaseIdent] [T::FatArrow] [T::UppercaseIdent]
 
+        rule typed_ident() =
+          [T::LowercaseIdent] [T::Colon] type_annotation()
+
+        rule effects() =
+          [T::KeywordEffects] effect_name() record_type()
+
+        rule effect_name() =
+          [T::LowercaseIdent] [T::Dot] [T::UppercaseIdent]
+
         rule module_name() =
           [T::UppercaseIdent] ([T::Dot] [T::UppercaseIdent])*
 
         rule ident() =
           [T::UppercaseIdent]
           / [T::LowercaseIdent]
+
+        rule type_annotation() =
+          tag_union()
+          / function_type()
+          / type_annotation_no_fun()
+
+        rule type_annotation_no_fun() =
+          tag_union()
+          / apply_type()
+          / bound_variable()
+          / record_type()
+          / inferred()
+          / wildcard()
+        // TODO inline type alias
+
+        rule type_annotation_paren_fun() =
+          type_annotation_no_fun()
+          / [T::OpenParen] function_type() [T::CloseParen]
+
+        rule tag_union() =
+          empty_list()
+          / [T::OpenSquare] (tag() [T::Comma])* tag() [T::CloseSquare] type_variable()?
+        
+        rule type_variable() =
+          [T::Underscore]
+          / bound_variable()
+
+        rule bound_variable() =
+          [T::LowercaseIdent]
+
+        // The `*` type variable, e.g. in (List *)  
+        rule wildcard() =
+          [T::Asterisk]
+
+        // '_', indicating the compiler should infer the type  
+        rule inferred() =
+          [T::Underscore]
+
+        rule function_type() =
+          ((type_annotation_paren_fun() [T::Comma])* type_annotation_paren_fun() [T::Arrow])? type_annotation_paren_fun()
+
+        rule apply_type() =
+          concrete_type() apply_args()?
+        rule concrete_type() =
+          [T::UppercaseIdent] ([T::Dot] [T::UppercaseIdent])*
+        rule apply_args() =
+          type_annotation() type_annotation()*
     }
 }
 
@@ -197,5 +266,60 @@ fn test_basic_expr() {
 
     assert_eq!(tokenparser::expr(&[T::KeywordExpect, T::Number]), Ok(()));
 
-    assert_eq!(tokenparser::expr(&[T::Ident, T::OpBackpassing, T::Number]), Ok(()));
+    assert_eq!(tokenparser::expr(&[T::LowercaseIdent, T::OpBackpassing, T::Number]), Ok(()));
 }
+
+#[test]
+fn test_app_header() {
+  //app "test-app" packages {} imports [] provides [] to blah
+  assert_eq!(tokenparser::header(&[
+    T::KeywordApp, T::String,
+    T::KeywordPackages, T::OpenCurly, T::CloseCurly,
+    T::KeywordImports, T::OpenSquare, T::CloseSquare,
+    T::KeywordProvides, T::OpenSquare, T::CloseSquare,
+    T::KeywordTo, T::LowercaseIdent  
+  ]), Ok(()));
+}
+
+#[test]
+fn test_interface_header() {
+  //interface Foo.Bar.Baz exposes [] imports []
+  assert_eq!(tokenparser::header(&[
+    T::KeywordInterface, T::UppercaseIdent, T::Dot, T::UppercaseIdent, T::Dot, T::UppercaseIdent,
+    T::KeywordExposes, T::OpenSquare, T::CloseSquare,
+    T::KeywordImports, T::OpenSquare, T::CloseSquare,
+  ]), Ok(()));
+}
+
+#[test]
+fn test_platform_header() {
+  /*platform "examples/cli"
+    requires {}{ main : Task {} [] }
+    exposes []
+    packages {}
+    imports [ Task.{ Task } ]
+    provides [ mainForHost ]
+    effects fx.Effect
+        {
+            getLine : Effect Str,
+            putLine : Str -> Effect {},
+            twoArguments : Int, Int -> Effect {}
+        }*/
+
+  assert_eq!(tokenparser::header(&[
+    T::KeywordPlatform, T::String,
+    T::KeywordRequires, T::OpenCurly, T::CloseCurly, T::OpenCurly, T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::OpenCurly, T::CloseCurly, T::OpenSquare, T::CloseSquare, T::CloseCurly,
+    T::KeywordExposes, T::OpenSquare, T::CloseSquare,
+    T::KeywordPackages, T::OpenCurly, T::CloseCurly,
+    T::KeywordImports, T::OpenSquare, T::UppercaseIdent, T::Dot, T::OpenCurly, T::UppercaseIdent, T::CloseCurly, T::CloseSquare,
+    T::KeywordProvides, T::OpenSquare, T::LowercaseIdent, T::CloseSquare,
+    T::KeywordEffects, T::LowercaseIdent, T::Dot, T::UppercaseIdent,
+    T::OpenCurly,
+    T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::UppercaseIdent , T::Comma,
+    T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::Arrow, T::UppercaseIdent, T::OpenCurly, T::CloseCurly,
+    T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::Comma, T::UppercaseIdent, T::Arrow, T::UppercaseIdent, T::OpenCurly, T::CloseCurly,
+    T::CloseCurly
+    
+  ]), Ok(()));
+}
+
