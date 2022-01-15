@@ -995,6 +995,7 @@ define_builtins! {
         107 NUM_CAST_TO_NAT: "#castToNat"
         108 NUM_DIV_CEIL: "divCeil"
         109 NUM_TO_STR: "toStr"
+        110 NUM_MIN_I128: "minI128"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

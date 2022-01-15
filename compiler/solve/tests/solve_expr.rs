@@ -3342,6 +3342,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn min_i128() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minI128
+                "#
+            ),
+            "I128",
+        );
+    }
+
+    #[test]
     fn max_i128() {
         infer_eq_without_problem(
             indoc!(
