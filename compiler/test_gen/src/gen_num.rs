@@ -1858,6 +1858,118 @@ fn max_i128() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minI64
+                "#
+        ),
+        i64::MIN,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxI64
+                "#
+        ),
+        i64::MAX,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minU64
+                "#
+        ),
+        u64::MIN,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxU64
+                "#
+        ),
+        u64::MAX,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_i32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minI32
+                "#
+        ),
+        i32::MIN,
+        i32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_i32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxI32
+                "#
+        ),
+        i32::MAX,
+        i32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minU32
+                "#
+        ),
+        u32::MIN,
+        u32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxU32
+                "#
+        ),
+        u32::MAX,
+        u32
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn is_multiple_of() {
     // true

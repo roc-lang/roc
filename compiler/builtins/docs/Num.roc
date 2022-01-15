@@ -64,12 +64,14 @@ interface Num
             maxFloat,
             maxI32,
             maxU32,
+            maxI64,
             maxU64,
             maxI128,
             maxInt,
             minFloat,
             minI32,
             minU32,
+            minI64,
             minU64,
             minI128,
             minInt,
@@ -825,6 +827,25 @@ minU32 : U32
 ## For reference, this number is `4_294_967_295`,
 ## which is over 4 million.
 maxU32 : U32
+
+## The min number that can be stored in an #I64 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is `-`.
+##
+## Note that the positive version of this number is larger than #Int.maxI64,
+## which means if you call #Num.abs on #Int.minI64, it will overflow and crash!
+minI64 : I64
+
+## The highest number that can be stored in an #I64 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is ``,
+## which is over 2 million.
+##
+## Note that this is smaller than the positive version of #Int.minI64,
+## which means if you call #Num.abs on #Int.minI64, it will overflow and crash!
+maxI64 : I64
 
 ## The lowest number that can be stored in a #U64 without underflowing its
 ## available memory and crashing.

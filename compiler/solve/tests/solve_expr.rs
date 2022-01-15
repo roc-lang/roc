@@ -3366,6 +3366,102 @@ mod solve_expr {
     }
 
     #[test]
+    fn min_i64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minI64
+                "#
+            ),
+            "I64",
+        );
+    }
+
+    #[test]
+    fn max_i64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxI64
+                "#
+            ),
+            "I64",
+        );
+    }
+
+    #[test]
+    fn min_u64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minU64
+                "#
+            ),
+            "U64",
+        );
+    }
+
+    #[test]
+    fn max_u64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxU64
+                "#
+            ),
+            "U64",
+        );
+    }
+
+    #[test]
+    fn min_i32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minI32
+                "#
+            ),
+            "I32",
+        );
+    }
+
+    #[test]
+    fn max_i32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxI32
+                "#
+            ),
+            "I32",
+        );
+    }
+
+    #[test]
+    fn min_u32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minU32
+                "#
+            ),
+            "U32",
+        );
+    }
+
+    #[test]
+    fn max_u32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxU32
+                "#
+            ),
+            "U32",
+        );
+    }
+
+    #[test]
     fn reconstruct_path() {
         infer_eq_without_problem(
             indoc!(
