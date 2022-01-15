@@ -586,7 +586,7 @@ impl<'a> WasmBackend<'a> {
                 x => todo!("call type {:?}", x),
             },
 
-            Expr::Struct(fields) => self.create_struct(sym, layout, fields),
+            Expr::Struct(fields) => self.create_struct(sym, layout, storage, fields),
 
             Expr::StructAtIndex {
                 index,
@@ -1430,15 +1430,17 @@ impl<'a> WasmBackend<'a> {
         (linker_sym_index as u32, elements_addr)
     }
 
-    fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
-        // TODO: we just calculated storage and now we're getting it out of a map
-        // Not passing it as an argument because I'm trying to match Backend method signatures
-        let storage = self.storage.get(sym).to_owned();
-
+    fn create_struct(
+        &mut self,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+        storage: &StoredValue,
+        fields: &'a [Symbol],
+    ) {
         if matches!(layout, Layout::Struct(_)) {
             match storage {
                 StoredValue::StackMemory { location, size, .. } => {
-                    if size > 0 {
+                    if *size > 0 {
                         let (local_id, struct_offset) =
                             location.local_and_offset(self.storage.stack_frame_pointer);
                         let mut field_offset = struct_offset;
@@ -1461,7 +1463,7 @@ impl<'a> WasmBackend<'a> {
             // Struct expression but not Struct layout => single element. Copy it.
             let field_storage = self.storage.get(&fields[0]).to_owned();
             self.storage
-                .clone_value(&mut self.code_builder, &storage, &field_storage, fields[0]);
+                .clone_value(&mut self.code_builder, storage, &field_storage, fields[0]);
         }
     }
 
