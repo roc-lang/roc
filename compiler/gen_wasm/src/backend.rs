@@ -182,7 +182,7 @@ impl<'a> WasmBackend<'a> {
 
         self.start_proc(proc);
 
-        self.build_stmt(&proc.body, &proc.ret_layout);
+        self.build_stmt(&proc.body);
 
         self.finalize_proc();
         self.reset();
@@ -285,7 +285,7 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
+    fn build_stmt(&mut self, stmt: &Stmt<'a>) {
         match stmt {
             Stmt::Let(_, _, _, _) => {
                 let mut current_stmt = stmt;
@@ -304,7 +304,7 @@ impl<'a> WasmBackend<'a> {
                     current_stmt = *following;
                 }
 
-                self.build_stmt(current_stmt, ret_layout);
+                self.build_stmt(current_stmt);
             }
 
             Stmt::Ret(sym) => {
@@ -413,7 +413,7 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 // if we never jumped because a value matched, we're in the default case
-                self.build_stmt(default_branch.1, ret_layout);
+                self.build_stmt(default_branch.1);
 
                 // now put in the actual body of each branch in order
                 // (the first branch would have broken out of 1 block,
@@ -421,7 +421,7 @@ impl<'a> WasmBackend<'a> {
                 for (_, _, branch) in branches.iter() {
                     self.end_block();
 
-                    self.build_stmt(branch, ret_layout);
+                    self.build_stmt(branch);
                 }
             }
             Stmt::Join {
@@ -451,12 +451,12 @@ impl<'a> WasmBackend<'a> {
                 self.joinpoint_label_map
                     .insert(*id, (self.block_depth, jp_param_storages));
 
-                self.build_stmt(remainder, ret_layout);
+                self.build_stmt(remainder);
 
                 self.end_block();
                 self.start_loop();
 
-                self.build_stmt(body, ret_layout);
+                self.build_stmt(body);
 
                 // ends the loop
                 self.end_block();
@@ -503,7 +503,7 @@ impl<'a> WasmBackend<'a> {
                     self.register_helper_proc(spec);
                 }
 
-                self.build_stmt(rc_stmt, ret_layout);
+                self.build_stmt(rc_stmt);
             }
 
             x => todo!("statement {:?}", x),
