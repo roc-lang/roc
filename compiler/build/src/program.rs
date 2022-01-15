@@ -505,12 +505,16 @@ fn gen_from_mono_module_dev_wasm32(
         exposed_to_host,
     };
 
-    let todo_platform_and_builtins_object_file_bytes = &[];
+    let platform_and_builtins_object_file_bytes: &[u8] = if true {
+        todo!("The WebAssembly dev backend is a work in progress. Coming soon!")
+    } else {
+        &[] // This `if` gets rid of "unreachable code" warnings. When we're ready to use it, we'll notice!
+    };
 
     let bytes = roc_gen_wasm::build_module(
         &env,
         &mut interns,
-        todo_platform_and_builtins_object_file_bytes,
+        platform_and_builtins_object_file_bytes,
         procedures,
     )
     .unwrap();

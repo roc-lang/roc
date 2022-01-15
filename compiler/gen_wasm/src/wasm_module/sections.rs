@@ -9,7 +9,9 @@ use super::dead_code::{
 };
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
-use super::serialize::{parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes};
+use super::serialize::{
+    parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes, MAX_SIZE_ENCODED_U32,
+};
 use super::{CodeBuilder, ValueType};
 
 /*******************************************************************
@@ -38,7 +40,6 @@ pub enum SectionId {
     DataCount = 12,
 }
 
-const MAX_SIZE_ENCODED_U32: usize = 5;
 const MAX_SIZE_SECTION_HEADER: usize = std::mem::size_of::<SectionId>() + 2 * MAX_SIZE_ENCODED_U32;
 
 pub trait Section<'a>: Sized {
@@ -104,8 +105,8 @@ where
 
 fn section_size(bytes: &[u8]) -> usize {
     let id = 1;
-    let encoded_length = 5;
-    let encoded_count = 5;
+    let encoded_length = MAX_SIZE_ENCODED_U32;
+    let encoded_count = MAX_SIZE_ENCODED_U32;
 
     id + encoded_length + encoded_count + bytes.len()
 }
@@ -457,15 +458,21 @@ pub enum Limits {
     MinMax(u32, u32),
 }
 
+#[repr(u8)]
+enum LimitsId {
+    Min = 0,
+    MinMax = 1,
+}
+
 impl Serialize for Limits {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
             Self::Min(min) => {
-                buffer.append_u8(0);
+                buffer.append_u8(LimitsId::Min as u8);
                 buffer.encode_u32(*min);
             }
             Self::MinMax(min, max) => {
-                buffer.append_u8(1);
+                buffer.append_u8(LimitsId::MinMax as u8);
                 buffer.encode_u32(*min);
                 buffer.encode_u32(*max);
             }
@@ -475,7 +482,7 @@ impl Serialize for Limits {
 
 impl SkipBytes for Limits {
     fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        if bytes[*cursor] == 0 {
+        if bytes[*cursor] == LimitsId::Min as u8 {
             u8::skip_bytes(bytes, cursor);
             u32::skip_bytes(bytes, cursor);
         } else {
@@ -830,11 +837,11 @@ impl Serialize for DataSegment<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match &self.mode {
             DataMode::Active { offset } => {
-                buffer.append_u8(0);
+                buffer.append_u8(0); // variant ID
                 offset.serialize(buffer);
             }
             DataMode::Passive => {
-                buffer.append_u8(1);
+                buffer.append_u8(1); // variant ID
             }
         }
 

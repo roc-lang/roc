@@ -13,17 +13,17 @@ Or, more specifically, "dead function replacement"
 
 - On pre-loading the object file:
     - Analyse its call graph by finding all `call` instructions in the Code section,
-        and checking which function index they refer to. Store this in a `PreloadsCallGraph`
+      and checking which function index they refer to. Store this in a `PreloadsCallGraph`
 - While compiling Roc code:
     - Run the backend as usual, adding more data into various sections of the Wasm module
-    - Whenever a call to a builtin or platform function is made, record its index in a Set.
-        These are the "live" preloaded functions that we are not allowed to eliminate.
+    - Whenever a call to a builtin or platform function is made, record its index.
+      These are the "live" preloaded functions that we are not allowed to eliminate.
 - Call graph analysis:
-    - Starting with the set of live preloaded functions, trace their call graphs using the info we
-        collected earlier in `PreloadsCallGraph`. Mark all function indices in the call graph as "live".
+    - Starting with the live preloaded functions, trace their call graphs using the info we
+      collected earlier in `PreloadsCallGraph`. Mark all function indices in the call graph as "live".
 - Dead function replacement:
     - We actually don't want to just *delete* dead functions, because that would change the indices
-        of the live functions, invalidating all references to them, such as `call` instructions.
+      of the live functions, invalidating all references to them, such as `call` instructions.
     - Instead, during serialization, we replace its body with a single `unreachable` instruction
 */
 

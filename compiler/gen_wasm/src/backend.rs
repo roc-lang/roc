@@ -2,7 +2,7 @@ use bumpalo::{self, collections::Vec};
 
 use code_builder::Align;
 use roc_builtins::bitcode::{self, IntWidth};
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutMap;
 use roc_module::ident::Ident;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
@@ -42,7 +42,7 @@ pub struct WasmBackend<'a> {
     layout_ids: LayoutIds<'a>,
     next_constant_addr: u32,
     fn_index_offset: u32,
-    called_preload_fns: MutSet<u32>,
+    called_preload_fns: Vec<'a, u32>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
 
@@ -53,8 +53,6 @@ pub struct WasmBackend<'a> {
     /// how many blocks deep are we (used for jumps)
     block_depth: u32,
     joinpoint_label_map: MutMap<JoinPointId, (u32, Vec<'a, StoredValue>)>,
-
-    debug_current_proc_index: usize,
 }
 
 impl<'a> WasmBackend<'a> {
@@ -89,7 +87,7 @@ impl<'a> WasmBackend<'a> {
             layout_ids,
             next_constant_addr: CONST_SEGMENT_BASE_ADDR,
             fn_index_offset,
-            called_preload_fns: MutSet::default(),
+            called_preload_fns: Vec::with_capacity_in(2, env.arena),
             proc_symbols,
             helper_proc_gen,
 
@@ -98,8 +96,6 @@ impl<'a> WasmBackend<'a> {
             joinpoint_label_map: MutMap::default(),
             code_builder: CodeBuilder::new(env.arena),
             storage: Storage::new(env.arena),
-
-            debug_current_proc_index: 0,
         }
     }
 
@@ -126,7 +122,7 @@ impl<'a> WasmBackend<'a> {
         self.module.linking.symbol_table.push(linker_symbol);
     }
 
-    pub fn finalize(self) -> (WasmModule<'a>, MutSet<u32>) {
+    pub fn finalize(self) -> (WasmModule<'a>, Vec<'a, u32>) {
         (self.module, self.called_preload_fns)
     }
 
@@ -178,11 +174,9 @@ impl<'a> WasmBackend<'a> {
             println!("\ngenerating procedure {:?}\n", proc.name);
         }
 
-        self.debug_current_proc_index += 1;
-
         self.start_proc(proc);
 
-        self.build_stmt(&proc.body, &proc.ret_layout);
+        self.build_stmt(&proc.body);
 
         self.finalize_proc();
         self.reset();
@@ -285,7 +279,7 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
+    fn build_stmt(&mut self, stmt: &Stmt<'a>) {
         match stmt {
             Stmt::Let(_, _, _, _) => {
                 let mut current_stmt = stmt;
@@ -304,7 +298,7 @@ impl<'a> WasmBackend<'a> {
                     current_stmt = *following;
                 }
 
-                self.build_stmt(current_stmt, ret_layout);
+                self.build_stmt(current_stmt);
             }
 
             Stmt::Ret(sym) => {
@@ -413,7 +407,7 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 // if we never jumped because a value matched, we're in the default case
-                self.build_stmt(default_branch.1, ret_layout);
+                self.build_stmt(default_branch.1);
 
                 // now put in the actual body of each branch in order
                 // (the first branch would have broken out of 1 block,
@@ -421,7 +415,7 @@ impl<'a> WasmBackend<'a> {
                 for (_, _, branch) in branches.iter() {
                     self.end_block();
 
-                    self.build_stmt(branch, ret_layout);
+                    self.build_stmt(branch);
                 }
             }
             Stmt::Join {
@@ -451,12 +445,12 @@ impl<'a> WasmBackend<'a> {
                 self.joinpoint_label_map
                     .insert(*id, (self.block_depth, jp_param_storages));
 
-                self.build_stmt(remainder, ret_layout);
+                self.build_stmt(remainder);
 
                 self.end_block();
                 self.start_loop();
 
-                self.build_stmt(body, ret_layout);
+                self.build_stmt(body);
 
                 // ends the loop
                 self.end_block();
@@ -503,10 +497,10 @@ impl<'a> WasmBackend<'a> {
                     self.register_helper_proc(spec);
                 }
 
-                self.build_stmt(rc_stmt, ret_layout);
+                self.build_stmt(rc_stmt);
             }
 
-            x => todo!("statement {:?}", x),
+            Stmt::RuntimeError(msg) => todo!("RuntimeError {:?}", msg),
         }
     }
 
@@ -586,7 +580,7 @@ impl<'a> WasmBackend<'a> {
                 x => todo!("call type {:?}", x),
             },
 
-            Expr::Struct(fields) => self.create_struct(sym, layout, fields),
+            Expr::Struct(fields) => self.create_struct(sym, layout, storage, fields),
 
             Expr::StructAtIndex {
                 index,
@@ -1295,7 +1289,8 @@ impl<'a> WasmBackend<'a> {
         sym: Symbol,
         layout: &Layout<'a>,
     ) {
-        let not_supported_error = || todo!("Literal value {:?}", lit);
+        let invalid_error =
+            || internal_error!("Literal value {:?} has invalid storage {:?}", lit, storage);
 
         match storage {
             StoredValue::VirtualMachineStack { value_type, .. } => {
@@ -1306,7 +1301,7 @@ impl<'a> WasmBackend<'a> {
                     (Literal::Int(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
                     (Literal::Bool(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
                     (Literal::Byte(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
-                    _ => not_supported_error(),
+                    _ => invalid_error(),
                 };
             }
 
@@ -1369,11 +1364,11 @@ impl<'a> WasmBackend<'a> {
                             self.code_builder.i32_store(Align::Bytes4, offset + 4);
                         };
                     }
-                    _ => not_supported_error(),
+                    _ => invalid_error(),
                 }
             }
 
-            _ => not_supported_error(),
+            _ => invalid_error(),
         };
     }
 
@@ -1430,15 +1425,17 @@ impl<'a> WasmBackend<'a> {
         (linker_sym_index as u32, elements_addr)
     }
 
-    fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
-        // TODO: we just calculated storage and now we're getting it out of a map
-        // Not passing it as an argument because I'm trying to match Backend method signatures
-        let storage = self.storage.get(sym).to_owned();
-
+    fn create_struct(
+        &mut self,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+        storage: &StoredValue,
+        fields: &'a [Symbol],
+    ) {
         if matches!(layout, Layout::Struct(_)) {
             match storage {
                 StoredValue::StackMemory { location, size, .. } => {
-                    if size > 0 {
+                    if *size > 0 {
                         let (local_id, struct_offset) =
                             location.local_and_offset(self.storage.stack_frame_pointer);
                         let mut field_offset = struct_offset;
@@ -1461,7 +1458,7 @@ impl<'a> WasmBackend<'a> {
             // Struct expression but not Struct layout => single element. Copy it.
             let field_storage = self.storage.get(&fields[0]).to_owned();
             self.storage
-                .clone_value(&mut self.code_builder, &storage, &field_storage, fields[0]);
+                .clone_value(&mut self.code_builder, storage, &field_storage, fields[0]);
         }
     }
 
@@ -1477,24 +1474,10 @@ impl<'a> WasmBackend<'a> {
         let num_wasm_args = param_types.len();
         let has_return_val = ret_type.is_some();
         let fn_index = self.module.names.functions[name.as_bytes()];
-        self.called_preload_fns.insert(fn_index);
+        self.called_preload_fns.push(fn_index);
         let linker_symbol_index = u32::MAX;
 
         self.code_builder
             .call(fn_index, linker_symbol_index, num_wasm_args, has_return_val);
-    }
-
-    /// Debug utility
-    ///
-    /// if self._debug_current_proc_is("#UserApp_foo_1") {
-    ///     self.code_builder._debug_assert_i32(0x1234);
-    /// }
-    fn _debug_current_proc_is(&self, linker_name: &'static str) -> bool {
-        let (_, linker_sym_index) = self.proc_symbols[self.debug_current_proc_index];
-        let sym_info = &self.module.linking.symbol_table[linker_sym_index as usize];
-        match sym_info {
-            SymInfo::Function(WasmObjectSymbol::Defined { name, .. }) => name == linker_name,
-            _ => false,
-        }
     }
 }

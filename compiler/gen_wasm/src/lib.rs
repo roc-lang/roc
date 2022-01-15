@@ -57,7 +57,7 @@ pub fn build_module_without_test_wrapper<'a>(
     interns: &'a mut Interns,
     preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> (WasmModule<'a>, MutSet<u32>, u32) {
+) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
