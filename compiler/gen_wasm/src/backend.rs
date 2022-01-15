@@ -2,7 +2,7 @@ use bumpalo::{self, collections::Vec};
 
 use code_builder::Align;
 use roc_builtins::bitcode::{self, IntWidth};
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutMap;
 use roc_module::ident::Ident;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
@@ -42,7 +42,7 @@ pub struct WasmBackend<'a> {
     layout_ids: LayoutIds<'a>,
     next_constant_addr: u32,
     fn_index_offset: u32,
-    called_preload_fns: MutSet<u32>,
+    called_preload_fns: Vec<'a, u32>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
 
@@ -87,7 +87,7 @@ impl<'a> WasmBackend<'a> {
             layout_ids,
             next_constant_addr: CONST_SEGMENT_BASE_ADDR,
             fn_index_offset,
-            called_preload_fns: MutSet::default(),
+            called_preload_fns: Vec::with_capacity_in(2, env.arena),
             proc_symbols,
             helper_proc_gen,
 
@@ -122,7 +122,7 @@ impl<'a> WasmBackend<'a> {
         self.module.linking.symbol_table.push(linker_symbol);
     }
 
-    pub fn finalize(self) -> (WasmModule<'a>, MutSet<u32>) {
+    pub fn finalize(self) -> (WasmModule<'a>, Vec<'a, u32>) {
         (self.module, self.called_preload_fns)
     }
 
@@ -1474,7 +1474,7 @@ impl<'a> WasmBackend<'a> {
         let num_wasm_args = param_types.len();
         let has_return_val = ret_type.is_some();
         let fn_index = self.module.names.functions[name.as_bytes()];
-        self.called_preload_fns.insert(fn_index);
+        self.called_preload_fns.push(fn_index);
         let linker_symbol_index = u32::MAX;
 
         self.code_builder
