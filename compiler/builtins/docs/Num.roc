@@ -768,11 +768,13 @@ not : Int a -> Int a
 
 ## Limits
 
-## The number zero.
+## The lowest number that can be stored in a #Nat without underflowing its
+## available memory and crashing.
 ##
-## #Num.minNat is the lowest number that can be stored in a #Nat, which is zero
-## because #Nat is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
-## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
+## For reference, this is the number zero, because #Nat is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
 minNat : Nat
 
 ## The highest number that can be stored in a #Nat without overflowing its
@@ -783,47 +785,57 @@ minNat : Nat
 ## 32-bit system, this will be equal to #Num.maxU32.
 maxNat : Nat
 
-## The min number that can be stored in an #I32 without overflowing its
+## The lowest number that can be stored in an #I32 without underflowing its
 ## available memory and crashing.
 ##
-## Note that the positive version of this number is this is larger than
-## #Int.maxI32, which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
+## For reference, this number is `-2_147_483_648`.
+##
+## Note that the positive version of this number is larger than #Int.maxI32,
+## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
 minI32 : I32
 
 ## The highest number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
-## Note that this is smaller than the positive version of #Int.minI32
+## For reference, this number is `2_147_483_647`,
+## which is over 2 million.
+##
+## Note that this is smaller than the positive version of #Int.minI32,
 ## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
 maxI32 : I32
 
-## The number zero.
+## The lowest number that can be stored in a #U32 without underflowing its
+## available memory and crashing.
 ##
-## #Num.minU32 is the lowest number that can be stored in a #U32, which is zero
-## because #U32 is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
-## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
+## For reference, this number is zero, because #U32 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
 minU32 : U32
 
 ## The highest number that can be stored in a #U32 without overflowing its
 ## available memory and crashing.
 ##
-## For reference, that number is `4_294_967_295`, which is over 4 million.
+## For reference, this number is `4_294_967_295`,
+## which is over 4 million.
 maxU32 : U32
 
-## The number zero.
+## The lowest number that can be stored in a #U64 without underflowing its
+## available memory and crashing.
 ##
-## #Num.minU64 is the lowest number that can be stored in a #U64, which is zero
-## because #U64 is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## For reference, this number is zero because #U64 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
 ## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
 minU64 : U64
 
 ## The highest number that can be stored in a #U64 without overflowing its
 ## available memory and crashing.
 ##
-## For reference, that number is `18_446_744_073_709_551_615`, which is over 18 quintillion.
+## For reference, this number is `18_446_744_073_709_551_615`,
+## which is over 18 quintillion.
 maxU64 : U64
 
-## The min number that can be stored in an #I128 without underflowing its
+## The lowest number that can be stored in an #I128 without underflowing its
 ## available memory and crashing.
 ##
 ## For reference, this number is `-170_141_183_460_469_231_731_687_303_715_884_105_728`.
@@ -862,12 +874,14 @@ minF64 : F64
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
 maxF64 : F64
 
-## The lowest supported #Dec value you can have, which is precisely -170_141_183_460_469_231_731.687303715884105728.
+## The lowest supported #Dec value you can have,
+## which is precisely -170_141_183_460_469_231_731.687303715884105728.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
 minDec : Dec
 
-## The highest supported #Dec value you can have, which is precisely 170_141_183_460_469_231_731.687303715884105727.
+## The highest supported #Dec value you can have,
+## which is precisely 170_141_183_460_469_231_731.687303715884105727.
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
 maxDec : Dec
