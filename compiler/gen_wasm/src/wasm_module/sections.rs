@@ -458,15 +458,21 @@ pub enum Limits {
     MinMax(u32, u32),
 }
 
+#[repr(u8)]
+enum LimitsId {
+    Min = 0,
+    MinMax = 1,
+}
+
 impl Serialize for Limits {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
             Self::Min(min) => {
-                buffer.append_u8(0);
+                buffer.append_u8(LimitsId::Min as u8);
                 buffer.encode_u32(*min);
             }
             Self::MinMax(min, max) => {
-                buffer.append_u8(1);
+                buffer.append_u8(LimitsId::MinMax as u8);
                 buffer.encode_u32(*min);
                 buffer.encode_u32(*max);
             }
@@ -476,7 +482,7 @@ impl Serialize for Limits {
 
 impl SkipBytes for Limits {
     fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        if bytes[*cursor] == 0 {
+        if bytes[*cursor] == LimitsId::Min as u8 {
             u8::skip_bytes(bytes, cursor);
             u32::skip_bytes(bytes, cursor);
         } else {
@@ -831,11 +837,11 @@ impl Serialize for DataSegment<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match &self.mode {
             DataMode::Active { offset } => {
-                buffer.append_u8(0);
+                buffer.append_u8(0); // variant ID
                 offset.serialize(buffer);
             }
             DataMode::Passive => {
-                buffer.append_u8(1);
+                buffer.append_u8(1); // variant ID
             }
         }
 
