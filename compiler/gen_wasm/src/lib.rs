@@ -38,17 +38,19 @@ pub struct Env<'a> {
 pub fn build_module<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
+    preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (mut wasm_module, _) = build_module_help(env, interns, procedures)?;
+    let (wasm_module, _) = build_module_help(env, interns, preload_bytes, procedures)?;
     let mut buffer = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize_mut(&mut buffer);
+    wasm_module.serialize(&mut buffer);
     Ok(buffer)
 }
 
 pub fn build_module_help<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
+    preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<(WasmModule<'a>, u32), String> {
     let mut layout_ids = LayoutIds::default();
@@ -56,7 +58,7 @@ pub fn build_module_help<'a>(
     let mut proc_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut exports = Vec::with_capacity_in(4, env.arena);
-    let mut main_fn_index = None;
+    let mut maybe_main_fn_index = None;
 
     // Collect the symbols & names for the procedures,
     // and filter out procs we're going to inline
@@ -75,9 +77,9 @@ pub fn build_module_help<'a>(
             .to_symbol_string(sym, interns);
 
         if env.exposed_to_host.contains(&sym) {
-            main_fn_index = Some(fn_index);
+            maybe_main_fn_index = Some(fn_index);
             exports.push(Export {
-                name: fn_name.clone(),
+                name: env.arena.alloc_slice_copy(fn_name.as_bytes()),
                 ty: ExportType::Func,
                 index: fn_index,
             });
@@ -90,13 +92,26 @@ pub fn build_module_help<'a>(
         fn_index += 1;
     }
 
+    // Pre-load the WasmModule with data from the platform & builtins object file
+    let initial_module = WasmModule::preload(env.arena, preload_bytes);
+
+    // Adjust Wasm function indices to account for functions from the object file
+    let runtime_import_fn_count: u32 = initial_module.import.function_count(); // to be imported at runtime (e.g. WASI)
+    let fn_index_offset: u32 = runtime_import_fn_count + initial_module.code.preloaded_count;
+
+    // Get a map of name to index for the preloaded functions
+    // Assumes the preloaded object file has all symbols exported, as per `zig build-lib -dymamic`
+    let preloaded_functions_map: MutMap<&'a [u8], u32> =
+        initial_module.export.function_index_map(env.arena);
+
     let mut backend = WasmBackend::new(
         env,
         interns,
         layout_ids,
         proc_symbols,
-        linker_symbols,
-        exports,
+        initial_module,
+        fn_index_offset,
+        preloaded_functions_map,
         CodeGenHelp::new(env.arena, IntWidth::I32, env.module_id),
     );
 
@@ -133,7 +148,8 @@ pub fn build_module_help<'a>(
 
     let module = backend.into_module();
 
-    Ok((module, main_fn_index.unwrap()))
+    let main_function_index = maybe_main_fn_index.unwrap() + fn_index_offset;
+    Ok((module, main_function_index))
 }
 
 pub struct CopyMemoryConfig {
@@ -217,5 +233,5 @@ pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
     helper_procs_ir: false && cfg!(debug_assertions),
     let_stmt_ir: false && cfg!(debug_assertions),
     instructions: false && cfg!(debug_assertions),
-    keep_test_binary: false && cfg!(debug_assertions),
+    keep_test_binary: true && cfg!(debug_assertions),
 };

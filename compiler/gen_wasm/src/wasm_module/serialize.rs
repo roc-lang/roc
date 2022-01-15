@@ -3,7 +3,7 @@ use std::{fmt::Debug, iter::FromIterator};
 use bumpalo::collections::vec::Vec;
 use roc_reporting::internal_error;
 
-pub trait Serialize {
+pub(super) trait Serialize {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
 }
 
@@ -254,6 +254,37 @@ pub fn decode_u32_or_panic(bytes: &[u8]) -> (u32, usize) {
     decode_u32(bytes).unwrap_or_else(|e| internal_error!("{}", e))
 }
 
+pub fn parse_u32_or_panic(bytes: &[u8], cursor: &mut usize) -> u32 {
+    let (value, len) = decode_u32(&bytes[*cursor..]).unwrap_or_else(|e| internal_error!("{}", e));
+    *cursor += len;
+    value
+}
+
+/// Skip over serialized bytes for a type
+/// This may, or may not, require looking at the byte values
+pub trait SkipBytes {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize);
+}
+
+impl SkipBytes for u32 {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        parse_u32_or_panic(bytes, cursor);
+    }
+}
+
+impl SkipBytes for u8 {
+    fn skip_bytes(_bytes: &[u8], cursor: &mut usize) {
+        *cursor += 1;
+    }
+}
+
+impl SkipBytes for String {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        let len = parse_u32_or_panic(bytes, cursor);
+        *cursor += len as usize;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +459,38 @@ mod tests {
             help_pad_i64(i64::MIN),
             &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f],
         );
+    }
+
+    #[test]
+    fn test_decode_u32() {
+        assert_eq!(decode_u32(&[0]), Ok((0, 1)));
+        assert_eq!(decode_u32(&[64]), Ok((64, 1)));
+        assert_eq!(decode_u32(&[0x7f]), Ok((0x7f, 1)));
+        assert_eq!(decode_u32(&[0x80, 0x01]), Ok((0x80, 2)));
+        assert_eq!(decode_u32(&[0xff, 0x7f]), Ok((0x3fff, 2)));
+        assert_eq!(decode_u32(&[0x80, 0x80, 0x01]), Ok((0x4000, 3)));
+        assert_eq!(
+            decode_u32(&[0xff, 0xff, 0xff, 0xff, 0x0f]),
+            Ok((u32::MAX, 5))
+        );
+        assert!(matches!(decode_u32(&[0x80; 6]), Err(_)));
+        assert!(matches!(decode_u32(&[0x80; 2]), Err(_)));
+        assert!(matches!(decode_u32(&[]), Err(_)));
+    }
+
+    #[test]
+    fn test_parse_u32_sequence() {
+        let bytes = &[0, 0x80, 0x01, 0xff, 0xff, 0xff, 0xff, 0x0f];
+        let expected = [0, 128, u32::MAX];
+        let mut cursor = 0;
+
+        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[0]);
+        assert_eq!(cursor, 1);
+
+        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[1]);
+        assert_eq!(cursor, 3);
+
+        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[2]);
+        assert_eq!(cursor, 8);
     }
 }

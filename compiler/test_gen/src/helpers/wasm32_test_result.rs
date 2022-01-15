@@ -14,15 +14,17 @@ pub trait Wasm32TestResult {
         wrapper_name: &str,
         main_function_index: u32,
     ) {
-        let index = module.code.code_builders.len() as u32;
+        let index = module.import.function_count()
+            + module.code.preloaded_count
+            + module.code.code_builders.len() as u32;
 
         module.add_function_signature(Signature {
             param_types: Vec::with_capacity_in(0, arena),
             ret_type: Some(ValueType::I32),
         });
 
-        module.export.entries.push(Export {
-            name: wrapper_name.to_string(),
+        module.export.append(Export {
+            name: arena.alloc_slice_copy(wrapper_name.as_bytes()),
             ty: ExportType::Func,
             index,
         });

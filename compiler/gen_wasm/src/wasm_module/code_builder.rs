@@ -156,6 +156,12 @@ pub struct CodeBuilder<'a> {
     relocations: Vec<'a, RelocationEntry>,
 }
 
+impl<'a> Serialize for CodeBuilder<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        self.serialize_without_relocs(buffer);
+    }
+}
+
 #[allow(clippy::new_without_default)]
 impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
@@ -469,6 +475,39 @@ impl<'a> CodeBuilder<'a> {
         SERIALIZE
 
     ***********************************************************/
+
+    pub fn size(&self) -> usize {
+        self.inner_length.len() + self.preamble.len() + self.code.len() + self.insert_bytes.len()
+    }
+
+    /// Serialize all byte vectors in the right order
+    /// Also update relocation offsets relative to the base offset (code section body start)
+    pub fn serialize_without_relocs<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_slice(&self.inner_length);
+        buffer.append_slice(&self.preamble);
+
+        let mut code_pos = 0;
+        let mut insert_iter = self.insertions.iter();
+        loop {
+            let next_insert = insert_iter.next();
+            let next_pos = match next_insert {
+                Some(Insertion { at, .. }) => *at,
+                None => self.code.len(),
+            };
+
+            buffer.append_slice(&self.code[code_pos..next_pos]);
+
+            match next_insert {
+                Some(Insertion { at, start, end }) => {
+                    buffer.append_slice(&self.insert_bytes[*start..*end]);
+                    code_pos = *at;
+                }
+                None => {
+                    break;
+                }
+            }
+        }
+    }
 
     /// Serialize all byte vectors in the right order
     /// Also update relocation offsets relative to the base offset (code section body start)

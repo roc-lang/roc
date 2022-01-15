@@ -9,6 +9,9 @@ edition = "2018"
 name = "test_gen"
 path = "src/tests.rs"
 
+[build-dependencies]
+roc_builtins = { path = "../builtins" }
+
 [dev-dependencies]
 roc_gen_llvm = { path = "../gen_llvm" }
 roc_gen_dev = { path = "../gen_dev" }
