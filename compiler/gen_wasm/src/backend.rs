@@ -506,7 +506,7 @@ impl<'a> WasmBackend<'a> {
                 self.build_stmt(rc_stmt);
             }
 
-            x => todo!("statement {:?}", x),
+            Stmt::RuntimeError(msg) => todo!("RuntimeError {:?}", msg),
         }
     }
 
