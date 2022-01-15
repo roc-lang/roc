@@ -3,6 +3,12 @@ use std::{fmt::Debug, iter::FromIterator};
 use bumpalo::collections::vec::Vec;
 use roc_reporting::internal_error;
 
+/// In the WebAssembly binary format, all integers are variable-length encoded (using LEB-128)
+/// A small value like 3 or 100 is encoded as 1 byte. The value 128 needs 2 bytes, etc.
+/// In practice, this saves space, since small numbers used more often than large numbers.
+/// Of course there is a price for this - an encoded U32 can be up to 5 bytes wide.
+pub const MAX_SIZE_ENCODED_U32: usize = 5;
+
 pub(super) trait Serialize {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
 }
@@ -122,7 +128,7 @@ macro_rules! encode_padded_sleb128 {
         /// write a maximally-padded SLEB128 integer (only used in relocations)
         fn $name(&mut self, value: $ty) {
             let mut x = value;
-            let size = (std::mem::size_of::<$ty>() / 4) * 5;
+            let size = (std::mem::size_of::<$ty>() / 4) * MAX_SIZE_ENCODED_U32;
             for _ in 0..(size - 1) {
                 self.append_u8(0x80 | (x & 0x7f) as u8);
                 x >>= 7;
@@ -187,18 +193,18 @@ impl SerialBuffer for std::vec::Vec<u8> {
     }
     fn reserve_padded_u32(&mut self) -> usize {
         let index = self.len();
-        self.resize(index + 5, 0xff);
+        self.resize(index + MAX_SIZE_ENCODED_U32, 0xff);
         index
     }
     fn encode_padded_u32(&mut self, value: u32) -> usize {
         let index = self.len();
-        let new_len = index + 5;
+        let new_len = index + MAX_SIZE_ENCODED_U32;
         self.resize(new_len, 0);
         overwrite_padded_u32_help(&mut self[index..new_len], value);
         index
     }
     fn overwrite_padded_u32(&mut self, index: usize, value: u32) {
-        overwrite_padded_u32_help(&mut self[index..(index + 5)], value);
+        overwrite_padded_u32_help(&mut self[index..(index + MAX_SIZE_ENCODED_U32)], value);
     }
 }
 
@@ -217,18 +223,18 @@ impl<'a> SerialBuffer for Vec<'a, u8> {
     }
     fn reserve_padded_u32(&mut self) -> usize {
         let index = self.len();
-        self.resize(index + 5, 0xff);
+        self.resize(index + MAX_SIZE_ENCODED_U32, 0xff);
         index
     }
     fn encode_padded_u32(&mut self, value: u32) -> usize {
         let index = self.len();
-        let new_len = index + 5;
+        let new_len = index + MAX_SIZE_ENCODED_U32;
         self.resize(new_len, 0);
         overwrite_padded_u32_help(&mut self[index..new_len], value);
         index
     }
     fn overwrite_padded_u32(&mut self, index: usize, value: u32) {
-        overwrite_padded_u32_help(&mut self[index..(index + 5)], value);
+        overwrite_padded_u32_help(&mut self[index..(index + MAX_SIZE_ENCODED_U32)], value);
     }
 }
 
@@ -237,7 +243,7 @@ impl<'a> SerialBuffer for Vec<'a, u8> {
 pub fn decode_u32(bytes: &[u8]) -> Result<(u32, usize), String> {
     let mut value = 0;
     let mut shift = 0;
-    for (i, byte) in bytes.iter().take(5).enumerate() {
+    for (i, byte) in bytes.iter().take(MAX_SIZE_ENCODED_U32).enumerate() {
         value += ((byte & 0x7f) as u32) << shift;
         if (byte & 0x80) == 0 {
             return Ok((value, i + 1));
@@ -246,7 +252,7 @@ pub fn decode_u32(bytes: &[u8]) -> Result<(u32, usize), String> {
     }
     Err(format!(
         "Failed to decode u32 as LEB-128 from bytes: {:2x?}",
-        std::vec::Vec::from_iter(bytes.iter().take(5))
+        std::vec::Vec::from_iter(bytes.iter().take(MAX_SIZE_ENCODED_U32))
     ))
 }
 
@@ -317,7 +323,7 @@ mod tests {
     use bumpalo::{self, collections::Vec, Bump};
 
     fn help_u32<'a>(arena: &'a Bump, value: u32) -> Vec<'a, u8> {
-        let mut buffer = Vec::with_capacity_in(5, arena);
+        let mut buffer = Vec::with_capacity_in(MAX_SIZE_ENCODED_U32, arena);
         buffer.encode_u32(value);
         buffer
     }
@@ -356,7 +362,7 @@ mod tests {
     }
 
     fn help_i32<'a>(arena: &'a Bump, value: i32) -> Vec<'a, u8> {
-        let mut buffer = Vec::with_capacity_in(5, arena);
+        let mut buffer = Vec::with_capacity_in(MAX_SIZE_ENCODED_U32, arena);
         buffer.encode_i32(value);
         buffer
     }
@@ -443,7 +449,7 @@ mod tests {
     }
 
     fn help_pad_i32(val: i32) -> std::vec::Vec<u8> {
-        let mut buffer = std::vec::Vec::with_capacity(5);
+        let mut buffer = std::vec::Vec::with_capacity(MAX_SIZE_ENCODED_U32);
         buffer.encode_padded_i32(val);
         buffer
     }
@@ -497,7 +503,7 @@ mod tests {
         assert_eq!(decode_u32(&[0x80, 0x80, 0x01]), Ok((0x4000, 3)));
         assert_eq!(
             decode_u32(&[0xff, 0xff, 0xff, 0xff, 0x0f]),
-            Ok((u32::MAX, 5))
+            Ok((u32::MAX, MAX_SIZE_ENCODED_U32))
         );
         assert!(matches!(decode_u32(&[0x80; 6]), Err(_)));
         assert!(matches!(decode_u32(&[0x80; 2]), Err(_)));

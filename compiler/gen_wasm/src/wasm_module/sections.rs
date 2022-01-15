@@ -9,7 +9,9 @@ use super::dead_code::{
 };
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
-use super::serialize::{parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes};
+use super::serialize::{
+    parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes, MAX_SIZE_ENCODED_U32,
+};
 use super::{CodeBuilder, ValueType};
 
 /*******************************************************************
@@ -38,7 +40,6 @@ pub enum SectionId {
     DataCount = 12,
 }
 
-const MAX_SIZE_ENCODED_U32: usize = 5;
 const MAX_SIZE_SECTION_HEADER: usize = std::mem::size_of::<SectionId>() + 2 * MAX_SIZE_ENCODED_U32;
 
 pub trait Section<'a>: Sized {
@@ -104,8 +105,8 @@ where
 
 fn section_size(bytes: &[u8]) -> usize {
     let id = 1;
-    let encoded_length = 5;
-    let encoded_count = 5;
+    let encoded_length = MAX_SIZE_ENCODED_U32;
+    let encoded_count = MAX_SIZE_ENCODED_U32;
 
     id + encoded_length + encoded_count + bytes.len()
 }
