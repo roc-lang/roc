@@ -1295,7 +1295,8 @@ impl<'a> WasmBackend<'a> {
         sym: Symbol,
         layout: &Layout<'a>,
     ) {
-        let not_supported_error = || todo!("Literal value {:?}", lit);
+        let invalid_error =
+            || internal_error!("Literal value {:?} has invalid storage {:?}", lit, storage);
 
         match storage {
             StoredValue::VirtualMachineStack { value_type, .. } => {
@@ -1306,7 +1307,7 @@ impl<'a> WasmBackend<'a> {
                     (Literal::Int(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
                     (Literal::Bool(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
                     (Literal::Byte(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
-                    _ => not_supported_error(),
+                    _ => invalid_error(),
                 };
             }
 
@@ -1369,11 +1370,11 @@ impl<'a> WasmBackend<'a> {
                             self.code_builder.i32_store(Align::Bytes4, offset + 4);
                         };
                     }
-                    _ => not_supported_error(),
+                    _ => invalid_error(),
                 }
             }
 
-            _ => not_supported_error(),
+            _ => invalid_error(),
         };
     }
 
