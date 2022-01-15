@@ -499,26 +499,13 @@ impl<'a> CodeBuilder<'a> {
         buffer.append_slice(&self.preamble);
 
         let mut code_pos = 0;
-        let mut insert_iter = self.insertions.iter();
-        loop {
-            let next_insert = insert_iter.next();
-            let next_pos = match next_insert {
-                Some(Insertion { at, .. }) => *at,
-                None => self.code.len(),
-            };
-
-            buffer.append_slice(&self.code[code_pos..next_pos]);
-
-            match next_insert {
-                Some(Insertion { at, start, end }) => {
-                    buffer.append_slice(&self.insert_bytes[*start..*end]);
-                    code_pos = *at;
-                }
-                None => {
-                    break;
-                }
-            }
+        for Insertion { at, start, end } in self.insertions.iter() {
+            buffer.append_slice(&self.code[code_pos..(*at)]);
+            buffer.append_slice(&self.insert_bytes[*start..*end]);
+            code_pos = *at;
         }
+
+        buffer.append_slice(&self.code[code_pos..self.code.len()]);
     }
 
     /// Serialize all byte vectors in the right order
