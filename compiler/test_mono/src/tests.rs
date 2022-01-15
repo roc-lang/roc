@@ -1220,6 +1220,29 @@ fn monomorphized_list() {
     )
 }
 
+#[mono_test]
+fn optional_field_when_use_default() {
+    indoc!(
+        r#"
+        app "test" provides [ main ] to "./platform"
+
+        f = \r ->
+            when r is
+                { x: Blue, y ? 3 } -> y
+                { x: Red, y ? 5 } -> y
+
+
+        main =
+            a = f { x: Blue, y: 7 }
+            b = f { x: Blue }
+            c = f { x: Red, y: 11 }
+            d = f { x: Red }
+
+            a * b * c * d
+        "#
+    )
+}
+
 // #[ignore]
 // #[mono_test]
 // fn static_str_closure() {

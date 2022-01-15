@@ -1,0 +1,25 @@
+procedure Num.24 (#Attr.2, #Attr.3):
+    let Test.12 : Builtin(Int(U64)) = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Test.12;
+
+procedure Test.1 ():
+    let Test.13 : Builtin(Int(I64)) = 100i64;
+    ret Test.13;
+
+procedure Test.4 (Test.7, Test.8):
+    let Test.14 : Builtin(Int(U64)) = 1i64;
+    ret Test.14;
+
+procedure Test.4 (Test.7, Test.8):
+    let Test.15 : Builtin(Int(U64)) = 1i64;
+    ret Test.15;
+
+procedure Test.0 ():
+    let Test.4 : LambdaSet(LambdaSet { set: [(`#UserApp.f`, [])], representation: Struct([]) }) = Struct {};
+    let Test.1 : Builtin(Int(I64)) = CallByName Test.1;
+    let Test.4 : LambdaSet(LambdaSet { set: [(`#UserApp.f`, [])], representation: Struct([]) }) = Struct {};
+    let Test.1 : Builtin(Int(I64)) = CallByName Test.1;
+    let Test.10 : Builtin(Int(U64)) = CallByName Test.4 Test.1 Test.1;
+    let Test.11 : Builtin(Int(U64)) = CallByName Test.4 Test.1 Test.1;
+    let Test.9 : Builtin(Int(U64)) = CallByName Num.24 Test.10 Test.11;
+    ret Test.9;

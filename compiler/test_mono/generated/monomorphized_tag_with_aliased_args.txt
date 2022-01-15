@@ -1,0 +1,18 @@
+procedure Test.1 ():
+    let Test.13 : Struct([]) = Struct {};
+    ret Test.13;
+
+procedure Test.2 ():
+    let Test.14 : Struct([]) = Struct {};
+    ret Test.14;
+
+procedure Test.4 (Test.8):
+    let Test.10 : Builtin(Int(U64)) = 1i64;
+    ret Test.10;
+
+procedure Test.0 ():
+    let Test.12 : Struct([]) = CallByName Test.2;
+    let Test.11 : Struct([]) = CallByName Test.1;
+    let Test.3 : Struct([Struct([]), Struct([])]) = Struct {Test.11, Test.12};
+    let Test.9 : Builtin(Int(U64)) = CallByName Test.4 Test.3;
+    ret Test.9;

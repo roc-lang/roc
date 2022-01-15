@@ -9,7 +9,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::expr::ClosureData;
-use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
+use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, BumpSet, MutMap};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -94,7 +94,7 @@ pub struct EntryPoint<'a> {
     pub layout: ProcLayout<'a>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PartialProcId(usize);
 
 #[derive(Clone, Debug, PartialEq)]
@@ -103,6 +103,8 @@ pub struct PartialProcs<'a> {
     symbols: Vec<'a, Symbol>,
 
     partial_procs: Vec<'a, PartialProc<'a>>,
+
+    skipset: BumpSet<usize>,
 }
 
 impl<'a> PartialProcs<'a> {
@@ -110,6 +112,7 @@ impl<'a> PartialProcs<'a> {
         Self {
             symbols: Vec::new_in(arena),
             partial_procs: Vec::new_in(arena),
+            skipset: BumpSet::new_in(arena),
         }
     }
     fn contains_key(&self, symbol: Symbol) -> bool {
@@ -119,7 +122,8 @@ impl<'a> PartialProcs<'a> {
     fn symbol_to_id(&self, symbol: Symbol) -> Option<PartialProcId> {
         self.symbols
             .iter()
-            .position(|s| *s == symbol)
+            .enumerate()
+            .position(|(i, s)| *s == symbol && !self.skipset.contains(&i))
             .map(PartialProcId)
     }
 
@@ -146,6 +150,14 @@ impl<'a> PartialProcs<'a> {
         self.partial_procs.push(partial_proc);
 
         id
+    }
+
+    pub fn remove(&mut self, symbol: Symbol) {
+        let id = self.symbol_to_id(symbol);
+
+        debug_assert!(id.is_some(), "{:?} isn't in partial procs!", symbol);
+
+        self.skipset.insert(id.unwrap().0);
     }
 }
 
@@ -5027,12 +5039,12 @@ fn is_simple_literal(expr: &roc_can::expr::Expr) -> bool {
     use roc_can::expr::Expr::*;
     match expr {
         Num(_, _, _) | Int(_, _, _, _) | Float(_, _, _, _) => true,
-        List { loc_elems, .. } => loc_elems
-            .iter()
-            .map(|loc_expr| &loc_expr.value)
-            .all(is_simple_literal),
-        ZeroArgumentTag { .. } => true,
-        Tag { arguments, .. } if arguments.is_empty() => true,
+        // List { loc_elems, .. } => loc_elems
+        //     .iter()
+        //     .map(|loc_expr| &loc_expr.value)
+        //     .all(is_simple_literal),
+        // ZeroArgumentTag { .. } => true,
+        // Tag { arguments, .. } if arguments.is_empty() => true,
         _ => false,
     }
 }
@@ -5057,7 +5069,7 @@ fn needs_specialization<'a>(
     //    m = 100  # specialized
     //    n = 100  # specialized
     //    { m, n } # must also be specialized
-    is_simple_literal(expr) && env.subs.var_contains_content(expr_var, is_flex_or_rigid)
+    true && is_simple_literal(expr) && env.subs.var_contains_content(expr_var, is_flex_or_rigid)
 }
 
 pub fn from_can<'a>(
@@ -5324,7 +5336,11 @@ pub fn from_can<'a>(
 
                         procs.partial_procs.insert(*symbol, proc);
 
-                        return from_can(env, variable, cont.value, procs, layout_cache);
+                        let r = from_can(env, variable, cont.value, procs, layout_cache);
+
+                        procs.partial_procs.remove(*symbol);
+
+                        return r;
                     }
                     _ => {
                         let rest = from_can(env, variable, cont.value, procs, layout_cache);
