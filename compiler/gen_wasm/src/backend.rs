@@ -16,7 +16,7 @@ use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_reporting::internal_error;
 
 use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
-use crate::low_level::{dispatch_low_level, LowlevelBuildResult};
+use crate::low_level::LowLevelCall;
 use crate::storage::{StackMemoryLocation, Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{DataSymbol, LinkingSegment, WasmObjectSymbol};
 use crate::wasm_module::sections::{DataMode, DataSegment};
@@ -35,7 +35,7 @@ use crate::{
 const CONST_SEGMENT_BASE_ADDR: u32 = 1024;
 
 pub struct WasmBackend<'a> {
-    env: &'a Env<'a>,
+    pub env: &'a Env<'a>,
     interns: &'a mut Interns,
 
     // Module-level data
@@ -48,8 +48,8 @@ pub struct WasmBackend<'a> {
     helper_proc_gen: CodeGenHelp<'a>,
 
     // Function-level data
-    code_builder: CodeBuilder<'a>,
-    storage: Storage<'a>,
+    pub code_builder: CodeBuilder<'a>,
+    pub storage: Storage<'a>,
 
     /// how many blocks deep are we (used for jumps)
     block_depth: u32,
@@ -805,21 +805,21 @@ impl<'a> WasmBackend<'a> {
         &mut self,
         lowlevel: LowLevel,
         arguments: &'a [Symbol],
-        return_sym: Symbol,
-        mono_layout: &Layout<'a>,
-        storage: &StoredValue,
+        ret_symbol: Symbol,
+        ret_layout: &Layout<'a>,
+        ret_storage: &StoredValue,
     ) {
         use LowLevel::*;
-        let return_layout = WasmLayout::new(mono_layout);
+        let wasm_layout = WasmLayout::new(ret_layout);
 
         match lowlevel {
             Eq | NotEq => self.build_eq_or_neq(
                 lowlevel,
                 arguments,
-                return_sym,
-                return_layout,
-                mono_layout,
-                storage,
+                ret_symbol,
+                wasm_layout,
+                ret_layout,
+                ret_storage,
             ),
             PtrCast => {
                 // Don't want Zig calling convention when casting pointers.
@@ -829,37 +829,14 @@ impl<'a> WasmBackend<'a> {
 
             // Almost all lowlevels take this branch, except for the special cases above
             _ => {
-                // Load the arguments using Zig calling convention
-                let (param_types, ret_type) = self.storage.load_symbols_for_call(
-                    self.env.arena,
-                    &mut self.code_builder,
-                    arguments,
-                    return_sym,
-                    &return_layout,
-                    CallConv::Zig,
-                );
-
-                // Generate instructions OR decide which Zig function to call
-                let build_result = dispatch_low_level(
-                    &mut self.code_builder,
-                    &mut self.storage,
+                let low_level_call = LowLevelCall {
                     lowlevel,
                     arguments,
-                    &return_layout,
-                    mono_layout,
-                );
-
-                // Handle the result
-                use LowlevelBuildResult::*;
-                match build_result {
-                    Done => {}
-                    BuiltinCall(name) => {
-                        self.expr_call_zig_builtin(name, param_types, ret_type);
-                    }
-                    NotImplemented => {
-                        todo!("Low level operation {:?}", lowlevel)
-                    }
-                }
+                    ret_symbol,
+                    ret_layout: ret_layout.to_owned(),
+                    ret_storage: ret_storage.to_owned(),
+                };
+                low_level_call.generate(self);
             }
         }
     }
@@ -867,7 +844,7 @@ impl<'a> WasmBackend<'a> {
     /// Generate a call instruction to a Zig builtin function.
     /// And if we haven't seen it before, add an Import and linker data for it.
     /// Zig calls use LLVM's "fast" calling convention rather than our usual C ABI.
-    fn expr_call_zig_builtin(
+    pub fn call_zig_builtin_after_loading_args(
         &mut self,
         name: &'a str,
         param_types: Vec<'a, ValueType>,
@@ -992,7 +969,7 @@ impl<'a> WasmBackend<'a> {
         // Call the foreign function. (Zig and C calling conventions are the same for this signature)
         let param_types = bumpalo::vec![in self.env.arena; ValueType::I32, ValueType::I32];
         let ret_type = Some(ValueType::I32);
-        self.expr_call_zig_builtin("roc_alloc", param_types, ret_type);
+        self.call_zig_builtin_after_loading_args("roc_alloc", param_types, ret_type);
 
         // Save the allocation address to a temporary local variable
         let local_id = self.storage.create_anonymous_local(ValueType::I32);
@@ -1368,7 +1345,7 @@ impl<'a> WasmBackend<'a> {
                     &return_layout,
                     CallConv::Zig,
                 );
-                self.expr_call_zig_builtin(bitcode::STR_EQUAL, param_types, ret_type);
+                self.call_zig_builtin_after_loading_args(bitcode::STR_EQUAL, param_types, ret_type);
                 if matches!(lowlevel, LowLevel::NotEq) {
                     self.code_builder.i32_eqz();
                 }
@@ -1472,22 +1449,25 @@ impl<'a> WasmBackend<'a> {
                 // Both args are finite
                 let first = [arguments[0]];
                 let second = [arguments[1]];
-                dispatch_low_level(
-                    &mut self.code_builder,
-                    &mut self.storage,
-                    LowLevel::NumIsFinite,
-                    &first,
-                    &return_layout,
-                    mono_layout,
-                );
-                dispatch_low_level(
-                    &mut self.code_builder,
-                    &mut self.storage,
-                    LowLevel::NumIsFinite,
-                    &second,
-                    &return_layout,
-                    mono_layout,
-                );
+
+                // TODO!
+                //
+                // dispatch_low_level(
+                //     &mut self.code_builder,
+                //     &mut self.storage,
+                //     LowLevel::NumIsFinite,
+                //     &first,
+                //     &return_layout,
+                //     mono_layout,
+                // );
+                // dispatch_low_level(
+                //     &mut self.code_builder,
+                //     &mut self.storage,
+                //     LowLevel::NumIsFinite,
+                //     &second,
+                //     &return_layout,
+                //     mono_layout,
+                // );
                 self.code_builder.i32_and();
 
                 // AND they have the same bytes
