@@ -1,18 +1,118 @@
-use roc_builtins::bitcode::{self, FloatWidth};
+use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 use roc_reporting::internal_error;
 
-use crate::layout::{StackMemoryFormat::*, WasmLayout};
+use crate::layout::{
+    StackMemoryFormat::{self, *},
+    WasmLayout,
+};
 use crate::storage::{Storage, StoredValue};
-use crate::wasm_module::{Align, CodeBuilder, ValueType::*};
+use crate::wasm_module::{
+    Align, CodeBuilder,
+    ValueType::{self, *},
+};
 
 #[derive(Debug)]
 pub enum LowlevelBuildResult {
     Done,
     BuiltinCall(&'static str),
     NotImplemented,
+}
+
+/// Number types used for Wasm code gen
+/// Unlike other enums, this contains no details about layout or storage.
+/// Its purpose is to help simplify the arms of the main lowlevel `match` below.
+///
+/// Note: Wasm I32 is used for Roc I8, I16, I32, U8, U16, and U32, since it's
+/// the smallest integer supported in the Wasm instruction set.
+/// We may choose different instructions for signed and unsigned integers,
+/// but they share the same Wasm value type.
+enum CodeGenNumber {
+    I32,     // Supported in Wasm instruction set
+    I64,     // Supported in Wasm instruction set
+    F32,     // Supported in Wasm instruction set
+    F64,     // Supported in Wasm instruction set
+    I128,    // Bytes in memory, needs Zig builtins
+    F128,    // Bytes in memory, needs Zig builtins
+    Decimal, // Bytes in memory, needs Zig builtins
+}
+
+impl From<Layout<'_>> for CodeGenNumber {
+    fn from(layout: Layout) -> CodeGenNumber {
+        use CodeGenNumber::*;
+
+        let not_num_error =
+            || internal_error!("Tried to perform a Num low-level operation on {:?}", layout);
+        match layout {
+            Layout::Builtin(builtin) => match builtin {
+                Builtin::Int(int_width) => match int_width {
+                    IntWidth::U8 => I32,
+                    IntWidth::U16 => I32,
+                    IntWidth::U32 => I32,
+                    IntWidth::U64 => I64,
+                    IntWidth::U128 => I128,
+                    IntWidth::I8 => I32,
+                    IntWidth::I16 => I32,
+                    IntWidth::I32 => I32,
+                    IntWidth::I64 => I64,
+                    IntWidth::I128 => I128,
+                },
+                Builtin::Float(float_width) => match float_width {
+                    FloatWidth::F32 => F32,
+                    FloatWidth::F64 => F64,
+                    FloatWidth::F128 => F128,
+                },
+                Builtin::Decimal => Decimal,
+                _ => not_num_error(),
+            },
+            _ => not_num_error(),
+        }
+    }
+}
+
+impl From<ValueType> for CodeGenNumber {
+    fn from(value_type: ValueType) -> CodeGenNumber {
+        match value_type {
+            ValueType::I32 => CodeGenNumber::I32,
+            ValueType::I64 => CodeGenNumber::I64,
+            ValueType::F32 => CodeGenNumber::F32,
+            ValueType::F64 => CodeGenNumber::F64,
+        }
+    }
+}
+
+impl From<StackMemoryFormat> for CodeGenNumber {
+    fn from(format: StackMemoryFormat) -> CodeGenNumber {
+        match format {
+            StackMemoryFormat::Int128 => CodeGenNumber::I128,
+            StackMemoryFormat::Float128 => CodeGenNumber::F128,
+            StackMemoryFormat::Decimal => CodeGenNumber::Decimal,
+            StackMemoryFormat::DataStructure => {
+                internal_error!("Tried to perform a Num low-level operation on a data structure")
+            }
+        }
+    }
+}
+
+impl From<WasmLayout> for CodeGenNumber {
+    fn from(wasm_layout: WasmLayout) -> CodeGenNumber {
+        match wasm_layout {
+            WasmLayout::Primitive(value_type, _) => CodeGenNumber::from(value_type),
+            WasmLayout::StackMemory { format, .. } => CodeGenNumber::from(format),
+        }
+    }
+}
+
+impl From<StoredValue> for CodeGenNumber {
+    fn from(stored: StoredValue) -> CodeGenNumber {
+        match stored {
+            StoredValue::VirtualMachineStack { value_type, .. } => CodeGenNumber::from(value_type),
+            StoredValue::Local { value_type, .. } => CodeGenNumber::from(value_type),
+            StoredValue::StackMemory { format, .. } => CodeGenNumber::from(format),
+        }
+    }
 }
 
 pub fn dispatch_low_level<'a>(
