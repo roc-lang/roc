@@ -17,7 +17,7 @@ main =
                     InvalidSeek  px -> Stdout.line "InvalidSeek   \(px)"
 
             Ok v ->
-                {} <- await (Stdout.line "all went well")
+                {} <- await (Stdout.line "Thank you for flying Roc!")
                 Task.succeed v
 
 mainHelp : Task {} File.ReadErr

@@ -146,17 +146,14 @@ pub enum ReadErrTag {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_readAllBytes(
+    // TODO: Instead of accepting this `&mut output` argument, the function should
+    // return this instead. However, specifying it as the return type leads to
+    // https://github.com/rtfeldman/roc/issues/2358 and `&mut output` is the workaround!
+    output: &mut RocResult<RocList<u8>, ReadErr>,
     path: ManuallyDrop<RocStr>,
-) -> RocResult<RocList<u8>, ReadErr> {
-    println!("in roc_fx_readAllBytes({})", path.as_str());
-    let result = read_bytes(path.as_str());
-
-    match result {
-        Ok(list) => {
-            println!("all went well on the rust side");
-
-            RocResult::ok(list)
-        }
+) {
+    *output = match read_bytes(path.as_str()) {
+        Ok(list) => RocResult::ok(list),
         Err(err) => {
             // TODO give a more helpful error
             let tag = ReadErrTag::FileBusy;
@@ -168,7 +165,7 @@ pub extern "C" fn roc_fx_readAllBytes(
                 tag,
             })
         }
-    }
+    };
 }
 
 fn read_bytes(path: &str) -> io::Result<RocList<u8>> {
