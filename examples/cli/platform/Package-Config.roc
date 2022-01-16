@@ -11,14 +11,14 @@ platform "examples/cli"
            #                    # with just `ReadErr`, but that gives an error - so instead,
            #                    # ReadErr is inlined here.
            #                    [
-           #                        FileWasDir Str,
-           #                        InvalidSeek Str,
-           #                        IllegalByteSequence Str,
            #                        FileBusy Str,
+           #                        FileWasDir Str,
+           #                        IllegalByteSequence Str,
+           #                        InvalidSeek Str,
            #                    ]
            #                ),
             # readAllBytes : Str -> Effect (Result (List U8) *),
-            readAllBytes : Str -> Effect (Result (List U8) Str),
+            readAllBytes : Str -> Effect (Result (List U8) [ FileBusy Str, FileWasDir Str, IllegalByteSequence Str, InvalidSeek Str, ]),
             # TODO FIXME moving this to the end of the list (even after removing trailing comma)
             # gives a parse error on the `Str, Str` arguments
             writeAllBytes : Str, List U8 -> Effect I32,

@@ -10,9 +10,14 @@ main =
     Task.attempt mainHelp \result ->
         when result is
             Err e ->
-                Stdout.line "something went wrong"
+                when e is
+                    FileBusy px -> Stdout.line "FileBusy  \(px)"
+                    FileWasDir px -> Stdout.line "FileWasDir  \(px)"
+                    IllegalByteSequence  px -> Stdout.line "IllegalByteSequence   \(px)"
+                    InvalidSeek  px -> Stdout.line "InvalidSeek   \(px)"
 
             Ok v ->
+                {} <- await (Stdout.line "all went well")
                 Task.succeed v
 
 mainHelp : Task {} File.ReadErr

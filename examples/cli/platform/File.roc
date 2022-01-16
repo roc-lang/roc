@@ -43,10 +43,10 @@ OpenErr :
 ## Errors when attempting to read a non-directory file.
 ReadErr :
     [
-        FileWasDir Path,
-        InvalidSeek Path,
-        IllegalByteSequence Path,
         FileBusy Path,
+        FileWasDir Path,
+        IllegalByteSequence Path,
+        InvalidSeek Path,
     # TODO FIXME - should be the following, which parses but doesn't type-check:
     #]OpenErr
     ]
@@ -99,8 +99,7 @@ readBytesInfallible = \path ->
     Effect.after (Effect.readAllBytes path) \result ->
         when result is
             Ok bytes -> Task.succeed bytes
-            Err err -> Task.succeed []
-
+            Err err -> Task.fail err
 
 # readBytes : Path -> Task (List U8) [ ReadBytes ReadErr ]*
 # readBytes = \path ->
@@ -114,7 +113,7 @@ readBytes = \path ->
     Effect.after (Effect.readAllBytes path) \result ->
         when result is
             Ok answer -> Task.succeed answer
-            Err _ -> Task.fail "something went wrong"
+            Err _ -> Task.fail "readBytes: something went wrong"
 
 writeUtf8 : Path, Str -> Task {} [ WriteUtf8 WriteErr ]*
 writeUtf8 = \path, str ->
