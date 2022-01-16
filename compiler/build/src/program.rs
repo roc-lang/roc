@@ -31,7 +31,6 @@ const LLVM_VERSION: &str = "12";
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> usize {
     report_problems_help(
         loaded.total_problems(),
-        &loaded.header_sources,
         &loaded.sources,
         &loaded.interns,
         &mut loaded.can_problems,
@@ -43,7 +42,6 @@ pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> usize 
 pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> usize {
     report_problems_help(
         loaded.total_problems(),
-        &loaded.header_sources,
         &loaded.sources,
         &loaded.interns,
         &mut loaded.can_problems,
@@ -54,7 +52,6 @@ pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> usize {
 
 fn report_problems_help(
     total_problems: usize,
-    header_sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
     sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
     interns: &Interns,
     can_problems: &mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
@@ -75,14 +72,9 @@ fn report_problems_help(
     for (home, (module_path, src)) in sources.iter() {
         let mut src_lines: Vec<&str> = Vec::new();
 
-        if let Some((_, header_src)) = header_sources.get(home) {
-            src_lines.extend(header_src.split('\n'));
-            src_lines.extend(src.split('\n').skip(1));
-        } else {
-            src_lines.extend(src.split('\n'));
-        }
+        src_lines.extend(src.split('\n'));
 
-        let lines = LineInfo::new(src);
+        let lines = LineInfo::new(&src_lines.join("\n"));
 
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, *home, interns);
@@ -513,7 +505,19 @@ fn gen_from_mono_module_dev_wasm32(
         exposed_to_host,
     };
 
-    let bytes = roc_gen_wasm::build_module(&env, &mut interns, procedures).unwrap();
+    let platform_and_builtins_object_file_bytes: &[u8] = if true {
+        todo!("The WebAssembly dev backend is a work in progress. Coming soon!")
+    } else {
+        &[] // This `if` gets rid of "unreachable code" warnings. When we're ready to use it, we'll notice!
+    };
+
+    let bytes = roc_gen_wasm::build_module(
+        &env,
+        &mut interns,
+        platform_and_builtins_object_file_bytes,
+        procedures,
+    )
+    .unwrap();
 
     std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
 

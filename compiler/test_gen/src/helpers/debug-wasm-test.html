@@ -294,13 +294,73 @@
           }
         }
 
+        // Signatures from wasm_test_platform.o
+        const sig2 = (i32) => {};
+        const sig6 = (i32a, i32b) => 0;
+        const sig7 = (i32a, i32b, i32c) => 0;
+        const sig9 = (i32a, i64b, i32c) => 0;
+        const sig10 = (i32a, i64b, i64c, i32d) => 0;
+        const sig11 = (i32a, i64b, i64c) => 0;
+        const sig12 = (i32a) => 0;
+        const sig13 = (i32a, i64b) => 0;
+        const sig14 = (i32a, i32b, i32c, i64d, i32e) => 0;
+        const sig15 = (i32a, i32b, i32c, i32d) => 0;
+        const sig16 = (i32a, i64b, i32c, i32d) => 0;
+        const sig17 = (i32a, i32b, i32c, i32d, i32e) => 0;
+        const sig18 = (i32a, i32b, i32c, i32d, i64e, i64f, i32g) => 0;
+        const sig19 = (i32a, i32b, i32c, i32d, i32e, i32f, i32g) => 0;
+        const sig20 = (i32a, i32b, i32c, i32d, i32e, i64f, i64g, i32h, i32i) =>
+          0;
+        const sig21 = (i32a, i32b, i32c, i32d, i32e, i32f) => 0;
+        const sig22 = () => 0;
+
         return {
           wasi_snapshot_preview1: {
+            args_get: sig6,
+            args_sizes_get: sig6,
+            environ_get: sig6,
+            environ_sizes_get: sig6,
+            clock_res_get: sig6,
+            clock_time_get: sig9,
+            fd_advise: sig10,
+            fd_allocate: sig11,
             fd_close,
+            fd_datasync: sig12,
             fd_fdstat_get,
+            fd_fdstat_set_flags: sig6,
+            fd_fdstat_set_rights: sig11,
+            fd_filestat_get: sig6,
+            fd_filestat_set_size: sig13,
+            fd_filestat_set_times: sig10,
+            fd_pread: sig14,
+            fd_prestat_get: sig6,
+            fd_prestat_dir_name: sig7,
+            fd_pwrite: sig14,
+            fd_read: sig15,
+            fd_readdir: sig14,
+            fd_renumber: sig6,
             fd_seek,
+            fd_sync: sig12,
+            fd_tell: sig6,
             fd_write,
+            path_create_directory: sig7,
+            path_filestat_get: sig17,
+            path_filestat_set_times: sig18,
+            path_link: sig19,
+            path_open: sig20,
+            path_readlink: sig21,
+            path_remove_directory: sig7,
+            path_rename: sig21,
+            path_symlink: sig17,
+            path_unlink_file: sig7,
+            poll_oneoff: sig15,
             proc_exit,
+            proc_raise: sig12,
+            sched_yield: sig22,
+            random_get: sig6,
+            sock_recv: sig21,
+            sock_send: sig17,
+            sock_shutdown: sig6,
           },
         };
       }

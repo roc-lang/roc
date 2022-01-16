@@ -164,3 +164,24 @@ The compiler is invoked from the CLI via `build_file` in cli/src/build.rs
 | Code gen (unoptimized but fast, Wasm) | gen_wasm/src/lib.rs: build_module                |
 
 For a more detailed understanding of the compilation phases, see the `Phase`, `BuildTask`, and `Msg` enums in `load/src/file.rs`.
+
+## Debugging intermediate representations
+
+### The mono IR
+
+If you observe a miscomplication, you may first want to check the generated mono
+IR for your code - maybe there was a problem during specialization or layout
+generation. One way to do this is to add a test to `test_mono/src/tests.rs`
+and run the tests with `cargo test -p test_mono`; this will write the mono
+IR to a file.
+
+You may also want to set some or all of the following environment variables:
+
+- `PRINT_IR_AFTER_SPECIALIZATION=1` prints the mono IR after function
+    specialization to stdout
+- `PRINT_IR_AFTER_RESET_REUSE=1` prints the mono IR after insertion of
+    reset/reuse isntructions to stdout
+- `PRINT_IR_AFTER_REFCOUNT=1` prints the mono IR after insertion of reference
+    counting instructions to stdout
+- `PRETTY_PRINT_IR_SYMBOLS=1` instructs the pretty printer to dump all the
+    information it knows about the mono IR whenever it is printed

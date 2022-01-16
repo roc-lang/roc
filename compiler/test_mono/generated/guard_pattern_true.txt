@@ -1,25 +1,25 @@
 procedure Test.1 (Test.3):
-    let Test.6 = 2i64;
+    let Test.6 : Builtin(Int(I64)) = 2i64;
     joinpoint Test.11:
-        let Test.10 = 0i64;
+        let Test.10 : Builtin(Int(I64)) = 0i64;
         ret Test.10;
     in
-    let Test.13 = 2i64;
-    let Test.14 = lowlevel Eq Test.13 Test.6;
+    let Test.13 : Builtin(Int(I64)) = 2i64;
+    let Test.14 : Builtin(Bool) = lowlevel Eq Test.13 Test.6;
     if Test.14 then
         joinpoint Test.8 Test.12:
             if Test.12 then
-                let Test.7 = 42i64;
+                let Test.7 : Builtin(Int(I64)) = 42i64;
                 ret Test.7;
             else
                 jump Test.11;
         in
-        let Test.9 = false;
+        let Test.9 : Builtin(Bool) = false;
         jump Test.8 Test.9;
     else
         jump Test.11;
 
 procedure Test.0 ():
-    let Test.5 = Struct {};
-    let Test.4 = CallByName Test.1 Test.5;
+    let Test.5 : Struct([]) = Struct {};
+    let Test.4 : Builtin(Int(I64)) = CallByName Test.1 Test.5;
     ret Test.4;

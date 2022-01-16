@@ -587,9 +587,7 @@ fn optional_field_function_use_default() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
 fn optional_field_function_no_use_default() {
-    // blocked on https://github.com/rtfeldman/roc/issues/786
     assert_evals_to!(
         indoc!(
             r#"
@@ -608,9 +606,7 @@ fn optional_field_function_no_use_default() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
 fn optional_field_function_no_use_default_nested() {
-    // blocked on https://github.com/rtfeldman/roc/issues/786
     assert_evals_to!(
         indoc!(
             r#"

@@ -37,6 +37,18 @@ impl Serialize for ValueType {
     }
 }
 
+impl From<u8> for ValueType {
+    fn from(x: u8) -> Self {
+        match x {
+            0x7f => Self::I32,
+            0x7e => Self::I64,
+            0x7d => Self::F32,
+            0x7c => Self::F64,
+            _ => internal_error!("Invalid ValueType 0x{:02x}", x),
+        }
+    }
+}
+
 const BLOCK_NO_RESULT: u8 = 0x40;
 
 /// A control block in our model of the VM
@@ -154,6 +166,12 @@ pub struct CodeBuilder<'a> {
     /// Linker info to help combine the Roc module with builtin & platform modules,
     /// e.g. to modify call instructions when function indices change
     relocations: Vec<'a, RelocationEntry>,
+}
+
+impl<'a> Serialize for CodeBuilder<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        self.serialize_without_relocs(buffer);
+    }
 }
 
 #[allow(clippy::new_without_default)]
@@ -469,6 +487,26 @@ impl<'a> CodeBuilder<'a> {
         SERIALIZE
 
     ***********************************************************/
+
+    pub fn size(&self) -> usize {
+        self.inner_length.len() + self.preamble.len() + self.code.len() + self.insert_bytes.len()
+    }
+
+    /// Serialize all byte vectors in the right order
+    /// Also update relocation offsets relative to the base offset (code section body start)
+    pub fn serialize_without_relocs<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_slice(&self.inner_length);
+        buffer.append_slice(&self.preamble);
+
+        let mut code_pos = 0;
+        for Insertion { at, start, end } in self.insertions.iter() {
+            buffer.append_slice(&self.code[code_pos..(*at)]);
+            buffer.append_slice(&self.insert_bytes[*start..*end]);
+            code_pos = *at;
+        }
+
+        buffer.append_slice(&self.code[code_pos..self.code.len()]);
+    }
 
     /// Serialize all byte vectors in the right order
     /// Also update relocation offsets relative to the base offset (code section body start)
@@ -917,17 +955,4 @@ impl<'a> CodeBuilder<'a> {
     instruction_no_args!(i64_reinterpret_f64, I64REINTERPRETF64, 1, true);
     instruction_no_args!(f32_reinterpret_i32, F32REINTERPRETI32, 1, true);
     instruction_no_args!(f64_reinterpret_i64, F64REINTERPRETI64, 1, true);
-
-    /// Generate a debug assertion for an expected i32 value
-    pub fn _debug_assert_i32(&mut self, expected: i32) {
-        self.i32_const(expected);
-        self.i32_eq();
-        self.i32_eqz();
-        self.if_();
-        self.unreachable_(); // Tell Wasm runtime to throw an exception
-        self.end();
-        // It matches. Restore the original value to the VM stack and continue the program.
-        // We know it matched the expected value, so just use that!
-        self.i32_const(expected);
-    }
 }

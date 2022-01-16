@@ -7,7 +7,7 @@ use roc_region::all::LineInfo;
 use tempfile::tempdir;
 
 #[allow(unused_imports)]
-use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
+use roc_mono::ir::pretty_print_ir_symbols;
 
 #[allow(dead_code)]
 fn promote_expr_to_module(src: &str) -> String {
@@ -76,7 +76,7 @@ pub fn helper(
     // while you're working on the dev backend!
     {
         // println!("=========== Procedures ==========");
-        // if PRETTY_PRINT_IR_SYMBOLS {
+        // if pretty_print_ir_symbols() {
         //     println!("");
         //     for proc in procedures.values() {
         //         println!("{}", proc.to_pretty(200));

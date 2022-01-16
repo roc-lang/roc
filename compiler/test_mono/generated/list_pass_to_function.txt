@@ -1,19 +1,19 @@
 procedure List.4 (#Attr.2, #Attr.3, #Attr.4):
-    let Test.11 = lowlevel ListLen #Attr.2;
-    let Test.9 = lowlevel NumLt #Attr.3 Test.11;
+    let Test.11 : Builtin(Int(U64)) = lowlevel ListLen #Attr.2;
+    let Test.9 : Builtin(Bool) = lowlevel NumLt #Attr.3 Test.11;
     if Test.9 then
-        let Test.10 = lowlevel ListSet #Attr.2 #Attr.3 #Attr.4;
+        let Test.10 : Builtin(List(Builtin(Int(I64)))) = lowlevel ListSet #Attr.2 #Attr.3 #Attr.4;
         ret Test.10;
     else
         ret #Attr.2;
 
 procedure Test.2 (Test.3):
-    let Test.6 = 0i64;
-    let Test.7 = 0i64;
-    let Test.5 = CallByName List.4 Test.3 Test.6 Test.7;
+    let Test.6 : Builtin(Int(U64)) = 0i64;
+    let Test.7 : Builtin(Int(I64)) = 0i64;
+    let Test.5 : Builtin(List(Builtin(Int(I64)))) = CallByName List.4 Test.3 Test.6 Test.7;
     ret Test.5;
 
 procedure Test.0 ():
-    let Test.1 = Array [1i64, 2i64, 3i64];
-    let Test.4 = CallByName Test.2 Test.1;
+    let Test.1 : Builtin(List(Builtin(Int(I64)))) = Array [1i64, 2i64, 3i64];
+    let Test.4 : Builtin(List(Builtin(Int(I64)))) = CallByName Test.2 Test.1;
     ret Test.4;
