@@ -70,16 +70,12 @@ WriteErr :
 
 readUtf8Infallible : Path -> Task Str *
 readUtf8Infallible = \path ->
-    Task.await (readBytesInfallible path) \_ ->
-        Task.succeed "ok!"
-    # when result is
-    #     Ok bytes ->
-    #         when Str.fromUtf8 bytes is
-    #             Ok str -> Task.succeed str
-    #             # TODO FIXME replace with:  -> Task.fail (ReadUtf8 (BadUtf8 problem index))
-    #             Err (BadUtf8 problem index) -> Task.succeed "<<bad utf8>>"
+    Task.await (readBytesInfallible path) \bytes ->
+        when Str.fromUtf8 bytes is
+            Ok str -> Task.succeed str
+            # TODO FIXME replace with:  -> Task.fail (ReadUtf8 (BadUtf8 problem index))
+            Err (BadUtf8 problem index) -> Task.succeed "<<bad utf8>>"
 
-    #     Err (ReadBytes problem) -> Task.succeed "<<problem!>>"
 
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
 # TODO FIXME use this instead:
@@ -100,12 +96,10 @@ readUtf8 = \path ->
 
 readBytesInfallible : Path -> Task (List U8) *
 readBytesInfallible = \path ->
-    Effect.after (Effect.readAllBytes path) \_ ->
-        Task.succeed []
-    # Effect.after (Effect.readAllBytes path) \result ->
-    #     when result is
-    #         Ok bytes -> Task.succeed bytes
-    #         Err err -> Task.succeed []
+    Effect.after (Effect.readAllBytes path) \result ->
+        when result is
+            Ok bytes -> Task.succeed bytes
+            Err err -> Task.succeed []
 
 
 # readBytes : Path -> Task (List U8) [ ReadBytes ReadErr ]*

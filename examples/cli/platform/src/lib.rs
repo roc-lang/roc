@@ -147,13 +147,13 @@ pub enum ReadErrTag {
 #[no_mangle]
 pub extern "C" fn roc_fx_readAllBytes(
     path: ManuallyDrop<RocStr>,
-) -> RocResult<RocList<u8>, ReadErr> {
+) -> RocResult<RocList<u8>, RocStr> {
     println!("in roc_fx_readAllBytes({})", path.as_str());
     let result = read_bytes(path.as_str());
 
     match result {
         Ok(list) => {
-            println!("Read this list of bytes: {:?}", list);
+            // println!("Read this list of bytes: {:?}", list);
 
             RocResult::ok(list)
         }
@@ -161,14 +161,12 @@ pub extern "C" fn roc_fx_readAllBytes(
             println!("Error reading file: {:?}", err);
 
             // TODO give a more helpful error
-            let tag = ReadErrTag::FileBusy;
-            let path = "TODO roc read result error".into();
+            // let tag = ReadErrTag::FileBusy;
+            let path = RocStr::from_slice(b"TODO roc read result error");
 
-            RocResult::err(ReadErr {
-                path,
-                // errno: i32, // needed once OpenErr is in the mix
-                tag,
-            })
+            // RocResult::err(ReadErr { path, errno: i32, // needed once OpenErr is in the mix tag, })
+
+            RocResult::err(path)
         }
     }
 }
