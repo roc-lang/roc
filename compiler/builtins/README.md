@@ -80,7 +80,7 @@ fn atan() {
 ```
 But replace `Num.atan` and the type signature with the new builtin.
 
-### gen/test/*.rs
+### test_gen/test/*.rs
 In this directory, there are a couple files like `gen_num.rs`, `gen_str.rs`, etc. For the `Str` module builtins, put the test in `gen_str.rs`, etc. Find the one for the new builtin, and add a test like:
 ```
 #[test]
