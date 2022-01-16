@@ -40,11 +40,12 @@ pub fn dispatch_low_level<'a>(
         StrStartsWithCodePt => return BuiltinCall(bitcode::STR_STARTS_WITH_CODE_PT),
         StrEndsWith => return BuiltinCall(bitcode::STR_ENDS_WITH),
         StrSplit => {
-            // Roughly we need to:
-            // 1. count segments
-            // 2. make a new pointer
-            // 3. split that pointer in place
-            // see: build_str.rs line 31
+            // LLVM implementation (build_str.rs) does the following
+            // 1. Call bitcode::STR_COUNT_SEGMENTS
+            // 2. Allocate a `List Str`
+            // 3. Call bitcode::STR_STR_SPLIT_IN_PLACE
+            // 4. Write the elements and length of the List
+            // To do this here, we need full access to WasmBackend, or we could make a Zig wrapper
             return NotImplemented;
         }
         StrCountGraphemes => return BuiltinCall(bitcode::STR_COUNT_GRAPEHEME_CLUSTERS),
@@ -78,8 +79,8 @@ pub fn dispatch_low_level<'a>(
         StrFromUtf8 => return BuiltinCall(bitcode::STR_FROM_UTF8),
         StrTrimLeft => return BuiltinCall(bitcode::STR_TRIM_LEFT),
         StrTrimRight => return BuiltinCall(bitcode::STR_TRIM_RIGHT),
-        StrFromUtf8Range => return BuiltinCall(bitcode::STR_FROM_UTF8_RANGE), // refcounting errors
-        StrToUtf8 => return BuiltinCall(bitcode::STR_TO_UTF8),                // refcounting errors
+        StrFromUtf8Range => return BuiltinCall(bitcode::STR_FROM_UTF8_RANGE),
+        StrToUtf8 => return BuiltinCall(bitcode::STR_TO_UTF8),
         StrRepeat => return BuiltinCall(bitcode::STR_REPEAT),
         StrTrim => return BuiltinCall(bitcode::STR_TRIM),
 
