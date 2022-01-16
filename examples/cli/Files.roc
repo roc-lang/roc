@@ -7,6 +7,16 @@ app "echo"
 
 main : Task {} []
 main =
+    Task.attempt mainHelp \result ->
+        when result is
+            Err e ->
+                Stdout.line "something went wrong"
+
+            Ok v ->
+                Task.succeed v
+
+mainHelp : Task {} File.ReadErr
+mainHelp =
     task =
         {} <- await (Stdout.line "What file should I read?")
         filename <- await Stdin.line

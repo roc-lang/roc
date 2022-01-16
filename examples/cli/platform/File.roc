@@ -68,7 +68,7 @@ WriteErr :
     #]OpenErr
     ]
 
-readUtf8Infallible : Path -> Task Str *
+readUtf8Infallible : Path -> Task Str ReadErr
 readUtf8Infallible = \path ->
     Task.await (readBytesInfallible path) \bytes ->
         when Str.fromUtf8 bytes is
@@ -94,7 +94,7 @@ readUtf8 = \path ->
         #Err (ReadBytes problem) -> Task.fail (ReadUtf8 problem)
         Err str -> Task.fail (ReadUtf8 (FileWasDir str))
 
-readBytesInfallible : Path -> Task (List U8) *
+readBytesInfallible : Path -> Task (List U8) ReadErr
 readBytesInfallible = \path ->
     Effect.after (Effect.readAllBytes path) \result ->
         when result is
@@ -114,7 +114,7 @@ readBytes = \path ->
     Effect.after (Effect.readAllBytes path) \result ->
         when result is
             Ok answer -> Task.succeed answer
-            Err str -> Task.fail str
+            Err _ -> Task.fail "something went wrong"
 
 writeUtf8 : Path, Str -> Task {} [ WriteUtf8 WriteErr ]*
 writeUtf8 = \path, str ->

@@ -134,7 +134,7 @@ pub struct ReadErr {
     tag: ReadErrTag,
 }
 
-#[repr(u64)] // TODO this will be a u8 after Ayaz's PR merges
+#[repr(u8)]
 /// === THIS MUST BE MANUALLY KEPT IN SYNC WITH THE ONE IN File.roc ===
 pub enum ReadErrTag {
     ////// THESE MUST BE ALPHABETIZED!!! //////
@@ -152,14 +152,8 @@ pub extern "C" fn roc_fx_readAllBytes(
     let result = read_bytes(path.as_str());
 
     match result {
-        Ok(list) => {
-            // println!("Read this list of bytes: {:?}", list);
-
-            RocResult::ok(list)
-        }
+        Ok(list) => RocResult::ok(list),
         Err(err) => {
-            println!("Error reading file: {:?}", err);
-
             // TODO give a more helpful error
             // let tag = ReadErrTag::FileBusy;
             let path = RocStr::from_slice(b"TODO roc read result error");
