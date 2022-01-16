@@ -28,6 +28,8 @@ pub const BUILTIN_EFFECT_FUNCTIONS: [(&str, Builder); 3] = [
     ("map", build_effect_map),
     // Effect.always : a -> Effect a
     ("always", build_effect_always),
+    // Effect.forever : Effect a -> Effect b
+    ("forever", build_effect_forever),
 ];
 
 // the Effects alias & associated functions
@@ -586,6 +588,63 @@ fn build_effect_after(
     };
 
     (after_symbol, def)
+}
+
+fn build_effect_forever(
+    env: &mut Env,
+    scope: &mut Scope,
+    effect_symbol: Symbol,
+    effect_tag_name: TagName,
+    var_store: &mut VarStore,
+) -> (Symbol, Def) {
+    // morally
+    //
+    //  Effect.forever = \effect -> Effect.after effect (\_ -> Effect.forever effect)
+    //
+    // Here we inline the `Effect.after`, and get
+    //
+    //  Effect.forever : Effect a -> Effect b
+    //  Effect.forever = \effect ->
+    //      \{} ->
+    //          @Effect thunk1 = effect
+    //          _ = thunk1 {}
+    //          @Effect thunk2 = Effect.forever effect
+    //          thunk2 {}
+    //
+    // We then rely on our defunctionalization to turn this into a tail-recursive loop.
+    // First the `@Effect` wrapper melts away
+    //
+    //  Effect.forever : ({} -> a) -> ({} -> b)
+    //  Effect.forever = \effect ->
+    //      \{} ->
+    //          thunk1 = effect
+    //          _ = thunk1 {}
+    //          thunk2 = Effect.forever effect
+    //          thunk2 {}
+    //
+    // Then we defunctionalize
+    //
+    //  foreverInner = \{}, { effect } ->
+    //      thunk1 = effect
+    //      _ = thunk1 {}
+    //      thunk2 = Effect.forever effect
+    //      thunk2 {}
+    //
+    //  Effect.forever : [ C foreverInner { effect : T } ]
+    //  Effect.forever = \effect ->
+    //      C { effect }
+    //
+    // And we have to adjust the call
+    //
+    //  foreverInner = \{}, { effect } ->
+    //      thunk1 = effect
+    //      _ = thunk1 {}
+    //      thunk2 = Effect.forever effect
+    //      when thunk2 is
+    //          C env -> foreverInner {} env.effect
+    //
+    // Making `foreverInner` perfectly tail-call optimizable
+    todo!()
 }
 
 pub fn build_host_exposed_def(
