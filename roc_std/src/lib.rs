@@ -748,7 +748,7 @@ impl Clone for RocStr {
 
 impl Drop for RocStr {
     fn drop(&mut self) {
-        if !self.is_small_str() {
+        if !self.is_small_str() && self.length != 0 {
             let storage_ptr = self.get_storage_ptr_mut();
 
             unsafe {
