@@ -18,7 +18,7 @@ main =
 
             Ok v ->
                 {} <- await (Stdout.line "Thank you for flying Roc!")
-                Task.succeed v
+                Task.succeed ""
 
 mainHelp : Task {} File.ReadErr
 mainHelp =
