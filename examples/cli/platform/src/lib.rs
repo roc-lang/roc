@@ -150,20 +150,15 @@ pub extern "C" fn roc_fx_readAllBytes(
     // return this instead. However, specifying it as the return type leads to
     // https://github.com/rtfeldman/roc/issues/2358 and `&mut output` is the workaround!
     output: &mut RocResult<RocList<u8>, ReadErr>,
-    path: ManuallyDrop<RocStr>,
+    mut path: ManuallyDrop<RocStr>,
 ) {
     *output = match read_bytes(path.as_str()) {
         Ok(list) => RocResult::ok(list),
         Err(err) => {
-            // TODO give a more helpful error
             let tag = ReadErrTag::FileBusy;
-            let path = RocStr::from_slice(b"TODO roc read result error");
+            let path = unsafe { ManuallyDrop::<RocStr>::take(&mut path) };
 
-            RocResult::err(ReadErr {
-                path,
-                // errno: i32, // needed once OpenErr is in the mixtag
-                tag,
-            })
+            RocResult::err(ReadErr { path, tag })
         }
     };
 }
