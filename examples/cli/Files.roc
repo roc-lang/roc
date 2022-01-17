@@ -15,15 +15,18 @@ main =
     Task.attempt task \result ->
         when result is
             Err err ->
-                msg =
-                    when err is
-                        FileBusy px -> "FileBusy  \(px)"
-                        FileWasDir px -> "FileWasDir  \(px)"
-                        IllegalByteSequence  px -> "IllegalByteSequence   \(px)"
-                        InvalidSeek  px -> "InvalidSeek   \(px)"
+                msg = fmtErr err
 
                 Stdout.line "Error reading file: \(msg)"
 
             Ok contents ->
                 {} <- await (Stdout.line "Here are its contents:\n\n\(contents)")
                 Task.succeed {}
+
+fmtErr : File.ReadErr -> Str
+fmtErr = \err ->
+    when err is
+        FileBusy path -> "\(path) was busy"
+        FileWasDir path -> "\(path) was a directory, not a file"
+        IllegalByteSequence  path -> "\(path) contained an illegal byte sequence"
+        InvalidSeek path -> "Invalid seek when reading from \(path)"
