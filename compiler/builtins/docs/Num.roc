@@ -65,6 +65,7 @@ interface Num
             maxI128,
             maxInt,
             minFloat,
+            minI128,
             minInt,
             modInt,
             modFloat,
@@ -821,6 +822,25 @@ maxU32 : U32
 ## because #U32 is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
 ## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
 minU32 : U32
+
+## The highest number that can be stored in an #I128 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `170_141_183_460_469_231_731_687_303_715_884_105_727`,
+## which is over 2 million.
+##
+## Note that this is smaller than the positive version of #Int.minI128,
+## which means if you call #Num.abs on #Int.minI128, it will overflow and crash!
+maxI128 : I128
+
+## The min number that can be stored in an #I128 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is `-170_141_183_460_469_231_731_687_303_715_884_105_728`.
+##
+## Note that the positive version of this number is larger than #Int.maxI128,
+## which means if you call #Num.abs on #Int.minI128, it will overflow and crash!
+minI128 : I128
 
 ## The highest supported #F64 value you can have, which is approximately 1.8 × 10^308.
 ##
