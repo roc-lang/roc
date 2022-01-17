@@ -2596,6 +2596,30 @@ mod solve_expr {
     }
 
     #[test]
+    fn alias_with_composed_tag_unions() {
+        infer_eq(
+            indoc!(
+                r#"
+                    Foo : [ A, B ]
+                    Bar : [ C Str, D {} ]Foo
+
+                    x : Bar
+                    x = A
+
+                    y : Bar
+                    y = B
+
+                    z : Bar
+                    z = C "hi"
+
+                    [ x, y, z ]
+                "#
+            ),
+            "List Bar",
+        );
+    }
+
+    #[test]
     fn linked_list_empty() {
         infer_eq_without_problem(
             indoc!(
