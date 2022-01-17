@@ -51,7 +51,7 @@ ReadErr :
     #]OpenErr
     ]
 
-ReadUtf8Err : [ BadUtf8 Str.Utf8ByteProblem Nat ]ReadErr
+ReadUtf8Err : [ BadUtf8 Path Str.Utf8ByteProblem Nat ]ReadErr
 
 ## Errors when attempting to read a directory.
 DirReadErr :
@@ -69,7 +69,7 @@ WriteErr :
     ]
 
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
-# TODO FIXME use this instead:
+# TODO FIXME use this instead once it no longer causes a compiler crash:
 #readUtf8 : Path -> Task Str [ ReadUtf8 ReadUtf8Err ]*
 readUtf8 : Path -> Task Str [ ReadUtf8 ReadErr ]*
 readUtf8 = \path ->
