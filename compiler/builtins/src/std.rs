@@ -709,8 +709,19 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // trim : Str -> Str
     add_top_level_function_type!(Symbol::STR_TRIM, vec![str_type()], Box::new(str_type()));
 
-    // TODO GIESCH
-    // dropPrefix, dropSuffix
+    // dropPrefix : Str, Str -> Str
+    add_top_level_function_type!(
+        Symbol::STR_DROP_PREFIX,
+        vec![str_type(), str_type()],
+        Box::new(str_type())
+    );
+
+    // dropSuffix : Str, Str -> Str
+    add_top_level_function_type!(
+        Symbol::STR_DROP_SUFFIX,
+        vec![str_type(), str_type()],
+        Box::new(str_type())
+    );
 
     // fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
     {
