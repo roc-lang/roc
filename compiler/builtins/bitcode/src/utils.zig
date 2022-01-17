@@ -305,10 +305,15 @@ pub fn getExpectFailures() []Failure {
     return failures[0..failure_length];
 }
 
-pub fn getExpectFailuresC() callconv(.C) *c_void {
+const CSlice = extern struct {
+    pointer: *c_void,
+    len: usize,
+};
+pub fn getExpectFailuresC() callconv(.C) CSlice {
+
     var bytes = @ptrCast(*c_void, failures);
 
-    return bytes;
+    return .{.pointer = bytes, .len = failure_length};
 }
 
 pub fn deinitFailures() void {

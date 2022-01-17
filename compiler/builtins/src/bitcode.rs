@@ -316,3 +316,6 @@ pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_INCREF: &str = "roc_builtins.utils.incref";
 pub const UTILS_DECREF: &str = "roc_builtins.utils.decref";
 pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null";
+pub const UTILS_EXPECT_FAILED: &str = "roc_builtins.utils.expect_failed";
+pub const UTILS_GET_EXPECT_FAILURES: &str = "roc_builtins.utils.get_expect_failures";
+pub const UTILS_DEINIT_FAILURES: &str = "roc_builtins.utils.deinit_failures";

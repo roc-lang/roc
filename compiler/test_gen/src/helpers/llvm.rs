@@ -599,6 +599,52 @@ macro_rules! assert_evals_to {
     };
 }
 
+#[allow(unused_macros)]
+macro_rules! assert_expect_failed {
+    ($src:expr, $expected:expr, $ty:ty) => {
+        use bumpalo::Bump;
+        use inkwell::context::Context;
+        use roc_gen_llvm::run_jit_function;
+
+        let arena = Bump::new();
+        let context = Context::create();
+
+        // NOTE the stdlib must be in the arena; just taking a reference will segfault
+        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
+
+        let is_gen_test = true;
+        let (main_fn_name, errors, lib) = $crate::helpers::llvm::helper(
+            &arena,
+            $src,
+            stdlib,
+            is_gen_test,
+            false,
+            &context,
+        );
+
+        let transform = |success| {
+            let expected = $expected;
+            assert_eq!(&success, &expected, "LLVM test failed");
+        };
+        run_jit_function!(lib, main_fn_name, $ty, transform, errors)
+    };
+
+    ($src:expr, $expected:expr, $ty:ty) => {
+        $crate::helpers::llvm::assert_llvm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $crate::helpers::llvm::identity,
+            false
+        );
+    };
+
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+    };
+}
+
+
 #[allow(dead_code)]
 pub fn identity<T>(value: T) -> T {
     value
@@ -633,3 +679,6 @@ pub(crate) use assert_llvm_evals_to;
 pub(crate) use assert_non_opt_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
+#[allow(unused_imports)]
+pub(crate) use assert_expect_failed;
+

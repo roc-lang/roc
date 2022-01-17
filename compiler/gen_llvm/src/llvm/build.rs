@@ -5259,11 +5259,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     }
 }
 
-// TODO: Fix me! I should be different in tests vs. user code!
-fn expect_failed() {
-    panic!("An expectation failed!");
-}
-
 #[allow(clippy::too_many_arguments)]
 fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -5274,7 +5269,6 @@ fn run_low_level<'a, 'ctx, 'env>(
     op: LowLevel,
     args: &[Symbol],
     update_mode: UpdateMode,
-    // expect_failed: *const (),
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
 
@@ -6036,33 +6030,20 @@ fn run_low_level<'a, 'ctx, 'env>(
             {
                 bd.position_at_end(throw_block);
 
-                match env.ptr_bytes {
-                    8 => {
-                        let test = env.module.get_function("get_expect_failed").unwrap();
-                        let fn_ptr_type = context
-                            .void_type()
-                            .fn_type(&[], false)
-                            .ptr_type(AddressSpace::Generic);
-                        let fn_addr = env
-                            .ptr_int()
-                            .const_int(expect_failed as *const () as u64, false);
-                        let func: PointerValue<'ctx> = bd.build_int_to_ptr(
-                            fn_addr,
-                            fn_ptr_type,
-                            "cast_expect_failed_addr_to_ptr",
-                        );
-                        let callable = CallableValue::try_from(func).unwrap();
+                let func = env.module.get_function("roc_builtins.utils.expect_failed").unwrap();
+                let callable = CallableValue::try_from(func).unwrap();
+                let start_line = context.i32_type().const_int(0, false);
+                let end_line = context.i32_type().const_int(0, false);
+                let start_col = context.i16_type().const_int(0, false);
+                let end_col = context.i16_type().const_int(0, false);
 
-                        bd.build_call(callable, &[], "call_expect_failed");
+                bd.build_call(
+                    callable,
+                    &[start_line.into(), end_line.into(), start_col.into(), end_col.into()],
+                    "call_expect_failed",
+                );
 
-                        bd.build_unconditional_branch(then_block);
-                    }
-                    4 => {
-                        // temporary WASM implementation
-                        throw_exception(env, "An expectation failed!");
-                    }
-                    _ => unreachable!(),
-                }
+                bd.build_unconditional_branch(then_block);
             }
 
             bd.position_at_end(then_block);
