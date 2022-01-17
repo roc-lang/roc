@@ -16,10 +16,10 @@ main =
         when result is
             Err err ->
                 msg = fmtErr err
-
                 Stdout.line "Error reading file: \(msg)"
 
             Ok contents ->
+                # TODO remove this `await` once https://github.com/rtfeldman/roc/pull/2226 has landed
                 {} <- await (Stdout.line "Here are its contents:\n\n\(contents)")
                 Task.succeed {}
 
