@@ -2,13 +2,13 @@ use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_reporting::internal_error;
 
 use crate::backend::WasmBackend;
 use crate::layout::CallConv;
 use crate::layout::{StackMemoryFormat, WasmLayout};
-use crate::storage::StoredValue;
+use crate::storage::{StackMemoryLocation, StoredValue};
 use crate::wasm_module::{Align, ValueType};
 
 /// Number types used for Wasm code gen
@@ -31,7 +31,7 @@ enum CodeGenNumType {
 }
 
 impl CodeGenNumType {
-    pub fn for_symbol<'a>(backend: &WasmBackend<'a>, symbol: Symbol) -> Self {
+    pub fn for_symbol(backend: &WasmBackend<'_>, symbol: Symbol) -> Self {
         Self::from(backend.storage.get(&symbol))
     }
 }
@@ -125,22 +125,21 @@ impl<'a> LowLevelCall<'a> {
     /// Load symbol values for a Zig call or numerical operation
     /// For numerical ops, this just pushes the arguments to the Wasm VM's value stack
     /// It implements the calling convention used by Zig for both numbers and structs
-    /// When returning structs, it also loads a stack frame pointer for the return value
+    /// Result is the type signature of the call
     fn load_args(&self, backend: &mut WasmBackend<'a>) -> (Vec<'a, ValueType>, Option<ValueType>) {
-        let fn_signature = backend.storage.load_symbols_for_call(
+        backend.storage.load_symbols_for_call(
             backend.env.arena,
             &mut backend.code_builder,
             self.arguments,
             self.ret_symbol,
             &WasmLayout::new(&self.ret_layout),
             CallConv::Zig,
-        );
-        fn_signature
+        )
     }
 
     fn load_args_and_call_zig(&self, backend: &mut WasmBackend<'a>, name: &'a str) {
         let (param_types, ret_type) = self.load_args(backend);
-        backend.call_zig_builtin_after_loading_args(name, param_types, ret_type);
+        backend.call_zig_builtin_after_loading_args(name, param_types.len(), ret_type.is_some());
     }
 
     /// Wrap an integer whose Wasm representation is i32
@@ -173,6 +172,7 @@ impl<'a> LowLevelCall<'a> {
         }
     }
 
+    ///  Main entrypoint from WasmBackend
     pub fn generate(&self, backend: &mut WasmBackend<'a>) {
         use CodeGenNumType::*;
 
@@ -547,58 +547,8 @@ impl<'a> LowLevelCall<'a> {
                     _ => panic_ret_type(),
                 }
             }
-            NumIsFinite => {
-                use StoredValue::*;
-                self.load_args(backend);
-                match backend.storage.get(&self.arguments[0]) {
-                    VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
-                        match value_type {
-                            ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(1), // always true for integers
-                            ValueType::F32 => {
-                                backend.code_builder.i32_reinterpret_f32();
-                                backend.code_builder.i32_const(0x7f80_0000);
-                                backend.code_builder.i32_and();
-                                backend.code_builder.i32_const(0x7f80_0000);
-                                backend.code_builder.i32_ne();
-                            }
-                            ValueType::F64 => {
-                                backend.code_builder.i64_reinterpret_f64();
-                                backend.code_builder.i64_const(0x7ff0_0000_0000_0000);
-                                backend.code_builder.i64_and();
-                                backend.code_builder.i64_const(0x7ff0_0000_0000_0000);
-                                backend.code_builder.i64_ne();
-                            }
-                        }
-                    }
-                    StackMemory {
-                        format, location, ..
-                    } => {
-                        let (local_id, offset) =
-                            location.local_and_offset(backend.storage.stack_frame_pointer);
+            NumIsFinite => num_is_finite(backend, self.arguments[0]),
 
-                        match format {
-                            StackMemoryFormat::Int128 => backend.code_builder.i32_const(1),
-                            StackMemoryFormat::Float128 => {
-                                backend.code_builder.get_local(local_id);
-                                backend.code_builder.i64_load(Align::Bytes4, offset + 8);
-                                backend.code_builder.i64_const(0x7fff_0000_0000_0000);
-                                backend.code_builder.i64_and();
-                                backend.code_builder.i64_const(0x7fff_0000_0000_0000);
-                                backend.code_builder.i64_ne();
-                            }
-                            StackMemoryFormat::Decimal => {
-                                backend.code_builder.get_local(local_id);
-                                backend.code_builder.i64_load(Align::Bytes4, offset + 8);
-                                backend.code_builder.i64_const(0x7100_0000_0000_0000);
-                                backend.code_builder.i64_and();
-                                backend.code_builder.i64_const(0x7100_0000_0000_0000);
-                                backend.code_builder.i64_ne();
-                            }
-                            StackMemoryFormat::DataStructure => panic_ret_type(),
-                        }
-                    }
-                }
-            }
             NumAtan => match self.ret_layout {
                 Layout::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ATAN[width]);
@@ -720,8 +670,238 @@ impl<'a> LowLevelCall<'a> {
             ExpectTrue => todo!("{:?}", self.lowlevel),
             RefCountInc => self.load_args_and_call_zig(backend, bitcode::UTILS_INCREF),
             RefCountDec => self.load_args_and_call_zig(backend, bitcode::UTILS_DECREF),
-            Eq | NotEq | Hash | PtrCast => {
-                internal_error!("{:?} should be handled in backend.rs", self.lowlevel)
+
+            PtrCast => {
+                let code_builder = &mut backend.code_builder;
+                backend.storage.load_symbols(code_builder, self.arguments);
+            }
+
+            Hash => todo!("{:?}", self.lowlevel),
+
+            Eq | NotEq => self.eq_or_neq(backend),
+        }
+    }
+
+    /// Equality and inequality
+    /// These can operate on any data type (except functions) so they're more complex than other operators.
+    fn eq_or_neq(&self, backend: &mut WasmBackend<'a>) {
+        let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
+        let other_arg_layout = backend.storage.symbol_layouts[&self.arguments[1]];
+        debug_assert!(
+            arg_layout == other_arg_layout,
+            "Cannot do `==` comparison on different types"
+        );
+
+        let invert_result = matches!(self.lowlevel, NotEq);
+
+        match arg_layout {
+            Layout::Builtin(
+                Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
+            ) => self.eq_or_neq_number(backend),
+
+            Layout::Builtin(Builtin::Str) => {
+                self.load_args_and_call_zig(backend, bitcode::STR_EQUAL);
+                if invert_result {
+                    backend.code_builder.i32_eqz();
+                }
+            }
+
+            // Empty record is always equal to empty record.
+            // There are no runtime arguments to check, so just emit true or false.
+            Layout::Struct(fields) if fields.is_empty() => {
+                backend.code_builder.i32_const(!invert_result as i32);
+            }
+
+            // Void is always equal to void. This is the type for the contents of the empty list in `[] == []`
+            // This instruction will never execute, but we need an i32 for module validation
+            Layout::Union(UnionLayout::NonRecursive(tags)) if tags.is_empty() => {
+                backend.code_builder.i32_const(!invert_result as i32);
+            }
+
+            Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
+            | Layout::Struct(_)
+            | Layout::Union(_)
+            | Layout::LambdaSet(_) => {
+                // Don't want Zig calling convention here, we're calling internal Roc functions
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, self.arguments);
+
+                backend.call_eq_specialized(
+                    self.arguments,
+                    &arg_layout,
+                    self.ret_symbol,
+                    &self.ret_storage,
+                );
+
+                if invert_result {
+                    backend.code_builder.i32_eqz();
+                }
+            }
+
+            Layout::RecursivePointer => {
+                internal_error!(
+                    "Tried to apply `==` to RecursivePointer values {:?}",
+                    self.arguments,
+                )
+            }
+        }
+    }
+
+    fn eq_or_neq_number(&self, backend: &mut WasmBackend<'a>) {
+        use StoredValue::*;
+
+        match backend.storage.get(&self.arguments[0]).to_owned() {
+            VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+                self.load_args(backend);
+                match self.lowlevel {
+                    LowLevel::Eq => match value_type {
+                        ValueType::I32 => backend.code_builder.i32_eq(),
+                        ValueType::I64 => backend.code_builder.i64_eq(),
+                        ValueType::F32 => backend.code_builder.f32_eq(),
+                        ValueType::F64 => backend.code_builder.f64_eq(),
+                    },
+                    LowLevel::NotEq => match value_type {
+                        ValueType::I32 => backend.code_builder.i32_ne(),
+                        ValueType::I64 => backend.code_builder.i64_ne(),
+                        ValueType::F32 => backend.code_builder.f32_ne(),
+                        ValueType::F64 => backend.code_builder.f64_ne(),
+                    },
+                    _ => internal_error!("{:?} ended up in Equality code", self.lowlevel),
+                }
+            }
+            StackMemory {
+                format,
+                location: location0,
+                ..
+            } => {
+                if let StackMemory {
+                    location: location1,
+                    ..
+                } = backend.storage.get(&self.arguments[1]).to_owned()
+                {
+                    self.eq_num128(backend, format, [location0, location1]);
+                    if matches!(self.lowlevel, LowLevel::NotEq) {
+                        backend.code_builder.i32_eqz();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Equality for 12-bit numbers. Checks if they're finite and contain the same bytes
+    /// Takes care of loading the arguments
+    fn eq_num128(
+        &self,
+        backend: &mut WasmBackend<'a>,
+        format: StackMemoryFormat,
+        locations: [StackMemoryLocation; 2],
+    ) {
+        match format {
+            StackMemoryFormat::Decimal => {
+                // Both args are finite
+                num_is_finite(backend, self.arguments[0]);
+                num_is_finite(backend, self.arguments[1]);
+                backend.code_builder.i32_and();
+
+                // AND they have the same bytes
+                Self::eq_num128_bytes(backend, locations);
+                backend.code_builder.i32_and();
+            }
+
+            StackMemoryFormat::Int128 => Self::eq_num128_bytes(backend, locations),
+
+            StackMemoryFormat::Float128 => todo!("equality for f128"),
+
+            StackMemoryFormat::DataStructure => {
+                internal_error!("Data structure equality is handled elsewhere")
+            }
+        }
+    }
+
+    /// Check that two 128-bit numbers contain the same bytes
+    /// Loads *half* an argument at a time
+    /// (Don't call "load arguments" or "load symbols" helpers before this, it'll just waste instructions)
+    fn eq_num128_bytes(backend: &mut WasmBackend<'a>, locations: [StackMemoryLocation; 2]) {
+        let (local0, offset0) = locations[0].local_and_offset(backend.storage.stack_frame_pointer);
+        let (local1, offset1) = locations[1].local_and_offset(backend.storage.stack_frame_pointer);
+
+        // Load & compare the first half of each argument
+        backend.code_builder.get_local(local0);
+        backend.code_builder.i64_load(Align::Bytes8, offset0);
+        backend.code_builder.get_local(local1);
+        backend.code_builder.i64_load(Align::Bytes8, offset1);
+        backend.code_builder.i64_eq();
+
+        // Load & compare the second half of each argument
+        backend.code_builder.get_local(local0);
+        backend.code_builder.i64_load(Align::Bytes8, offset0 + 8);
+        backend.code_builder.get_local(local1);
+        backend.code_builder.i64_load(Align::Bytes8, offset1 + 8);
+        backend.code_builder.i64_eq();
+
+        // First half matches AND second half matches
+        backend.code_builder.i32_and();
+    }
+}
+
+/// Helper for NumIsFinite op, and also part of Eq/NotEq
+fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
+    use StoredValue::*;
+    let stored = backend.storage.get(&argument).to_owned();
+    match stored {
+        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+            backend
+                .storage
+                .load_symbols(&mut backend.code_builder, &[argument]);
+            match value_type {
+                ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(1), // always true for integers
+                ValueType::F32 => {
+                    backend.code_builder.i32_reinterpret_f32();
+                    backend.code_builder.i32_const(0x7f80_0000);
+                    backend.code_builder.i32_and();
+                    backend.code_builder.i32_const(0x7f80_0000);
+                    backend.code_builder.i32_ne();
+                }
+                ValueType::F64 => {
+                    backend.code_builder.i64_reinterpret_f64();
+                    backend.code_builder.i64_const(0x7ff0_0000_0000_0000);
+                    backend.code_builder.i64_and();
+                    backend.code_builder.i64_const(0x7ff0_0000_0000_0000);
+                    backend.code_builder.i64_ne();
+                }
+            }
+        }
+        StackMemory {
+            format, location, ..
+        } => {
+            let (local_id, offset) = location.local_and_offset(backend.storage.stack_frame_pointer);
+
+            match format {
+                StackMemoryFormat::Int128 => backend.code_builder.i32_const(1),
+
+                // f128 is not supported anywhere else but it's easy to support it here, so why not...
+                StackMemoryFormat::Float128 => {
+                    backend.code_builder.get_local(local_id);
+                    backend.code_builder.i64_load(Align::Bytes4, offset + 8);
+                    backend.code_builder.i64_const(0x7fff_0000_0000_0000);
+                    backend.code_builder.i64_and();
+                    backend.code_builder.i64_const(0x7fff_0000_0000_0000);
+                    backend.code_builder.i64_ne();
+                }
+
+                StackMemoryFormat::Decimal => {
+                    backend.code_builder.get_local(local_id);
+                    backend.code_builder.i64_load(Align::Bytes4, offset + 8);
+                    backend.code_builder.i64_const(0x7100_0000_0000_0000);
+                    backend.code_builder.i64_and();
+                    backend.code_builder.i64_const(0x7100_0000_0000_0000);
+                    backend.code_builder.i64_ne();
+                }
+
+                StackMemoryFormat::DataStructure => {
+                    internal_error!("Tried to perform NumIsFinite on a data structure")
+                }
             }
         }
     }
