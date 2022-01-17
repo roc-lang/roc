@@ -10,11 +10,11 @@ main =
     task =
         {} <- await (Stdout.line "What file should I read?")
         filename <- await Stdin.line
-        File.readUtf8Infallible filename
+        File.readUtf8 filename
 
     Task.attempt task \result ->
         when result is
-            Err err ->
+            Err (ReadUtf8 err) ->
                 msg = fmtErr err
                 Stdout.line "Error reading file: \(msg)"
 

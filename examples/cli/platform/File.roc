@@ -1,5 +1,5 @@
 interface File
-    exposes [ Path, OpenErr, ReadErr, ReadUtf8Err, WriteErr, DirReadErr, readBytes, readUtf8, readUtf8Infallible, writeBytes, writeUtf8 ]
+    exposes [ Path, OpenErr, ReadErr, ReadUtf8Err, WriteErr, DirReadErr, readBytes, readUtf8, writeBytes, writeUtf8 ]
     imports [ fx.Effect, Task.{ Task }, Stdout ]
 
 ## TODO move this to an internal module; this should not be exposed in userspace
@@ -68,15 +68,6 @@ WriteErr :
     #]OpenErr
     ]
 
-readUtf8Infallible : Path -> Task Str ReadErr
-readUtf8Infallible = \path ->
-    Task.await (readBytesInfallible path) \bytes ->
-        when Str.fromUtf8 bytes is
-            Ok str -> Task.succeed str
-            # TODO FIXME replace with:  -> Task.fail (ReadUtf8 (BadUtf8 problem index))
-            Err (BadUtf8 problem index) -> Task.succeed "<<bad utf8>>"
-
-
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
 # TODO FIXME use this instead:
 #readUtf8 : Path -> Task Str [ ReadUtf8 ReadUtf8Err ]*
@@ -91,29 +82,16 @@ readUtf8 = \path ->
                 # TODO FIXME replace with:  -> Task.fail (ReadUtf8 (BadUtf8 problem index))
                 Err (BadUtf8 problem index) -> Task.succeed ""
 
-        #Err (ReadBytes problem) -> Task.fail (ReadUtf8 problem)
-        Err str -> Task.fail (ReadUtf8 (FileWasDir str))
+        Err (ReadBytes readErr) -> Task.fail (ReadUtf8 readErr)
 
-readBytesInfallible : Path -> Task (List U8) ReadErr
-readBytesInfallible = \path ->
-    Effect.after (Effect.readAllBytes path) \result ->
-        when result is
-            Ok bytes -> Task.succeed bytes
-            Err err -> Task.fail err
 
-# readBytes : Path -> Task (List U8) [ ReadBytes ReadErr ]*
-# readBytes = \path ->
-#     Effect.after (Effect.readAllBytes path) \result ->
-#         when result is
-#             Ok answer -> Task.succeed answer
-#             Err readErr -> Task.fail (ReadBytes readErr)
-
-readBytes : Path -> Task (List U8) Str
+readBytes : Path -> Task (List U8) [ ReadBytes ReadErr ]*
 readBytes = \path ->
     Effect.after (Effect.readAllBytes path) \result ->
         when result is
-            Ok answer -> Task.succeed answer
-            Err _ -> Task.fail "readBytes: something went wrong"
+            Ok bytes -> Task.succeed bytes
+            Err readErr -> Task.fail (ReadBytes readErr)
+
 
 writeUtf8 : Path, Str -> Task {} [ WriteUtf8 WriteErr ]*
 writeUtf8 = \path, str ->
