@@ -23,10 +23,11 @@ main =
                 {} <- await (Stdout.line "Here are its contents:\n\n\(contents)")
                 Task.succeed {}
 
-fmtErr : File.ReadErr -> Str
+fmtErr : File.ReadUtf8Err -> Str
 fmtErr = \err ->
     when err is
         FileBusy path -> "\(path) was busy"
         FileWasDir path -> "\(path) was a directory, not a file"
         IllegalByteSequence  path -> "\(path) contained an illegal byte sequence"
         InvalidSeek path -> "Invalid seek when reading from \(path)"
+        BadUtf8 path _ _ -> "\(path) was not encoded as valid UTF-8"

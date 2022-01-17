@@ -69,9 +69,7 @@ WriteErr :
     ]
 
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
-# TODO FIXME use this instead once it no longer causes a compiler crash:
-#readUtf8 : Path -> Task Str [ ReadUtf8 ReadUtf8Err ]*
-readUtf8 : Path -> Task Str [ ReadUtf8 ReadErr ]*
+readUtf8 : Path -> Task Str [ ReadUtf8 ReadUtf8Err ]*
 readUtf8 = \path ->
     result <- Task.attempt (readBytes path)
 
@@ -82,8 +80,7 @@ readUtf8 = \path ->
                 # TODO FIXME replace with:  -> Task.fail (ReadUtf8 (BadUtf8 problem index))
                 Err (BadUtf8 problem index) -> Task.succeed ""
 
-        Err (ReadBytes readErr) -> Task.fail (ReadUtf8 readErr)
-
+        Err (ReadBytes readErr) -> Task.succeed "" #Task.fail (ReadUtf8 readErr)
 
 readBytes : Path -> Task (List U8) [ ReadBytes ReadErr ]*
 readBytes = \path ->
