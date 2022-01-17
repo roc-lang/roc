@@ -206,6 +206,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SHIFT_RIGHT => num_shift_right_by,
         NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
         NUM_INT_CAST=> num_int_cast,
+        NUM_MIN_I128=> num_min_i128,
         NUM_MAX_I128=> num_max_i128,
         NUM_TO_STR => num_to_str,
         RESULT_MAP => result_map,
@@ -1235,6 +1236,35 @@ fn num_shift_right_zf_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.intCast: Int a -> Int b
 fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+/// Num.minI128: I128
+fn num_min_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    // TODO: or `i128::MIN.into()` ?
+    let body = int(int_var, int_precision_var, i128::MIN);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        // TODO: or `None` ?
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
 }
 
 /// Num.maxI128: I128

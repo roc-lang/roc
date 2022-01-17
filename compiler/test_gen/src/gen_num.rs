@@ -1831,6 +1831,20 @@ fn shift_right_zf_by() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_i128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minI128
+                "#
+        ),
+        i128::MIN,
+        i128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn max_i128() {
     assert_evals_to!(
         indoc!(
