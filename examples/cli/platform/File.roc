@@ -51,7 +51,8 @@ ReadErr :
     #]OpenErr
     ]
 
-ReadUtf8Err : [ BadUtf8 Path Str.Utf8ByteProblem Nat ]ReadErr
+# TODO this doesn't work! Instead, we need either a wrapper around it or to use open tag unions here somehow.
+ReadUtf8Err a : [ ReadErr ReadErr, ReadUtf8Err Path Str.Utf8ByteProblem Nat ]a
 
 ## Errors when attempting to read a directory.
 DirReadErr :
@@ -69,7 +70,7 @@ WriteErr :
     ]
 
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
-readUtf8 : Path -> Task Str [ ReadUtf8 ReadUtf8Err ]*
+readUtf8 : Path -> Task Str (ReadUtf8Err *)
 readUtf8 = \path ->
     result <- Task.attempt (readBytes path)
 
