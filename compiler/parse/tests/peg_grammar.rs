@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod test_peg_grammar {
+
 #[derive(Copy, Clone)]
 pub enum Token {
     LowercaseIdent      = 0b_0010_0000, 
@@ -43,12 +46,12 @@ pub enum Token {
     OpLessThan          = 0b_0110_0110,
     OpAssignment        = 0b_0110_0111,
     OpPizza             = 0b_0110_1000,
-    OpEquals            = 0b_0110_1001,
+    OpEquals            = 0b_0110_1001, // ==
     OpNotEquals         = 0b_0110_1010,
     OpGreaterThanOrEq   = 0b_0110_1011,
     OpLessThanOrEq      = 0b_0110_1100,
-    OpAnd               = 0b_0110_1101,
-    OpOr                = 0b_0110_1110,
+    OpAnd               = 0b_0110_1101, // &&
+    OpOr                = 0b_0110_1110, // ||
     OpDoubleSlash       = 0b_0110_1111,
     OpDoublePercent     = 0b_0111_0001,
     OpBackpassing       = 0b_0111_1010,
@@ -80,10 +83,13 @@ pub enum Token {
 }
 
 type T = Token;
-
+// TODO credit zig.peg for inspiration
 peg::parser!{
     grammar tokenparser() for [T] {
-        pub rule expr() =
+
+      pub rule full_expr() = bool_and_expr()
+      
+      pub rule expr() =
           expect()
           / if_expr()
           / backpass()
@@ -92,7 +98,7 @@ peg::parser!{
           / parens_around()
           / number()
           / string()
-          / private_tag() //TODO global_tag
+          / tag()
 
 
         rule number() = [T::Number] {}
@@ -100,7 +106,7 @@ peg::parser!{
 
         rule tag() =
           private_tag()
-          / [T::UppercaseIdent]
+          / [T::UppercaseIdent] // = Global Tag
         rule private_tag() = [T::PrivateTag] {}
 
         rule list() = empty_list()
@@ -187,7 +193,7 @@ peg::parser!{
         rule requires_rigid() =
           [T::LowercaseIdent] [T::FatArrow] [T::UppercaseIdent]
 
-        rule typed_ident() =
+        pub rule typed_ident() =
           [T::LowercaseIdent] [T::Colon] type_annotation()
 
         rule effects() =
@@ -203,9 +209,9 @@ peg::parser!{
           [T::UppercaseIdent]
           / [T::LowercaseIdent]
 
+        // content of type_annotation without Colon(:)
         rule type_annotation() =
-          tag_union()
-          / function_type()
+          function_type()
           / type_annotation_no_fun()
 
         rule type_annotation_no_fun() =
@@ -241,7 +247,7 @@ peg::parser!{
           [T::Underscore]
 
         rule function_type() =
-          ((type_annotation_paren_fun() [T::Comma])* type_annotation_paren_fun() [T::Arrow])? type_annotation_paren_fun()
+          ( type_annotation_paren_fun() ([T::Comma] type_annotation_paren_fun())* [T::Arrow])? type_annotation_paren_fun()
 
         rule apply_type() =
           concrete_type() apply_args()?
@@ -249,6 +255,40 @@ peg::parser!{
           [T::UppercaseIdent] ([T::Dot] [T::UppercaseIdent])*
         rule apply_args() =
           type_annotation() type_annotation()*
+
+        rule unary_op() =
+          [T::OpMinus]
+          / [T::Bang]
+        rule unary_expr() =
+          unary_op()* expr()
+
+        rule mul_level_op() =
+          [T::Asterisk]
+          / [T::OpSlash] 
+        rule mul_level_expr() =
+          unary_expr() (mul_level_op() unary_expr())*
+
+        rule add_level_op() =
+          [T::OpPlus]
+          / [T::OpMinus]
+        rule add_level_expr() =
+          mul_level_expr() (add_level_op() mul_level_expr())*
+        
+        rule compare_op() =
+          [T::OpEquals] // ==
+          / [T::OpNotEquals]
+          / [T::OpLessThan]
+          / [T::OpGreaterThan]
+          / [T::OpLessThanOrEq]
+          / [T::OpGreaterThanOrEq]
+        rule compare_expr() =
+          add_level_expr() (compare_op() add_level_expr())?
+
+        rule bool_and_expr() =
+          compare_expr() ([T::OpAnd] compare_op())*
+
+        rule bool_or_expr() =
+          bool_and_expr() ([T::OpOr] bool_and_expr())*
     }
 }
 
@@ -266,7 +306,7 @@ fn test_basic_expr() {
 
     assert_eq!(tokenparser::expr(&[T::KeywordExpect, T::Number]), Ok(()));
 
-    assert_eq!(tokenparser::expr(&[T::LowercaseIdent, T::OpBackpassing, T::Number]), Ok(()));
+    assert_eq!(tokenparser::expr(&[T::LowercaseIdent, T::OpBackpassing, T::Number]), Ok(()));    
 }
 
 #[test]
@@ -316,10 +356,26 @@ fn test_platform_header() {
     T::KeywordEffects, T::LowercaseIdent, T::Dot, T::UppercaseIdent,
     T::OpenCurly,
     T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::UppercaseIdent , T::Comma,
-    T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::Arrow, T::UppercaseIdent, T::OpenCurly, T::CloseCurly,
+    T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::Arrow, T::UppercaseIdent, T::OpenCurly, T::CloseCurly, T::Comma,
     T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::Comma, T::UppercaseIdent, T::Arrow, T::UppercaseIdent, T::OpenCurly, T::CloseCurly,
     T::CloseCurly
     
   ]), Ok(()));
 }
 
+#[test]
+fn test_typed_ident() {
+  // main : Task {} []
+  assert_eq!(tokenparser::typed_ident(&[
+    T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::OpenCurly, T::CloseCurly, T::OpenSquare, T::CloseSquare
+  ]), Ok(()));
+}
+
+#[test]
+fn test_order_of_ops() {
+  // True || False && True || False
+  assert_eq!(tokenparser::full_expr(&[T::UppercaseIdent, T::OpOr, T::UppercaseIdent, T::OpAnd, T::UppercaseIdent, T::OpOr, T::UppercaseIdent]), Ok(()));
+}
+
+
+}
