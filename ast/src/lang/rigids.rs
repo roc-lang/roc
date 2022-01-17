@@ -11,7 +11,7 @@ use roc_module::ident::Lowercase;
 use roc_types::subs::Variable;
 
 #[derive(Debug)]
-pub struct Rigids {
+pub struct Rigids { // Rigid type variable = type variable where type is specified by the programmar
     pub names: PoolVec<(Option<PoolStr>, Variable)>, // 8B
     padding: [u8; 1],
 }
