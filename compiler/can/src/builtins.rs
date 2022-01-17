@@ -1469,7 +1469,6 @@ fn num_max_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn num_min_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_precision_var = var_store.fresh();
-    // TODO: or `i128::MIN.into()` ?
     let body = int::<i128>(int_var, int_precision_var, i128::MIN);
 
     let std = roc_builtins::std::types();
@@ -1485,7 +1484,6 @@ fn num_min_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
     };
 
     Def {
-        // TODO: or `None` ?
         annotation: Some(annotation),
         expr_var: int_var,
         loc_expr: Loc::at_zero(body),
