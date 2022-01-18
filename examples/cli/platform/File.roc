@@ -2,7 +2,8 @@ interface File
     exposes [ Path, OpenErr, ReadErr, ReadUtf8Err, WriteErr, DirReadErr, readBytes, readUtf8, writeBytes, writeUtf8 ]
     imports [ fx.Effect, Task.{ Task }, Stdout ]
 
-## TODO move this to an internal module; this should not be exposed in userspace
+## TODO move this to an internal module, and then use it in Package-Config.roc;
+## it should not be exposed in userspace!
 ##
 ## === THIS MUST BE MANUALLY KEPT IN SYNC WITH THE ONE IN lib.rs ===
 ReadErrTag :
@@ -41,18 +42,18 @@ OpenErr :
     ]
 
 ## Errors when attempting to read a non-directory file.
-ReadErr :
+ReadErr a :
     [
         FileBusy Path,
         FileWasDir Path,
         IllegalByteSequence Path,
         InvalidSeek Path,
-    # TODO FIXME - should be the following, which parses but doesn't type-check:
+    # TODO FIXME - should incorporate OpenErr
     #]OpenErr
-    ]
+    ]a
 
 # TODO this doesn't work! Instead, we need either a wrapper around it or to use open tag unions here somehow.
-ReadUtf8Err a : [ ReadErr ReadErr, ReadUtf8Err Path Str.Utf8ByteProblem Nat ]a
+ReadUtf8Err a : ReadErr [ BadUtf8 Path Str.Utf8ByteProblem Nat ]a
 
 ## Errors when attempting to read a directory.
 DirReadErr :
@@ -78,17 +79,18 @@ readUtf8 = \path ->
         Ok bytes ->
             when Str.fromUtf8 bytes is
                 Ok str -> Task.succeed str
-                # TODO FIXME replace with:  -> Task.fail (ReadUtf8 (BadUtf8 problem index))
+                # TODO FIXME replace with:  -> Task.fail (BadUtf8 path problem index)
                 Err (BadUtf8 problem index) -> Task.succeed ""
 
-        Err (ReadBytes readErr) -> Task.succeed "" #Task.fail (ReadUtf8 readErr)
+        Err readErr -> Task.succeed "" #Task.fail readErr
 
-readBytes : Path -> Task (List U8) [ ReadBytes ReadErr ]*
+
+readBytes : Path -> Task (List U8) (ReadErr *)
 readBytes = \path ->
     Effect.after (Effect.readAllBytes path) \result ->
         when result is
             Ok bytes -> Task.succeed bytes
-            Err readErr -> Task.fail (ReadBytes readErr)
+            Err tag -> Task.fail (fromReadErrTag tag path)
 
 
 writeUtf8 : Path, Str -> Task {} [ WriteUtf8 WriteErr ]*
@@ -122,3 +124,11 @@ writeBytes = \path, data ->
 ## Like #readChunks except after each chunk you can either `Continue`,
 ## specifying how many bytes you'd like to read next, or `Stop` early.
 #readChunksOrStop : Path, U64, state, (state, List U8 -> [ Continue U64 (Task state []err), Stop (Task state []err) ]) -> Task state (FileReadErr err)
+
+fromReadErrTag : ReadErrTag, Path -> ReadErr *
+fromReadErrTag = \tag, path ->
+    when tag is
+        FileBusy -> FileBusy path
+        FileWasDir -> FileWasDir path
+        IllegalByteSequence -> IllegalByteSequence path
+        InvalidSeek -> InvalidSeek path

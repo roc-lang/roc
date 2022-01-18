@@ -127,13 +127,6 @@ pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) {
     println!("{}", string);
 }
 
-#[repr(C)]
-pub struct ReadErr {
-    path: RocStr,
-    // errno: i32, // needed once OpenErr is in the mix
-    tag: ReadErrTag,
-}
-
 #[repr(u8)]
 /// === THIS MUST BE MANUALLY KEPT IN SYNC WITH THE ONE IN File.roc ===
 pub enum ReadErrTag {
@@ -149,17 +142,12 @@ pub extern "C" fn roc_fx_readAllBytes(
     // TODO: Instead of accepting this `&mut output` argument, the function should
     // return this instead. However, specifying it as the return type leads to
     // https://github.com/rtfeldman/roc/issues/2358 and `&mut output` is the workaround!
-    output: &mut RocResult<RocList<u8>, ReadErr>,
+    output: &mut RocResult<RocList<u8>, ReadErrTag>,
     mut path: ManuallyDrop<RocStr>,
 ) {
     *output = match read_bytes(path.as_str()) {
         Ok(list) => RocResult::ok(list),
-        Err(err) => {
-            let tag = ReadErrTag::FileBusy;
-            let path = unsafe { ManuallyDrop::<RocStr>::take(&mut path) };
-
-            RocResult::err(ReadErr { path, tag })
-        }
+        Err(err) => RocResult::err(ReadErrTag::FileBusy),
     };
 }
 

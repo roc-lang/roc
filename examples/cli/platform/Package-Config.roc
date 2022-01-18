@@ -6,10 +6,16 @@ platform "examples/cli"
     provides [ mainForHost ]
     effects fx.Effect
         {
-            # TODO FIXME it should be possible to replace this whole union
-            # with just `ReadErr`, but using imported type aliases here
-            # gives an error
-            readAllBytes : Str -> Effect (Result (List U8) [ FileBusy Str, FileWasDir Str, IllegalByteSequence Str, InvalidSeek Str ]),
+            readAllBytes :
+                Str ->
+                Effect
+                    (
+                        Result (List U8)
+                        # THIS MUST BE MANUALLY KEPT IN SYNC with `ReadErrTag` in File.roc,
+                        # ane should be replaced with it once the bug has been fixed where
+                        # imported type aliases don't work in these declarations
+                        [ FileBusy, FileWasDir, IllegalByteSequence, InvalidSeek ]
+                    ),
             writeAllBytes : Str, List U8 -> Effect I32,
             putLine : Str -> Effect {},
             getLine : Effect Str

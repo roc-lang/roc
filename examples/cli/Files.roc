@@ -14,7 +14,7 @@ main =
 
     Task.attempt task \result ->
         when result is
-            Err (ReadUtf8 err) ->
+            Err err ->
                 msg = fmtErr err
                 Stdout.line "Error reading file: \(msg)"
 
@@ -23,7 +23,7 @@ main =
                 {} <- await (Stdout.line "Here are its contents:\n\n\(contents)")
                 Task.succeed {}
 
-fmtErr : File.ReadUtf8Err -> Str
+fmtErr : File.ReadUtf8Err * -> Str
 fmtErr = \err ->
     when err is
         FileBusy path -> "\(path) was busy"
