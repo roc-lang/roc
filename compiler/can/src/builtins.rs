@@ -197,8 +197,6 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ASIN => num_asin,
         NUM_BYTES_TO_U16 => num_bytes_to_u16,
         NUM_BYTES_TO_U32 => num_bytes_to_u32,
-        NUM_MAX_INT => num_max_int,
-        NUM_MIN_INT => num_min_int,
         NUM_BITWISE_AND => num_bitwise_and,
         NUM_BITWISE_XOR => num_bitwise_xor,
         NUM_BITWISE_OR => num_bitwise_or,
@@ -362,36 +360,6 @@ fn lowlevel_5(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
         body,
         ret_var,
     )
-}
-
-/// Num.maxInt : Int
-fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<i64>(int_var, int_precision_var, i64::MAX);
-
-    Def {
-        annotation: None,
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
-}
-
-/// Num.minInt : Int
-fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<i64>(int_var, int_precision_var, i64::MIN);
-
-    Def {
-        annotation: None,
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
 }
 
 // Num.toStr : Num a -> Str

@@ -2381,7 +2381,7 @@ fn cleanup_because_exception() {
             five : I64
             five = 5
 
-            five + Num.maxInt + 3 + (Num.intCast (List.len x))
+            five + Num.maxI64 + 3 + (Num.intCast (List.len x))
                "#
         ),
         9,
