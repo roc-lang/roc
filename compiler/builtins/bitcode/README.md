@@ -27,7 +27,7 @@ There will be two directories like `roc_builtins-[some random characters]`, look
 `out` directory as a child.
 
 > The bitcode is a bunch of bytes that aren't particularly human-readable.
-> If you want to take a look at the human-readable LLVM IR, look at 
+> If you want to take a look at the human-readable LLVM IR, look at
 > `target/debug/build/roc_builtins-[some random characters]/out/builtins.ll`
 
 ## Calling bitcode functions

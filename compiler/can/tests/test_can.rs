@@ -524,7 +524,7 @@ mod test_can {
     fn annotation_followed_with_unrelated_affectation() {
         let src = indoc!(
             r#"
-                F : Str 
+                F : Str
 
                 x = 1
 
@@ -545,10 +545,10 @@ mod test_can {
     fn two_annotations_followed_with_unrelated_affectation() {
         let src = indoc!(
             r#"
-                G : Str 
+                G : Str
 
-                F : {} 
-                
+                F : {}
+
                 x = 1
 
                 x
@@ -629,7 +629,7 @@ mod test_can {
     fn incorrect_optional_value() {
         let src = indoc!(
             r#"
-                { x ? 42 }                
+                { x ? 42 }
             "#
         );
         let arena = Bump::new();
@@ -1004,7 +1004,7 @@ mod test_can {
         let src = indoc!(
             r#"
                 x = Dict.empty
-                
+
                 Dict.len x
             "#
         );
