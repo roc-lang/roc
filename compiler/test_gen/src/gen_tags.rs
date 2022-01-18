@@ -1047,9 +1047,7 @@ fn alignment_in_multi_tag_pattern_match() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn phantom_polymorphic() {
-    // see https://github.com/rtfeldman/roc/issues/786 and below
     assert_evals_to!(
         indoc!(
             r"#
