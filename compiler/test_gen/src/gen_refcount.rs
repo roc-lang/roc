@@ -59,7 +59,10 @@ fn list_int_inc() {
         ),
         RocList<RocList<i64>>,
         &[
-            3, // list
+            // TODO be smarter about coalescing polymorphic list values
+            1, // list0
+            1, // list1
+            1, // list2
             1  // result
         ]
     );
@@ -77,7 +80,10 @@ fn list_int_dealloc() {
         ),
         usize,
         &[
-            0, // list
+            // TODO be smarter about coalescing polymorphic list values
+            0, // list0
+            0, // list1
+            0, // list2
             0  // result
         ]
     );
