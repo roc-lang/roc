@@ -105,6 +105,7 @@ pub struct PartialProcs<'a> {
     partial_procs: Vec<'a, PartialProc<'a>>,
 
     skipset: BumpSet<usize>,
+    sym2skip: BumpMap<Symbol, usize>,
 }
 
 impl<'a> PartialProcs<'a> {
@@ -113,6 +114,7 @@ impl<'a> PartialProcs<'a> {
             symbols: Vec::new_in(arena),
             partial_procs: Vec::new_in(arena),
             skipset: BumpSet::new_in(arena),
+            sym2skip: BumpMap::new_in(arena),
         }
     }
     fn contains_key(&self, symbol: Symbol) -> bool {
@@ -158,6 +160,19 @@ impl<'a> PartialProcs<'a> {
         debug_assert!(id.is_some(), "{:?} isn't in partial procs!", symbol);
 
         self.skipset.insert(id.unwrap().0);
+        self.sym2skip.insert(symbol, id.unwrap().0);
+    }
+
+    pub fn ignore(&mut self, symbol: Symbol) {
+        self.remove(symbol);
+    }
+    pub fn unignore(&mut self, symbol: Symbol) {
+        let id = self.sym2skip.get(&symbol);
+
+        debug_assert!(id.is_some(), "{:?} isn't ignored!", symbol);
+
+        self.skipset.remove(id.unwrap());
+        self.sym2skip.remove(&symbol);
     }
 }
 
@@ -3969,9 +3984,26 @@ pub fn with_hole<'a>(
                     unreachable!("a closure syntactically always must have at least one argument")
                 }
                 RawFunctionLayout::Function(_argument_layouts, lambda_set, _ret_layout) => {
+                    let mut thunkified_captures = vec![];
+                    for &(s, var) in captured_symbols.iter() {
+                        if procs.get_partial_proc(s).is_some() {
+                            let layout =
+                                layout_cache.raw_from_var(env.arena, var, env.subs).unwrap();
+                            if let RawFunctionLayout::ZeroArgumentThunk(_) = layout {
+                                thunkified_captures.push(s);
+                            }
+                        }
+                    }
+
                     let mut captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
                     captured_symbols.sort();
                     let captured_symbols = captured_symbols.into_bump_slice();
+
+                    // To specialize the closure body, mark the captures of this closure that were demoted to thunks
+                    // as being proper values.
+                    for &s in thunkified_captures.iter() {
+                        procs.partial_procs.ignore(s);
+                    }
 
                     let inserted = procs.insert_anonymous(
                         env,
@@ -3983,6 +4015,10 @@ pub fn with_hole<'a>(
                         return_type,
                         layout_cache,
                     );
+
+                    for &s in thunkified_captures.iter() {
+                        procs.partial_procs.unignore(s);
+                    }
 
                     if let Err(runtime_error) = inserted {
                         return Stmt::RuntimeError(env.arena.alloc(format!(
@@ -4001,7 +4037,23 @@ pub fn with_hole<'a>(
                         Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
                             .into_bump_slice();
 
-                    construct_closure_data(env, lambda_set, name, symbols, assigned, hole)
+                    let mut fin =
+                        construct_closure_data(env, lambda_set, name, symbols, assigned, hole);
+
+                    // We need to reify the thunkified captures into proper values so that
+                    // they're captured correctly.
+                    for &symbol in thunkified_captures.iter() {
+                        fin = reuse_function_symbol(
+                            env,
+                            procs,
+                            layout_cache,
+                            None,
+                            symbol,
+                            fin,
+                            symbol,
+                        );
+                    }
+                    fin
                 }
             }
         }
@@ -5039,12 +5091,12 @@ fn is_simple_literal(expr: &roc_can::expr::Expr) -> bool {
     use roc_can::expr::Expr::*;
     match expr {
         Num(_, _, _) | Int(_, _, _, _) | Float(_, _, _, _) => true,
-        // List { loc_elems, .. } => loc_elems
-        //     .iter()
-        //     .map(|loc_expr| &loc_expr.value)
-        //     .all(is_simple_literal),
-        // ZeroArgumentTag { .. } => true,
-        // Tag { arguments, .. } if arguments.is_empty() => true,
+        List { loc_elems, .. } => loc_elems
+            .iter()
+            .map(|loc_expr| &loc_expr.value)
+            .all(is_simple_literal),
+        ZeroArgumentTag { .. } => true,
+        Tag { arguments, .. } if arguments.is_empty() => true,
         _ => false,
     }
 }
@@ -5069,7 +5121,7 @@ fn needs_specialization<'a>(
     //    m = 100  # specialized
     //    n = 100  # specialized
     //    { m, n } # must also be specialized
-    true && is_simple_literal(expr) && env.subs.var_contains_content(expr_var, is_flex_or_rigid)
+    is_simple_literal(expr) && env.subs.var_contains_content(expr_var, is_flex_or_rigid)
 }
 
 pub fn from_can<'a>(
@@ -6551,6 +6603,44 @@ fn reuse_function_symbol<'a>(
 
                     if captures {
                         // this is a closure by capture, meaning it itself captures local variables.
+
+                        let symbols_and_vars = match captured {
+                            CapturedSymbols::Captured(captured_symbols) => captured_symbols,
+                            CapturedSymbols::None => unreachable!(),
+                        };
+
+                        // We may have some captures that we thought were immediate values, but may
+                        // have been demoted to thunks during IR generation. For example, in
+                        //   x = 1
+                        //   f = \{} -> x
+                        // the type of `x` may have been ambiguous during checking, so we gave it a
+                        // `Int *` and didn't specialize it until the mono pass happening now. At
+                        // this point `x` is really a zero-argument thunk, but the capture data for
+                        // `f` doesn't know that - it still thinks it's an immediate.
+                        //
+                        // So, we can do one of two things:
+                        //   1. Fixup the closure data of `f` to remove the capture of `x`, or
+                        //      change its type
+                        //   2. Reify `x` to an immediate now
+                        //
+                        // I've chosen the latter option for now.
+                        let mut thunkified_captures = vec![];
+                        for &(s, var) in symbols_and_vars {
+                            if procs.get_partial_proc(s).is_some() {
+                                let layout =
+                                    layout_cache.raw_from_var(env.arena, var, env.subs).unwrap();
+                                if let RawFunctionLayout::ZeroArgumentThunk(_) = layout {
+                                    thunkified_captures.push(s);
+                                }
+                            }
+                        }
+
+                        // To specialize the closure body, mark the captures of this closure that were demoted to thunks
+                        // as being proper values.
+                        for &s in thunkified_captures.iter() {
+                            procs.partial_procs.ignore(s);
+                        }
+
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -6559,24 +6649,39 @@ fn reuse_function_symbol<'a>(
                             layout_cache,
                         );
 
+                        for &s in thunkified_captures.iter() {
+                            procs.partial_procs.unignore(s);
+                        }
+
                         let closure_data = symbol;
 
-                        let symbols = match captured {
-                            CapturedSymbols::Captured(captured_symbols) => {
-                                Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
-                                    .into_bump_slice()
-                            }
-                            CapturedSymbols::None => unreachable!(),
-                        };
+                        let symbols =
+                            Vec::from_iter_in(symbols_and_vars.iter().map(|x| x.0), env.arena)
+                                .into_bump_slice();
 
-                        construct_closure_data(
+                        let mut fin = construct_closure_data(
                             env,
                             lambda_set,
                             original,
                             symbols,
                             closure_data,
                             env.arena.alloc(result),
-                        )
+                        );
+
+                        // We need to reify the thunkified captures into proper values so that
+                        // they're captured correctly.
+                        for &symbol in thunkified_captures.iter() {
+                            fin = reuse_function_symbol(
+                                env,
+                                procs,
+                                layout_cache,
+                                None,
+                                symbol,
+                                fin,
+                                symbol,
+                            );
+                        }
+                        fin
                     } else if procs.is_module_thunk(original) {
                         // this is a 0-argument thunk
 
