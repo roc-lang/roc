@@ -36,7 +36,7 @@ When(
         },
         WhenBranch {
             patterns: [
-                @39-40 SpaceBefore(
+                @38-39 SpaceBefore(
                     Underscore(
                         "",
                     ),
@@ -45,7 +45,7 @@ When(
                     ],
                 ),
             ],
-            value: @44-45 Num(
+            value: @43-44 Num(
                 "4",
             ),
             guard: None,
