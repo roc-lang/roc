@@ -21,7 +21,7 @@ type Builder = for<'r, 's, 't0, 't1> fn(
     &'t1 mut VarStore,
 ) -> (Symbol, Def);
 
-pub const BUILTIN_EFFECT_FUNCTIONS: [(&str, Builder); 3] = [
+pub const BUILTIN_EFFECT_FUNCTIONS: &[(&str, Builder)] = &[
     // Effect.after : Effect a, (a -> Effect b) -> Effect b
     ("after", build_effect_after),
     // Effect.map : Effect a, (a -> b) -> Effect b
@@ -31,6 +31,8 @@ pub const BUILTIN_EFFECT_FUNCTIONS: [(&str, Builder); 3] = [
     // Effect.forever : Effect a -> Effect b
     ("forever", build_effect_forever),
 ];
+
+const RECURSIVE_BUILTIN_EFFECT_FUNCTIONS: &[&str] = &["forever"];
 
 // the Effects alias & associated functions
 //
@@ -54,7 +56,7 @@ pub fn build_effect_builtins(
     exposed_symbols: &mut MutSet<Symbol>,
     declarations: &mut Vec<Declaration>,
 ) {
-    for (_, f) in BUILTIN_EFFECT_FUNCTIONS.iter() {
+    for (name, f) in BUILTIN_EFFECT_FUNCTIONS.iter() {
         let (symbol, def) = f(
             env,
             scope,
@@ -64,7 +66,20 @@ pub fn build_effect_builtins(
         );
 
         exposed_symbols.insert(symbol);
-        declarations.push(Declaration::Declare(def));
+
+        let is_recursive = RECURSIVE_BUILTIN_EFFECT_FUNCTIONS.iter().any(|n| n == name);
+        if is_recursive {
+            declarations.push(Declaration::DeclareRec(vec![def]));
+        } else {
+            declarations.push(Declaration::Declare(def));
+        }
+    }
+
+    // Useful when working on functions in this module. By default symbols that we named do now
+    // show up with their name. We have to register them like below to make the names show up in
+    // debug prints
+    if false {
+        env.home.register_debug_idents(&env.ident_ids);
     }
 }
 
@@ -590,6 +605,98 @@ fn build_effect_after(
     (after_symbol, def)
 }
 
+/// turn `value` into `@Effect \{} -> value`
+fn wrap_in_effect_thunk(
+    body: Expr,
+    effect_tag_name: TagName,
+    closure_name: Symbol,
+    captured_symbols: Vec<Symbol>,
+    var_store: &mut VarStore,
+) -> Expr {
+    let captured_symbols: Vec<_> = captured_symbols
+        .into_iter()
+        .map(|x| (x, var_store.fresh()))
+        .collect();
+
+    // \{} -> body
+    let const_closure = {
+        let arguments = vec![(
+            var_store.fresh(),
+            Loc::at_zero(empty_record_pattern(var_store)),
+        )];
+
+        Expr::Closure(ClosureData {
+            function_type: var_store.fresh(),
+            closure_type: var_store.fresh(),
+            closure_ext_var: var_store.fresh(),
+            return_type: var_store.fresh(),
+            name: closure_name,
+            // captured_symbols: vec![(value_symbol, var_store.fresh())],
+            captured_symbols,
+            recursive: Recursive::NotRecursive,
+            arguments,
+            loc_body: Box::new(Loc::at_zero(body)),
+        })
+    };
+
+    // `@Effect \{} -> value`
+    Expr::Tag {
+        variant_var: var_store.fresh(),
+        ext_var: var_store.fresh(),
+        name: effect_tag_name,
+        arguments: vec![(var_store.fresh(), Loc::at_zero(const_closure))],
+    }
+}
+
+/// given `effect : Effect a`, unwrap the thunk and force it, giving a value of type `a`
+fn force_effect(
+    effect: Expr,
+    effect_tag_name: TagName,
+    thunk_symbol: Symbol,
+    var_store: &mut VarStore,
+) -> Expr {
+    let whole_var = var_store.fresh();
+    let ext_var = var_store.fresh();
+
+    let thunk_var = var_store.fresh();
+
+    let pattern = Pattern::AppliedTag {
+        ext_var,
+        whole_var,
+        tag_name: effect_tag_name,
+        arguments: vec![(thunk_var, Loc::at_zero(Pattern::Identifier(thunk_symbol)))],
+    };
+
+    let pattern_vars = SendMap::default();
+    // pattern_vars.insert(thunk_symbol, thunk_var);
+
+    let def = Def {
+        loc_pattern: Loc::at_zero(pattern),
+        loc_expr: Loc::at_zero(effect),
+        expr_var: var_store.fresh(),
+        pattern_vars,
+        annotation: None,
+    };
+
+    let ret_var = var_store.fresh();
+
+    let force_thunk_call = {
+        let boxed = (
+            var_store.fresh(),
+            Loc::at_zero(Expr::Var(thunk_symbol)),
+            var_store.fresh(),
+            ret_var,
+        );
+
+        let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::EmptyRecord))];
+        let call = Expr::Call(Box::new(boxed), arguments, CalledVia::Space);
+
+        Loc::at_zero(call)
+    };
+
+    Expr::LetNonRec(Box::new(def), Box::new(force_thunk_call), var_store.fresh())
+}
+
 fn build_effect_forever(
     env: &mut Env,
     scope: &mut Scope,
@@ -605,7 +712,7 @@ fn build_effect_forever(
     //
     //  Effect.forever : Effect a -> Effect b
     //  Effect.forever = \effect ->
-    //      \{} ->
+    //      @Effect \{} ->
     //          @Effect thunk1 = effect
     //          _ = thunk1 {}
     //          @Effect thunk2 = Effect.forever effect
@@ -644,7 +751,264 @@ fn build_effect_forever(
     //          C env -> foreverInner {} env.effect
     //
     // Making `foreverInner` perfectly tail-call optimizable
-    todo!()
+
+    let forever_symbol = {
+        scope
+            .introduce(
+                "forever".into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
+    };
+
+    let effect = {
+        scope
+            .introduce(
+                "effect".into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
+    };
+
+    let body = build_effect_forever_body(
+        env,
+        scope,
+        effect_tag_name.clone(),
+        forever_symbol,
+        effect,
+        var_store,
+    );
+
+    let arguments = vec![(var_store.fresh(), Loc::at_zero(Pattern::Identifier(effect)))];
+
+    let function_var = var_store.fresh();
+    let after_closure = Expr::Closure(ClosureData {
+        function_type: var_store.fresh(),
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: var_store.fresh(),
+        name: forever_symbol,
+        captured_symbols: Vec::new(),
+        recursive: Recursive::Recursive,
+        arguments,
+        loc_body: Box::new(Loc::at_zero(body)),
+    });
+
+    let mut introduced_variables = IntroducedVariables::default();
+
+    let signature = {
+        let var_a = var_store.fresh();
+
+        introduced_variables.insert_named("a".into(), var_a);
+
+        let effect_a_1 = build_effect_alias(
+            effect_symbol,
+            effect_tag_name.clone(),
+            "a",
+            var_a,
+            Type::Variable(var_a),
+            var_store,
+            &mut introduced_variables,
+        );
+
+        // We need this second variable (instead of cloning the one above)
+        // so we get a new fresh variable for the lambda set
+        let effect_a_2 = build_effect_alias(
+            effect_symbol,
+            effect_tag_name,
+            "a",
+            var_a,
+            Type::Variable(var_a),
+            var_store,
+            &mut introduced_variables,
+        );
+
+        let closure_var = var_store.fresh();
+        introduced_variables.insert_wildcard(closure_var);
+
+        Type::Function(
+            vec![effect_a_1],
+            Box::new(Type::Variable(closure_var)),
+            Box::new(effect_a_2),
+        )
+    };
+
+    let def_annotation = roc_can::def::Annotation {
+        signature,
+        introduced_variables,
+        aliases: SendMap::default(),
+        region: Region::zero(),
+    };
+
+    let pattern = Pattern::Identifier(forever_symbol);
+    let mut pattern_vars = SendMap::default();
+    pattern_vars.insert(forever_symbol, function_var);
+    let def = Def {
+        loc_pattern: Loc::at_zero(pattern),
+        loc_expr: Loc::at_zero(after_closure),
+        expr_var: function_var,
+        pattern_vars,
+        annotation: Some(def_annotation),
+    };
+
+    (forever_symbol, def)
+}
+
+fn build_effect_forever_body(
+    env: &mut Env,
+    scope: &mut Scope,
+    effect_tag_name: TagName,
+    forever_symbol: Symbol,
+    effect: Symbol,
+    var_store: &mut VarStore,
+) -> Expr {
+    let closure_name = {
+        scope
+            .introduce(
+                "forever_inner".into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
+    };
+
+    let inner_body = build_effect_forever_inner_body(
+        env,
+        scope,
+        effect_tag_name.clone(),
+        forever_symbol,
+        effect,
+        var_store,
+    );
+
+    let captured_symbols = vec![effect];
+    wrap_in_effect_thunk(
+        inner_body,
+        effect_tag_name,
+        closure_name,
+        captured_symbols,
+        var_store,
+    )
+}
+
+fn build_effect_forever_inner_body(
+    env: &mut Env,
+    scope: &mut Scope,
+    effect_tag_name: TagName,
+    forever_symbol: Symbol,
+    effect: Symbol,
+    var_store: &mut VarStore,
+) -> Expr {
+    let thunk1_symbol = {
+        scope
+            .introduce(
+                "thunk1".into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
+    };
+
+    let thunk2_symbol = {
+        scope
+            .introduce(
+                "thunk2".into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
+    };
+
+    // Effect thunk1 = effect
+    let thunk_from_effect = {
+        let whole_var = var_store.fresh();
+        let ext_var = var_store.fresh();
+
+        let thunk_var = var_store.fresh();
+
+        let pattern = Pattern::AppliedTag {
+            ext_var,
+            whole_var,
+            tag_name: effect_tag_name.clone(),
+            arguments: vec![(thunk_var, Loc::at_zero(Pattern::Identifier(thunk1_symbol)))],
+        };
+
+        let pattern_vars = SendMap::default();
+
+        Def {
+            loc_pattern: Loc::at_zero(pattern),
+            loc_expr: Loc::at_zero(Expr::Var(effect)),
+            expr_var: var_store.fresh(),
+            pattern_vars,
+            annotation: None,
+        }
+    };
+
+    // thunk1 {}
+    let force_thunk_call = {
+        let ret_var = var_store.fresh();
+        let boxed = (
+            var_store.fresh(),
+            Loc::at_zero(Expr::Var(thunk1_symbol)),
+            var_store.fresh(),
+            ret_var,
+        );
+
+        let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::EmptyRecord))];
+        let call = Expr::Call(Box::new(boxed), arguments, CalledVia::Space);
+
+        Loc::at_zero(call)
+    };
+
+    // _ = thunk1 {}
+    let force_thunk1 = Def {
+        loc_pattern: Loc::at_zero(Pattern::Underscore),
+        loc_expr: force_thunk_call,
+        expr_var: var_store.fresh(),
+        pattern_vars: Default::default(),
+        annotation: None,
+    };
+
+    // recursive call `forever effect`
+    let forever_effect = {
+        let boxed = (
+            var_store.fresh(),
+            Loc::at_zero(Expr::Var(forever_symbol)),
+            var_store.fresh(),
+            var_store.fresh(),
+        );
+
+        let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::Var(effect)))];
+        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+    };
+
+    // ```
+    // Effect thunk2 = forever effect
+    // thunk2 {}
+    // ```
+    let force_thunk2 = Loc::at_zero(force_effect(
+        forever_effect,
+        effect_tag_name,
+        thunk2_symbol,
+        var_store,
+    ));
+
+    Expr::LetNonRec(
+        Box::new(thunk_from_effect),
+        Box::new(Loc::at_zero(Expr::LetNonRec(
+            Box::new(force_thunk1),
+            Box::new(force_thunk2),
+            var_store.fresh(),
+        ))),
+        var_store.fresh(),
+    )
 }
 
 pub fn build_host_exposed_def(
