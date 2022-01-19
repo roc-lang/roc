@@ -46,8 +46,8 @@ procedure Test.0 ():
     in
     let Test.26 : Builtin(Bool) = true;
     if Test.26 then
-        let Test.7 : LambdaSet([( #UserApp.7, [Builtin(Int(I64))]), ( #UserApp.8, [Builtin(Int(I64)), Builtin(Bool)])]LambdaSet { set: Ok(()), representation: Union(NonRecursive([[Builtin(Int(I64))], [Builtin(Int(I64)), Builtin(Bool)]])) }) = ClosureTag(Test.7) Test.4;
+        let Test.7 : LambdaSet([( Test.7, [Builtin(Int(I64))]), ( Test.8, [Builtin(Int(I64)), Builtin(Bool)])]LambdaSet { set: Ok(()), representation: Union(NonRecursive([[Builtin(Int(I64))], [Builtin(Int(I64)), Builtin(Bool)]])) }) = ClosureTag(Test.7) Test.4;
         jump Test.22 Test.7;
     else
-        let Test.8 : LambdaSet([( #UserApp.7, [Builtin(Int(I64))]), ( #UserApp.8, [Builtin(Int(I64)), Builtin(Bool)])]LambdaSet { set: Ok(()), representation: Union(NonRecursive([[Builtin(Int(I64))], [Builtin(Int(I64)), Builtin(Bool)]])) }) = ClosureTag(Test.8) Test.5 Test.6;
+        let Test.8 : LambdaSet([( Test.7, [Builtin(Int(I64))]), ( Test.8, [Builtin(Int(I64)), Builtin(Bool)])]LambdaSet { set: Ok(()), representation: Union(NonRecursive([[Builtin(Int(I64))], [Builtin(Int(I64)), Builtin(Bool)]])) }) = ClosureTag(Test.8) Test.5 Test.6;
         jump Test.22 Test.8;

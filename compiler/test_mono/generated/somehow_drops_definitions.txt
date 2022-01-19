@@ -46,8 +46,8 @@ procedure Test.0 ():
     in
     let Test.24 : Builtin(Bool) = true;
     if Test.24 then
-        let Test.3 : LambdaSet([( #UserApp.3, []), ( #UserApp.4, [])]LambdaSet { set: Ok(()), representation: Builtin(Bool) }) = false;
+        let Test.3 : LambdaSet([( Test.3, []), ( Test.4, [])]LambdaSet { set: Ok(()), representation: Builtin(Bool) }) = false;
         jump Test.19 Test.3;
     else
-        let Test.4 : LambdaSet([( #UserApp.3, []), ( #UserApp.4, [])]LambdaSet { set: Ok(()), representation: Builtin(Bool) }) = true;
+        let Test.4 : LambdaSet([( Test.3, []), ( Test.4, [])]LambdaSet { set: Ok(()), representation: Builtin(Bool) }) = true;
         jump Test.19 Test.4;
