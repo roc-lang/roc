@@ -738,14 +738,18 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<ProcLayout<'a>, RuntimeError> {
-        // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
-        let is_self_recursive = false;
-
         let raw_layout = layout_cache
             .raw_from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
         let top_level = ProcLayout::from_raw(env.arena, raw_layout);
+
+        // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
+        // EXCEPT when the closure conversion makes it tail-recursive.
+        let is_self_recursive = match top_level.arguments.last() {
+            Some(Layout::LambdaSet(lambda_set)) => lambda_set.contains(symbol),
+            _ => false,
+        };
 
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
