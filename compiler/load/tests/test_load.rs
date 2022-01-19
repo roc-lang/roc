@@ -276,9 +276,9 @@ mod test_load {
                 "Main",
                 indoc!(
                     r#"
-                        app "test-app" 
-                            packages { blah: "./blah" } 
-                            imports [ RBTree ] 
+                        app "test-app"
+                            packages { blah: "./blah" }
+                            imports [ RBTree ]
                             provides [ main ] to blah
 
                         empty : RBTree.RedBlackTree I64 I64
@@ -541,7 +541,7 @@ mod test_load {
                 indoc!(
                     "
             \u{1b}[36m── UNFINISHED LIST ─────────────────────────────────────────────────────────────\u{1b}[0m
-            
+
             I cannot find the end of this list:
 
             \u{1b}[36m3\u{1b}[0m\u{1b}[36m│\u{1b}[0m  \u{1b}[37mmain = [\u{1b}[0m

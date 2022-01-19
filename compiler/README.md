@@ -147,7 +147,7 @@ The compiler contains a lot of code! If you're new to the project it can be hard
 
 After you get into the details, you'll discover that some parts of the compiler have more than one entry point. And things can be interwoven together in subtle and complex ways, for reasons to do with performance, edge case handling, etc. But if this is "day one" for you, and you're just trying to get familiar with things, this should be "good enough".
 
-The compiler is invoked from the CLI via `build_file` in cli/src/build.rs 
+The compiler is invoked from the CLI via `build_file` in cli/src/build.rs
 
 | Phase                                 | Entry point / main functions                     |
 | ------------------------------------- | ------------------------------------------------ |

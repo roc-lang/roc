@@ -15,11 +15,11 @@ procedure Test.1 (Test.2, Test.3):
         case 0:
             let Test.19 : Builtin(Int(I64)) = CallByName Test.7 Test.3 Test.2;
             jump Test.18 Test.19;
-    
+
         default:
             let Test.20 : Builtin(Int(I64)) = CallByName Test.8 Test.3 Test.2;
             jump Test.18 Test.20;
-    
+
 
 procedure Test.7 (Test.10, #Attr.12):
     let Test.4 : Builtin(Int(I64)) = UnionAtIndex (Id 0) (Index 0) #Attr.12;

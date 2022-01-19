@@ -482,13 +482,11 @@ impl Serialize for Limits {
 
 impl SkipBytes for Limits {
     fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        if bytes[*cursor] == LimitsId::Min as u8 {
-            u8::skip_bytes(bytes, cursor);
-            u32::skip_bytes(bytes, cursor);
-        } else {
-            u8::skip_bytes(bytes, cursor);
-            u32::skip_bytes(bytes, cursor);
-            u32::skip_bytes(bytes, cursor);
+        let variant_id = bytes[*cursor];
+        u8::skip_bytes(bytes, cursor); // advance past the variant byte
+        u32::skip_bytes(bytes, cursor); // skip "min"
+        if variant_id == LimitsId::MinMax as u8 {
+            u32::skip_bytes(bytes, cursor); // skip "max"
         }
     }
 }

@@ -59,7 +59,7 @@ In some cases, the compiler can detect that no reference counting is necessary. 
 
 The fact that the reference count may or may not be present could creat a tricky situation for some `List` operations.
 
-For example, should `List.get 0` return the first 16B of the heap-allocated bytes, or the second 16B? If there's a reference count in the first 16B, it should return the second 16B. If there's no refcount, it should return the first 16B. 
+For example, should `List.get 0` return the first 16B of the heap-allocated bytes, or the second 16B? If there's a reference count in the first 16B, it should return the second 16B. If there's no refcount, it should return the first 16B.
 
 To solve this, the pointer in the List struct *always* points to the first element in the list. That means to access the reference count, it does negative pointer arithmetic to get the address at 16B *preceding* the memory address it has stored in its pointer field.
 

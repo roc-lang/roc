@@ -2325,7 +2325,7 @@ pub mod test_constrain {
             indoc!(
                 r#"
                 person = { name: "roc" }
-    
+
                 person
                 "#
             ),
@@ -2339,8 +2339,8 @@ pub mod test_constrain {
             indoc!(
                 r#"
                 person = { name: "roc" }
-    
-                { person & name: "bird" } 
+
+                { person & name: "bird" }
                 "#
             ),
             "{ name : Str }",
@@ -2462,7 +2462,7 @@ pub mod test_constrain {
             indoc!(
                 r#"
                 x = 1
-    
+
                 \{} -> x
                 "#
             ),

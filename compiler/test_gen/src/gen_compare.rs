@@ -551,10 +551,10 @@ fn rosetree_with_tag() {
             r#"
                 Rose a : [ Rose (Result (List (Rose a)) I64) ]
 
-                x : Rose I64 
+                x : Rose I64
                 x = (Rose (Ok []))
 
-                y : Rose I64 
+                y : Rose I64
                 y = (Rose (Ok []))
 
                 x == y
@@ -637,10 +637,10 @@ fn compare_recursive_union_same_content() {
             r#"
                 Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64 ]
 
-                v1 : Expr 
+                v1 : Expr
                 v1 = Val1 42
 
-                v2 : Expr 
+                v2 : Expr
                 v2 = Val2 42
 
                 v1 == v2
@@ -659,10 +659,10 @@ fn compare_nullable_recursive_union_same_content() {
             r#"
                 Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64, Empty ]
 
-                v1 : Expr 
+                v1 : Expr
                 v1 = Val1 42
 
-                v2 : Expr 
+                v2 : Expr
                 v2 = Val2 42
 
                 v1 == v2

@@ -206,6 +206,15 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SHIFT_RIGHT => num_shift_right_by,
         NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
         NUM_INT_CAST=> num_int_cast,
+        NUM_MIN_I32=> num_min_i32,
+        NUM_MAX_I32=> num_max_i32,
+        NUM_MIN_U32=> num_min_u32,
+        NUM_MAX_U32=> num_max_u32,
+        NUM_MIN_I64=> num_min_i64,
+        NUM_MAX_I64=> num_max_i64,
+        NUM_MIN_U64=> num_min_u64,
+        NUM_MAX_U64=> num_max_u64,
+        NUM_MIN_I128=> num_min_i128,
         NUM_MAX_I128=> num_max_i128,
         NUM_TO_STR => num_to_str,
         RESULT_MAP => result_map,
@@ -359,7 +368,7 @@ fn lowlevel_5(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
 fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_precision_var = var_store.fresh();
-    let body = int(int_var, int_precision_var, i64::MAX.into());
+    let body = int::<i64>(int_var, int_precision_var, i64::MAX);
 
     Def {
         annotation: None,
@@ -374,7 +383,7 @@ fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_precision_var = var_store.fresh();
-    let body = int(int_var, int_precision_var, i64::MIN.into());
+    let body = int::<i64>(int_var, int_precision_var, i64::MIN);
 
     Def {
         annotation: None,
@@ -860,7 +869,10 @@ fn num_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (arg_var, int(var_store.fresh(), var_store.fresh(), 1)),
+            (
+                arg_var,
+                int::<i128>(var_store.fresh(), var_store.fresh(), 1),
+            ),
             (
                 arg_var,
                 RunLowLevel {
@@ -1237,11 +1249,256 @@ fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
 }
 
+/// Num.minI32: I32
+fn num_min_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    let body = int::<i32>(int_var, int_precision_var, i32::MIN);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Num.maxI32: I32
+fn num_max_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    let body = int::<i32>(int_var, int_precision_var, i32::MAX);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Num.minU32: U32
+fn num_min_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    let body = int::<u32>(int_var, int_precision_var, u32::MIN);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Num.maxU32: U32
+fn num_max_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    let body = int::<u32>(int_var, int_precision_var, u32::MAX);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Num.minI64: I64
+fn num_min_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    let body = int::<i64>(int_var, int_precision_var, i64::MIN);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Num.maxI64: I64
+fn num_max_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    let body = int::<i64>(int_var, int_precision_var, i64::MAX);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Num.minU64: U64
+fn num_min_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    let body = int::<u64>(int_var, int_precision_var, u64::MIN);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Num.maxU64: U64
+fn num_max_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    let body = int::<u64>(int_var, int_precision_var, u64::MAX);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Num.minI128: I128
+fn num_min_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    // TODO: or `i128::MIN.into()` ?
+    let body = int::<i128>(int_var, int_precision_var, i128::MIN);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        // TODO: or `None` ?
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
 /// Num.maxI128: I128
 fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_precision_var = var_store.fresh();
-    let body = int(int_var, int_precision_var, i128::MAX);
+    let body = int::<i128>(int_var, int_precision_var, i128::MAX);
 
     let std = roc_builtins::std::types();
     let solved = std.get(&symbol).unwrap();
@@ -1386,7 +1643,10 @@ fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
                             loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
                         },
                     ),
-                    (errorcode_var, int(errorcode_var, Variable::UNSIGNED8, 0)),
+                    (
+                        errorcode_var,
+                        int::<i128>(errorcode_var, Variable::UNSIGNED8, 0),
+                    ),
                 ],
                 ret_var: bool_var,
             }),
@@ -2128,7 +2388,7 @@ fn list_swap(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn list_take_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
-    let zero = int(len_var, Variable::NATURAL, 0);
+    let zero = int::<i128>(len_var, Variable::NATURAL, 0);
 
     let body = RunLowLevel {
         op: LowLevel::ListSublist,
@@ -2154,7 +2414,7 @@ fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
 
-    let zero = int(len_var, Variable::NATURAL, 0);
+    let zero = int::<i128>(len_var, Variable::NATURAL, 0);
     let bool_var = var_store.fresh();
 
     let get_list_len = RunLowLevel {
@@ -2264,7 +2524,7 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let clos_elem_sym = Symbol::ARG_4;
 
     let int_var = var_store.fresh();
-    let zero = int(int_var, Variable::NATURAL, 0);
+    let zero = int::<i128>(int_var, Variable::NATURAL, 0);
 
     // \acc, elem -> acc |> List.append sep |> List.append elem
     let clos = Closure(ClosureData {
@@ -2344,7 +2604,7 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let clos_ret_var = var_store.fresh();
 
     let ret_var = var_store.fresh();
-    let zero = int(index_var, Variable::NATURAL, 0);
+    let zero = int::<i128>(index_var, Variable::NATURAL, 0);
 
     let clos = Closure(ClosureData {
         function_type: clos_fun_var,
@@ -2506,7 +2766,7 @@ fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::ListDropAt,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
-            (index_var, int(num_var, num_precision_var, 0)),
+            (index_var, int::<i128>(num_var, num_precision_var, 0)),
         ],
         ret_var: list_var,
     };
@@ -2603,7 +2863,7 @@ fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                 ret_var: len_var,
                             },
                         ),
-                        (arg_var, int(num_var, num_precision_var, 1)),
+                        (arg_var, int::<i128>(num_var, num_precision_var, 1)),
                     ],
                     ret_var: len_var,
                 },
@@ -2801,7 +3061,7 @@ fn list_min(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, int(num_var, num_precision_var, 0)),
+                        (len_var, int::<i128>(num_var, num_precision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -2832,7 +3092,7 @@ fn list_min(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                         op: LowLevel::ListGetUnsafe,
                                         args: vec![
                                             (list_var, Var(Symbol::ARG_1)),
-                                            (arg_var, int(num_var, num_precision_var, 0)),
+                                            (arg_var, int::<i128>(num_var, num_precision_var, 0)),
                                         ],
                                         ret_var: list_elem_var,
                                     },
@@ -2931,7 +3191,7 @@ fn list_max(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, int(num_var, num_precision_var, 0)),
+                        (len_var, int::<i128>(num_var, num_precision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -2962,7 +3222,7 @@ fn list_max(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                         op: LowLevel::ListGetUnsafe,
                                         args: vec![
                                             (list_var, Var(Symbol::ARG_1)),
-                                            (arg_var, int(num_var, num_precision_var, 0)),
+                                            (arg_var, int::<i128>(num_var, num_precision_var, 0)),
                                         ],
                                         ret_var: list_elem_var,
                                     },
@@ -3844,7 +4104,7 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         (num_var, Var(Symbol::ARG_2)),
                         (
                             num_var,
-                            int(unbound_zero_var, unbound_zero_precision_var, 0),
+                            int::<i128>(unbound_zero_var, unbound_zero_precision_var, 0),
                         ),
                     ],
                     ret_var: bool_var,
@@ -3910,7 +4170,7 @@ fn num_div_ceil(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         (num_var, Var(Symbol::ARG_2)),
                         (
                             num_var,
-                            int(unbound_zero_var, unbound_zero_precision_var, 0),
+                            int::<i128>(unbound_zero_var, unbound_zero_precision_var, 0),
                         ),
                     ],
                     ret_var: bool_var,
@@ -3980,7 +4240,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, int(zero_var, zero_precision_var, 0)),
+                        (len_var, int::<i128>(zero_var, zero_precision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -4004,7 +4264,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                             op: LowLevel::ListGetUnsafe,
                             args: vec![
                                 (list_var, Var(Symbol::ARG_1)),
-                                (len_var, int(zero_var, zero_precision_var, 0)),
+                                (len_var, int::<i128>(zero_var, zero_precision_var, 0)),
                             ],
                             ret_var: list_elem_var,
                         },
@@ -4061,7 +4321,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, int(num_var, num_precision_var, 0)),
+                        (len_var, int::<i128>(num_var, num_precision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -4100,7 +4360,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     ret_var: len_var,
                                                 },
                                             ),
-                                            (arg_var, int(num_var, num_precision_var, 1)),
+                                            (arg_var, int::<i128>(num_var, num_precision_var, 1)),
                                         ],
                                         ret_var: len_var,
                                     },
@@ -4816,8 +5076,12 @@ fn defn_help(
 }
 
 #[inline(always)]
-fn int(num_var: Variable, precision_var: Variable, i: i128) -> Expr {
-    Int(num_var, precision_var, i.to_string().into_boxed_str(), i)
+fn int<I128>(num_var: Variable, precision_var: Variable, i: I128) -> Expr
+where
+    I128: Into<i128>,
+{
+    let ii = i.into();
+    Int(num_var, precision_var, ii.to_string().into_boxed_str(), ii)
 }
 
 #[inline(always)]

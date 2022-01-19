@@ -18,7 +18,7 @@ SpaceBefore(
                 },
             ),
         ),
-        @33-44 SpaceBefore(
+        @33-43 SpaceBefore(
             Backpassing(
                 [
                     @33-34 Identifier(
@@ -28,7 +28,7 @@ SpaceBefore(
                 @38-40 Record(
                     [],
                 ),
-                @43-44 SpaceBefore(
+                @42-43 SpaceBefore(
                     Var {
                         module_name: "",
                         ident: "x",

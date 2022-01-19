@@ -15,7 +15,7 @@ When(
                     ],
                 ),
             ],
-            value: @28-29 SpaceBefore(
+            value: @27-28 SpaceBefore(
                 Num(
                     "1",
                 ),
@@ -27,7 +27,7 @@ When(
         },
         WhenBranch {
             patterns: [
-                @35-36 SpaceBefore(
+                @34-35 SpaceBefore(
                     Underscore(
                         "",
                     ),
@@ -37,7 +37,7 @@ When(
                     ],
                 ),
             ],
-            value: @49-50 SpaceBefore(
+            value: @47-48 SpaceBefore(
                 Num(
                     "2",
                 ),
@@ -49,7 +49,7 @@ When(
         },
         WhenBranch {
             patterns: [
-                @56-58 SpaceBefore(
+                @54-56 SpaceBefore(
                     GlobalTag(
                         "Ok",
                     ),
@@ -59,7 +59,7 @@ When(
                     ],
                 ),
             ],
-            value: @71-72 SpaceBefore(
+            value: @68-69 SpaceBefore(
                 Num(
                     "3",
                 ),

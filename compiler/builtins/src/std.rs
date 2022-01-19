@@ -397,6 +397,33 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(bool_type()),
     );
 
+    // minI32 : I32
+    add_type!(Symbol::NUM_MIN_I32, i32_type());
+
+    // maxI32 : I32
+    add_type!(Symbol::NUM_MAX_I32, i32_type());
+
+    // minU32 : U32
+    add_type!(Symbol::NUM_MIN_U32, u32_type());
+
+    // maxU32 : U32
+    add_type!(Symbol::NUM_MAX_U32, u32_type());
+
+    // minI64 : I64
+    add_type!(Symbol::NUM_MIN_I64, i64_type());
+
+    // maxI64 : I64
+    add_type!(Symbol::NUM_MAX_I64, i64_type());
+
+    // minU64 : U64
+    add_type!(Symbol::NUM_MIN_U64, u64_type());
+
+    // maxU64 : U64
+    add_type!(Symbol::NUM_MAX_U64, u64_type());
+
+    // minI128 : I128
+    add_type!(Symbol::NUM_MIN_I128, i128_type());
+
     // maxI128 : I128
     add_type!(Symbol::NUM_MAX_I128, i128_type());
 

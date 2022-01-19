@@ -498,7 +498,7 @@ fn specialize_row_by_ctor2(
                 patterns.extend(args);
                 matrix.push(patterns);
             } else {
-                // do nothing 
+                // do nothing
             }
         Some(Anything) => {
             // TODO order!

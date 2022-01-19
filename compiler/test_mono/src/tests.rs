@@ -982,17 +982,17 @@ fn closure_in_list() {
     indoc!(
         r#"
         app "test" provides [ main ] to "./platform"
-    
+
         foo = \{} ->
             x = 41
-    
+
             f = \{} -> x
-    
+
             [ f ]
-    
+
         main =
             items = foo {}
-    
+
             List.len items
         "#
     )
@@ -1005,7 +1005,7 @@ fn somehow_drops_definitions() {
         r#"
         app "test" provides [ main ] to "./platform"
 
-        one : I64 
+        one : I64
         one = 1
 
         two : I64
@@ -1037,7 +1037,7 @@ fn specialize_closures() {
         apply = \f, x -> f x
 
         main =
-            one : I64 
+            one : I64
             one = 1
 
             two : I64
