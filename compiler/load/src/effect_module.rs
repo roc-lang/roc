@@ -1165,8 +1165,7 @@ fn build_effect_loop(
         loc_expr: Loc::at_zero(after_closure),
         expr_var: function_var,
         pattern_vars,
-        // annotation: Some(def_annotation),
-        annotation: None,
+        annotation: Some(def_annotation),
     };
 
     (loop_symbol, def)
