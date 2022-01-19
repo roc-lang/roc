@@ -1,8 +1,11 @@
 interface Task
-    exposes [ Task, succeed, fail, after, map, putLine, putInt, getInt ]
+    exposes [ Task, succeed, fail, after, map, putLine, putInt, getInt, forever ]
     imports [ fx.Effect ]
 
 Task ok err : Effect.Effect (Result ok err)
+
+forever : Task val err -> Task c d
+forever = \task -> Effect.forever task
 
 succeed : val -> Task val *
 succeed = \val ->

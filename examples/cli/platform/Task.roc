@@ -1,8 +1,12 @@
 interface Task
-    exposes [ Task, succeed, fail, await, map, onFail, attempt ]
+    exposes [ Task, succeed, fail, await, map, onFail, attempt, forever ]
     imports [ fx.Effect ]
 
 Task ok err : Effect.Effect (Result ok err)
+
+# Run a task forever. Note that even when we hit an error, we don't stop
+forever : Task val err -> Task c d
+forever = \task -> Effect.forever task
 
 succeed : val -> Task val *
 succeed = \val ->
