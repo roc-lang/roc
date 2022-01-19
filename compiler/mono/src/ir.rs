@@ -16,7 +16,9 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
-use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSubsSlice};
+use roc_types::subs::{
+    Content, Descriptor, FlatType, StorageSubs, Subs, UnionTags, Variable, VariableSubsSlice,
+};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
@@ -231,6 +233,14 @@ impl<'a> PartialProc<'a> {
                 }
             }
         }
+    }
+
+    /// Is this a zero-argument thunk, but captures some symbols?
+    pub fn is_capturing_thunk(&self) -> bool {
+        if let CapturedSymbols::Captured(captured) = self.captured_symbols {
+            return !captured.is_empty() && self.pattern_symbols.is_empty();
+        }
+        false
     }
 }
 
@@ -2206,6 +2216,13 @@ fn generate_runtime_error_function<'a>(
             (args.into_bump_slice(), *ret_layout)
         }
         RawFunctionLayout::ZeroArgumentThunk(ret_layout) => (&[] as &[_], ret_layout),
+        RawFunctionLayout::ZeroArgumentClosure(ret_layout, lambda_set) => {
+            let mut args = Vec::with_capacity_in(1, env.arena);
+
+            args.push((Layout::LambdaSet(lambda_set), Symbol::ARG_CLOSURE));
+
+            (args.into_bump_slice(), *ret_layout)
+        }
     };
 
     Proc {
@@ -2235,6 +2252,33 @@ fn specialize_external<'a>(
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
+
+    let fn_var = if partial_proc.is_capturing_thunk() {
+        let value_ty_var = fn_var;
+        // We're trying to specialize a capturing zero-argument thunk, e.g. "b" in
+        //   a = 1
+        //   b = A a
+        // The "fn_var" we've been given corresponds to the thunk value type, i.e. [A Nat].
+        // But we need the type of the specialized function we're going to create, including
+        // captures and everything (in this case, the captured symbol "a"). So, wrap the value
+        // type in a zero-argument function so that we can specialize the closure properly.
+        // TODO: this is hacky, can we make it better?
+        let star = env.subs.fresh_unnamed_flex_var();
+        let clos_var = env
+            .subs
+            .fresh(Descriptor::from(Content::Structure(FlatType::TagUnion(
+                UnionTags::default(),
+                star,
+            ))));
+        env.subs
+            .fresh(Descriptor::from(Content::Structure(FlatType::Func(
+                VariableSubsSlice::default(),
+                clos_var,
+                value_ty_var,
+            ))))
+    } else {
+        fn_var
+    };
 
     let _unified = roc_unify::unify::unify(
         env.subs,
@@ -2336,7 +2380,8 @@ fn specialize_external<'a>(
 
                     aliases.insert(*symbol, (name, top_level, layout));
                 }
-                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                RawFunctionLayout::ZeroArgumentThunk(_)
+                | RawFunctionLayout::ZeroArgumentClosure(_, _) => {
                     unreachable!("so far");
                 }
             }
@@ -2545,6 +2590,7 @@ fn specialize_external<'a>(
     }
 }
 
+#[derive(Debug)]
 enum SpecializedLayout<'a> {
     /// A body like `foo = \a,b,c -> ...`
     FunctionBody {
@@ -2577,6 +2623,16 @@ fn build_specialized_proc_from_var<'a>(
                 proc_name,
                 pattern_symbols,
                 pattern_layouts_vec,
+                Some(closure_layout),
+                *ret_layout,
+            )
+        }
+        RawFunctionLayout::ZeroArgumentClosure(ret_layout, closure_layout) => {
+            build_specialized_proc(
+                env.arena,
+                proc_name,
+                pattern_symbols,
+                Vec::new_in(env.arena),
                 Some(closure_layout),
                 *ret_layout,
             )
@@ -2872,6 +2928,11 @@ impl<'a> ProcLayout<'a> {
         match raw {
             RawFunctionLayout::Function(arguments, lambda_set, result) => {
                 let arguments = lambda_set.extend_argument_list(arena, arguments);
+                ProcLayout::new(arena, arguments, *result)
+            }
+            RawFunctionLayout::ZeroArgumentClosure(result, lambda_set) => {
+                let arguments =
+                    lambda_set.extend_argument_list(arena, &*arena.alloc_slice_copy(&[]));
                 ProcLayout::new(arena, arguments, *result)
             }
             RawFunctionLayout::ZeroArgumentThunk(result) => ProcLayout::new(arena, &[], result),
@@ -3821,6 +3882,7 @@ pub fn with_hole<'a>(
                             construct_closure_data(env, lambda_set, name, &[], assigned, hole)
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
+                        RawFunctionLayout::ZeroArgumentClosure(_, _) => unreachable!(),
                     }
                 }
 
@@ -3980,7 +4042,8 @@ pub fn with_hole<'a>(
             let raw = layout_cache.raw_from_var(env.arena, function_type, env.subs);
 
             match return_on_layout_error!(env, raw) {
-                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                RawFunctionLayout::ZeroArgumentThunk(_)
+                | RawFunctionLayout::ZeroArgumentClosure(_, _) => {
                     unreachable!("a closure syntactically always must have at least one argument")
                 }
                 RawFunctionLayout::Function(_argument_layouts, lambda_set, _ret_layout) => {
@@ -4161,6 +4224,9 @@ pub fn with_hole<'a>(
                                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                                     unreachable!("calling a non-closure layout")
                                 }
+                                RawFunctionLayout::ZeroArgumentClosure(_, _) => {
+                                    unreachable!("zero-argument closures cannot be called in the source language")
+                                }
                             }
                         }
                         Value(function_symbol) => match full_layout {
@@ -4180,6 +4246,9 @@ pub fn with_hole<'a>(
                             }
                             RawFunctionLayout::ZeroArgumentThunk(_) => {
                                 unreachable!("calling a non-closure layout")
+                            }
+                            RawFunctionLayout::ZeroArgumentClosure(_, _) => {
+                                unreachable!("zero-argument closures cannot be called in the source language")
                             }
                         },
                         NotASymbol => {
@@ -4216,6 +4285,12 @@ pub fn with_hole<'a>(
                                     );
                                 }
                                 RawFunctionLayout::ZeroArgumentThunk(_) => {
+                                    unreachable!(
+                                        "{:?} cannot be called in the source language",
+                                        full_layout
+                                    )
+                                }
+                                RawFunctionLayout::ZeroArgumentClosure(_, _) => {
                                     unreachable!(
                                         "{:?} cannot be called in the source language",
                                         full_layout
@@ -4330,6 +4405,7 @@ pub fn with_hole<'a>(
                             )
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
+                        RawFunctionLayout::ZeroArgumentClosure(_,_) => unreachable!("match_on_closure_argument received a zero-argument closure"),
                     }
                 }};
             }
@@ -4902,6 +4978,7 @@ fn tag_union_to_function<'a>(
                     construct_closure_data(env, lambda_set, proc_symbol, &[], assigned, hole)
                 }
                 RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
+                RawFunctionLayout::ZeroArgumentClosure(_, _) => unreachable!(),
             }
         }
 
@@ -5044,6 +5121,15 @@ fn register_capturing_closure<'a>(
                     CapturedSymbols::Captured(temp.into_bump_slice())
                 }
             }
+            Ok(RawFunctionLayout::ZeroArgumentClosure(_, lambda_set)) => {
+                if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
+                    CapturedSymbols::None
+                } else {
+                    let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
+                    temp.sort();
+                    CapturedSymbols::Captured(temp.into_bump_slice())
+                }
+            }
             Ok(RawFunctionLayout::ZeroArgumentThunk(_)) => {
                 // top-level thunks cannot capture any variables
                 debug_assert!(
@@ -5087,18 +5173,19 @@ fn is_flex_or_rigid(c: &Content) -> bool {
     matches!(c, Content::FlexVar(_) | Content::RigidVar(_))
 }
 
-fn is_simple_literal(expr: &roc_can::expr::Expr) -> bool {
+fn is_literal_like(expr: &roc_can::expr::Expr) -> bool {
     use roc_can::expr::Expr::*;
-    match expr {
-        Num(_, _, _) | Int(_, _, _, _) | Float(_, _, _, _) => true,
-        List { loc_elems, .. } => loc_elems
-            .iter()
-            .map(|loc_expr| &loc_expr.value)
-            .all(is_simple_literal),
-        ZeroArgumentTag { .. } => true,
-        Tag { arguments, .. } if arguments.is_empty() => true,
-        _ => false,
-    }
+    matches!(
+        expr,
+        Num(..)
+            | Int(..)
+            | Float(..)
+            | List { .. }
+            | Str(_)
+            | ZeroArgumentTag { .. }
+            | Tag { .. }
+            | Record { .. }
+    )
 }
 
 fn needs_specialization<'a>(
@@ -5121,7 +5208,253 @@ fn needs_specialization<'a>(
     //    m = 100  # specialized
     //    n = 100  # specialized
     //    { m, n } # must also be specialized
-    is_simple_literal(expr) && env.subs.var_contains_content(expr_var, is_flex_or_rigid)
+    is_literal_like(expr) && env.subs.var_contains_content(expr_var, is_flex_or_rigid)
+}
+
+mod vars {
+    use roc_can::expr::ClosureData;
+    use roc_can::pattern::{DestructType, Pattern};
+    use roc_collections::all::{MutMap, MutSet};
+    use roc_module::symbol::Symbol;
+    use roc_types::subs::Variable;
+
+    /// Returns `(free, bound)`, where `free` are the free variables referenced in a pattern, and
+    /// `bound` are the variables introduced by that pattern.
+    // TODO: make this a loop rather than recursive
+    fn in_pattern(pat: &Pattern) -> (MutMap<Symbol, Variable>, MutSet<Symbol>) {
+        let mut free = MutMap::default();
+        let mut bound: MutSet<Symbol> = MutSet::default();
+        match pat {
+            &Pattern::Identifier(sym) => {
+                bound.insert(sym);
+            }
+            Pattern::AppliedTag { arguments, .. } => {
+                for (_, arg) in arguments.iter() {
+                    let (free1, bound1) = in_pattern(&arg.value);
+                    free.extend(free1);
+                    bound.extend(bound1);
+                }
+            }
+            Pattern::RecordDestructure { destructs, .. } => {
+                for dtor in destructs.iter().map(|d| &d.value) {
+                    match &dtor.typ {
+                        DestructType::Required => {
+                            bound.insert(dtor.symbol);
+                        }
+                        DestructType::Optional(var, def_expr) => {
+                            bound.insert(dtor.symbol);
+                            let free1 = free_in_expr(&def_expr.value, *var);
+                            free.extend(free1);
+                        }
+                        DestructType::Guard(_, pat) => {
+                            // Something like {a : {b, c}}, where {b, c} is the guard. a is not
+                            // introduced as a bound variable.
+                            let (free1, bound1) = in_pattern(&pat.value);
+                            free.extend(free1);
+                            bound.extend(bound1);
+                        }
+                    }
+                }
+            }
+            Pattern::IntLiteral(_, _, _)
+            | Pattern::NumLiteral(_, _, _)
+            | Pattern::FloatLiteral(_, _, _)
+            | Pattern::StrLiteral(_)
+            | Pattern::Underscore
+            | Pattern::Shadowed(_, _)
+            | Pattern::UnsupportedPattern(_)
+            | Pattern::MalformedPattern(_, _) => {}
+        }
+        (free, bound)
+    }
+
+    /// Returns the free variables in an expression (and their type variables).
+    pub fn free_in_expr(
+        expr: &roc_can::expr::Expr,
+        expr_var: Variable,
+    ) -> MutMap<Symbol, Variable> {
+        let mut stack = std::vec![(expr, expr_var)];
+        let mut free: MutMap<Symbol, Variable> = MutMap::default();
+
+        use roc_can::expr::Expr::*;
+        while let Some((expr, var)) = stack.pop() {
+            match expr {
+                Num(_, _, _) | Int(_, _, _, _) | Float(_, _, _, _) | Str(_) => {}
+                List {
+                    elem_var,
+                    loc_elems,
+                } => {
+                    loc_elems
+                        .iter()
+                        .for_each(|e| stack.push((&e.value, *elem_var)));
+                }
+
+                // Lookups
+                Var(sym) => {
+                    free.insert(*sym, var);
+                }
+                // Branching
+                When {
+                    cond_var,
+                    expr_var,
+                    region: _,
+                    loc_cond,
+                    branches,
+                } => {
+                    stack.push((&loc_cond.value, *cond_var));
+
+                    for branch in branches.iter() {
+                        let mut free_in_body = free_in_expr(&branch.value.value, *expr_var);
+                        if let Some(guard) = &branch.guard {
+                            free_in_body.extend(free_in_expr(&guard.value, Variable::BOOL));
+                        }
+                        let mut free_in_patterns = MutMap::default();
+                        let mut bound_in_branch = None;
+                        for pat in &branch.patterns {
+                            let (free, bound) = in_pattern(&pat.value);
+                            free_in_patterns.extend(free);
+                            bound_in_branch = Some(bound);
+                        }
+
+                        for bound in bound_in_branch.unwrap().iter() {
+                            free_in_body.remove(bound);
+                        }
+
+                        free.extend(free_in_body);
+                        free.extend(free_in_patterns);
+                    }
+                }
+                If {
+                    cond_var,
+                    branch_var,
+                    branches,
+                    final_else,
+                } => {
+                    for (cond, body) in branches.iter() {
+                        stack.push((&cond.value, *cond_var));
+                        stack.push((&body.value, *branch_var));
+                    }
+                    stack.push((&final_else.value, *branch_var));
+                }
+
+                Tag { arguments, .. } => {
+                    for (var, expr) in arguments.iter() {
+                        stack.push((&expr.value, *var));
+                    }
+                }
+                ZeroArgumentTag { arguments, .. } => {
+                    debug_assert!(arguments.is_empty());
+                }
+                LetRec(defs, expr, var) => {
+                    let mut free_in_body = free_in_expr(&expr.value, *var);
+
+                    let mut free_in_defs = MutMap::default();
+                    let mut bound_in_defs = MutSet::default();
+                    let mut free_in_def_bodies = MutMap::default();
+                    for def in defs.iter() {
+                        let (free, bound) = in_pattern(&def.loc_pattern.value);
+                        free_in_defs.extend(free);
+                        bound_in_defs.extend(bound);
+
+                        let free_in_def_body = free_in_expr(&def.loc_expr.value, def.expr_var);
+                        free_in_def_bodies.extend(free_in_def_body);
+                    }
+
+                    for bound in bound_in_defs.iter() {
+                        free_in_body.remove(bound);
+                        // Remove from def bodies as well, since the bodies are recursive.
+                        free_in_def_bodies.remove(bound);
+                    }
+
+                    free.extend(free_in_body);
+                    free.extend(free_in_defs);
+                    free.extend(free_in_def_bodies);
+                }
+                LetNonRec(def, expr, var) => {
+                    let mut free_in_body = free_in_expr(&expr.value, *var);
+
+                    let (free_in_def, bound_in_def) = in_pattern(&def.loc_pattern.value);
+                    let free_in_def_body = free_in_expr(&def.loc_expr.value, def.expr_var);
+
+                    for bound in bound_in_def.iter() {
+                        free_in_body.remove(bound);
+                    }
+
+                    free.extend(free_in_body);
+                    free.extend(free_in_def);
+                    free.extend(free_in_def_body);
+                }
+                Call(f, args, _) => {
+                    let (fn_var, fn_expr, _lambda_set_var, _ret_var) = &**f;
+                    stack.push((&fn_expr.value, *fn_var));
+                    for (var, expr) in args.iter() {
+                        stack.push((&expr.value, *var));
+                    }
+                }
+                RunLowLevel { args, .. } | ForeignCall { args, .. } => {
+                    for (var, expr) in args.iter() {
+                        stack.push((expr, *var));
+                    }
+                }
+                Closure(ClosureData {
+                    arguments,
+                    loc_body,
+                    return_type,
+                    ..
+                }) => {
+                    let mut free_in_body = free_in_expr(&loc_body.value, *return_type);
+                    let mut free_in_patterns = MutMap::default();
+                    let mut bound_in_patterns = MutSet::default();
+                    for (_, arg) in arguments.iter() {
+                        let (free, bound) = in_pattern(&arg.value);
+                        free_in_patterns.extend(free);
+                        bound_in_patterns.extend(bound);
+                    }
+                    for bound in bound_in_patterns.iter() {
+                        free_in_body.remove(bound);
+                    }
+
+                    free.extend(free_in_body);
+                    free.extend(free_in_patterns);
+                }
+                Record { fields, .. } => {
+                    for field in fields.values() {
+                        stack.push((&field.loc_expr.value, field.var));
+                    }
+                }
+                EmptyRecord => {}
+
+                Access {
+                    record_var,
+                    loc_expr,
+                    ..
+                } => stack.push((&loc_expr.value, *record_var)),
+                Accessor {
+                    name, function_var, ..
+                } => {
+                    free.insert(*name, *function_var);
+                }
+                Update {
+                    record_var,
+                    symbol,
+                    updates,
+                    ..
+                } => {
+                    free.insert(*symbol, *record_var);
+                    for field in updates.values() {
+                        stack.push((&field.loc_expr.value, field.var));
+                    }
+                }
+
+                Expect(e1, e2) => {
+                    stack.push((&e1.value, expr_var));
+                    stack.push((&e2.value, expr_var));
+                }
+                RuntimeError(_) => {}
+            }
+        }
+        free
+    }
 }
 
 pub fn from_can<'a>(
@@ -5133,7 +5466,6 @@ pub fn from_can<'a>(
 ) -> Stmt<'a> {
     use roc_can::expr::Expr::*;
 
-    // dbg!(&can_expr);
     match can_expr {
         When {
             cond_var,
@@ -5376,20 +5708,70 @@ pub fn from_can<'a>(
                         return from_can(env, variable, new_outer, procs, layout_cache);
                     }
                     body if needs_specialization(env, &body, def.expr_var) => {
-                        let proc = PartialProc {
-                            annotation: def.expr_var,
-                            pattern_symbols: &[], // zero-argument thunk
-                            // TODO fix me for aliases, tags, and records
-                            captured_symbols: CapturedSymbols::None,
-                            body,
-                            is_self_recursive: false,
-                        };
-                        // dbg!(&symbol, &proc, &cont.value);
+                        let fv = vars::free_in_expr(&body, def.expr_var);
+                        if fv.is_empty() {
+                            // Happy case - we can just treat this as a zero-argument thunk.
+                            let proc = PartialProc {
+                                annotation: def.expr_var,
+                                pattern_symbols: &[], // zero-argument thunk
+                                captured_symbols: CapturedSymbols::None,
+                                body,
+                                is_self_recursive: false,
+                            };
+                            procs.partial_procs.insert(*symbol, proc);
+                        } else {
+                            // We need to demote this value into a zero-argument thunk, but it also
+                            // references some variables in the present scope. So it needs to
+                            // become a zero-argument closure.
+                            let mut symbols = Vec::from_iter_in(fv.into_iter(), env.arena);
+                            symbols.sort();
 
-                        procs.partial_procs.insert(*symbol, proc);
+                            let clos_tags = UnionTags::insert_into_subs(
+                                env.subs,
+                                vec![(
+                                    // We know the closure for this symbol will only ever reference
+                                    // this symbol, and the variables we've found it to capture.
+                                    TagName::Closure(*symbol),
+                                    symbols.iter().map(|&(_, var)| var),
+                                )],
+                            );
+                            let clos = Content::Structure(FlatType::TagUnion(
+                                clos_tags,
+                                Variable::EMPTY_TAG_UNION,
+                            ));
+                            let clos_var = env.subs.fresh(Descriptor::from(clos));
+
+                            let func = Content::Structure(FlatType::Func(
+                                VariableSubsSlice::default(),
+                                clos_var,
+                                def.expr_var,
+                            ));
+                            let func_var = env.subs.fresh(Descriptor::from(func));
+
+                            let closure_data = ClosureData {
+                                function_type: func_var,
+                                closure_type: clos_var,
+                                closure_ext_var: Variable::EMPTY_TAG_UNION,
+                                return_type: def.expr_var,
+                                name: *symbol,
+                                captured_symbols: symbols.to_vec(),
+                                recursive: roc_can::expr::Recursive::NotRecursive,
+                                arguments: vec![],
+                                loc_body: Box::new(Loc::at_zero(body)),
+                            };
+                            register_capturing_closure(
+                                env,
+                                procs,
+                                layout_cache,
+                                *symbol,
+                                closure_data,
+                            )
+                        };
 
                         let r = from_can(env, variable, cont.value, procs, layout_cache);
 
+                        // There may be another variable of the same name we need to demote in
+                        // another scope. Remove the current symbol to avoid interference.
                         procs.partial_procs.remove(*symbol);
 
                         return r;
@@ -5410,7 +5792,6 @@ pub fn from_can<'a>(
             }
 
             // this may be a destructure pattern
-            // dbg!(&def.loc_pattern.value, &def.loc_expr);
             let (mono_pattern, assignments) =
                 match from_can_pattern(env, layout_cache, &def.loc_pattern.value) {
                     Ok(v) => v,
@@ -5517,9 +5898,7 @@ fn to_opt_branches<'a>(
             Guard::NoGuard
         };
 
-        // dbg!(&when_branch);
         for loc_pattern in when_branch.patterns {
-            // dbg!(&loc_pattern.value);
             match from_can_pattern(env, layout_cache, &loc_pattern.value) {
                 Ok((mono_pattern, assignments)) => {
                     loc_branches.push((
@@ -6539,6 +6918,7 @@ fn reuse_function_symbol<'a>(
                             RawFunctionLayout::Function(_, lambda_set, _) => {
                                 Layout::LambdaSet(lambda_set)
                             }
+                            RawFunctionLayout::ZeroArgumentClosure(_, _) => unreachable!(),
                         };
 
                         let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
@@ -6581,13 +6961,61 @@ fn reuse_function_symbol<'a>(
         }
 
         Some(partial_proc) => {
+            // The `arg_var` may not always be the type of the function we want to specialize.
+            // The function type differs when the value to be specialized is one that was demoted
+            // to a zero-argument closure, e.g. `b` in
+            //   a = 1
+            //   b = A a
+            // which, say, needs to be specialized from [A (Int *)] to [A U8].
+            // Now the `arg_var` for `b` would be [A U8], but we can't use that to generate a
+            // layout, because `b` must capture `a` in this case. So, we have to get the expected
+            // function type of `b`, and unify it in the present environment to figure out exactly
+            // what its layout should be.
+            // At the end of this, we must reset the types/layouts snapshots so as not to interfere
+            // with other specializations later on.
+            // TODO: this exactly what we have to do in specialize_external, but this may happen in
+            // a different code path than specialize_external. Can we make it simpler somehow?
+            let snapshot = env.subs.snapshot();
+            let cache_snapshot = layout_cache.snapshot();
+
+            let fn_var = if partial_proc.is_capturing_thunk() {
+                // Promote e.g. [A U8] => () []* -> [A U8]
+                let star = env.subs.fresh_unnamed_flex_var();
+                let clos_var =
+                    env.subs
+                        .fresh(Descriptor::from(Content::Structure(FlatType::TagUnion(
+                            UnionTags::default(),
+                            star,
+                        ))));
+                let fn_var = env
+                    .subs
+                    .fresh(Descriptor::from(Content::Structure(FlatType::Func(
+                        VariableSubsSlice::default(),
+                        clos_var,
+                        arg_var.unwrap(),
+                    ))));
+
+                let _unified = roc_unify::unify::unify(
+                    env.subs,
+                    partial_proc.annotation,
+                    fn_var,
+                    roc_unify::unify::Mode::Eq,
+                );
+
+                fn_var
+            } else {
+                // This is already either a proper function or a non-capturing zero-argument thunk;
+                // we're good.
+                arg_var.unwrap_or(partial_proc.annotation)
+            };
+
             let arg_var = arg_var.unwrap_or(partial_proc.annotation);
             // this symbol is a function, that is used by-name (e.g. as an argument to another
             // function). Register it with the current variable, then create a function pointer
             // to it in the IR.
             let res_layout = return_on_layout_error!(
                 env,
-                layout_cache.raw_from_var(env.arena, arg_var, env.subs)
+                layout_cache.raw_from_var(env.arena, fn_var, env.subs)
             );
 
             // we have three kinds of functions really. Plain functions, closures by capture,
@@ -6595,9 +7023,11 @@ fn reuse_function_symbol<'a>(
             // anything.
             let captures = partial_proc.captured_symbols.captures();
             let captured = partial_proc.captured_symbols;
+            let is_capturing_thunk = partial_proc.is_capturing_thunk();
 
-            match res_layout {
-                RawFunctionLayout::Function(_, lambda_set, _) => {
+            let result = match res_layout {
+                RawFunctionLayout::Function(_, lambda_set, _)
+                | RawFunctionLayout::ZeroArgumentClosure(_, lambda_set) => {
                     // define the function pointer
                     let function_ptr_layout = ProcLayout::from_raw(env.arena, res_layout);
 
@@ -6630,14 +7060,14 @@ fn reuse_function_symbol<'a>(
                                 let layout =
                                     layout_cache.raw_from_var(env.arena, var, env.subs).unwrap();
                                 if let RawFunctionLayout::ZeroArgumentThunk(_) = layout {
-                                    thunkified_captures.push(s);
+                                    thunkified_captures.push((s, var));
                                 }
                             }
                         }
 
                         // To specialize the closure body, mark the captures of this closure that were demoted to thunks
                         // as being proper values.
-                        for &s in thunkified_captures.iter() {
+                        for &(s, _) in thunkified_captures.iter() {
                             procs.partial_procs.ignore(s);
                         }
 
@@ -6649,39 +7079,67 @@ fn reuse_function_symbol<'a>(
                             layout_cache,
                         );
 
-                        for &s in thunkified_captures.iter() {
+                        for &(s, _) in thunkified_captures.iter() {
                             procs.partial_procs.unignore(s);
                         }
-
-                        let closure_data = symbol;
 
                         let symbols =
                             Vec::from_iter_in(symbols_and_vars.iter().map(|x| x.0), env.arena)
                                 .into_bump_slice();
 
-                        let mut fin = construct_closure_data(
+                        let (result, closure_data_sym) = if is_capturing_thunk {
+                            // A zero-argument closure always evaluates to a value, so we must call
+                            // the thunk with the closure data after it's created. Make a new hole
+                            // that forces the thunk here; next we'll wrap the hole in the closure
+                            // data creation.
+                            let closure_data_sym = env.unique_symbol(); // where we'll store the closure data
+                            let thunk_value_sym = symbol;
+                            let thunk_call = Call {
+                                call_type: CallType::ByName {
+                                    name: original,
+                                    ret_layout: &*env.arena.alloc(function_ptr_layout.result),
+                                    arg_layouts: function_ptr_layout.arguments,
+                                    specialization_id: env.next_call_specialization_id(),
+                                },
+                                arguments: &*env.arena.alloc_slice_copy(&[closure_data_sym]),
+                            };
+                            let thunk_value = build_call(
+                                env,
+                                thunk_call,
+                                thunk_value_sym,
+                                function_ptr_layout.result,
+                                env.arena.alloc(result),
+                            );
+
+                            (thunk_value, closure_data_sym)
+                        } else {
+                            // For a regular closure there is nothing to force
+                            (result, symbol)
+                        };
+
+                        let mut result = construct_closure_data(
                             env,
                             lambda_set,
                             original,
                             symbols,
-                            closure_data,
+                            closure_data_sym,
                             env.arena.alloc(result),
                         );
 
                         // We need to reify the thunkified captures into proper values so that
                         // they're captured correctly.
-                        for &symbol in thunkified_captures.iter() {
-                            fin = reuse_function_symbol(
+                        for &(symbol, var) in thunkified_captures.iter() {
+                            result = reuse_function_symbol(
                                 env,
                                 procs,
                                 layout_cache,
-                                None,
+                                Some(var),
                                 symbol,
-                                fin,
+                                result,
                                 symbol,
                             );
                         }
-                        fin
+                        result
                     } else if procs.is_module_thunk(original) {
                         // this is a 0-argument thunk
 
@@ -6727,7 +7185,12 @@ fn reuse_function_symbol<'a>(
 
                     force_thunk(env, original, ret_layout, symbol, env.arena.alloc(result))
                 }
-            }
+            };
+
+            layout_cache.rollback_to(cache_snapshot);
+            env.subs.rollback_to(snapshot);
+
+            result
         }
     }
 }
@@ -6973,6 +7436,7 @@ fn call_by_name<'a>(
                 panic!("most likely we're trying to call something that is not a function");
             }
         }
+        Ok(RawFunctionLayout::ZeroArgumentClosure(_, _)) => unreachable!(),
     }
 }
 
@@ -7382,7 +7846,8 @@ fn call_specialized_proc<'a>(
                 // but now we need to remove it because the `match_on_lambda_set` will add it again
                 build_call(env, call, assigned, Layout::LambdaSet(lambda_set), hole)
             }
-            RawFunctionLayout::ZeroArgumentThunk(_) => {
+            RawFunctionLayout::ZeroArgumentThunk(_)
+            | RawFunctionLayout::ZeroArgumentClosure(_, _) => {
                 unreachable!()
             }
         }

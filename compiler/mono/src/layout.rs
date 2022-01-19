@@ -45,6 +45,8 @@ impl From<LayoutProblem> for RuntimeError {
 pub enum RawFunctionLayout<'a> {
     Function(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
     ZeroArgumentThunk(Layout<'a>),
+    /// Like a `ZeroArgumentThunk`, but this one can actually capture something.
+    ZeroArgumentClosure(&'a Layout<'a>, LambdaSet<'a>),
 }
 
 impl<'a> RawFunctionLayout<'a> {
@@ -160,7 +162,11 @@ impl<'a> RawFunctionLayout<'a> {
                 let lambda_set =
                     LambdaSet::from_var(env.arena, env.subs, closure_var, env.ptr_bytes)?;
 
-                Ok(Self::Function(fn_args, lambda_set, ret))
+                if fn_args.is_empty() {
+                    Ok(Self::ZeroArgumentClosure(ret, lambda_set))
+                } else {
+                    Ok(Self::Function(fn_args, lambda_set, ret))
+                }
             }
             TagUnion(tags, ext) if tags.is_newtype_wrapper(env.subs) => {
                 debug_assert!(ext_var_is_empty_tag_union(env.subs, ext));

@@ -1186,7 +1186,6 @@ fn monomorphized_tag() {
 }
 
 #[mono_test]
-#[ignore = "TODO"]
 fn monomorphized_tag_with_aliased_args() {
     indoc!(
         r#"
@@ -1239,6 +1238,23 @@ fn optional_field_when_use_default() {
             d = f { x: Red }
 
             a * b * c * d
+        "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_applied_tag() {
+    indoc!(
+        r#"
+        app "test" provides [ main ] to "./platform"
+
+        main =
+            a = A "A"
+            f = \x ->
+                when x is
+                    A y -> y
+                    B y -> y
+            f a
         "#
     )
 }

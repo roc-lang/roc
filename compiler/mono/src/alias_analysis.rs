@@ -159,7 +159,8 @@ where
             if let HostExposedLayouts::HostExposed { aliases, .. } = &proc.host_exposed_layouts {
                 for (_, (symbol, top_level, layout)) in aliases {
                     match layout {
-                        RawFunctionLayout::Function(_, _, _) => {
+                        RawFunctionLayout::Function(_, _, _)
+                        | RawFunctionLayout::ZeroArgumentClosure(_, _) => {
                             let it = top_level.arguments.iter().copied();
                             let bytes = func_name_bytes_help(*symbol, it, &top_level.result);
 

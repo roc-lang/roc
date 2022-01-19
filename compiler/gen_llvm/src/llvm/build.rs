@@ -4474,6 +4474,10 @@ pub fn build_proc<'a, 'ctx, 'env>(
                     RawFunctionLayout::ZeroArgumentThunk(_) => {
                         // do nothing
                     }
+
+                    RawFunctionLayout::ZeroArgumentClosure(_, _) => {
+                        unreachable!("cannot be exposed to the host")
+                    }
                 }
             }
         }

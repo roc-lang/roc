@@ -2267,3 +2267,31 @@ fn monomorphized_ints_names_dont_conflict() {
         u64
     )
 }
+
+#[test]
+#[ignore = "TODO"]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_ints_aliased() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                y = 100
+                w1 = y
+                w2 = y
+
+                f1 : U8, U32 -> U8
+                f1 = \_, _ -> 1
+
+                f2 : U32, U8 -> U8
+                f2 = \_, _ -> 2
+
+                f1 w1 w2 + f2 w1 w2
+            "#
+        ),
+        2,
+        u8
+    )
+}
