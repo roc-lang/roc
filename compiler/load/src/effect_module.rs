@@ -802,10 +802,12 @@ fn build_effect_forever(
 
     let signature = {
         let var_a = var_store.fresh();
+        let var_b = var_store.fresh();
 
         introduced_variables.insert_named("a".into(), var_a);
+        introduced_variables.insert_named("b".into(), var_b);
 
-        let effect_a_1 = build_effect_alias(
+        let effect_a = build_effect_alias(
             effect_symbol,
             effect_tag_name.clone(),
             "a",
@@ -815,14 +817,12 @@ fn build_effect_forever(
             &mut introduced_variables,
         );
 
-        // We need this second variable (instead of cloning the one above)
-        // so we get a new fresh variable for the lambda set
-        let effect_a_2 = build_effect_alias(
+        let effect_b = build_effect_alias(
             effect_symbol,
             effect_tag_name,
-            "a",
-            var_a,
-            Type::Variable(var_a),
+            "b",
+            var_b,
+            Type::Variable(var_b),
             var_store,
             &mut introduced_variables,
         );
@@ -831,9 +831,9 @@ fn build_effect_forever(
         introduced_variables.insert_wildcard(closure_var);
 
         Type::Function(
-            vec![effect_a_1],
+            vec![effect_a],
             Box::new(Type::Variable(closure_var)),
-            Box::new(effect_a_2),
+            Box::new(effect_b),
         )
     };
 
