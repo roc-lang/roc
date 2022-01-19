@@ -576,14 +576,14 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
-                
+
                 I cannot find a `true` value
-                
+
                 1│  if true then 1 else 2
                        ^^^^
-                
+
                 Did you mean one of these?
-                
+
                     True
                     Str
                     Num
@@ -630,12 +630,12 @@ mod test_reporting {
             indoc!(
                 r#"
                  y = 9
-    
+
                  box = \class, htmlChildren ->
                      div [ class ] []
-    
+
                  div = \_, _ -> 4
-    
+
                  box "wizard" []
              "#
             ),
@@ -644,7 +644,7 @@ mod test_reporting {
                  ── UNUSED ARGUMENT ─────────────────────────────────────────────────────────────
 
                  `box` doesn't use `htmlChildren`.
-    
+
                  3│  box = \class, htmlChildren ->
                                    ^^^^^^^^^^^^
 
@@ -7042,7 +7042,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 C a b : a -> D a b
                 D a b : { a, b }
-                
+
                 f : C a Nat -> D a Nat
                 f = \c -> c 6
                 f
@@ -7051,20 +7051,20 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-                
+
                 The 1st argument to `c` is not what I expect:
-                
+
                 5│  f = \c -> c 6
                                 ^
-                
+
                 This argument is a number of type:
-                
+
                     Num a
-                
+
                 But `c` needs the 1st argument to be:
-                
+
                     a
-                
+
                 Tip: The type annotation uses the type variable `a` to say that this
                 definition can produce any type of value. But in the body I see that
                 it will only produce a `Num` value of a single specific type. Maybe

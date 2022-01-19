@@ -511,7 +511,7 @@ fn canonicalize_pending_def<'a>(
                             // remove its generated name from the closure map.
                             let references =
                                 env.closures.remove(&closure_symbol).unwrap_or_else(|| {
-                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures) 
+                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures)
                             });
 
                             // TODO should we re-insert this function into env.closures?
@@ -680,7 +680,7 @@ fn canonicalize_pending_def<'a>(
                     // remove its generated name from the closure map.
                     let references =
                         env.closures.remove(&closure_symbol).unwrap_or_else(|| {
-                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures) 
+                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures)
                         });
 
                     // TODO should we re-insert this function into env.closures?

@@ -997,7 +997,7 @@ fn both_have_unique_fields() {
             b = { x: 42, z: 44 }
 
             f : { x : I64 }a, { x : I64 }b -> I64
-            f = \{ x: x1}, { x: x2 } -> x1 + x2 
+            f = \{ x: x1}, { x: x2 } -> x1 + x2
 
             f a b
             "#

@@ -32,11 +32,11 @@ procedure Test.5 (Test.8, Test.9):
         case 0:
             let Test.16 : Builtin(Int(I64)) = CallByName Test.3 Test.9;
             jump Test.15 Test.16;
-    
+
         default:
             let Test.17 : Builtin(Int(I64)) = CallByName Test.4 Test.9;
             jump Test.15 Test.17;
-    
+
 
 procedure Test.0 ():
     joinpoint Test.19 Test.12:

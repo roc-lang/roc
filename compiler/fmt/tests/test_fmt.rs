@@ -410,19 +410,19 @@ mod test_fmt {
             indoc!(
                 r#"
                 x = (5)
-    
-    
+
+
                 y = ((10))
-    
+
                 42
                 "#
             ),
             indoc!(
                 r#"
                 x = 5
-    
+
                 y = 10
-    
+
                 42
                 "#
             ),
@@ -766,9 +766,9 @@ mod test_fmt {
 
                 # comment 2
                 x: 42
-                
+
                 # comment 3
-                
+
                 # comment 4
             }"#
             ),
@@ -819,7 +819,7 @@ mod test_fmt {
                 f: {                    y : Int *,
                                          x : Int * ,
                    }
-                
+
                 f"#
             ),
             indoc!(
@@ -910,7 +910,7 @@ mod test_fmt {
                     {
                         # comment
                     }
-                
+
                 f"#
             ),
         );
@@ -935,7 +935,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 f :
-                    { 
+                    {
                         x: Int * # comment 1
                         ,
                         # comment 2
@@ -951,7 +951,7 @@ mod test_fmt {
                         # comment 1
                         # comment 2
                     }
-                
+
                 f"#
             ),
         );
@@ -1007,7 +1007,7 @@ mod test_fmt {
             indoc!(
                 r#"
                     identity = \a
-                        -> 
+                        ->
                             a + b
 
                     identity 4010
@@ -1387,7 +1387,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-            {    
+            {
             }"#
             ),
             "{}",
@@ -2763,7 +2763,7 @@ mod test_fmt {
                         # comment 2
                         # comment 3
                     ]
-    
+
                 b
                 "#
             ),

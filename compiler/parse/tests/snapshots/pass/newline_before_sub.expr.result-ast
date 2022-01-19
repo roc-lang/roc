@@ -9,10 +9,10 @@ BinOps(
                     Newline,
                 ],
             ),
-            @4-5 Minus,
+            @2-3 Minus,
         ),
     ],
-    @6-7 Num(
+    @4-5 Num(
         "4",
     ),
 )

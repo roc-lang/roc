@@ -29,11 +29,11 @@ procedure Test.0 ():
             case 0:
                 let Test.16 : Builtin(Int(I64)) = CallByName Test.6 Test.12 Test.13;
                 jump Test.15 Test.16;
-        
+
             default:
                 let Test.17 : Builtin(Int(I64)) = CallByName Test.7 Test.12 Test.13;
                 jump Test.15 Test.17;
-        
+
     in
     let Test.22 : Builtin(Bool) = true;
     if Test.22 then
