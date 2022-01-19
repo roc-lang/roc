@@ -506,7 +506,40 @@ impl<'a> UnionLayout<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Custom type so we can get the numeric representation of a symbol in tests (so `#UserApp.3`
+/// instead of `UserApp.foo`). The pretty name is not reliable when running many tests
+/// concurrently. The number does not change and will give a reliable output.
+struct SetElement<'a> {
+    symbol: Symbol,
+    layout: &'a [Layout<'a>],
+}
+
+impl std::fmt::Debug for SetElement<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if crate::ir::pretty_print_ir_symbols() {
+            write!(f, "( {:?}, {:?})", self.symbol, self.layout)
+        } else {
+            write!(f, "( {}, {:?})", self.symbol, self.layout)
+        }
+    }
+}
+
+impl std::fmt::Debug for LambdaSet<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let entries = self.set.iter().map(|x| SetElement {
+            symbol: x.0,
+            layout: x.1,
+        });
+        let set = f.debug_list().entries(entries).finish();
+
+        f.debug_struct("LambdaSet")
+            .field("set", &set)
+            .field("representation", &self.representation)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
     pub set: &'a [(Symbol, &'a [Layout<'a>])],
