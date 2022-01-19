@@ -87,7 +87,7 @@ type T = Token;
 peg::parser!{
     grammar tokenparser() for [T] {
 
-      pub rule full_expr() = bool_and_expr()
+      pub rule full_expr() = bool_or_expr()
       
       pub rule expr() =
           expect()
@@ -96,30 +96,51 @@ peg::parser!{
           / list()
           / record()
           / parens_around()
-          / number()
-          / string()
+          / [T::Number]
+          / [T::NumberBase]
+          / [T::String]
           / tag()
+          / accessor_function()
+          / defs()
+          // / access() // TODO prevent infinite loop
 
-
-        rule number() = [T::Number] {}
-        rule string() = [T::String] {}
 
         rule tag() =
           private_tag()
           / [T::UppercaseIdent] // = Global Tag
         rule private_tag() = [T::PrivateTag] {}
 
+
         rule list() = empty_list()
                     / [T::OpenSquare] (expr() [T::Comma])* expr()? [T::Comma]? [T::CloseSquare] { }
         rule empty_list() = [T::OpenSquare] [T::CloseSquare]
 
-        rule record() = empty_record() // TODO non-empty
+
+        rule record() =
+          empty_record()
+          / [T::OpenCurly]  assigned_fields() [T::CloseCurly]
+
+        rule assigned_fields() =
+          (assigned_field() [T::Comma])* assigned_field()? [T::Comma]?
+
+        rule assigned_field() =
+          required_value()
+          / [T::LowercaseIdent]
+
+        rule required_value() =
+          [T::LowercaseIdent] [T::Colon] full_expr()
+
         rule empty_record() = [T::OpenCurly] [T::CloseCurly]
+
+        rule record_update() = [T::OpenCurly] expr() [T::Ampersand] assigned_fields() [T::CloseCurly]
+
         rule record_type() =
           empty_record()
           / [T::OpenCurly] (record_field_type() [T::Comma])* record_field_type() [T::Comma]? [T::CloseCurly]
+
         rule record_field_type() =
           ident() [T::Colon] type_annotation()
+
 
         rule parens_around() = [T::OpenParen] expr() [T::CloseParen]
 
@@ -134,6 +155,14 @@ peg::parser!{
         rule ident_or_underscore() =
           [T::LowercaseIdent]
           / [T::Underscore]
+
+
+        rule access() =
+          expr() [T::Dot] ident()
+
+        rule accessor_function() =
+          [T::Dot] ident()
+
 
         pub rule header() =
           app_header()
@@ -154,9 +183,11 @@ peg::parser!{
 
         rule imports() =
           [T::KeywordImports] imports_list()
+
         rule imports_list() =
           empty_list()
           / [T::OpenSquare] (imports_entry() [T::Comma])* imports_entry()? [T::Comma]? [T::CloseSquare]
+
         rule imports_entry() =
           ([T::LowercaseIdent] [T::Dot])?
           module_name()
@@ -170,7 +201,7 @@ peg::parser!{
         rule provides() =
           [T::KeywordProvides] provides_list() ([T::KeywordTo] provides_to())?
         rule provides_to() =
-          string()
+         [T::String]
           / ident()
         
         rule provides_list() =
@@ -202,12 +233,14 @@ peg::parser!{
         rule effect_name() =
           [T::LowercaseIdent] [T::Dot] [T::UppercaseIdent]
 
+
         rule module_name() =
           [T::UppercaseIdent] ([T::Dot] [T::UppercaseIdent])*
 
         rule ident() =
           [T::UppercaseIdent]
           / [T::LowercaseIdent]
+
 
         // content of type_annotation without Colon(:)
         rule type_annotation() =
@@ -256,6 +289,7 @@ peg::parser!{
         rule apply_args() =
           type_annotation() type_annotation()*
 
+
         rule unary_op() =
           [T::OpMinus]
           / [T::Bang]
@@ -285,10 +319,21 @@ peg::parser!{
           add_level_expr() (compare_op() add_level_expr())?
 
         rule bool_and_expr() =
-          compare_expr() ([T::OpAnd] compare_op())*
+          compare_expr() ([T::OpAnd] compare_expr())*
 
         rule bool_or_expr() =
           bool_and_expr() ([T::OpOr] bool_and_expr())*
+
+        rule defs() =
+          def()+ full_expr()
+
+        rule def() =
+        // TODO
+        /*  AnnotatedBody
+          / Annotation
+          / Body
+          / Alias
+          / Expect*/
     }
 }
 
