@@ -1461,26 +1461,30 @@ impl<'a> Literal<'a> {
     }
 }
 
+pub(crate) fn symbol_to_doc_string(symbol: Symbol) -> String {
+    use roc_module::ident::ModuleName;
+
+    if pretty_print_ir_symbols() {
+        format!("{:?}", symbol)
+    } else {
+        let text = format!("{}", symbol);
+
+        if text.starts_with(ModuleName::APP) {
+            let name: String = text.trim_start_matches(ModuleName::APP).into();
+            format!("Test{}", name)
+        } else {
+            text
+        }
+    }
+}
+
 fn symbol_to_doc<'b, D, A>(alloc: &'b D, symbol: Symbol) -> DocBuilder<'b, D, A>
 where
     D: DocAllocator<'b, A>,
     D::Doc: Clone,
     A: Clone,
 {
-    use roc_module::ident::ModuleName;
-
-    if pretty_print_ir_symbols() {
-        alloc.text(format!("{:?}", symbol))
-    } else {
-        let text = format!("{}", symbol);
-
-        if text.starts_with(ModuleName::APP) {
-            let name: String = text.trim_start_matches(ModuleName::APP).into();
-            alloc.text("Test").append(name)
-        } else {
-            alloc.text(text)
-        }
-    }
+    alloc.text(symbol_to_doc_string(symbol))
 }
 
 fn join_point_to_doc<'b, D, A>(alloc: &'b D, symbol: JoinPointId) -> DocBuilder<'b, D, A>

@@ -516,11 +516,9 @@ struct SetElement<'a> {
 
 impl std::fmt::Debug for SetElement<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if crate::ir::pretty_print_ir_symbols() {
-            write!(f, "( {:?}, {:?})", self.symbol, self.layout)
-        } else {
-            write!(f, "( {}, {:?})", self.symbol, self.layout)
-        }
+        let symbol_string = crate::ir::symbol_to_doc_string(self.symbol);
+
+        write!(f, "( {}, {:?})", symbol_string, self.layout)
     }
 }
 
