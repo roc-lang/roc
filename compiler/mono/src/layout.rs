@@ -569,6 +569,11 @@ impl<'a> LambdaSet<'a> {
         *self.representation
     }
 
+    /// Does the lambda set contain the given symbol?
+    pub fn contains(&self, symbol: Symbol) -> bool {
+        self.set.iter().any(|(s, _)| *s == symbol)
+    }
+
     pub fn is_represented(&self) -> Option<Layout<'a>> {
         if let Layout::Struct(&[]) = self.representation {
             None
