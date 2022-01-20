@@ -181,6 +181,17 @@ where
         references.insert(*symbol);
     }
 
+    // add any builtins used by other builtins
+    let transitive_builtins: Vec<Symbol> = references
+        .iter()
+        .filter(|s| s.is_builtin())
+        .map(|s| crate::builtins::builtin_dependencies(*s))
+        .flatten()
+        .copied()
+        .collect();
+
+    references.extend(transitive_builtins);
+
     // NOTE previously we inserted builtin defs into the list of defs here
     // this is now done later, in file.rs.
 

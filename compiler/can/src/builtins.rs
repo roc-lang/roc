@@ -44,6 +44,22 @@ macro_rules! macro_magic {
 /// delegates to the compiler-internal List.getUnsafe function to do the actual
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
+
+/// Does a builtin depend on any other builtins?
+///
+/// NOTE: you are supposed to give all symbols that are relied on,
+/// even those that are relied on transitively!
+pub fn builtin_dependencies(symbol: Symbol) -> &'static [Symbol] {
+    match symbol {
+        // Symbol::LIST_SORT_ASC => &[Symbol::LIST_SORT_WITH, Symbol::NUM_COMPARE],
+        Symbol::LIST_PRODUCT => &[Symbol::LIST_WALK, Symbol::NUM_MUL],
+        Symbol::LIST_SUM => &[Symbol::LIST_WALK, Symbol::NUM_ADD],
+        Symbol::LIST_JOIN_MAP => &[Symbol::LIST_WALK, Symbol::LIST_CONCAT],
+        _ => &[],
+    }
+}
+
+/// Implementation for a builtin
 pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
     debug_assert!(symbol.is_builtin());
 
@@ -3273,15 +3289,22 @@ fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let closure_var = var_store.fresh();
 
-    let body = RunLowLevel {
-        op: LowLevel::ListWalk,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (num_var, num(var_store.fresh(), 0)),
-            (closure_var, list_sum_add(num_var, var_store)),
-        ],
+    let function = (
+        var_store.fresh(),
+        Loc::at_zero(Expr::Var(Symbol::LIST_WALK)),
+        var_store.fresh(),
         ret_var,
-    };
+    );
+
+    let body = Expr::Call(
+        Box::new(function),
+        vec![
+            (list_var, Loc::at_zero(Var(Symbol::ARG_1))),
+            (num_var, Loc::at_zero(num(var_store.fresh(), 0))),
+            (closure_var, Loc::at_zero(Var(Symbol::NUM_ADD))),
+        ],
+        CalledVia::Space,
+    );
 
     defn(
         symbol,
@@ -3289,61 +3312,35 @@ fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         ret_var,
-    )
-}
-
-fn list_sum_add(num_var: Variable, var_store: &mut VarStore) -> Expr {
-    let body = RunLowLevel {
-        op: LowLevel::NumAdd,
-        args: vec![(num_var, Var(Symbol::ARG_3)), (num_var, Var(Symbol::ARG_4))],
-        ret_var: num_var,
-    };
-
-    defn_help(
-        Symbol::LIST_SUM_ADD,
-        vec![(num_var, Symbol::ARG_3), (num_var, Symbol::ARG_4)],
-        var_store,
-        body,
-        num_var,
     )
 }
 
 /// List.product : List (Num a) -> Num a
 fn list_product(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let num_var = var_store.fresh();
-    let ret_var = num_var;
     let list_var = var_store.fresh();
     let closure_var = var_store.fresh();
 
-    let body = RunLowLevel {
-        op: LowLevel::ListWalk,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (num_var, num(var_store.fresh(), 1)),
-            (closure_var, list_product_mul(num_var, var_store)),
+    let function = (
+        var_store.fresh(),
+        Loc::at_zero(Expr::Var(Symbol::LIST_WALK)),
+        var_store.fresh(),
+        num_var,
+    );
+
+    let body = Expr::Call(
+        Box::new(function),
+        vec![
+            (list_var, Loc::at_zero(Var(Symbol::ARG_1))),
+            (num_var, Loc::at_zero(num(var_store.fresh(), 1))),
+            (closure_var, Loc::at_zero(Var(Symbol::NUM_MUL))),
         ],
-        ret_var,
-    };
+        CalledVia::Space,
+    );
 
     defn(
         symbol,
         vec![(list_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        ret_var,
-    )
-}
-
-fn list_product_mul(num_var: Variable, var_store: &mut VarStore) -> Expr {
-    let body = RunLowLevel {
-        op: LowLevel::NumMul,
-        args: vec![(num_var, Var(Symbol::ARG_3)), (num_var, Var(Symbol::ARG_4))],
-        ret_var: num_var,
-    };
-
-    defn_help(
-        Symbol::LIST_PRODUCT_MUL,
-        vec![(num_var, Symbol::ARG_3), (num_var, Symbol::ARG_4)],
         var_store,
         body,
         num_var,
