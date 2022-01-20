@@ -234,7 +234,7 @@ enum PartialExprLink {
 pub struct PartialExprs(BumpMap<Symbol, PartialExprLink>);
 
 impl PartialExprs {
-    pub fn new_in<'a>(arena: &'a Bump) -> Self {
+    pub fn new_in(arena: &Bump) -> Self {
         Self(BumpMap::new_in(arena))
     }
 
