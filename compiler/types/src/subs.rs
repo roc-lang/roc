@@ -3483,77 +3483,69 @@ fn var_contains_content_help<P>(
 where
     P: Fn(&Content) -> bool + Copy,
 {
-    if seen_recursion_vars.contains(&var) {
-        return false;
-    }
+    let mut stack = vec![var];
 
-    let content = subs.get_content_without_compacting(var);
-
-    if predicate(content) {
-        return true;
-    }
-
-    macro_rules! check_var {
-        ($v:expr) => {
-            var_contains_content_help(subs, $v, predicate, seen_recursion_vars)
-        };
-    }
-
-    macro_rules! check_var_slice {
+    macro_rules! push_var_slice {
         ($slice:expr) => {
-            subs.get_subs_slice($slice)
-                .into_iter()
-                .any(|v| check_var!(*v))
+            stack.extend(subs.get_subs_slice($slice))
         };
     }
 
-    use Content::*;
-    use FlatType::*;
-    match content {
-        FlexVar(_) => false,
-        RigidVar(_) => false,
-        RecursionVar {
-            structure,
-            opt_name: _,
-        } => {
-            seen_recursion_vars.insert(var);
-            var_contains_content_help(subs, *structure, predicate, seen_recursion_vars)
+    while let Some(var) = stack.pop() {
+        if seen_recursion_vars.contains(&var) {
+            continue;
         }
-        Structure(flat_type) => match flat_type {
-            Apply(_, vars) => check_var_slice!(*vars),
-            Func(args, clos, ret) => {
-                check_var_slice!(*args) || check_var!(*clos) || check_var!(*ret)
-            }
-            Record(fields, var) => check_var_slice!(fields.variables()) || check_var!(*var),
-            TagUnion(tags, ext_var) => {
-                for i in tags.variables() {
-                    if check_var_slice!(subs[i]) {
-                        return true;
-                    }
-                }
-                if check_var!(*ext_var) {
-                    return true;
-                }
-                false
-            }
-            FunctionOrTagUnion(_, _, var) => check_var!(*var),
-            RecursiveTagUnion(rec_var, tags, ext_var) => {
-                seen_recursion_vars.insert(*rec_var);
-                for i in tags.variables() {
-                    if check_var_slice!(subs[i]) {
-                        return true;
-                    }
-                }
-                if check_var!(*ext_var) {
-                    return true;
-                }
-                false
-            }
-            Erroneous(_) | EmptyRecord | EmptyTagUnion => false,
-        },
-        Alias(_, arguments, real_type_var) => {
-            check_var_slice!(arguments.variables()) || check_var!(*real_type_var)
+
+        let content = subs.get_content_without_compacting(var);
+
+        if predicate(content) {
+            return true;
         }
-        Error => false,
+
+        use Content::*;
+        use FlatType::*;
+        match content {
+            FlexVar(_) | RigidVar(_) => {}
+            RecursionVar {
+                structure,
+                opt_name: _,
+            } => {
+                seen_recursion_vars.insert(var);
+                stack.push(*structure);
+            }
+            Structure(flat_type) => match flat_type {
+                Apply(_, vars) => push_var_slice!(*vars),
+                Func(args, clos, ret) => {
+                    push_var_slice!(*args);
+                    stack.push(*clos);
+                    stack.push(*ret);
+                }
+                Record(fields, var) => {
+                    push_var_slice!(fields.variables());
+                    stack.push(*var);
+                }
+                TagUnion(tags, ext_var) => {
+                    for i in tags.variables() {
+                        push_var_slice!(subs[i]);
+                    }
+                    stack.push(*ext_var);
+                }
+                FunctionOrTagUnion(_, _, var) => stack.push(*var),
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    seen_recursion_vars.insert(*rec_var);
+                    for i in tags.variables() {
+                        push_var_slice!(subs[i]);
+                    }
+                    stack.push(*ext_var);
+                }
+                Erroneous(_) | EmptyRecord | EmptyTagUnion => {}
+            },
+            Alias(_, arguments, real_type_var) => {
+                push_var_slice!(arguments.variables());
+                stack.push(*real_type_var);
+            }
+            Error => {}
+        }
     }
+    false
 }
