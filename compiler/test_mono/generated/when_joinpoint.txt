@@ -7,15 +7,15 @@ procedure Test.1 (Test.5):
         case 1:
             let Test.10 : Builtin(Int(I64)) = 1i64;
             jump Test.9 Test.10;
-
+    
         case 2:
             let Test.11 : Builtin(Int(I64)) = 2i64;
             jump Test.9 Test.11;
-
+    
         default:
             let Test.12 : Builtin(Int(I64)) = 3i64;
             jump Test.9 Test.12;
-
+    
 
 procedure Test.0 ():
     let Test.7 : Struct([]) = Struct {};
