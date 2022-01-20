@@ -3182,3 +3182,28 @@ fn recursively_build_effect() {
         RocStr
     );
 }
+
+#[test]
+#[ignore = "TODO; currently generates bad code because `a` isn't specialized inside the closure."]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymophic_expression_captured_inside_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            asU8 : U8 -> U8
+            asU8 = \_ -> 30
+
+            main =
+                a = 15
+                f = \{} ->
+                    asU8 a
+
+                f {}
+            "#
+        ),
+        30,
+        u8
+    );
+}

@@ -266,6 +266,11 @@ impl PartialExprs {
             }
         }
     }
+
+    pub fn remove(&mut self, symbol: Symbol) {
+        debug_assert!(self.contains(symbol));
+        self.0.remove(&symbol);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -3861,9 +3866,16 @@ pub fn with_hole<'a>(
                     );
 
                     match raw_layout {
-                        RawFunctionLayout::Function(_, lambda_set, _) => {
-                            construct_closure_data(env, lambda_set, name, &[], assigned, hole)
-                        }
+                        RawFunctionLayout::Function(_, lambda_set, _) => construct_closure_data(
+                            env,
+                            procs,
+                            layout_cache,
+                            lambda_set,
+                            name,
+                            &[],
+                            assigned,
+                            hole,
+                        ),
                         RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
                     }
                 }
@@ -4057,10 +4069,18 @@ pub fn with_hole<'a>(
                     // define the closure data
 
                     let symbols =
-                        Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
-                            .into_bump_slice();
+                        Vec::from_iter_in(captured_symbols.iter(), env.arena).into_bump_slice();
 
-                    construct_closure_data(env, lambda_set, name, symbols, assigned, hole)
+                    construct_closure_data(
+                        env,
+                        procs,
+                        layout_cache,
+                        lambda_set,
+                        name,
+                        symbols,
+                        assigned,
+                        hole,
+                    )
                 }
             }
         }
@@ -4512,17 +4532,20 @@ pub fn with_hole<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn construct_closure_data<'a>(
     env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
     lambda_set: LambdaSet<'a>,
     name: Symbol,
-    symbols: &'a [Symbol],
+    symbols: &'a [&(Symbol, Variable)],
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let lambda_set_layout = Layout::LambdaSet(lambda_set);
 
-    match lambda_set.layout_for_member(name) {
+    let mut result = match lambda_set.layout_for_member(name) {
         ClosureRepresentation::Union {
             tag_id,
             alphabetic_order_fields: field_layouts,
@@ -4531,8 +4554,10 @@ fn construct_closure_data<'a>(
         } => {
             // captured variables are in symbol-alphabetic order, but now we want
             // them ordered by their alignment requirements
-            let mut combined =
-                Vec::from_iter_in(symbols.iter().zip(field_layouts.iter()), env.arena);
+            let mut combined = Vec::from_iter_in(
+                symbols.iter().map(|&&(s, _)| s).zip(field_layouts.iter()),
+                env.arena,
+            );
 
             let ptr_bytes = env.ptr_bytes;
 
@@ -4544,7 +4569,7 @@ fn construct_closure_data<'a>(
             });
 
             let symbols =
-                Vec::from_iter_in(combined.iter().map(|(a, _)| **a), env.arena).into_bump_slice();
+                Vec::from_iter_in(combined.iter().map(|(a, _)| *a), env.arena).into_bump_slice();
 
             let expr = Expr::Tag {
                 tag_id,
@@ -4560,8 +4585,10 @@ fn construct_closure_data<'a>(
 
             // captured variables are in symbol-alphabetic order, but now we want
             // them ordered by their alignment requirements
-            let mut combined =
-                Vec::from_iter_in(symbols.iter().zip(field_layouts.iter()), env.arena);
+            let mut combined = Vec::from_iter_in(
+                symbols.iter().map(|&(s, _)| s).zip(field_layouts.iter()),
+                env.arena,
+            );
 
             let ptr_bytes = env.ptr_bytes;
 
@@ -4605,7 +4632,23 @@ fn construct_closure_data<'a>(
             Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
         _ => unreachable!(),
+    };
+
+    // Some of the captured symbols may be references to polymorphic expressions,
+    // which have not been specialized yet. We need to perform those
+    // specializations now so that there are real symbols to capture.
+    //
+    // TODO: this is not quite right. What we should actually be doing is removing references to
+    // polymorphic expressions from the captured symbols, and allowing the specializations of those
+    // symbols to be inlined when specializing the closure body elsewhere.
+    for &&(symbol, var) in symbols {
+        if procs.partial_exprs.contains(symbol) {
+            result =
+                reuse_function_symbol(env, procs, layout_cache, Some(var), symbol, result, symbol);
+        }
     }
+
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4908,9 +4951,16 @@ fn tag_union_to_function<'a>(
             );
 
             match raw_layout {
-                RawFunctionLayout::Function(_, lambda_set, _) => {
-                    construct_closure_data(env, lambda_set, proc_symbol, &[], assigned, hole)
-                }
+                RawFunctionLayout::Function(_, lambda_set, _) => construct_closure_data(
+                    env,
+                    procs,
+                    layout_cache,
+                    lambda_set,
+                    proc_symbol,
+                    &[],
+                    assigned,
+                    hole,
+                ),
                 RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
             }
         }
@@ -5388,7 +5438,12 @@ pub fn from_can<'a>(
                             .partial_exprs
                             .insert(*symbol, def.loc_expr.value, def.expr_var);
 
-                        return from_can(env, variable, cont.value, procs, layout_cache);
+                        let result = from_can(env, variable, cont.value, procs, layout_cache);
+
+                        // We won't see this symbol again.
+                        procs.partial_exprs.remove(*symbol);
+
+                        return result;
                     }
                     _ => {
                         let rest = from_can(env, variable, cont.value, procs, layout_cache);
@@ -6655,7 +6710,7 @@ fn reuse_function_symbol<'a>(
 
                         let symbols = match captured {
                             CapturedSymbols::Captured(captured_symbols) => {
-                                Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
+                                Vec::from_iter_in(captured_symbols.iter(), env.arena)
                                     .into_bump_slice()
                             }
                             CapturedSymbols::None => unreachable!(),
@@ -6663,6 +6718,8 @@ fn reuse_function_symbol<'a>(
 
                         construct_closure_data(
                             env,
+                            procs,
+                            layout_cache,
                             lambda_set,
                             original,
                             symbols,
@@ -6699,6 +6756,8 @@ fn reuse_function_symbol<'a>(
                         // unification may still cause it to have an extra argument
                         construct_closure_data(
                             env,
+                            procs,
+                            layout_cache,
                             lambda_set,
                             original,
                             &[],
@@ -7382,8 +7441,8 @@ fn call_specialized_proc<'a>(
             .map(|pp| &pp.captured_symbols)
         {
             Some(&CapturedSymbols::Captured(captured_symbols)) => {
-                let symbols = Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
-                    .into_bump_slice();
+                let symbols =
+                    Vec::from_iter_in(captured_symbols.iter(), env.arena).into_bump_slice();
 
                 let closure_data_symbol = env.unique_symbol();
 
@@ -7408,6 +7467,8 @@ fn call_specialized_proc<'a>(
 
                 let result = construct_closure_data(
                     env,
+                    procs,
+                    layout_cache,
                     lambda_set,
                     proc_name,
                     symbols,
