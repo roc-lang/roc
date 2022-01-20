@@ -903,107 +903,105 @@ define_builtins! {
         15 NUM_F32: "F32" imported // the Num.F32 type alias
         16 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
         17 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
-        18 NUM_MAX_INT: "" // removed (replaced functionally by NUM_MAX_I128)
-        19 NUM_MIN_INT: "" // removed (replaced functionally by NUM_MIN_I128)
-        20 NUM_MAX_FLOAT: "maxFloat"
-        21 NUM_MIN_FLOAT: "minFloat"
-        22 NUM_ABS: "abs"
-        23 NUM_NEG: "neg"
-        24 NUM_ADD: "add"
-        25 NUM_SUB: "sub"
-        26 NUM_MUL: "mul"
-        27 NUM_LT: "isLt"
-        28 NUM_LTE: "isLte"
-        29 NUM_GT: "isGt"
-        30 NUM_GTE: "isGte"
-        31 NUM_TO_FLOAT: "toFloat"
-        32 NUM_SIN: "sin"
-        33 NUM_COS: "cos"
-        34 NUM_TAN: "tan"
-        35 NUM_IS_ZERO: "isZero"
-        36 NUM_IS_EVEN: "isEven"
-        37 NUM_IS_ODD: "isOdd"
-        38 NUM_IS_POSITIVE: "isPositive"
-        39 NUM_IS_NEGATIVE: "isNegative"
-        40 NUM_REM: "rem"
-        41 NUM_DIV_FLOAT: "div"
-        42 NUM_DIV_INT: "divFloor"
-        43 NUM_MOD_INT: "modInt"
-        44 NUM_MOD_FLOAT: "modFloat"
-        45 NUM_SQRT: "sqrt"
-        46 NUM_LOG: "log"
-        47 NUM_ROUND: "round"
-        48 NUM_COMPARE: "compare"
-        49 NUM_POW: "pow"
-        50 NUM_CEILING: "ceiling"
-        51 NUM_POW_INT: "powInt"
-        52 NUM_FLOOR: "floor"
-        53 NUM_ADD_WRAP: "addWrap"
-        54 NUM_ADD_CHECKED: "addChecked"
-        55 NUM_ADD_SATURATED: "addSaturated"
-        56 NUM_ATAN: "atan"
-        57 NUM_ACOS: "acos"
-        58 NUM_ASIN: "asin"
-        59 NUM_AT_SIGNED128: "@Signed128"
-        60 NUM_SIGNED128: "Signed128" imported
-        61 NUM_AT_SIGNED64: "@Signed64"
-        62 NUM_SIGNED64: "Signed64" imported
-        63 NUM_AT_SIGNED32: "@Signed32"
-        64 NUM_SIGNED32: "Signed32" imported
-        65 NUM_AT_SIGNED16: "@Signed16"
-        66 NUM_SIGNED16: "Signed16" imported
-        67 NUM_AT_SIGNED8: "@Signed8"
-        68 NUM_SIGNED8: "Signed8" imported
-        69 NUM_AT_UNSIGNED128: "@Unsigned128"
-        70 NUM_UNSIGNED128: "Unsigned128" imported
-        71 NUM_AT_UNSIGNED64: "@Unsigned64"
-        72 NUM_UNSIGNED64: "Unsigned64" imported
-        73 NUM_AT_UNSIGNED32: "@Unsigned32"
-        74 NUM_UNSIGNED32: "Unsigned32" imported
-        75 NUM_AT_UNSIGNED16: "@Unsigned16"
-        76 NUM_UNSIGNED16: "Unsigned16" imported
-        77 NUM_AT_UNSIGNED8: "@Unsigned8"
-        78 NUM_UNSIGNED8: "Unsigned8" imported
-        79 NUM_AT_BINARY64: "@Binary64"
-        80 NUM_BINARY64: "Binary64" imported
-        81 NUM_AT_BINARY32: "@Binary32"
-        82 NUM_BINARY32: "Binary32" imported
-        83 NUM_BITWISE_AND: "bitwiseAnd"
-        84 NUM_BITWISE_XOR: "bitwiseXor"
-        85 NUM_BITWISE_OR: "bitwiseOr"
-        86 NUM_SHIFT_LEFT: "shiftLeftBy"
-        87 NUM_SHIFT_RIGHT: "shiftRightBy"
-        88 NUM_SHIFT_RIGHT_ZERO_FILL: "shiftRightZfBy"
-        89 NUM_SUB_WRAP: "subWrap"
-        90 NUM_SUB_CHECKED: "subChecked"
-        91 NUM_SUB_SATURATED: "subSaturated"
-        92 NUM_MUL_WRAP: "mulWrap"
-        93 NUM_MUL_CHECKED: "mulChecked"
-        94 NUM_INT: "Int" imported
-        95 NUM_FLOAT: "Float" imported
-        96 NUM_AT_NATURAL: "@Natural"
-        97 NUM_NATURAL: "Natural" imported
-        98 NUM_NAT: "Nat" imported
-        99 NUM_INT_CAST: "intCast"
-        100 NUM_MAX_I128: "maxI128"
-        101 NUM_IS_MULTIPLE_OF: "isMultipleOf"
-        102 NUM_AT_DECIMAL: "@Decimal"
-        103 NUM_DECIMAL: "Decimal" imported
-        104 NUM_DEC: "Dec" imported // the Num.Dectype alias
-        105 NUM_BYTES_TO_U16: "bytesToU16"
-        106 NUM_BYTES_TO_U32: "bytesToU32"
-        107 NUM_CAST_TO_NAT: "#castToNat"
-        108 NUM_DIV_CEIL: "divCeil"
-        109 NUM_TO_STR: "toStr"
-        110 NUM_MIN_I128: "minI128"
-        111 NUM_MIN_I32: "minI32"
-        112 NUM_MAX_I32: "maxI32"
-        113 NUM_MIN_U32: "minU32"
-        114 NUM_MAX_U32: "maxU32"
-        115 NUM_MIN_I64: "minI64"
-        116 NUM_MAX_I64: "maxI64"
-        117 NUM_MIN_U64: "minU64"
-        118 NUM_MAX_U64: "maxU64"
+        18 NUM_MAX_FLOAT: "maxFloat"
+        19 NUM_MIN_FLOAT: "minFloat"
+        20 NUM_ABS: "abs"
+        21 NUM_NEG: "neg"
+        22 NUM_ADD: "add"
+        23 NUM_SUB: "sub"
+        24 NUM_MUL: "mul"
+        25 NUM_LT: "isLt"
+        26 NUM_LTE: "isLte"
+        27 NUM_GT: "isGt"
+        28 NUM_GTE: "isGte"
+        29 NUM_TO_FLOAT: "toFloat"
+        30 NUM_SIN: "sin"
+        31 NUM_COS: "cos"
+        32 NUM_TAN: "tan"
+        33 NUM_IS_ZERO: "isZero"
+        34 NUM_IS_EVEN: "isEven"
+        35 NUM_IS_ODD: "isOdd"
+        36 NUM_IS_POSITIVE: "isPositive"
+        37 NUM_IS_NEGATIVE: "isNegative"
+        38 NUM_REM: "rem"
+        39 NUM_DIV_FLOAT: "div"
+        40 NUM_DIV_INT: "divFloor"
+        41 NUM_MOD_INT: "modInt"
+        42 NUM_MOD_FLOAT: "modFloat"
+        43 NUM_SQRT: "sqrt"
+        44 NUM_LOG: "log"
+        45 NUM_ROUND: "round"
+        46 NUM_COMPARE: "compare"
+        47 NUM_POW: "pow"
+        48 NUM_CEILING: "ceiling"
+        49 NUM_POW_INT: "powInt"
+        50 NUM_FLOOR: "floor"
+        51 NUM_ADD_WRAP: "addWrap"
+        52 NUM_ADD_CHECKED: "addChecked"
+        53 NUM_ADD_SATURATED: "addSaturated"
+        54 NUM_ATAN: "atan"
+        55 NUM_ACOS: "acos"
+        56 NUM_ASIN: "asin"
+        57 NUM_AT_SIGNED128: "@Signed128"
+        58 NUM_SIGNED128: "Signed128" imported
+        59 NUM_AT_SIGNED64: "@Signed64"
+        60 NUM_SIGNED64: "Signed64" imported
+        61 NUM_AT_SIGNED32: "@Signed32"
+        62 NUM_SIGNED32: "Signed32" imported
+        63 NUM_AT_SIGNED16: "@Signed16"
+        64 NUM_SIGNED16: "Signed16" imported
+        65 NUM_AT_SIGNED8: "@Signed8"
+        66 NUM_SIGNED8: "Signed8" imported
+        67 NUM_AT_UNSIGNED128: "@Unsigned128"
+        68 NUM_UNSIGNED128: "Unsigned128" imported
+        69 NUM_AT_UNSIGNED64: "@Unsigned64"
+        70 NUM_UNSIGNED64: "Unsigned64" imported
+        71 NUM_AT_UNSIGNED32: "@Unsigned32"
+        72 NUM_UNSIGNED32: "Unsigned32" imported
+        73 NUM_AT_UNSIGNED16: "@Unsigned16"
+        74 NUM_UNSIGNED16: "Unsigned16" imported
+        75 NUM_AT_UNSIGNED8: "@Unsigned8"
+        76 NUM_UNSIGNED8: "Unsigned8" imported
+        77 NUM_AT_BINARY64: "@Binary64"
+        78 NUM_BINARY64: "Binary64" imported
+        79 NUM_AT_BINARY32: "@Binary32"
+        80 NUM_BINARY32: "Binary32" imported
+        81 NUM_BITWISE_AND: "bitwiseAnd"
+        82 NUM_BITWISE_XOR: "bitwiseXor"
+        83 NUM_BITWISE_OR: "bitwiseOr"
+        84 NUM_SHIFT_LEFT: "shiftLeftBy"
+        85 NUM_SHIFT_RIGHT: "shiftRightBy"
+        86 NUM_SHIFT_RIGHT_ZERO_FILL: "shiftRightZfBy"
+        87 NUM_SUB_WRAP: "subWrap"
+        88 NUM_SUB_CHECKED: "subChecked"
+        89 NUM_SUB_SATURATED: "subSaturated"
+        90 NUM_MUL_WRAP: "mulWrap"
+        91 NUM_MUL_CHECKED: "mulChecked"
+        92 NUM_INT: "Int" imported
+        93 NUM_FLOAT: "Float" imported
+        94 NUM_AT_NATURAL: "@Natural"
+        95 NUM_NATURAL: "Natural" imported
+        96 NUM_NAT: "Nat" imported
+        97 NUM_INT_CAST: "intCast"
+        98 NUM_MAX_I128: "maxI128"
+        99 NUM_IS_MULTIPLE_OF: "isMultipleOf"
+        100 NUM_AT_DECIMAL: "@Decimal"
+        101 NUM_DECIMAL: "Decimal" imported
+        102 NUM_DEC: "Dec" imported // the Num.Dectype alias
+        103 NUM_BYTES_TO_U16: "bytesToU16"
+        104 NUM_BYTES_TO_U32: "bytesToU32"
+        105 NUM_CAST_TO_NAT: "#castToNat"
+        106 NUM_DIV_CEIL: "divCeil"
+        107 NUM_TO_STR: "toStr"
+        108 NUM_MIN_I128: "minI128"
+        109 NUM_MIN_I32: "minI32"
+        110 NUM_MAX_I32: "maxI32"
+        111 NUM_MIN_U32: "minU32"
+        112 NUM_MAX_U32: "maxU32"
+        113 NUM_MIN_I64: "minI64"
+        114 NUM_MAX_I64: "maxI64"
+        115 NUM_MIN_U64: "minU64"
+        116 NUM_MAX_U64: "maxU64"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
