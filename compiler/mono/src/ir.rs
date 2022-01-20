@@ -4008,13 +4008,36 @@ pub fn with_hole<'a>(
                             );
                         }
                         CopyExisting(index) => {
+                            let record_needs_specialization =
+                                procs.partial_exprs.contains(structure);
+                            let specialized_structure_sym = if record_needs_specialization {
+                                // We need to specialize the record now; create a new one for it.
+                                // TODO: reuse this symbol for all updates
+                                env.unique_symbol()
+                            } else {
+                                // The record is already good.
+                                structure
+                            };
+
                             let access_expr = Expr::StructAtIndex {
-                                structure,
+                                structure: specialized_structure_sym,
                                 index,
                                 field_layouts,
                             };
                             stmt =
                                 Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
+
+                            if record_needs_specialization {
+                                stmt = reuse_function_symbol(
+                                    env,
+                                    procs,
+                                    layout_cache,
+                                    Some(record_var),
+                                    specialized_structure_sym,
+                                    stmt,
+                                    structure,
+                                );
+                            }
                         }
                     }
                 }
