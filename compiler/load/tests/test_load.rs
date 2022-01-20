@@ -379,7 +379,7 @@ mod test_load {
                 "floatTest" => "Float *",
                 "divisionFn" => "Float a, Float a -> Result (Float a) [ DivByZero ]*",
                 "divisionTest" => "Result (Float *) [ DivByZero ]*",
-                "intTest" => "Int *",
+                "intTest" => "I64",
                 "x" => "Float *",
                 "constantNum" => "Num *",
                 "divDep1ByDep2" => "Result (Float *) [ DivByZero ]*",

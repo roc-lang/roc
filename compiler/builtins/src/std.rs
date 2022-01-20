@@ -302,12 +302,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(bool_type())
     );
 
-    // maxInt : Int range
-    add_type!(Symbol::NUM_MAX_INT, int_type(flex(TVAR1)));
-
-    // minInt : Int range
-    add_type!(Symbol::NUM_MIN_INT, int_type(flex(TVAR1)));
-
     let div_by_zero = SolvedType::TagUnion(
         vec![(TagName::Global("DivByZero".into()), vec![])],
         Box::new(SolvedType::Wildcard),

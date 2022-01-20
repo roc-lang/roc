@@ -903,8 +903,8 @@ define_builtins! {
         15 NUM_F32: "F32" imported // the Num.F32 type alias
         16 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
         17 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
-        18 NUM_MAX_INT: "maxInt"
-        19 NUM_MIN_INT: "minInt"
+        18 NUM_MAX_INT: "" // removed (replaced functionally by NUM_MAX_I128)
+        19 NUM_MIN_INT: "" // removed (replaced functionally by NUM_MIN_I128)
         20 NUM_MAX_FLOAT: "maxFloat"
         21 NUM_MIN_FLOAT: "minFloat"
         22 NUM_ABS: "abs"

@@ -549,8 +549,8 @@ fn i64_abs() {
     assert_evals_to!("Num.abs 1", 1, i64);
     assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
     assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
-    assert_evals_to!("Num.abs Num.maxInt", i64::MAX, i64);
-    assert_evals_to!("Num.abs (Num.minInt + 1)", -(i64::MIN + 1), i64);
+    assert_evals_to!("Num.abs Num.maxI64", i64::MAX, i64);
+    assert_evals_to!("Num.abs (Num.minI64 + 1)", -(i64::MIN + 1), i64);
 }
 
 #[test]
@@ -562,7 +562,7 @@ fn abs_min_int_overflow() {
     assert_evals_to!(
         indoc!(
             r#"
-                Num.abs Num.minInt
+                Num.abs Num.minI64
                 "#
         ),
         0,
@@ -1231,7 +1231,7 @@ fn tail_call_elimination() {
 #[cfg(any(feature = "gen-dev"))]
 fn int_negate_dev() {
     // TODO
-    // dev backend yet to have `Num.maxInt` or `Num.minInt`.
+    // dev backend yet to have `Num.maxI64` or `Num.minI64`.
     // add the "gen-dev" feature to the test below after implementing them both.
     assert_evals_to!("Num.neg 123", -123, i64);
     assert_evals_to!("Num.neg -123", 123, i64);
@@ -1242,8 +1242,8 @@ fn int_negate_dev() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_negate() {
     assert_evals_to!("Num.neg 123", -123, i64);
-    assert_evals_to!("Num.neg Num.maxInt", -i64::MAX, i64);
-    assert_evals_to!("Num.neg (Num.minInt + 1)", i64::MAX, i64);
+    assert_evals_to!("Num.neg Num.maxI64", -i64::MAX, i64);
+    assert_evals_to!("Num.neg (Num.minI64 + 1)", i64::MAX, i64);
 }
 
 #[test]
@@ -1255,7 +1255,7 @@ fn neg_min_int_overflow() {
     assert_evals_to!(
         indoc!(
             r#"
-                Num.neg Num.minInt
+                Num.neg Num.minI64
                 "#
         ),
         0,
@@ -1544,34 +1544,6 @@ fn float_add_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn num_max_int() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.maxInt
-                "#
-        ),
-        i64::MAX,
-        i64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn num_min_int() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.minInt
-                "#
-        ),
-        i64::MIN,
-        i64
-    );
-}
-
-#[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
 fn int_sub_overflow() {
@@ -1633,7 +1605,7 @@ fn int_sub_checked() {
     assert_evals_to!(
         indoc!(
             r#"
-                when Num.subChecked Num.minInt 1 is
+                when Num.subChecked Num.minI64 1 is
                     Err Overflow -> -1
                     Ok v -> v
                 "#
@@ -1737,7 +1709,7 @@ fn int_mul_wrap() {
     assert_evals_to!(
         indoc!(
             r#"
-                Num.mulWrap Num.maxInt 2
+                Num.mulWrap Num.maxI64 2
                 "#
         ),
         -2,
@@ -1763,7 +1735,7 @@ fn int_mul_checked() {
     assert_evals_to!(
         indoc!(
             r#"
-                when Num.mulChecked Num.maxInt 2 is
+                when Num.mulChecked Num.maxI64 2 is
                     Err Overflow -> -1
                     Ok v -> v
                 "#
@@ -2215,14 +2187,14 @@ fn num_to_str() {
 
     let max = format!("{}", i64::MAX);
     assert_evals_to!(
-        r#"Num.toStr Num.maxInt"#,
+        r#"Num.toStr Num.maxI64"#,
         RocStr::from_slice(max.as_bytes()),
         RocStr
     );
 
     let min = format!("{}", i64::MIN);
     assert_evals_to!(
-        r#"Num.toStr Num.minInt"#,
+        r#"Num.toStr Num.minI64"#,
         RocStr::from_slice(min.as_bytes()),
         RocStr
     );

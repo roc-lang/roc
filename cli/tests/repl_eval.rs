@@ -342,24 +342,30 @@ mod repl_eval {
 
     #[test]
     fn num_add_wrap() {
-        expect_success("Num.addWrap Num.maxInt 1", "-9223372036854775808 : Int *");
+        expect_success(
+            "Num.addWrap Num.maxI64 1",
+            "-9223372036854775808 : Int Signed64",
+        );
     }
 
     #[test]
     fn num_sub_wrap() {
-        expect_success("Num.subWrap Num.minInt 1", "9223372036854775807 : Int *");
+        expect_success(
+            "Num.subWrap Num.minI64 1",
+            "9223372036854775807 : Int Signed64",
+        );
     }
 
     #[test]
     fn num_mul_wrap() {
-        expect_success("Num.mulWrap Num.maxInt 2", "-2 : Int *");
+        expect_success("Num.mulWrap Num.maxI64 2", "-2 : Int Signed64");
     }
 
     #[test]
     fn num_add_checked() {
         expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [ Overflow ]*");
         expect_success(
-            "Num.addChecked Num.maxInt 1",
+            "Num.addChecked Num.maxI64 1",
             "Err Overflow : Result I64 [ Overflow ]*",
         );
     }
@@ -368,7 +374,7 @@ mod repl_eval {
     fn num_sub_checked() {
         expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [ Overflow ]*");
         expect_success(
-            "Num.subChecked Num.minInt 1",
+            "Num.subChecked Num.minI64 1",
             "Err Overflow : Result I64 [ Overflow ]*",
         );
     }
@@ -380,7 +386,7 @@ mod repl_eval {
             "Ok 40 : Result (Num *) [ Overflow ]*",
         );
         expect_success(
-            "Num.mulChecked Num.maxInt 2",
+            "Num.mulChecked Num.maxI64 2",
             "Err Overflow : Result I64 [ Overflow ]*",
         );
     }
