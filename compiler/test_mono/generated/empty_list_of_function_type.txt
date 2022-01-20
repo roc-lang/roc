@@ -15,7 +15,6 @@ procedure Test.2 (Test.6):
     ret Test.24;
 
 procedure Test.0 ():
-    let Test.1 : Builtin(List(LambdaSet([]LambdaSet { set: Ok(()), representation: Struct([]) }))) = Array [];
     joinpoint Test.22 Test.3:
         let Test.14 : Builtin(Int(U64)) = 0i64;
         let Test.7 : Union(NonRecursive([[Struct([])], [LambdaSet([( Test.2, [])]LambdaSet { set: Ok(()), representation: Struct([]) })]])) = CallByName List.3 Test.3 Test.14;
@@ -35,9 +34,9 @@ procedure Test.0 ():
     in
     let Test.25 : Builtin(Bool) = false;
     if Test.25 then
+        let Test.1 : Builtin(List(LambdaSet([( Test.2, [])]LambdaSet { set: Ok(()), representation: Struct([]) }))) = Array [];
         jump Test.22 Test.1;
     else
-        dec Test.1;
         let Test.23 : LambdaSet([( Test.2, [])]LambdaSet { set: Ok(()), representation: Struct([]) }) = Struct {};
         let Test.21 : Builtin(List(LambdaSet([( Test.2, [])]LambdaSet { set: Ok(()), representation: Struct([]) }))) = Array [Test.23];
         jump Test.22 Test.21;

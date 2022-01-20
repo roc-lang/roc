@@ -2317,3 +2317,92 @@ fn sub_saturated() {
         u8
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_ints() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = 100
+
+            f : U8, U32 -> Nat
+            f = \_, _ -> 18
+
+            f x x
+            "#
+        ),
+        18,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_floats() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = 100.0
+
+            f : F32, F64 -> Nat
+            f = \_, _ -> 18
+
+            f x x
+            "#
+        ),
+        18,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_ints_names_dont_conflict() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f : U8 -> Nat
+            f = \_ -> 9
+            x =
+                n = 100
+                f n
+
+            y =
+                n = 100
+                f n
+
+            x + y
+            "#
+        ),
+        18,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_ints_aliased() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                y = 100
+                w1 = y
+                w2 = y
+
+                f1 : U8, U32 -> U8
+                f1 = \_, _ -> 1
+
+                f2 : U32, U8 -> U8
+                f2 = \_, _ -> 2
+
+                f1 w1 w2 + f2 w1 w2
+            "#
+        ),
+        3,
+        u8
+    )
+}
