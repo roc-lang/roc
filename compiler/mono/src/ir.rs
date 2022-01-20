@@ -231,26 +231,26 @@ enum PartialExprLink {
 /// Polymorphic *functions* are stored in `PartialProc`s, since functions are
 /// non longer first-class once we finish lowering to the IR.
 #[derive(Clone, Debug)]
-pub struct PartialExprs(BumpMap<Symbol, PartialExprLink>);
+struct PartialExprs(BumpMap<Symbol, PartialExprLink>);
 
 impl PartialExprs {
-    pub fn new_in(arena: &Bump) -> Self {
+    fn new_in(arena: &Bump) -> Self {
         Self(BumpMap::new_in(arena))
     }
 
-    pub fn insert(&mut self, symbol: Symbol, expr: roc_can::expr::Expr, expr_var: Variable) {
+    fn insert(&mut self, symbol: Symbol, expr: roc_can::expr::Expr, expr_var: Variable) {
         self.0.insert(symbol, PartialExprLink::Expr(expr, expr_var));
     }
 
-    pub fn insert_alias(&mut self, symbol: Symbol, aliases: Symbol) {
+    fn insert_alias(&mut self, symbol: Symbol, aliases: Symbol) {
         self.0.insert(symbol, PartialExprLink::Aliases(aliases));
     }
 
-    pub fn contains(&self, symbol: Symbol) -> bool {
+    fn contains(&self, symbol: Symbol) -> bool {
         self.0.contains_key(&symbol)
     }
 
-    pub fn get(&mut self, mut symbol: Symbol) -> Option<(&roc_can::expr::Expr, Variable)> {
+    fn get(&mut self, mut symbol: Symbol) -> Option<(&roc_can::expr::Expr, Variable)> {
         // In practice the alias chain is very short
         loop {
             match self.0.get(&symbol) {
@@ -267,7 +267,7 @@ impl PartialExprs {
         }
     }
 
-    pub fn remove(&mut self, symbol: Symbol) {
+    fn remove(&mut self, symbol: Symbol) {
         debug_assert!(self.contains(symbol));
         self.0.remove(&symbol);
     }
@@ -734,7 +734,7 @@ impl<'a> Specialized<'a> {
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
-    pub partial_exprs: PartialExprs,
+    partial_exprs: PartialExprs,
     pub imported_module_thunks: &'a [Symbol],
     pub module_thunks: &'a [Symbol],
     pending_specializations: PendingSpecializations<'a>,
