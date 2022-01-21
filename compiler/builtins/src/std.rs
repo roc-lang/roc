@@ -1302,6 +1302,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1))),
     );
 
+    // sortDesc : List (Num a) -> List (Num a)
+    add_top_level_function_type!(
+        Symbol::LIST_SORT_DESC,
+        vec![list_type(num_type(flex(TVAR1)))],
+        Box::new(list_type(num_type(flex(TVAR1))))
+    );
+
     // find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
     {
         let not_found = SolvedType::TagUnion(
