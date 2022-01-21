@@ -2434,6 +2434,17 @@ fn list_sort_asc() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_sort_desc() {
+    assert_evals_to!("List.sortDesc []", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.sortDesc [ 1,2,3,4 ]",
+        RocList::from_slice(&[4, 3, 2, 1]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_any() {
     assert_evals_to!("List.any [] (\\e -> e > 3)", false, bool);
     assert_evals_to!("List.any [ 1, 2, 3 ] (\\e -> e > 3)", false, bool);
