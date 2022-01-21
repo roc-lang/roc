@@ -44,7 +44,7 @@ pub enum Token {
     OpCaret             = 0b_0110_0100,
     OpGreaterThan       = 0b_0110_0101,
     OpLessThan          = 0b_0110_0110,
-    OpAssignment        = 0b_0110_0111,
+    OpAssignment        = 0b_0110_0111, // =
     OpPizza             = 0b_0110_1000,
     OpEquals            = 0b_0110_1001, // ==
     OpNotEquals         = 0b_0110_1010,
@@ -72,12 +72,12 @@ pub enum Token {
 
     Underscore,
 
-    Ampersand,
-    Pipe,
-    Dot,
-    Bang,
-    LambdaStart,
-    Arrow,
+    Ampersand, // &
+    Pipe, // |
+    Dot, // .
+    Bang, // !
+    LambdaStart, // \
+    Arrow, // ->
     FatArrow,
     Asterisk,
 }
@@ -90,11 +90,15 @@ peg::parser!{
       pub rule full_expr() = bool_or_expr()
       
       pub rule expr() =
-          expect()
+          closure()
+          / expect()
           / if_expr()
+          / when()
+          / annotation()
           / backpass()
           / list()
           / record()
+          / record_update()
           / parens_around()
           / [T::Number]
           / [T::NumberBase]
@@ -104,10 +108,17 @@ peg::parser!{
           / defs()
           // / access() // TODO prevent infinite loop
 
+        rule closure() =
+          [T::LambdaStart] args() [T::Arrow] full_expr()
+
+        rule args() =
+          (ident() [T::Comma])* ident()?
+
 
         rule tag() =
           private_tag()
           / [T::UppercaseIdent] // = Global Tag
+
         rule private_tag() = [T::PrivateTag] {}
 
 
@@ -328,12 +339,33 @@ peg::parser!{
           def()+ full_expr()
 
         rule def() =
-        // TODO
-        /*  AnnotatedBody
-          / Annotation
-          / Body
-          / Alias
-          / Expect*/
+          annotated_body()
+          / annotation()
+          / body()
+          / alias()
+          / expect()
+
+        rule annotation() =
+          ident() [T::Colon] type_annotation()
+
+        rule body() =
+          ident() [T::OpAssignment] full_expr()
+
+        rule annotated_body() =
+          annotation() body()
+
+        rule alias() =
+          apply_type() [T::Colon] type_annotation()
+          
+        rule when() =
+          [T::KeywordWhen] expr() [T::KeywordIs] when_branch()+
+
+        rule when_branch() =
+          expr() ([T::Pipe] full_expr())* ([T::KeywordIf] full_expr())? [T::Arrow] full_expr() 
+
+        rule var() =
+          ident()
+          / module_name() [T::Dot] ident()
     }
 }
 
