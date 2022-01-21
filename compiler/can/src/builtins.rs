@@ -52,11 +52,7 @@ macro_rules! macro_magic {
 pub fn builtin_dependencies(symbol: Symbol) -> &'static [Symbol] {
     match symbol {
         Symbol::LIST_SORT_ASC => &[Symbol::LIST_SORT_WITH, Symbol::NUM_COMPARE],
-        Symbol::LIST_SORT_DESC => &[
-            Symbol::LIST_SORT_WITH,
-            Symbol::LIST_SORT_DESC_COMPARE,
-            Symbol::NUM_COMPARE,
-        ],
+        Symbol::LIST_SORT_DESC => &[Symbol::LIST_SORT_WITH],
         Symbol::LIST_PRODUCT => &[Symbol::LIST_WALK, Symbol::NUM_MUL],
         Symbol::LIST_SUM => &[Symbol::LIST_WALK, Symbol::NUM_ADD],
         Symbol::LIST_JOIN_MAP => &[Symbol::LIST_WALK, Symbol::LIST_CONCAT],
@@ -3471,7 +3467,7 @@ fn list_sort_desc(symbol: Symbol, var_store: &mut VarStore) -> Def {
         return_type: compare_ret_var,
         name: Symbol::LIST_SORT_DESC_COMPARE,
         recursive: Recursive::NotRecursive,
-        captured_symbols: vec![(Symbol::ARG_2, num_var)],
+        captured_symbols: vec![],
         arguments: vec![
             (num_var, no_region(Pattern::Identifier(Symbol::ARG_2))),
             (num_var, no_region(Pattern::Identifier(Symbol::ARG_3))),
