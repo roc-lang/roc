@@ -1110,8 +1110,9 @@ define_builtins! {
         52 LIST_ALL: "all"
         53 LIST_DROP_IF: "dropIf"
         54 LIST_DROP_IF_PREDICATE: "#dropIfPred"
-        55 LIST_SORT_DESC: "sortDesc"
-        56 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
+        55 LIST_SORT_ASC: "sortAsc"
+        56 LIST_SORT_DESC: "sortDesc"
+        57 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

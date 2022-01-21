@@ -2423,6 +2423,17 @@ fn list_sort_with() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_sort_asc() {
+    assert_evals_to!("List.sortAsc []", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.sortAsc [ 4,3,2,1 ]",
+        RocList::from_slice(&[1, 2, 3, 4]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_any() {
     assert_evals_to!("List.any [] (\\e -> e > 3)", false, bool);
     assert_evals_to!("List.any [ 1, 2, 3 ] (\\e -> e > 3)", false, bool);
