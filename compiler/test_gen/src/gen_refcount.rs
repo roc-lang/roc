@@ -59,7 +59,10 @@ fn list_int_inc() {
         ),
         RocList<RocList<i64>>,
         &[
-            3, // list
+            // TODO be smarter about coalescing polymorphic list values
+            1, // list0
+            1, // list1
+            1, // list2
             1  // result
         ]
     );
@@ -77,7 +80,10 @@ fn list_int_dealloc() {
         ),
         usize,
         &[
-            0, // list
+            // TODO be smarter about coalescing polymorphic list values
+            0, // list0
+            0, // list1
+            0, // list2
             0  // result
         ]
     );
@@ -130,6 +136,7 @@ fn struct_inc() {
         indoc!(
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
+                r1 : { a: I64, b: Str, c: Str }
                 r1 = { a: 123, b: s, c: s }
                 { y: r1, z: r1 }
             "#
@@ -146,6 +153,7 @@ fn struct_dealloc() {
         indoc!(
             r#"
             s = Str.concat "A long enough string " "to be heap-allocated"
+            r1 : { a: I64, b: Str, c: Str }
             r1 = { a: 123, b: s, c: s }
             r2 = { x: 456, y: r1, z: r1 }
             r2.x

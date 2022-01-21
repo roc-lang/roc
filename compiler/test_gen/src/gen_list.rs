@@ -2631,3 +2631,22 @@ fn list_find_empty_layout() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_lists() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            l = [1, 2, 3]
+
+            f : List U8, List U16 -> Nat
+            f = \_, _ -> 18
+
+            f l l
+            "#
+        ),
+        18,
+        u64
+    )
+}

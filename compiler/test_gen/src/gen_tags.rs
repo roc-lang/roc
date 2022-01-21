@@ -1262,3 +1262,108 @@ fn recursive_tag_union_into_flat_tag_union() {
         |_| 0
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            b = False
+            f : Bool, [True, False, Idk] -> U8
+            f = \_, _ -> 18
+            f b b
+            "#
+        ),
+        18,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_applied_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main =
+                a = A "abc"
+                f = \x ->
+                    when x is
+                        A y -> y
+                        B y -> y
+                f a
+            "#
+        ),
+        RocStr::from_slice(b"abc"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_tag_with_polymorphic_arg() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                a = A
+                wrap = Wrapped a
+
+                useWrap1 : [Wrapped [A], Other] -> U8
+                useWrap1 =
+                    \w -> when w is
+                        Wrapped A -> 2
+                        Other -> 3
+
+                useWrap2 : [Wrapped [A, B]] -> U8
+                useWrap2 =
+                    \w -> when w is
+                        Wrapped A -> 5
+                        Wrapped B -> 7
+
+                useWrap1 wrap * useWrap2 wrap
+            "#
+        ),
+        10,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                mono : U8
+                mono = 15
+                poly = A
+                wrap = Wrapped poly mono
+
+                useWrap1 : [Wrapped [A] U8, Other] -> U8
+                useWrap1 =
+                    \w -> when w is
+                        Wrapped A n -> n
+                        Other -> 0
+
+                useWrap2 : [Wrapped [A, B] U8] -> U8
+                useWrap2 =
+                    \w -> when w is
+                        Wrapped A n -> n
+                        Wrapped B _ -> 0
+
+                useWrap1 wrap * useWrap2 wrap
+            "#
+        ),
+        225,
+        u8
+    )
+}
