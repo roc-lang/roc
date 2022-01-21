@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod test_peg_grammar {
 
-#[derive(Copy, Clone)]
+/*#[derive(Copy, Clone)]
 pub enum Token {
     LowercaseIdent      = 0b_0010_0000, 
     UppercaseIdent      = 0b_0011_0011, 
@@ -41,20 +41,20 @@ pub enum Token {
     OpMinus             = 0b_0110_0001,
     OpSlash             = 0b_0110_0010,
     OpPercent           = 0b_0110_0011,
-    OpCaret             = 0b_0110_0100,
+    OpCaret             = 0b_0110_0100, // ^
     OpGreaterThan       = 0b_0110_0101,
     OpLessThan          = 0b_0110_0110,
     OpAssignment        = 0b_0110_0111, // =
-    OpPizza             = 0b_0110_1000,
+    OpPizza             = 0b_0110_1000, // |>
     OpEquals            = 0b_0110_1001, // ==
-    OpNotEquals         = 0b_0110_1010,
-    OpGreaterThanOrEq   = 0b_0110_1011,
-    OpLessThanOrEq      = 0b_0110_1100,
+    OpNotEquals         = 0b_0110_1010, // !=
+    OpGreaterThanOrEq   = 0b_0110_1011, // >=
+    OpLessThanOrEq      = 0b_0110_1100, // <=
     OpAnd               = 0b_0110_1101, // &&
     OpOr                = 0b_0110_1110, // ||
-    OpDoubleSlash       = 0b_0110_1111,
-    OpDoublePercent     = 0b_0111_0001,
-    OpBackpassing       = 0b_0111_1010,
+    OpDoubleSlash       = 0b_0110_1111, // //
+    OpDoublePercent     = 0b_0111_0001, // %%
+    OpBackpassing       = 0b_0111_1010, // <-
 
     TodoNextThing       = 0b_1000_0000,
 
@@ -80,10 +80,154 @@ pub enum Token {
     Arrow, // ->
     FatArrow,
     Asterisk,
-}
+}*/
+
+use logos::Logos;
+
+  // tokenizer used for testing the peg_grammar until the "official" tokenizer is ready
+  #[derive(Logos, Debug, PartialEq, Copy, Clone)]
+  pub enum Token {
+      // Keywords
+      #[token("if")]
+      KeywordIf,
+      #[token("then")]
+      KeywordThen,
+      #[token("else")]
+      KeywordElse,
+      #[token("when")]
+      KeywordWhen,
+      #[token("as")]
+      KeywordAs,
+      #[token("is")]
+      KeywordIs,
+      #[token("expect")]
+      KeywordExpect,
+      #[token("app")]
+      KeywordApp,
+      #[token("interface")]
+      KeywordInterface,
+      #[token("packages")]
+      KeywordPackages,
+      #[token("imports")]
+      KeywordImports,
+      #[token("provides")]
+      KeywordProvides,
+      #[token("to")]
+      KeywordTo,
+      #[token("exposes")]
+      KeywordExposes,
+      #[token("effects")]
+      KeywordEffects,
+      #[token("platform")]
+      KeywordPlatform,
+      #[token("requires")]
+      KeywordRequires,
+      
+      // TODO support unicode alphabet
+      #[regex("[A-Z][a-zA-Z0-9]")]
+      UppercaseIdent,
+      #[regex("[a-z][a-zA-Z0-9]")]
+      LowercaseIdent,
+
+      #[token(",")]
+      Comma,
+      #[token(":")]
+      Colon,
+
+      #[token("(")]
+      OpenParen,
+      #[token(")")]
+      CloseParen,
+      #[token("{")]
+      OpenCurly,
+      #[token("}")]
+      CloseCurly,
+      #[token("[")]
+      OpenSquare,
+      #[token("]")]
+      CloseSquare,
+
+      #[token("+")]
+      OpPlus,
+      #[token("-")]
+      OpMinus,
+      #[token("/")]
+      OpSlash,
+      #[token("%")]
+      OpPercent,
+      #[token("^")]
+      OpCaret,
+      #[token(">")]
+      OpGreaterThan,
+      #[token("<")]
+      OpLessThan,
+      #[token("=")]
+      OpAssignment,
+      #[token("|>")]
+      OpPizza,
+      #[token("==")]
+      OpEquals,
+      #[token("!=")]
+      OpNotEquals,
+      #[token(">=")]
+      OpGreaterThanOrEq,
+      #[token("<=")]
+      OpLessThanOrEq,
+      #[token("&&")]
+      OpAnd,
+      #[token("||")]
+      OpOr,
+      #[token("//")]
+      OpDoubleSlash,
+      #[token("%%")]
+      OpDoublePercent,
+      #[token("<-")]
+      OpBackpassing,
+
+      #[token("@[A-Z][a-zA-Z0-9]")]
+      PrivateTag,
+      #[token("\"[^\n\"]\"")]
+      String,
+
+      #[token("TODO")]
+      NumberBase,
+      #[token("([0-9]+)?(.[0-9]*)?")]
+      Number,
+
+      #[token("?")]
+      QuestionMark,
+      #[token("_")]
+      Underscore,
+      #[token("&")]
+      Ampersand,
+      #[token("|")]
+      Pipe,
+      #[token(".")]
+      Dot,
+      #[token("!")]
+      Bang,
+      #[token("\\")]
+      LambdaStart,
+      #[token("->")]
+      Arrow,
+      #[token("=>")]
+      FatArrow,
+      #[token("*")]
+      Asterisk,
+
+      // Logos requires one token variant to handle errors,
+      #[error]
+      // We can also use this variant to define whitespace,
+      // or any other matches we wish to skip.
+      #[regex(r"[ \t\n\r]+", logos::skip)]
+      Error,
+  }
 
 type T = Token;
-// TODO credit zig.peg for inspiration
+// Inspired by https://ziglang.org/documentation/0.7.1/#Grammar
+// license information can be found in the LEGAL_DETAILS
+// file in the root directory of this distribution.
+// Thank you zig contributors!
 peg::parser!{
     grammar tokenparser() for [T] {
 
@@ -452,6 +596,21 @@ fn test_typed_ident() {
 fn test_order_of_ops() {
   // True || False && True || False
   assert_eq!(tokenparser::full_expr(&[T::UppercaseIdent, T::OpOr, T::UppercaseIdent, T::OpAnd, T::UppercaseIdent, T::OpOr, T::UppercaseIdent]), Ok(()));
+}
+
+fn test_hello() {
+  Token::lexer( r#"
+app "test-app"
+    packages { pf: "platform" }
+    imports []
+    provides [ main ] to pf
+
+main = "Hello, world!"
+
+
+"#;);
+
+  // TODO make full_program parsing rule
 }
 
 
