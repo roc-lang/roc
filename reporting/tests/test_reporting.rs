@@ -7074,4 +7074,83 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn issue_2380_annotations_only() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F : F
+                a : F
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `F` alias is self-recursive in an invalid way:
+
+                1│  F : F
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tag.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2380_typed_body() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F : F
+                a : F
+                a = 1
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `F` alias is self-recursive in an invalid way:
+
+                1│  F : F
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tag.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2380_alias_with_vars() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F a b : F a b
+                a : F Str Str
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `F` alias is self-recursive in an invalid way:
+
+                1│  F a b : F a b
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tag.
+                "#
+            ),
+        )
+    }
 }

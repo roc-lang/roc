@@ -100,10 +100,10 @@ pub fn type_problem<'b>(
 
                     report(title, doc, filename)
                 }
-                CyclicAlias(symbol, region, others) => {
-                    let (doc, title) = cyclic_alias(alloc, lines, symbol, region, others);
-
-                    report(title, doc, filename)
+                CyclicAlias(..) => {
+                    // We'll also report cyclic aliases as a canonicalization problem, no need to
+                    // re-report them.
+                    None
                 }
 
                 SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/rtfeldman/roc/pull/1711
