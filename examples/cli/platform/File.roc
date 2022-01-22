@@ -79,10 +79,9 @@ readUtf8 = \path ->
         Ok bytes ->
             when Str.fromUtf8 bytes is
                 Ok str -> Task.succeed str
-                # TODO FIXME replace with:  -> Task.fail (BadUtf8 path problem index)
-                Err (BadUtf8 problem index) -> Task.succeed ""
+                Err (BadUtf8 problem index) -> Task.fail (BadUtf8 path problem index)
 
-        Err readErr -> Task.fail readErr
+        Err readErr -> Task.succeed "" # Task.fail readErr
 
 
 readBytes : Path -> Task (List U8) (ReadErr *)
