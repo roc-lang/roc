@@ -1,4 +1,4 @@
-app "echo"
+app "form"
     packages { pf: "platform" }
     imports [ pf.Task.{ Task, await }, pf.Stdout, pf.Stdin ]
     provides [ main ] to pf
