@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::raw::c_char;
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed"]
+    #[link_name = "roc__mainForHost_1_exposed_generic"]
     fn roc_main(args: RocStr, output: *mut u8) -> ();
 
     #[link_name = "roc__mainForHost_size"]
@@ -188,10 +188,16 @@ pub extern "C" fn roc_fx_closeFile(br_ptr: *mut BufReader<File>) {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_openFile(name: ManuallyDrop<RocStr>) -> *mut BufReader<File> {
-    let f = File::open(name.as_str()).expect("Unable to open file");
-    let br = BufReader::new(f);
+    match File::open(name.as_str()) {
+        Ok(f) => {
+            let br = BufReader::new(f);
 
-    Box::into_raw(Box::new(br))
+            Box::into_raw(Box::new(br))
+        }
+        Err(_) => {
+            panic!("unable to open file {:?}", name)
+        }
+    }
 }
 
 #[no_mangle]
