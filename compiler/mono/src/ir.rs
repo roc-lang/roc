@@ -133,7 +133,13 @@ impl<'a> PartialProcs<'a> {
         &self.partial_procs[id.0]
     }
 
-    pub fn insert(&mut self, symbol: Symbol, partial_proc: PartialProc<'a>) -> PartialProcId {
+    pub fn insert(
+        &mut self,
+        symbol: Symbol,
+        partial_proc: PartialProc<'a>,
+        partial_exprs: &PartialExprs,
+        subs: &mut Subs,
+    ) -> PartialProcId {
         debug_assert!(
             !self.contains_key(symbol),
             "The {:?} is inserted as a partial proc twice: that's a bug!",
@@ -141,6 +147,29 @@ impl<'a> PartialProcs<'a> {
         );
 
         let id = PartialProcId(self.symbols.len());
+
+        // Pull out expressions from the captured list that will be specialized anyway.
+        let partial_proc = match partial_proc {
+            PartialProc {
+                annotation: fn_var,
+                captured_symbols: CapturedSymbols::Captured(captured),
+                pattern_symbols,
+                body,
+                is_self_recursive,
+            } if captured.iter().any(|&(s, _)| partial_exprs.contains(s)) => {
+                let lambda_set_var = match subs.get_content_without_compacting(fn_var) {
+                    Content::Structure(FlatType::Func(_, lambda_set, _)) => lambda_set,
+                    _ => unreachable!(),
+                };
+                match subs.get_content_without_compacting(lambda_set_var) {
+                    Content::FlatType(FlatType::TagUnion()) => {
+                        todo!();
+                    }
+                    _ => todo!(),
+                }
+            }
+            other => other,
+        };
 
         self.symbols.push(symbol);
         self.partial_procs.push(partial_proc);

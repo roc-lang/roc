@@ -4112,6 +4112,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
             env.dibuilder.finalize();
 
             if fn_val.verify(true) {
+                env.module.print_to_file(Path::new("/tmp/roc.ll")).unwrap();
                 function_pass.run_on(fn_val);
             } else {
                 let mode = "NON-OPTIMIZED";

@@ -3184,7 +3184,6 @@ fn recursively_build_effect() {
 }
 
 #[test]
-#[ignore = "TODO; currently generates bad code because `a` isn't specialized inside the closure."]
 #[cfg(any(feature = "gen-llvm"))]
 fn polymophic_expression_captured_inside_closure() {
     assert_evals_to!(
@@ -3192,10 +3191,10 @@ fn polymophic_expression_captured_inside_closure() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            asU8 : U8 -> U8
-            asU8 = \_ -> 30
-
             main =
+                asU8 : U8 -> U8
+                asU8 = \_ -> 30
+
                 a = 15
                 f = \{} ->
                     asU8 a
