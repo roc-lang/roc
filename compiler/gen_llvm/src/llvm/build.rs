@@ -1474,10 +1474,17 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
 
 pub fn tag_alloca<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    type_: BasicTypeEnum<'ctx>,
+    basic_type: BasicTypeEnum<'ctx>,
     name: &str,
 ) -> PointerValue<'ctx> {
-    let result_alloca = env.builder.build_alloca(type_, name);
+    // let result_alloca = env.builder.build_alloca(basic_type, name);
+    let parent = env
+        .builder
+        .get_insert_block()
+        .unwrap()
+        .get_parent()
+        .unwrap();
+    let result_alloca = create_entry_block_alloca(env, parent, basic_type, name);
 
     // Initialize all memory of the alloca. This _should_ not be required, but currently
     // LLVM can access uninitialized memory after applying some optimizations. Hopefully
@@ -1496,7 +1503,7 @@ pub fn tag_alloca<'a, 'ctx, 'env>(
     // After inlining, those checks are combined. That means that even if the tag is Err,
     // a check is done on the "string" to see if it is big or small, which will touch the
     // uninitialized memory.
-    let all_zeros = type_.const_zero();
+    let all_zeros = basic_type.const_zero();
     env.builder.build_store(result_alloca, all_zeros);
 
     result_alloca
