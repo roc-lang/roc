@@ -52,6 +52,7 @@ macro_rules! macro_magic {
 pub fn builtin_dependencies(symbol: Symbol) -> &'static [Symbol] {
     match symbol {
         Symbol::LIST_SORT_ASC => &[Symbol::LIST_SORT_WITH, Symbol::NUM_COMPARE],
+        Symbol::LIST_SORT_DESC => &[Symbol::LIST_SORT_WITH],
         Symbol::LIST_PRODUCT => &[Symbol::LIST_WALK, Symbol::NUM_MUL],
         Symbol::LIST_SUM => &[Symbol::LIST_WALK, Symbol::NUM_ADD],
         Symbol::LIST_JOIN_MAP => &[Symbol::LIST_WALK, Symbol::LIST_CONCAT],
@@ -142,6 +143,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_WALK_UNTIL => list_walk_until,
         LIST_SORT_WITH => list_sort_with,
         LIST_SORT_ASC => list_sort_asc,
+        LIST_SORT_DESC => list_sort_desc,
         LIST_ANY => list_any,
         LIST_ALL => list_all,
         LIST_FIND => list_find,
@@ -3437,6 +3439,60 @@ fn list_sort_asc(symbol: Symbol, var_store: &mut VarStore) -> Def {
         vec![
             (list_var, Loc::at_zero(Var(Symbol::ARG_1))),
             (closure_var, Loc::at_zero(Var(Symbol::NUM_COMPARE))),
+        ],
+        CalledVia::Space,
+    );
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+/// List.sortDesc : List (Num a) -> List (Num a)
+fn list_sort_desc(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let num_var = var_store.fresh();
+    let closure_var = var_store.fresh();
+    let compare_ret_var = var_store.fresh();
+    let ret_var = list_var;
+
+    let closure = Closure(ClosureData {
+        function_type: closure_var,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: compare_ret_var,
+        name: Symbol::LIST_SORT_DESC_COMPARE,
+        recursive: Recursive::NotRecursive,
+        captured_symbols: vec![],
+        arguments: vec![
+            (num_var, no_region(Pattern::Identifier(Symbol::ARG_2))),
+            (num_var, no_region(Pattern::Identifier(Symbol::ARG_3))),
+        ],
+        loc_body: {
+            Box::new(no_region(RunLowLevel {
+                op: LowLevel::NumCompare,
+                args: vec![(num_var, Var(Symbol::ARG_3)), (num_var, Var(Symbol::ARG_2))],
+                ret_var: compare_ret_var,
+            }))
+        },
+    });
+
+    let function = (
+        var_store.fresh(),
+        Loc::at_zero(Expr::Var(Symbol::LIST_SORT_WITH)),
+        var_store.fresh(),
+        ret_var,
+    );
+
+    let body = Expr::Call(
+        Box::new(function),
+        vec![
+            (list_var, Loc::at_zero(Var(Symbol::ARG_1))),
+            (closure_var, Loc::at_zero(closure)),
         ],
         CalledVia::Space,
     );
