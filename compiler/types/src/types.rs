@@ -886,6 +886,9 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
             accum.insert(*symbol);
             args.iter().for_each(|arg| symbols_help(arg, accum));
         }
+        Erroneous(Problem::CyclicAlias(alias, _, _)) => {
+            accum.insert(*alias);
+        }
         EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
     }
 }

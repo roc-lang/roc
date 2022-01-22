@@ -311,15 +311,19 @@ pub fn canonicalize_defs<'a>(
                 vec![],
                 &mut can_ann.typ,
                 var_store,
+                // Don't report any errors yet. We'll take care of self and mutual
+                // recursion errors after the sorted introductions are complete.
                 &mut false,
             );
         }
 
-        scope.add_alias(symbol, ann.region, can_vars.clone(), can_ann.typ.clone());
+        scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
         let alias = scope.lookup_alias(symbol).expect("alias is added to scope");
         aliases.insert(symbol, alias.clone());
     }
 
+    // Now that we know the alias dependency graph, we can try to insert recursion variables
+    // where aliases are recursive tag unions, or detect illegal recursions.
     correct_mutual_recursive_type_alias(env, &mut aliases, var_store);
 
     // Now that we have the scope completely assembled, and shadowing resolved,
@@ -962,66 +966,7 @@ fn canonicalize_pending_def<'a>(
             }
         }
 
-        Alias {
-            name, ann, vars, ..
-        } => {
-            let symbol = name.value;
-            let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
-
-            // Record all the annotation's references in output.references.lookups
-
-            for symbol in can_ann.references {
-                output.references.lookups.insert(symbol);
-                output.references.referenced_aliases.insert(symbol);
-            }
-
-            let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
-
-            for loc_lowercase in vars {
-                if let Some(var) = can_ann
-                    .introduced_variables
-                    .var_by_name(&loc_lowercase.value)
-                {
-                    // This is a valid lowercase rigid var for the alias.
-                    can_vars.push(Loc {
-                        value: (loc_lowercase.value.clone(), *var),
-                        region: loc_lowercase.region,
-                    });
-                } else {
-                    env.problems.push(Problem::PhantomTypeArgument {
-                        alias: symbol,
-                        variable_region: loc_lowercase.region,
-                        variable_name: loc_lowercase.value.clone(),
-                    });
-                }
-            }
-
-            scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
-
-            if can_ann.typ.contains_symbol(symbol) {
-                // the alias is recursive. If it's a tag union, we attempt to fix this
-                if let Type::TagUnion(tags, ext) = can_ann.typ {
-                    // re-canonicalize the alias with the alias already in scope
-                    let rec_var = var_store.fresh();
-                    let mut rec_type_union = Type::RecursiveTagUnion(rec_var, tags, ext);
-                    rec_type_union.substitute_alias(symbol, &Type::Variable(rec_var));
-
-                    scope.add_alias(symbol, name.region, can_vars, rec_type_union);
-                } else {
-                    env.problems
-                        .push(Problem::CyclicAlias(symbol, name.region, vec![]));
-                    return output;
-                }
-            }
-
-            let alias = scope.lookup_alias(symbol).expect("alias was not added");
-            aliases.insert(symbol, alias.clone());
-
-            output
-                .introduced_variables
-                .union(&can_ann.introduced_variables);
-        }
-
+        Alias { .. } => unreachable!("Aliases are handled in a separate pass"),
         InvalidAlias => {
             // invalid aliases (shadowed, incorrect patterns) get ignored
         }
