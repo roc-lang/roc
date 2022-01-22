@@ -1942,6 +1942,118 @@ fn max_u32() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_i16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minI16
+                "#
+        ),
+        i16::MIN,
+        i16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_i16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxI16
+                "#
+        ),
+        i16::MAX,
+        i16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_u16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minU16
+                "#
+        ),
+        u16::MIN,
+        u16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_u16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxU16
+                "#
+        ),
+        u16::MAX,
+        u16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minI8
+                "#
+        ),
+        i8::MIN,
+        i8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxI8
+                "#
+        ),
+        i8::MAX,
+        i8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_u8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minU8
+                "#
+        ),
+        u8::MIN,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_u8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxU8
+                "#
+        ),
+        u8::MAX,
+        u8
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn is_multiple_of() {
     // true
