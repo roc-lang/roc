@@ -62,12 +62,20 @@ interface Num
             isZero,
             log,
             maxFloat,
+            maxI8,
+            maxU8,
+            maxI16,
+            maxU16,
             maxI32,
             maxU32,
             maxI64,
             maxU64,
             maxI128,
             minFloat,
+            minI8,
+            minU8,
+            minI16,
+            minU16,
             minI32,
             minU32,
             minI64,
@@ -790,6 +798,72 @@ minNat : Nat
 ## 64-bit system, this will be equal to #Num.maxU64, but when building for a
 ## 32-bit system, this will be equal to #Num.maxU32.
 maxNat : Nat
+
+## The lowest number that can be stored in an #I8 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is `-128`.
+##
+## Note that the positive version of this number is larger than #Int.maxI8,
+## which means if you call #Num.abs on #Int.minI8, it will overflow and crash!
+minI8 : I8
+
+## The highest number that can be stored in an #I8 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `127`.
+##
+## Note that this is smaller than the positive version of #Int.minI8,
+## which means if you call #Num.abs on #Int.minI8, it will overflow and crash!
+maxI8 : I8
+
+## The lowest number that can be stored in a #U8 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is zero, because #U8 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
+minU8 : U8
+
+## The highest number that can be stored in a #U8 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `255`.
+maxU8 : U8
+
+## The lowest number that can be stored in an #I16 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is `-32_768`.
+##
+## Note that the positive version of this number is larger than #Int.maxI16,
+## which means if you call #Num.abs on #Int.minI16, it will overflow and crash!
+minI16 : I16
+
+## The highest number that can be stored in an #I16 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `32_767`.
+##
+## Note that this is smaller than the positive version of #Int.minI16,
+## which means if you call #Num.abs on #Int.minI16, it will overflow and crash!
+maxI16 : I16
+
+## The lowest number that can be stored in a #U16 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is zero, because #U16 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
+minU16 : U16
+
+## The highest number that can be stored in a #U16 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `65_535`.
+maxU16 : U16
 
 ## The lowest number that can be stored in an #I32 without underflowing its
 ## available memory and crashing.

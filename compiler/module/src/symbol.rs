@@ -1002,6 +1002,14 @@ define_builtins! {
         114 NUM_MAX_I64: "maxI64"
         115 NUM_MIN_U64: "minU64"
         116 NUM_MAX_U64: "maxU64"
+        117 NUM_MIN_I8: "minI8"
+        118 NUM_MAX_I8: "maxI8"
+        119 NUM_MIN_U8: "minU8"
+        120 NUM_MAX_U8: "maxU8"
+        121 NUM_MIN_I16: "minI16"
+        122 NUM_MAX_I16: "maxI16"
+        123 NUM_MIN_U16: "minU16"
+        124 NUM_MAX_U16: "maxU16"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
