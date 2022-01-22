@@ -1238,272 +1238,54 @@ fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.minI32: I32
 fn num_min_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<i32>(int_var, int_precision_var, i32::MIN);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
+    int_min_or_max::<i32>(symbol, var_store, i32::MIN);
 }
 
 /// Num.maxI32: I32
 fn num_max_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<i32>(int_var, int_precision_var, i32::MAX);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
+    int_min_or_max::<i32>(symbol, var_store, i32::MAX);
 }
 
 /// Num.minU32: U32
 fn num_min_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<u32>(int_var, int_precision_var, u32::MIN);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
+    int_min_or_max::<u32>(symbol, var_store, u32::MIN);
 }
 
 /// Num.maxU32: U32
 fn num_max_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<u32>(int_var, int_precision_var, u32::MAX);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
+    int_min_or_max::<u32>(symbol, var_store, u32::MAX);
 }
 
 /// Num.minI64: I64
 fn num_min_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<i64>(int_var, int_precision_var, i64::MIN);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
+    int_min_or_max::<i64>(symbol, var_store, i64::MIN);
 }
 
 /// Num.maxI64: I64
 fn num_max_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<i64>(int_var, int_precision_var, i64::MAX);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
+    int_min_or_max::<i64>(symbol, var_store, i64::MAX);
 }
 
 /// Num.minU64: U64
 fn num_min_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<u64>(int_var, int_precision_var, u64::MIN);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
+    int_min_or_max::<u64>(symbol, var_store, u64::MIN);
 }
 
 /// Num.maxU64: U64
 fn num_max_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<u64>(int_var, int_precision_var, u64::MAX);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
+    int_min_or_max::<u64>(symbol, var_store, iu64::MAX);
 }
 
 /// Num.minI128: I128
 fn num_min_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<i128>(int_var, int_precision_var, i128::MIN);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+    int_min_or_max::<i128>(symbol, var_store, i128::MIN);
         pattern_vars: SendMap::default(),
     }
 }
 
 /// Num.maxI128: I128
 fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<i128>(int_var, int_precision_var, i128::MAX);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
+    int_min_or_max::<i128>(symbol, var_store, i128::MIN);
 }
 
 /// List.isEmpty : List * -> Bool
@@ -5124,6 +4906,36 @@ fn defn_help(
         arguments: closure_args,
         loc_body: Box::new(no_region(body)),
     })
+}
+
+#[inline(always)]
+fn int_min_or_max<I128>(symbol: Symbol, var_store: &mut VarStore, i: I128) -> Def
+where
+    I128: Into<i128>,
+{
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    let body = int::<I128>(int_var, int_precision_var, i);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
 }
 
 #[inline(always)]
