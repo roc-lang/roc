@@ -124,9 +124,9 @@ use logos::Logos;
       KeywordRequires,
       
       // TODO support unicode alphabet
-      #[regex("[A-Z][a-zA-Z0-9]")]
+      #[regex("[A-Z][a-zA-Z0-9]*")]
       UppercaseIdent,
-      #[regex("[a-z][a-zA-Z0-9]")]
+      #[regex("[a-z][a-zA-Z0-9]*")]
       LowercaseIdent,
 
       #[token(",")]
@@ -184,14 +184,14 @@ use logos::Logos;
       #[token("<-")]
       OpBackpassing,
 
-      #[token("@[A-Z][a-zA-Z0-9]")]
+      #[regex("@[A-Z][a-zA-Z0-9]")]
       PrivateTag,
-      #[token("\"[^\n\"]\"")]
+      #[regex("\"[^\n\"]*\"")]
       String,
 
       #[token("TODO")]
       NumberBase,
-      #[token("([0-9]+)?(.[0-9]*)?")]
+      #[regex("([0-9]+)?(.[0-9]*)?")]
       Number,
 
       #[token("?")]
@@ -220,6 +220,7 @@ use logos::Logos;
       // We can also use this variant to define whitespace,
       // or any other matches we wish to skip.
       #[regex(r"[ \t\n\r]+", logos::skip)]
+      #[regex(r"#[^\n]*", logos::skip)] // skip comments for now
       Error,
   }
 
@@ -230,6 +231,9 @@ type T = Token;
 // Thank you zig contributors!
 peg::parser!{
     grammar tokenparser() for [T] {
+
+      pub rule module() =
+        header() module_defs()
 
       pub rule full_expr() = bool_or_expr()
       
@@ -250,6 +254,8 @@ peg::parser!{
           / tag()
           / accessor_function()
           / defs()
+          / apply()
+          / var()
           // / access() // TODO prevent infinite loop
 
         rule closure() =
@@ -297,10 +303,10 @@ peg::parser!{
           ident() [T::Colon] type_annotation()
 
 
-        rule parens_around() = [T::OpenParen] expr() [T::CloseParen]
+        rule parens_around() = [T::OpenParen] full_expr() [T::CloseParen]
 
-        rule if_expr() = [T::KeywordIf] expr() [T::KeywordThen] expr()
-                            [T::KeywordElse] expr()
+        rule if_expr() = [T::KeywordIf] full_expr() [T::KeywordThen] full_expr()
+                            [T::KeywordElse] full_expr()
 
         rule expect() = [T::KeywordExpect] expr()
 
@@ -482,12 +488,15 @@ peg::parser!{
         rule defs() =
           def()+ full_expr()
 
-        rule def() =
+        pub rule def() =
           annotated_body()
           / annotation()
           / body()
           / alias()
           / expect()
+
+        rule module_defs() =
+          def() def()*
 
         rule annotation() =
           ident() [T::Colon] type_annotation()
@@ -510,6 +519,13 @@ peg::parser!{
         rule var() =
           ident()
           / module_name() [T::Dot] ident()
+
+        rule apply() =
+          apply_expr() full_expr()+
+
+        rule apply_expr() =
+          var()
+          / tag()
     }
 }
 
@@ -598,20 +614,60 @@ fn test_order_of_ops() {
   assert_eq!(tokenparser::full_expr(&[T::UppercaseIdent, T::OpOr, T::UppercaseIdent, T::OpAnd, T::UppercaseIdent, T::OpOr, T::UppercaseIdent]), Ok(()));
 }
 
+#[test]
 fn test_hello() {
-  Token::lexer( r#"
-app "test-app"
-    packages { pf: "platform" }
-    imports []
-    provides [ main ] to pf
+  let lex = Token::lexer( r#"
+  app "test-app"
+      packages { pf: "platform" }
+      imports []
+      provides [ main ] to pf
+  
+  main = "Hello, world!"
+  "#);
 
-main = "Hello, world!"
+  let tokens: Vec<Token> = lex.collect();
 
-
-"#;);
-
-  // TODO make full_program parsing rule
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
+
+#[test]
+fn test_fibo_def() {
+  let lex = Token::lexer( 
+    r#"
+fib = \n, a, b ->
+    if n == 0 then
+        a
+    else
+        fib (n - 1) b (a + b)
+  "#);
+
+  let tokens: Vec<Token> = lex.collect();
+  /*dbg!(&tokens);
+  dbg!(tokens.len());*/
+
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn astar_init_model() {
+  let lex = Token::lexer( 
+  r#"
+initialModel = \start ->
+    {
+        evaluated: Set.empty,
+        openSet: Set.single start,
+        costs: Dict.single start 0,
+        cameFrom: Dict.empty,
+    }
+"#);
+
+  let tokens: Vec<Token> = lex.collect();
+  dbg!(&tokens);
+  dbg!(tokens.len());
+
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
 
 
 }
