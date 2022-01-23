@@ -6,6 +6,7 @@ App {
         packages: [],
         imports: [],
         provides: [],
+        provides_types: None,
         to: @53-57 ExistingPackage(
             "blah",
         ),

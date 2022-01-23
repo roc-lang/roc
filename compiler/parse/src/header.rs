@@ -93,6 +93,7 @@ pub struct AppHeader<'a> {
     pub packages: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
     pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     pub provides: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    pub provides_types: Option<Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>>,
     pub to: Loc<To<'a>>,
 
     // Potential comments and newlines - these will typically all be empty.

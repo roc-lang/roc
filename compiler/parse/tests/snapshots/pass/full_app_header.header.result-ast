@@ -26,6 +26,7 @@ App {
                 "quicksort",
             ),
         ],
+        provides_types: None,
         to: @108-110 ExistingPackage(
             "pf",
         ),
