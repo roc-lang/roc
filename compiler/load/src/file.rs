@@ -2543,6 +2543,20 @@ fn parse_header<'a>(
 
             let packages = unspace(arena, header.packages.items);
 
+            let mut exposes = bumpalo::collections::Vec::new_in(arena);
+            exposes.extend(unspace(arena, header.provides.items));
+
+            if let Some(provided_types) = header.provides_types {
+                for provided_type in unspace(arena, provided_types.items) {
+                    let string: &str = provided_type.value.into();
+                    let exposed_name = ExposedName::new(string);
+
+                    exposes.push(Loc::at(provided_type.region, exposed_name));
+                }
+            }
+
+            let exposes = exposes.into_bump_slice();
+
             let info = HeaderInfo {
                 loc_name: Loc {
                     region: header.name.region,
@@ -2552,7 +2566,7 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages,
-                exposes: unspace(arena, header.provides.items),
+                exposes,
                 imports: unspace(arena, header.imports.items),
                 to_platform: Some(header.to.value),
             };
