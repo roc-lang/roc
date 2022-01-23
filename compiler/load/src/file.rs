@@ -26,6 +26,7 @@ use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::PackageName;
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
+use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
@@ -2920,6 +2921,7 @@ struct PlatformHeaderInfo<'a> {
     packages: &'a [Loc<PackageEntry<'a>>],
     provides: &'a [Loc<ExposedName<'a>>],
     requires: &'a [Loc<TypedIdent<'a>>],
+    requires_types: &'a [Loc<UppercaseIdent<'a>>],
     imports: &'a [Loc<ImportsEntry<'a>>],
 }
 
@@ -2940,6 +2942,7 @@ fn send_header_two<'a>(
         packages,
         provides,
         requires,
+        requires_types,
         imports,
     } = info;
 
@@ -3043,6 +3046,18 @@ fn send_header_two<'a>(
                 debug_assert!(!scope.contains_key(&ident.clone()));
 
                 scope.insert(ident, (symbol, entry.ident.region));
+            }
+
+            for entry in requires_types {
+                let string: &str = entry.value.into();
+                let ident: Ident = string.into();
+                let ident_id = ident_ids.get_or_insert(&ident);
+                let symbol = Symbol::new(app_module_id, ident_id);
+
+                // Since this value is exposed, add it to our module's default scope.
+                debug_assert!(!scope.contains_key(&ident.clone()));
+
+                scope.insert(ident, (symbol, entry.region));
             }
         }
 
@@ -3289,6 +3304,7 @@ fn fabricate_pkg_config_module<'a>(
             header.requires.signature.region,
             header.requires.signature.extract_spaces().item,
         )]),
+        requires_types: unspace(arena, header.requires.rigids.items),
         imports: unspace(arena, header.imports.items),
     };
 

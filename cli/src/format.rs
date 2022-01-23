@@ -177,6 +177,7 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     packages: header.packages.remove_spaces(arena),
                     imports: header.imports.remove_spaces(arena),
                     provides: header.provides.remove_spaces(arena),
+                    provides_types: header.provides_types.map(|ts| ts.remove_spaces(arena)),
                     to: header.to.remove_spaces(arena),
                     before_header: &[],
                     after_app_keyword: &[],
