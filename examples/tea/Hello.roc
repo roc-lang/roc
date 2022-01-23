@@ -8,7 +8,7 @@ render :
     [
         Rectangle { top : F32, left : F32, bottom : F32, right : F32 },
         Circle { top : F32, left : F32, radius : F32 },
-                # Text { top : F32, left : F32, text : Str },
+        # Text { top : F32, left : F32, text : Str },
     ]
 render = \window ->
     Rectangle { top: 10, left: 10, bottom: 100, right: 100 }
