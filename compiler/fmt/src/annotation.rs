@@ -263,8 +263,9 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             }
 
             As(lhs, _spaces, AliasHeader { name, vars }) => {
-                // TODO use spaces?
-                lhs.value.format(buf, indent);
+                // TODO use _spaces?
+                lhs.value
+                    .format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
                 buf.spaces(1);
                 buf.push_str("as");
                 buf.spaces(1);
