@@ -27,7 +27,7 @@ fn run_event_loop(title: &str) -> Result<(), Box<dyn Error>> {
 
     let window = winit::window::WindowBuilder::new()
         .with_inner_size(PhysicalSize::new(1900.0, 1000.0))
-        .with_title("The Roc Editor - Work In Progress")
+        .with_title(title)
         .build(&event_loop)
         .unwrap();
 
