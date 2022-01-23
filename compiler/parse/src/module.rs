@@ -399,16 +399,30 @@ fn provides_without_to<'a>() -> impl Parser<
 fn provides_types<'a>(
 ) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>, EProvides<'a>> {
     let min_indent = 1;
-    collection_trailing_sep_e!(
-        word1(b'{', EProvides::ListStart),
-        provides_type_entry(EProvides::Identifier),
-        word1(b',', EProvides::ListEnd),
-        word1(b'}', EProvides::ListEnd),
-        min_indent,
-        EProvides::Open,
-        EProvides::Space,
-        EProvides::IndentListEnd,
-        Spaced::SpaceBefore
+
+    skip_first!(
+        // We only support spaces here, not newlines, because this is not intended
+        // to be the design forever. Someday it will hopefully work like Elm,
+        // where platform authors can provide functions like Browser.sandbox which
+        // present an API based on ordinary-looking type variables.
+        zero_or_more!(word1(
+            b' ',
+            // HACK: If this errors, EProvides::Provides is not an accurate reflection
+            // of what went wrong. However, this is both skipped and zero_or_more,
+            // so this error should never be visible to anyone in practice!
+            EProvides::Provides
+        )),
+        collection_trailing_sep_e!(
+            word1(b'{', EProvides::ListStart),
+            provides_type_entry(EProvides::Identifier),
+            word1(b',', EProvides::ListEnd),
+            word1(b'}', EProvides::ListEnd),
+            min_indent,
+            EProvides::Open,
+            EProvides::Space,
+            EProvides::IndentListEnd,
+            Spaced::SpaceBefore
+        )
     )
 }
 
