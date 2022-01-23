@@ -32,7 +32,7 @@ pub enum Pattern {
     Underscore,
 
     // Runtime Exceptions
-    Shadowed(Region, Loc<Ident>),
+    Shadowed(Region, Loc<Ident>, Symbol),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
     // parse error patterns
@@ -65,7 +65,7 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
     use Pattern::*;
 
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             symbols.push(*symbol);
         }
 
@@ -92,8 +92,6 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
         | Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => {}
-
-        Shadowed(_, _) => {}
     }
 }
 
@@ -121,13 +119,14 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::Identifier(symbol)
             }
-            Err((original_region, shadow)) => {
+            Err((original_region, shadow, new_symbol)) => {
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                     original_region,
                     shadow: shadow.clone(),
                 }));
+                output.references.bound_symbols.insert(new_symbol);
 
-                Pattern::Shadowed(original_region, shadow)
+                Pattern::Shadowed(original_region, shadow, new_symbol)
             }
         },
         GlobalTag(name) => {
@@ -268,7 +267,7 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow)) => {
+                            Err((original_region, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
@@ -278,7 +277,8 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                                opt_erroneous =
+                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
                             }
                         };
                     }
@@ -339,7 +339,7 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow)) => {
+                            Err((original_region, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
@@ -349,7 +349,8 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                                opt_erroneous =
+                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
                             }
                         };
                     }
@@ -452,7 +453,7 @@ fn add_bindings_from_patterns(
     use Pattern::*;
 
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             answer.push((*symbol, *region));
         }
         AppliedTag {
@@ -477,7 +478,6 @@ fn add_bindings_from_patterns(
         | FloatLiteral(_, _, _)
         | StrLiteral(_)
         | Underscore
-        | Shadowed(_, _)
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => (),
     }
