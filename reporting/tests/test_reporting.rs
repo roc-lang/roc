@@ -424,6 +424,16 @@ mod test_reporting {
 
                 `Booly` is not used anywhere in your code.
 
+                3│  Booly : [ Yes, No, Maybe ]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                
+                If you didn't intend on using `Booly` then remove it so future readers
+                of your code don't wonder why it is there.
+                
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+                
+                `Booly` is not used anywhere in your code.
+                
                 1│  Booly : [ Yes, No ]
                     ^^^^^^^^^^^^^^^^^^^
 
