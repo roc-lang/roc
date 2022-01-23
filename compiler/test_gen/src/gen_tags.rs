@@ -1369,7 +1369,7 @@ fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn issue_2365_monomorphize_tag_with_non_empty_ext_var() {
     assert_evals_to!(
         indoc!(
@@ -1394,7 +1394,7 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
     assert_evals_to!(
         indoc!(
@@ -1422,7 +1422,7 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
     assert_evals_to!(
         indoc!(
