@@ -1367,3 +1367,85 @@ fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
         u8
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_2365_monomorphize_tag_with_non_empty_ext_var() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Single a : [A, B, C]a
+            Compound a : Single [D, E, F]a
+
+            single : {} -> Single *
+            single = \{} -> C
+
+            compound : {} -> Compound *
+            compound = \{} -> single {}
+
+            main = compound {}
+            "#
+        ),
+        2, // C
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Single a : [A, B, C]a
+            Compound a : Single [D, E, F]a
+
+            single : {} -> Result Str (Single *)
+            single = \{} -> Err C
+
+            compound : {} -> Result Str (Compound *)
+            compound = \{} ->
+                when single {} is
+                    Ok s -> Ok s
+                    Err e -> Err e
+
+            main = compound {}
+            "#
+        ),
+        2, // C
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Single a : [A, B, C]a
+            Compound a : Single [D, E, F]a
+
+            main =
+                single : {} -> Result Str (Single *)
+                single = \{} -> Err C
+
+                compound : {} -> Result Str (Compound *)
+                compound = \{} ->
+                    when single {} is
+                        Ok s -> Ok s
+                        Err e -> Err e
+
+                compound {}
+            "#
+        ),
+        2, // C
+        u8
+    )
+}
