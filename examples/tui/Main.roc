@@ -1,4 +1,4 @@
-app "echo"
+app "tui"
     packages { pf: "platform" }
     imports [ pf.Program.{ Program } ]
     provides [ main ] { Model } to pf

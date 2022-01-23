@@ -171,6 +171,11 @@ fn call_the_closure(program: Program) void {
 
     while (true) {
         const line = (stdin.readUntilDelimiterOrEof(buf[0..], '\n') catch unreachable) orelse return;
+
+        if (line.len == 1 and line[0] == 'q') {
+            return;
+        }
+
         const to_append = RocStr.init(line.ptr, line.len);
 
         model = update(allocator, model, to_append);
