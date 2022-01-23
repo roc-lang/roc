@@ -2652,7 +2652,7 @@ mod test_fmt {
     fn single_line_platform() {
         module_formats_same(
             "platform \"folkertdev/foo\" \
-            requires { model=>Model, msg=>Msg } { main : Effect {} } \
+            requires { Model, Msg } { main : Effect {} } \
             exposes [] \
             packages {} \
             imports [ Task.{ Task } ] \
