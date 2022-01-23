@@ -2,13 +2,13 @@ use crate::ast::{Collection, CommentOrNewline, Def, Module, Spaced};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader,
-    ModuleName, PackageEntry, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    ModuleName, PackageEntry, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
-use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
+use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase_ident, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, specialize, specialize_region, word1, word2, EEffects, EExposes, EHeader,
-    EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser, SourceError, SyntaxError,
+    backtrackable, specialize, specialize_region, word1, EEffects, EExposes, EHeader, EImports,
+    EPackages, EProvides, ERequires, ETypedIdent, Parser, SourceError, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal;
@@ -439,10 +439,13 @@ fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a
 #[inline(always)]
 fn requires_rigids<'a>(
     min_indent: u32,
-) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, PlatformRigid<'a>>>>, ERequires<'a>> {
+) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>, ERequires<'a>> {
     collection_trailing_sep_e!(
         word1(b'{', ERequires::ListStart),
-        specialize(|_, pos| ERequires::Rigid(pos), loc!(requires_rigid())),
+        specialize(
+            |_, pos| ERequires::Rigid(pos),
+            loc!(map!(ident::uppercase(), Spaced::Item))
+        ),
         word1(b',', ERequires::ListEnd),
         word1(b'}', ERequires::ListEnd),
         min_indent,
@@ -450,17 +453,6 @@ fn requires_rigids<'a>(
         ERequires::Space,
         ERequires::IndentListEnd,
         Spaced::SpaceBefore
-    )
-}
-
-#[inline(always)]
-fn requires_rigid<'a>() -> impl Parser<'a, Spaced<'a, PlatformRigid<'a>>, ()> {
-    map!(
-        and!(
-            lowercase_ident(),
-            skip_first!(word2(b'=', b'>', |_| ()), uppercase_ident())
-        ),
-        |(rigid, alias)| Spaced::Item(PlatformRigid { rigid, alias })
     )
 }
 

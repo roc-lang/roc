@@ -1,6 +1,6 @@
 use crate::ast::{Collection, CommentOrNewline, Spaced, StrLiteral, TypeAnnotation};
 use crate::blankspace::space0_e;
-use crate::ident::lowercase_ident;
+use crate::ident::{lowercase_ident, UppercaseIdent};
 use crate::parser::Progress::*;
 use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
 use crate::state::State;
@@ -126,15 +126,9 @@ pub struct PackageHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct PlatformRigid<'a> {
-    pub rigid: &'a str,
-    pub alias: &'a str,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlatformRequires<'a> {
-    pub rigids: Collection<'a, Loc<Spaced<'a, PlatformRigid<'a>>>>,
+    pub rigids: Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>,
     pub signature: Loc<Spaced<'a, TypedIdent<'a>>>,
 }
 
