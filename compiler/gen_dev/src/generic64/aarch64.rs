@@ -3,9 +3,9 @@ use crate::Relocation;
 use bumpalo::collections::Vec;
 use packed_struct::prelude::*;
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::Layout;
-use roc_reporting::internal_error;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]

@@ -1,7 +1,7 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use core::panic;
-use roc_reporting::internal_error;
+use roc_error_macros::internal_error;
 
 use roc_module::symbol::Symbol;
 

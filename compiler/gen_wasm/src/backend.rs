@@ -12,8 +12,8 @@ use roc_mono::ir::{
     ProcLayout, Stmt,
 };
 
+use roc_error_macros::internal_error;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
-use roc_reporting::internal_error;
 
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::LowLevelCall;
