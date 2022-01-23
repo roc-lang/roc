@@ -383,6 +383,14 @@ mod cli_run {
             expected_ending: "Hi, Giovanni Giorgio!\n",
             use_valgrind: true,
         },
+        tui:"tui" => Example {
+            filename: "Main.roc",
+            executable_filename: "tui",
+            stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
+            input_file: None,
+            expected_ending: "Hello Worldfoo!\n",
+            use_valgrind: true,
+        },
         // custom_malloc:"custom-malloc" => Example {
         //     filename: "Main.roc",
         //     executable_filename: "custom-malloc-example",
