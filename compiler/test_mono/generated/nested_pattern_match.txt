@@ -1,4 +1,4 @@
-procedure Num.24 (#Attr.2, #Attr.3):
+procedure Num.22 (#Attr.2, #Attr.3):
     let Test.8 : Builtin(Int(I64)) = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Test.8;
 
@@ -22,7 +22,7 @@ procedure Test.0 ():
             let Test.10 : Union(NonRecursive([[Builtin(Int(I64))], []])) = UnionAtIndex (Id 0) (Index 0) Test.2;
             let Test.5 : Builtin(Int(I64)) = UnionAtIndex (Id 0) (Index 0) Test.10;
             let Test.7 : Builtin(Int(I64)) = 1i64;
-            let Test.6 : Builtin(Int(I64)) = CallByName Num.24 Test.5 Test.7;
+            let Test.6 : Builtin(Int(I64)) = CallByName Num.22 Test.5 Test.7;
             ret Test.6;
         else
             jump Test.16;
