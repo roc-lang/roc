@@ -1,6 +1,6 @@
+use roc_error_macros::internal_error;
 use roc_module::{called_via::CalledVia, symbol::Symbol};
 use roc_parse::ast::StrLiteral;
-use roc_reporting::internal_error;
 
 use crate::{
     ast_error::{ASTResult, UnexpectedASTNode},

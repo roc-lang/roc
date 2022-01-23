@@ -2,9 +2,9 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::Layout;
-use roc_reporting::internal_error;
 
 use crate::layout::{
     CallConv, ReturnMethod, StackMemoryFormat, WasmLayout, ZigVersion, BUILTINS_ZIG_VERSION,

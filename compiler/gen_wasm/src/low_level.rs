@@ -1,9 +1,9 @@
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
+use roc_error_macros::internal_error;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
-use roc_reporting::internal_error;
 
 use crate::backend::WasmBackend;
 use crate::layout::CallConv;

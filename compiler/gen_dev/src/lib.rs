@@ -5,6 +5,7 @@
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -14,7 +15,6 @@ use roc_mono::ir::{
     SelfRecursive, Stmt,
 };
 use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds};
-use roc_reporting::internal_error;
 
 mod generic64;
 mod object_builder;

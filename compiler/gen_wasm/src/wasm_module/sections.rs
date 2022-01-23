@@ -1,7 +1,7 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
-use roc_reporting::internal_error;
+use roc_error_macros::internal_error;
 
 use super::dead_code::{
     copy_preloads_shrinking_dead_fns, parse_preloads_call_graph, trace_call_graph,
