@@ -8,6 +8,7 @@ use roc_parse::header::{
     AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
     PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
+use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
 pub fn fmt_module<'a, 'buf>(buf: &mut Buf<'buf>, module: &'a Module<'a>) {
@@ -76,7 +77,7 @@ pub fn fmt_app_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a AppHeader<'a>) 
     buf.indent(indent);
     buf.push_str("provides");
     fmt_default_spaces(buf, header.after_provides, indent);
-    fmt_provides(buf, header.provides, indent);
+    fmt_provides(buf, header.provides, header.provides_types, indent);
     fmt_default_spaces(buf, header.before_to, indent);
     buf.indent(indent);
     buf.push_str("to");
@@ -126,7 +127,7 @@ pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHe
     buf.indent(indent);
     buf.push_str("provides");
     fmt_default_spaces(buf, header.after_provides, indent);
-    fmt_provides(buf, header.provides, indent);
+    fmt_provides(buf, header.provides, None, indent);
 
     fmt_effects(buf, &header.effects, indent);
 }
@@ -216,10 +217,15 @@ fn fmt_imports<'a, 'buf>(
 
 fn fmt_provides<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    loc_entries: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    loc_exposed_names: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    loc_provided_types: Option<Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>>,
     indent: u16,
 ) {
-    fmt_collection(buf, indent, '[', ']', loc_entries, Newlines::No)
+    fmt_collection(buf, indent, '[', ']', loc_exposed_names, Newlines::No);
+    if let Some(loc_provided_types) = loc_provided_types {
+        fmt_default_spaces(buf, &[], indent);
+        fmt_collection(buf, indent, '{', '}', loc_provided_types, Newlines::No);
+    }
 }
 
 fn fmt_to<'buf>(buf: &mut Buf<'buf>, to: To, indent: u16) {
