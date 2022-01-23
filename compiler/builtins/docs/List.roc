@@ -32,6 +32,8 @@ interface List
             set,
             single,
             sortWith,
+            split,
+            sublist,
             sum,
             swap,
             walk,
