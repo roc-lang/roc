@@ -3,10 +3,4 @@ app "hello-rust"
     imports []
     provides [ render ] to pf
 
-greeting =
-    hi = "Hello"
-    name = "World!"
-
-    "\(hi), \(name)!\n"
-
-render = greeting
+render = "Hello Roc GUI"
