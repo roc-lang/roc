@@ -266,8 +266,14 @@ mod test_parse {
         let result = func(&input);
 
         let actual_result = if should_pass {
+            eprintln!("The source code for this test did not successfully parse!\n");
+
             result.unwrap()
         } else {
+            eprintln!(
+                "The source code for this test successfully parsed, but it was not expected to!\n"
+            );
+
             result.unwrap_err()
         };
 

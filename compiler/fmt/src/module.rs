@@ -6,7 +6,7 @@ use crate::Buf;
 use roc_parse::ast::{Collection, Module, Spaced};
 use roc_parse::header::{
     AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
 use roc_region::all::Loc;
 
@@ -203,18 +203,6 @@ impl<'a, T: Formattable> Formattable for Spaced<'a, T> {
                 fmt_spaces(buf, spaces.iter(), indent);
             }
         }
-    }
-}
-
-impl<'a> Formattable for PlatformRigid<'a> {
-    fn is_multiline(&self) -> bool {
-        false
-    }
-
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, _indent: u16) {
-        buf.push_str(self.rigid);
-        buf.push_str("=>");
-        buf.push_str(self.alias);
     }
 }
 

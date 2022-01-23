@@ -12,10 +12,11 @@ use roc_parse::ast::{
 };
 use roc_parse::header::{
     AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
 use roc_parse::{
     ast::{Def, Module},
+    ident::UppercaseIdent,
     module::{self, module_defs},
     parser::{Parser, SyntaxError},
     state::State,
@@ -285,7 +286,7 @@ impl<'a> RemoveSpaces<'a> for PlatformRequires<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for PlatformRigid<'a> {
+impl<'a> RemoveSpaces<'a> for UppercaseIdent<'a> {
     fn remove_spaces(&self, _arena: &'a Bump) -> Self {
         *self
     }
