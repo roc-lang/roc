@@ -1,4 +1,4 @@
-procedure Num.42 (#Attr.2, #Attr.3):
+procedure Num.40 (#Attr.2, #Attr.3):
     let Test.15 : Builtin(Int(I64)) = 0i64;
     let Test.12 : Builtin(Bool) = lowlevel NotEq #Attr.3 Test.15;
     if Test.12 then
@@ -13,7 +13,7 @@ procedure Num.42 (#Attr.2, #Attr.3):
 procedure Test.0 ():
     let Test.8 : Builtin(Int(I64)) = 1000i64;
     let Test.9 : Builtin(Int(I64)) = 10i64;
-    let Test.2 : Union(NonRecursive([[Struct([])], [Builtin(Int(I64))]])) = CallByName Num.42 Test.8 Test.9;
+    let Test.2 : Union(NonRecursive([[Struct([])], [Builtin(Int(I64))]])) = CallByName Num.40 Test.8 Test.9;
     let Test.5 : Builtin(Int(U8)) = 1i64;
     let Test.6 : Builtin(Int(U8)) = GetTagId Test.2;
     let Test.7 : Builtin(Bool) = lowlevel Eq Test.5 Test.6;

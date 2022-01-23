@@ -11,7 +11,7 @@ procedure List.7 (#Attr.2):
     let Test.9 : Builtin(Int(U64)) = lowlevel ListLen #Attr.2;
     ret Test.9;
 
-procedure Num.24 (#Attr.2, #Attr.3):
+procedure Num.22 (#Attr.2, #Attr.3):
     let Test.7 : Builtin(Int(U64)) = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Test.7;
 
@@ -33,5 +33,5 @@ procedure Test.0 ():
     let Test.8 : Builtin(List(Builtin(Int(I64)))) = CallByName Test.1;
     let Test.6 : Builtin(Int(U64)) = CallByName List.7 Test.8;
     dec Test.8;
-    let Test.4 : Builtin(Int(U64)) = CallByName Num.24 Test.5 Test.6;
+    let Test.4 : Builtin(Int(U64)) = CallByName Num.22 Test.5 Test.6;
     ret Test.4;
