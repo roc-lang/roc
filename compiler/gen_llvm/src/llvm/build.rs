@@ -1477,7 +1477,6 @@ pub fn tag_alloca<'a, 'ctx, 'env>(
     basic_type: BasicTypeEnum<'ctx>,
     name: &str,
 ) -> PointerValue<'ctx> {
-    // let result_alloca = env.builder.build_alloca(basic_type, name);
     let parent = env
         .builder
         .get_insert_block()
