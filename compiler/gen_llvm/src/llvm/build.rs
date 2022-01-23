@@ -45,7 +45,7 @@ use inkwell::types::{
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue,
-    InstructionOpcode, InstructionValue, IntValue, PointerValue, StructValue,
+    InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -129,7 +129,7 @@ impl<'ctx> Iterator for FunctionIterator<'ctx> {
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
     pub top_level_thunks: ImMap<Symbol, (ProcLayout<'a>, FunctionValue<'ctx>)>,
-    join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
+    join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PhiValue<'ctx>])>,
 }
 
 impl<'a, 'ctx> Scope<'a, 'ctx> {
@@ -1474,10 +1474,16 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
 
 pub fn tag_alloca<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    type_: BasicTypeEnum<'ctx>,
+    basic_type: BasicTypeEnum<'ctx>,
     name: &str,
 ) -> PointerValue<'ctx> {
-    let result_alloca = env.builder.build_alloca(type_, name);
+    let parent = env
+        .builder
+        .get_insert_block()
+        .unwrap()
+        .get_parent()
+        .unwrap();
+    let result_alloca = create_entry_block_alloca(env, parent, basic_type, name);
 
     // Initialize all memory of the alloca. This _should_ not be required, but currently
     // LLVM can access uninitialized memory after applying some optimizations. Hopefully
@@ -1496,7 +1502,7 @@ pub fn tag_alloca<'a, 'ctx, 'env>(
     // After inlining, those checks are combined. That means that even if the tag is Err,
     // a check is done on the "string" to see if it is big or small, which will touch the
     // uninitialized memory.
-    let all_zeros = type_.const_zero();
+    let all_zeros = basic_type.const_zero();
     env.builder.build_store(result_alloca, all_zeros);
 
     result_alloca
@@ -2648,20 +2654,29 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let builder = env.builder;
             let context = env.context;
 
-            let mut joinpoint_args = Vec::with_capacity_in(parameters.len(), env.arena);
-
-            for param in parameters.iter() {
-                let btype = basic_type_from_layout(env, &param.layout);
-                joinpoint_args.push(create_entry_block_alloca(
-                    env,
-                    parent,
-                    btype,
-                    "joinpointarg",
-                ));
-            }
-
             // create new block
             let cont_block = context.append_basic_block(parent, "joinpointcont");
+
+            let mut joinpoint_args = Vec::with_capacity_in(parameters.len(), env.arena);
+            {
+                let current = builder.get_insert_block().unwrap();
+                builder.position_at_end(cont_block);
+
+                for param in parameters.iter() {
+                    let basic_type = basic_type_from_layout(env, &param.layout);
+
+                    let phi_type = if param.layout.is_passed_by_reference() {
+                        basic_type.ptr_type(AddressSpace::Generic).into()
+                    } else {
+                        basic_type
+                    };
+
+                    let phi_node = env.builder.build_phi(phi_type, "joinpointarg");
+                    joinpoint_args.push(phi_node);
+                }
+
+                builder.position_at_end(current);
+            }
 
             // store this join point
             let joinpoint_args = joinpoint_args.into_bump_slice();
@@ -2682,12 +2697,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // put the cont block at the back
             builder.position_at_end(cont_block);
 
-            for (ptr, param) in joinpoint_args.iter().zip(parameters.iter()) {
-                let value = if param.layout.is_passed_by_reference() {
-                    (*ptr).into()
-                } else {
-                    env.builder.build_load(*ptr, "load_jp_argument")
-                };
+            // bind the values
+            for (phi_value, param) in joinpoint_args.iter().zip(parameters.iter()) {
+                let value = phi_value.as_basic_value();
                 scope.insert(param.symbol, (param.layout, value));
             }
 
@@ -2708,15 +2720,18 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             result
         }
+
         Jump(join_point, arguments) => {
             let builder = env.builder;
             let context = env.context;
-            let (cont_block, argument_pointers) = scope.join_points.get(join_point).unwrap();
+            let (cont_block, argument_phi_values) = scope.join_points.get(join_point).unwrap();
 
-            for (pointer, argument) in argument_pointers.iter().zip(arguments.iter()) {
-                let (value, layout) = load_symbol_and_layout(scope, argument);
+            let current_block = builder.get_insert_block().unwrap();
 
-                store_roc_value(env, *layout, *pointer, value);
+            for (phi_value, argument) in argument_phi_values.iter().zip(arguments.iter()) {
+                let (value, _) = load_symbol_and_layout(scope, argument);
+
+                phi_value.add_incoming(&[(&value, current_block)]);
             }
 
             builder.build_unconditional_branch(*cont_block);
