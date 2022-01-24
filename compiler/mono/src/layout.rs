@@ -1602,9 +1602,8 @@ fn layout_from_flat_type<'a>(
             // That means none of the optimizations for enums or single tag tag unions apply
 
             let rec_var = subs.get_root_key_without_compacting(rec_var);
-            let mut tag_layouts = Vec::with_capacity_in(tags.tags.len(), arena);
-
-            let tags_vec = cheap_sort_tags(&tags);
+            let tags_vec = tags.tags;
+            let mut tag_layouts = Vec::with_capacity_in(tags_vec.len(), arena);
 
             let mut nullable = None;
 
@@ -2323,10 +2322,6 @@ pub fn union_sorted_tags_help<'a>(
     }
 }
 
-fn cheap_sort_tags<'a>(tags: &'a UnsortedUnionTags) -> &'a [(&'a TagName, &'a [Variable])] {
-    &tags.tags
-}
-
 fn layout_from_newtype<'a>(
     arena: &'a Bump,
     tags: &UnsortedUnionTags,
@@ -2376,7 +2371,7 @@ fn layout_from_tag_union<'a>(
         return layout_from_newtype(arena, tags, subs, ptr_bytes);
     }
 
-    let tags_vec = cheap_sort_tags(tags);
+    let tags_vec = &tags.tags;
 
     match tags_vec.get(0) {
         Some((tag_name, arguments)) if *tag_name == &TagName::Private(Symbol::NUM_AT_NUM) => {

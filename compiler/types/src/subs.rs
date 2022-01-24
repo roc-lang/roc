@@ -830,10 +830,7 @@ fn integer_type(
 ) {
     // define the type Signed64 (which is an alias for [ @Signed64 ])
     {
-        let tags = UnionTags::insert_into_subs::<Variable, _, _>(
-            subs,
-            [(TagName::Private(num_at_signed64), [])],
-        );
+        let tags = UnionTags::insert_into_subs(subs, [(TagName::Private(num_at_signed64), [])]);
 
         subs.set_content(at_signed64, {
             Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
@@ -1085,7 +1082,7 @@ impl Subs {
             Content::Structure(FlatType::EmptyTagUnion),
         );
 
-        let bool_union_tags = UnionTags::insert_into_subs::<Variable, _, _>(
+        let bool_union_tags = UnionTags::insert_into_subs(
             &mut subs,
             [
                 (TagName::Global("False".into()), []),
@@ -1727,11 +1724,10 @@ impl UnionTags {
     pub fn compare<T>(x: &(TagName, T), y: &(TagName, T)) -> std::cmp::Ordering {
         first(x, y)
     }
-    pub fn insert_into_subs<V, I, I2>(subs: &mut Subs, input: I) -> Self
+    pub fn insert_into_subs<I, I2>(subs: &mut Subs, input: I) -> Self
     where
-        V: Into<Variable>,
         I: IntoIterator<Item = (TagName, I2)>,
-        I2: IntoIterator<Item = V>,
+        I2: IntoIterator<Item = Variable>,
     {
         let tag_names_start = subs.tag_names.len() as u32;
         let variables_start = subs.variable_slices.len() as u32;
@@ -1744,8 +1740,7 @@ impl UnionTags {
 
         let mut length = 0;
         for (k, v) in it {
-            let variables =
-                VariableSubsSlice::insert_into_subs(subs, v.into_iter().map(|v| v.into()));
+            let variables = VariableSubsSlice::insert_into_subs(subs, v.into_iter());
 
             subs.tag_names.push(k);
             subs.variable_slices.push(variables);
