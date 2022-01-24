@@ -1,7 +1,7 @@
 use std::{fmt::Debug, iter::FromIterator};
 
 use bumpalo::collections::vec::Vec;
-use roc_reporting::internal_error;
+use roc_error_macros::internal_error;
 
 /// In the WebAssembly binary format, all integers are variable-length encoded (using LEB-128)
 /// A small value like 3 or 100 is encoded as 1 byte. The value 128 needs 2 bytes, etc.

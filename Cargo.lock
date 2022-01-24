@@ -3248,12 +3248,12 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_load",
  "roc_module",
  "roc_parse",
  "roc_problem",
  "roc_region",
- "roc_reporting",
  "roc_types",
  "roc_unify",
  "snafu",
@@ -3338,6 +3338,7 @@ dependencies = [
  "roc_constrain",
  "roc_docs",
  "roc_editor",
+ "roc_error_macros",
  "roc_fmt",
  "roc_gen_llvm",
  "roc_linker",
@@ -3471,6 +3472,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_error_macros"
+version = "0.1.0"
+
+[[package]]
 name = "roc_fmt"
 version = "0.1.0"
 dependencies = [
@@ -3495,12 +3500,12 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
  "roc_parse",
  "roc_problem",
  "roc_region",
- "roc_reporting",
  "roc_solve",
  "roc_std",
  "roc_types",
@@ -3517,9 +3522,9 @@ dependencies = [
  "morphic_lib",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
- "roc_reporting",
  "roc_std",
  "target-lexicon",
 ]
@@ -3531,9 +3536,9 @@ dependencies = [
  "bumpalo",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
- "roc_reporting",
  "roc_std",
 ]
 

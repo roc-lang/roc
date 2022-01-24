@@ -55,6 +55,7 @@ use morphic_lib::{
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth, IntrinsicName};
 use roc_builtins::{float_intrinsic, int_intrinsic};
 use roc_collections::all::{ImMap, MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
@@ -62,7 +63,6 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
-use roc_reporting::internal_error;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
