@@ -398,7 +398,7 @@ fn fix_values_captured_in_closure_pattern(
         | FloatLiteral(_, _, _)
         | StrLiteral(_)
         | Underscore
-        | Shadowed(_, _)
+        | Shadowed(..)
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => (),
     }

@@ -1980,12 +1980,12 @@ fn pattern_to_when<'a>(
             // for underscore we generate a dummy Symbol
             (env.unique_symbol(), body)
         }
-        Shadowed(region, loc_ident) => {
+        Shadowed(region, loc_ident, new_symbol) => {
             let error = roc_problem::can::RuntimeError::Shadowing {
                 original_region: *region,
                 shadow: loc_ident.clone(),
             };
-            (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
+            (*new_symbol, Loc::at_zero(RuntimeError(error)))
         }
 
         UnsupportedPattern(region) => {
@@ -7653,7 +7653,7 @@ fn from_can_pattern_help<'a>(
             }
         }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
-        Shadowed(region, ident) => Err(RuntimeError::Shadowing {
+        Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
         }),
