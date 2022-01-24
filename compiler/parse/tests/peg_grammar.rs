@@ -1,227 +1,422 @@
 #[cfg(test)]
 mod test_peg_grammar {
 
-/*#[derive(Copy, Clone)]
-pub enum Token {
-    LowercaseIdent      = 0b_0010_0000, 
-    UppercaseIdent      = 0b_0011_0011, 
-    MalformedIdent      = 0b_0010_0001,
-
-    KeywordIf           = 0b_0010_0010,
-    KeywordThen         = 0b_0010_0011,
-    KeywordElse         = 0b_0010_0100,
-    KeywordWhen         = 0b_0010_0101,
-    KeywordAs           = 0b_0010_0110,
-    KeywordIs           = 0b_0010_0111,
-    KeywordExpect       = 0b_0010_1000,
-    KeywordApp          = 0b_0010_1001,
-    KeywordInterface    = 0b_0010_1010,
-    KeywordPackages     = 0b_0010_1011,
-    KeywordImports      = 0b_0010_1100,
-    KeywordProvides     = 0b_0010_1101,
-    KeywordTo           = 0b_0010_1110,
-    KeywordExposes      = 0b_0010_1111,
-    KeywordEffects      = 0b_0011_0000,
-    KeywordPlatform     = 0b_0011_0001,
-    KeywordRequires     = 0b_0011_0010,
-
-    Comma               = 0b_0100_0000,
-    Colon               = 0b_0100_0001,
-
-    OpenParen           = 0b_0100_1000,
-    CloseParen          = 0b_0100_1001,
-    OpenCurly           = 0b_0100_1010,
-    CloseCurly          = 0b_0100_1011,
-    OpenSquare          = 0b_0100_1100,
-    CloseSquare         = 0b_0100_1101,
-    OpenIndent          = 0b_0100_1110,
-    CloseIndent         = 0b_0100_1111,
-
-    OpPlus              = 0b_0110_0000,
-    OpMinus             = 0b_0110_0001,
-    OpSlash             = 0b_0110_0010,
-    OpPercent           = 0b_0110_0011,
-    OpCaret             = 0b_0110_0100, // ^
-    OpGreaterThan       = 0b_0110_0101,
-    OpLessThan          = 0b_0110_0110,
-    OpAssignment        = 0b_0110_0111, // =
-    OpPizza             = 0b_0110_1000, // |>
-    OpEquals            = 0b_0110_1001, // ==
-    OpNotEquals         = 0b_0110_1010, // !=
-    OpGreaterThanOrEq   = 0b_0110_1011, // >=
-    OpLessThanOrEq      = 0b_0110_1100, // <=
-    OpAnd               = 0b_0110_1101, // &&
-    OpOr                = 0b_0110_1110, // ||
-    OpDoubleSlash       = 0b_0110_1111, // //
-    OpDoublePercent     = 0b_0111_0001, // %%
-    OpBackpassing       = 0b_0111_1010, // <-
-
-    TodoNextThing       = 0b_1000_0000,
-
-    Malformed,
-    MalformedOperator,
-
-    PrivateTag,
-
-    String,
-
-    NumberBase,
-    Number,
-
-    QuestionMark,
-
-    Underscore,
-
-    Ampersand, // &
-    Pipe, // |
-    Dot, // .
-    Bang, // !
-    LambdaStart, // \
-    Arrow, // ->
-    FatArrow,
-    Asterisk,
-}*/
-
-use logos::Logos;
-
-  // tokenizer used for testing the peg_grammar until the "official" tokenizer is ready
-  #[derive(Logos, Debug, PartialEq, Copy, Clone)]
+  #[repr(u8)]
+  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+  /// Tokens are full of very dense information to make checking properties about them
+  /// very fast.
+  /// Some bits have specific meanings: 
+  /// * 0b_001*_****: "Identifier-like" things
+  /// * 0b_01**_****: "Punctuation"
+  ///     * 0b_0100_1***: []{}() INDENT/DEDENT
+  ///         * 0b_0100_1**0 [{(INDENT
+  ///         * 0b_0100_1**1 ]})DEDENT
+  ///     * 0b_011*_**** Operators
   pub enum Token {
-      // Keywords
-      #[token("if")]
-      KeywordIf,
-      #[token("then")]
-      KeywordThen,
-      #[token("else")]
-      KeywordElse,
-      #[token("when")]
-      KeywordWhen,
-      #[token("as")]
-      KeywordAs,
-      #[token("is")]
-      KeywordIs,
-      #[token("expect")]
-      KeywordExpect,
-      #[token("app")]
-      KeywordApp,
-      #[token("interface")]
-      KeywordInterface,
-      #[token("packages")]
-      KeywordPackages,
-      #[token("imports")]
-      KeywordImports,
-      #[token("provides")]
-      KeywordProvides,
-      #[token("to")]
-      KeywordTo,
-      #[token("exposes")]
-      KeywordExposes,
-      #[token("effects")]
-      KeywordEffects,
-      #[token("platform")]
-      KeywordPlatform,
-      #[token("requires")]
-      KeywordRequires,
-      
-      // TODO support unicode alphabet
-      #[regex("[A-Z][a-zA-Z0-9]*")]
-      UppercaseIdent,
-      #[regex("[a-z][a-zA-Z0-9]*")]
-      LowercaseIdent,
-
-      #[token(",")]
-      Comma,
-      #[token(":")]
-      Colon,
-
-      #[token("(")]
-      OpenParen,
-      #[token(")")]
-      CloseParen,
-      #[token("{")]
-      OpenCurly,
-      #[token("}")]
-      CloseCurly,
-      #[token("[")]
-      OpenSquare,
-      #[token("]")]
-      CloseSquare,
-
-      #[token("+")]
-      OpPlus,
-      #[token("-")]
-      OpMinus,
-      #[token("/")]
-      OpSlash,
-      #[token("%")]
-      OpPercent,
-      #[token("^")]
-      OpCaret,
-      #[token(">")]
-      OpGreaterThan,
-      #[token("<")]
-      OpLessThan,
-      #[token("=")]
-      OpAssignment,
-      #[token("|>")]
-      OpPizza,
-      #[token("==")]
-      OpEquals,
-      #[token("!=")]
-      OpNotEquals,
-      #[token(">=")]
-      OpGreaterThanOrEq,
-      #[token("<=")]
-      OpLessThanOrEq,
-      #[token("&&")]
-      OpAnd,
-      #[token("||")]
-      OpOr,
-      #[token("//")]
-      OpDoubleSlash,
-      #[token("%%")]
-      OpDoublePercent,
-      #[token("<-")]
-      OpBackpassing,
-
-      #[regex("@[A-Z][a-zA-Z0-9]")]
+      LowercaseIdent      = 0b_0010_0000, 
+      UppercaseIdent      = 0b_0011_0011,
+      MalformedIdent      = 0b_0010_0001,
+  
+      KeywordIf           = 0b_0010_0010,
+      KeywordThen         = 0b_0010_0011,
+      KeywordElse         = 0b_0010_0100,
+      KeywordWhen         = 0b_0010_0101,
+      KeywordAs           = 0b_0010_0110,
+      KeywordIs           = 0b_0010_0111,
+      KeywordExpect       = 0b_0010_1000,
+      KeywordApp          = 0b_0010_1001,
+      KeywordInterface    = 0b_0010_1010,
+      KeywordPackages     = 0b_0010_1011,
+      KeywordImports      = 0b_0010_1100,
+      KeywordProvides     = 0b_0010_1101,
+      KeywordTo           = 0b_0010_1110,
+      KeywordExposes      = 0b_0010_1111,
+      KeywordEffects      = 0b_0011_0000,
+      KeywordPlatform     = 0b_0011_0001,
+      KeywordRequires     = 0b_0011_0010,
+  
+      Comma               = 0b_0100_0000,
+      Colon               = 0b_0100_0001,
+  
+      OpenParen           = 0b_0100_1000,
+      CloseParen          = 0b_0100_1001,
+      OpenCurly           = 0b_0100_1010,
+      CloseCurly          = 0b_0100_1011,
+      OpenSquare          = 0b_0100_1100,
+      CloseSquare         = 0b_0100_1101,
+      OpenIndent          = 0b_0100_1110,
+      CloseIndent         = 0b_0100_1111,
+      SameIndent          = 0b_0101_0000,
+  
+      OpPlus              = 0b_0110_0000,
+      OpMinus             = 0b_0110_0001,
+      OpSlash             = 0b_0110_0010,
+      OpPercent           = 0b_0110_0011,
+      OpCaret             = 0b_0110_0100,
+      OpGreaterThan       = 0b_0110_0101,
+      OpLessThan          = 0b_0110_0110,
+      OpAssignment        = 0b_0110_0111,
+      OpPizza             = 0b_0110_1000,
+      OpEquals            = 0b_0110_1001,
+      OpNotEquals         = 0b_0110_1010,
+      OpGreaterThanOrEq   = 0b_0110_1011,
+      OpLessThanOrEq      = 0b_0110_1100,
+      OpAnd               = 0b_0110_1101,
+      OpOr                = 0b_0110_1110,
+      OpDoubleSlash       = 0b_0110_1111,
+      OpDoublePercent     = 0b_0111_0001,
+      OpBackpassing       = 0b_0111_1010,
+  
+      TodoNextThing       = 0b_1000_0000,
+  
+      Malformed,
+      MalformedOperator,
+  
       PrivateTag,
-      #[regex("\"[^\n\"]*\"")]
+  
       String,
-
-      #[token("TODO")]
+  
       NumberBase,
-      #[regex("([0-9]+)?(.[0-9]*)?")]
       Number,
-
-      #[token("?")]
+  
       QuestionMark,
-      #[token("_")]
+  
       Underscore,
-      #[token("&")]
+  
       Ampersand,
-      #[token("|")]
       Pipe,
-      #[token(".")]
       Dot,
-      #[token("!")]
       Bang,
-      #[token("\\")]
       LambdaStart,
-      #[token("->")]
       Arrow,
-      #[token("=>")]
       FatArrow,
-      #[token("*")]
       Asterisk,
+  }
+  
+  pub struct TokenTable {
+      pub tokens: Vec<Token>,
+      pub offsets: Vec<usize>,
+      pub lengths: Vec<usize>,
+  }
+  
+  pub struct LexState {
+      indents: Vec<usize>,
+  }
+  
+  trait ConsumeToken {
+      fn token(&mut self, token: Token, offset: usize, length: usize);
+  }
 
-      // Logos requires one token variant to handle errors,
-      #[error]
-      // We can also use this variant to define whitespace,
-      // or any other matches we wish to skip.
-      #[regex(r"[ \t\n\r]+", logos::skip)]
-      #[regex(r"#[^\n]*", logos::skip)] // skip comments for now
-      Error,
+  struct TestConsumer{
+    tokens: Vec<Token>,
+  }
+
+  impl ConsumeToken for TestConsumer {
+    fn token(&mut self, token: Token, offset: usize, length: usize){
+      self.tokens.push(token);
+    }
+  }
+
+  fn test_tokenize(code_str: &str) -> Vec<Token> {
+    let mut lex_state = LexState{ indents: Vec::new() };
+    let mut consumer = TestConsumer{ tokens: Vec::new() };
+
+    tokenize(
+      &mut lex_state,
+      code_str.as_bytes(),
+      &mut consumer
+    );
+
+    consumer.tokens
+  }
+  
+  fn tokenize(
+      state: &mut LexState,
+      bytes: &[u8],
+      consumer: &mut impl ConsumeToken,
+  ) {
+      let mut i = 0;
+  
+      while i < bytes.len() {
+          let bytes = &bytes[i..];
+  
+          let (token, len) = match bytes[0] {
+              b'(' => (Token::OpenParen, 1),
+              b')' => (Token::CloseParen, 1),
+              b'{' => (Token::OpenCurly, 1),
+              b'}' => (Token::CloseCurly, 1),
+              b'[' => (Token::OpenSquare, 1),
+              b']' => (Token::CloseSquare, 1),
+              b',' => (Token::Comma, 1),
+              b'_' => lex_underscore(bytes),
+              b'@' => lex_private_tag(bytes),
+              b'a'..=b'z' => lex_ident(false, bytes),
+              b'A'..=b'Z' => lex_ident(true, bytes),
+              b'0'..=b'9' => lex_number(bytes),
+              b'-' | b':' | b'!' | b'.' | b'*' | b'/' | b'&' |
+              b'%' | b'^' | b'+' | b'<' | b'=' | b'>' | b'|' | b'\\' => lex_operator(bytes),
+              b' ' => {
+                  i += skip_whitespace(bytes);
+                  continue;
+              }
+              b'\n' => {
+                  // TODO: add newline to side_table
+                  let (new_skip, curr_line_indent) = skip_newlines(bytes);
+                  i += new_skip;
+
+                  if let Some(&prev_indent) = state.indents.last() {
+                    if curr_line_indent > prev_indent {
+                      state.indents.push(curr_line_indent);
+                      (Token::OpenIndent, curr_line_indent)
+                    } else {
+                      i += curr_line_indent;
+
+                      if prev_indent > curr_line_indent {
+                        state.indents.pop();
+                        consumer.token(Token::CloseIndent, i, 0);
+                      } else if prev_indent == curr_line_indent || curr_line_indent == 0 {
+                        consumer.token(Token::SameIndent, i, 0);
+                      }
+
+                      continue;
+                    }
+                  } else if curr_line_indent > 0 {
+                    state.indents.push(curr_line_indent);
+                    (Token::OpenIndent, curr_line_indent)
+                  } else {
+                    consumer.token(Token::SameIndent, i, 0);
+                    continue;
+                  }
+                  
+              }
+              b'#' => {
+                  // TODO: add comment to side_table
+                  i += skip_comment(bytes);
+                  continue;
+              }
+              b'"' => lex_string(bytes),
+              b => todo!("handle {:?}", b as char),
+          };
+  
+          consumer.token(token, i, len);
+          i += len;
+      }
+  }
+  
+  impl TokenTable {
+      pub fn new(text: &str) -> TokenTable {
+          let mut tt = TokenTable {
+              tokens: Vec::new(),
+              offsets: Vec::new(),
+              lengths: Vec::new(),
+          };
+  
+          let mut offset = 0;
+          let mut state = LexState::new();
+  
+          // while let Some((token, skip, length)) = Token::lex_single(&mut state, &text.as_bytes()[offset..]) {
+          //     tt.tokens.push(token);
+          //     offset += skip;
+          //     tt.offsets.push(offset);
+          //     offset += length;
+          //     tt.lengths.push(length);
+          // }
+  
+          tt
+      }
+  }
+  
+  impl LexState {
+      pub fn new() -> LexState {
+          LexState {
+              indents: Vec::new(),
+          }
+      }
+  }
+  
+  fn skip_comment(bytes: &[u8]) -> usize {
+      let mut skip = 0;
+      while skip < bytes.len() && bytes[skip] != b'\n' {
+          skip += 1;
+      }
+      if skip < bytes.len() && bytes[skip] == b'\n' {
+          skip += 1;
+      }
+      skip
+  }
+  
+  #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
+  struct Indent(usize);
+  
+  fn skip_whitespace(bytes: &[u8]) -> usize {
+      debug_assert!(bytes[0] == b' ');
+  
+      let mut skip = 0;
+      while skip < bytes.len() && bytes[skip] == b' ' {
+          skip += 1;
+      }
+      skip
+  }
+  
+  fn skip_newlines(bytes: &[u8]) -> (usize, usize) {
+      let mut skip = 0;
+      let mut indent = 0;
+  
+      while skip < bytes.len() && bytes[skip] == b'\n' {
+          skip += indent + 1;
+
+          let spaces = 
+          if bytes.len() > 1 && bytes[1] == b' ' {
+            skip_whitespace(&bytes[1..])
+          } else {
+            0
+          };
+          
+          indent = spaces;
+      }
+  
+      (skip, indent)
+  }
+  
+  fn is_op_continue(ch: u8) -> bool {
+      matches!(ch, b'-' | b':' | b'!' | b'.' | b'*' | b'/' | b'&' |
+                  b'%' | b'^' | b'+' | b'<' | b'=' | b'>' | b'|' | b'\\')
+  }
+  
+  fn lex_operator(bytes: &[u8]) -> (Token, usize) {
+      let mut i = 0;
+      while i < bytes.len() && is_op_continue(bytes[i]) {
+          i += 1;
+      }
+      let tok = match &bytes[0..i] {
+          b"+" => Token::OpPlus,
+          b"-" => Token::OpMinus,
+          b"*" => Token::Asterisk,
+          b"/" => Token::OpSlash,
+          b"%" => Token::OpPercent,
+          b"^" => Token::OpCaret,
+          b">" => Token::OpGreaterThan,
+          b"<" => Token::OpLessThan,
+          b"." => Token::Dot,
+          b"=" => Token::OpAssignment,
+          b":" => Token::Colon,
+          b"|" => Token::Pipe,
+          b"\\" => Token::LambdaStart,
+          b"|>" => Token::OpPizza,
+          b"==" => Token::OpEquals,
+          b"!" => Token::Bang,
+          b"!=" => Token::OpNotEquals,
+          b">=" => Token::OpGreaterThanOrEq,
+          b"<=" => Token::OpLessThanOrEq,
+          b"&&" => Token::OpAnd,
+          b"&" => Token::Ampersand,
+          b"||" => Token::OpOr,
+          b"//" => Token::OpDoubleSlash,
+          b"%%" => Token::OpDoublePercent,
+          b"->" => Token::Arrow,
+          b"<-" => Token::OpBackpassing,
+          op => {
+              dbg!(std::str::from_utf8(op).unwrap());
+              Token::MalformedOperator
+          }
+      };
+      (tok, i)
+  }
+  
+  fn is_ident_continue(ch: u8) -> bool {
+      matches!(ch, b'a'..=b'z'|b'A'..=b'Z'|b'0'..=b'9'|b'_')
+  }
+  
+  fn lex_private_tag(bytes: &[u8]) -> (Token, usize) {
+      debug_assert!(bytes[0] == b'@');
+      let mut i = 1;
+      while i < bytes.len() && is_ident_continue(bytes[i]) {
+          i += 1;
+      }
+      (Token::PrivateTag, i)
+  }
+  
+  fn lex_ident(uppercase: bool, bytes: &[u8]) -> (Token, usize) {
+      let mut i = 0;
+      while i < bytes.len() && is_ident_continue(bytes[i]) {
+          i += 1;
+      }
+      let tok = match &bytes[0..i] {
+          b"if" => Token::KeywordIf,
+          b"then" => Token::KeywordThen,
+          b"else" => Token::KeywordElse,
+          b"when" => Token::KeywordWhen,
+          b"as" => Token::KeywordAs,
+          b"is" => Token::KeywordIs,
+          b"expect" => Token::KeywordExpect,
+          b"app" => Token::KeywordApp,
+          b"interface" => Token::KeywordInterface,
+          b"packages" => Token::KeywordPackages,
+          b"imports" => Token::KeywordImports,
+          b"provides" => Token::KeywordProvides,
+          b"to" => Token::KeywordTo,
+          b"exposes" => Token::KeywordExposes,
+          b"effects" => Token::KeywordEffects,
+          b"platform" => Token::KeywordPlatform,
+          b"requires" => Token::KeywordRequires,
+          ident => {
+              if ident.contains(&b'_') {
+                  Token::MalformedIdent
+              } else if uppercase {
+                  Token::UppercaseIdent
+              } else {
+                  Token::LowercaseIdent
+              }
+          },
+      };
+      (tok, i)
+  }
+  
+  fn lex_underscore(bytes: &[u8]) -> (Token, usize) {
+      let mut i = 0;
+      while i < bytes.len() && is_ident_continue(bytes[i]) {
+          i += 1;
+      }
+      (Token::Underscore, i)
+  }
+  
+  fn is_int_continue(ch: u8) -> bool {
+      matches!(ch, b'0'..=b'9' | b'_')
+  }
+  
+  fn lex_number(bytes: &[u8]) -> (Token, usize) {
+      let mut i = 0;
+      while i < bytes.len() && is_int_continue(bytes[i]) {
+          i += 1;
+      }
+  
+      if i < bytes.len() && bytes[i] == b'.' {
+          i += 1;
+          while i < bytes.len() && is_int_continue(bytes[i]) {
+              i += 1;
+          }
+      }
+  
+      (Token::Number, i)
+  }
+  
+  fn lex_string(bytes: &[u8]) -> (Token, usize) {
+      let mut i = 0;
+      assert_eq!(bytes[i], b'"');
+      i += 1;
+  
+      while i < bytes.len() {
+          match bytes[i] {
+              b'"' => break,
+              // TODO: escapes
+              _ => i += 1,
+          }
+      }
+  
+      assert_eq!(bytes[i], b'"');
+      i += 1;
+  
+      (Token::String, i)
   }
 
 type T = Token;
@@ -324,26 +519,28 @@ peg::parser!{
         rule accessor_function() =
           [T::Dot] ident()
 
-
         pub rule header() =
+          ([T::SameIndent] / [T::OpenIndent])? almost_header()
+
+        pub rule almost_header() =
           app_header()
           / interface_header()
           / platform_header()
 
         rule app_header() =
-          [T::KeywordApp] [T::String] packages() imports() provides()// TODO String should be checked to not be empty
+          [T::KeywordApp] [T::String] [T::OpenIndent]? packages() imports() provides() end()// check String to be non-empty?
         
         rule interface_header() =
-          [T::KeywordInterface] module_name() exposes() imports()
+          [T::KeywordInterface] module_name() [T::OpenIndent]? exposes() imports() end()
 
         rule platform_header() =
-          [T::KeywordPlatform] [T::String] requires() exposes() packages() imports() provides() effects()// TODO check String to be nonempty
+          [T::KeywordPlatform] [T::String] [T::OpenIndent]? requires() exposes() packages() imports() provides() effects() end()// check String to be nonempty?
 
         rule packages() =
-          [T::KeywordPackages] record()
+          [T::SameIndent]? [T::KeywordPackages] record() 
 
         rule imports() =
-          [T::KeywordImports] imports_list()
+          [T::SameIndent]? [T::KeywordImports] imports_list()
 
         rule imports_list() =
           empty_list()
@@ -360,7 +557,8 @@ peg::parser!{
           ident()
 
         rule provides() =
-          [T::KeywordProvides] provides_list() ([T::KeywordTo] provides_to())?
+          [T::SameIndent]? [T::KeywordProvides] provides_list() ([T::KeywordTo] provides_to())?
+
         rule provides_to() =
          [T::String]
           / ident()
@@ -370,7 +568,7 @@ peg::parser!{
           / [T::OpenSquare] exposed_names() [T::CloseSquare]
 
         rule exposes() =
-          [T::KeywordExposes] [T::OpenSquare] exposed_names() [T::CloseSquare]
+          [T::SameIndent]? [T::KeywordExposes] [T::OpenSquare] exposed_names() [T::CloseSquare]
 
         rule exposed_names() =
           (ident() [T::Comma])* ident()? [T::Comma]?
@@ -383,13 +581,13 @@ peg::parser!{
           / [T::OpenCurly] (requires_rigid() [T::Comma])* requires_rigid() [T::Comma]? [T::CloseCurly]
 
         rule requires_rigid() =
-          [T::LowercaseIdent] [T::FatArrow] [T::UppercaseIdent]
+          [T::LowercaseIdent] ([T::FatArrow] [T::UppercaseIdent])?
 
         pub rule typed_ident() =
           [T::LowercaseIdent] [T::Colon] type_annotation()
 
         rule effects() =
-          [T::KeywordEffects] effect_name() record_type()
+          [T::SameIndent]? [T::KeywordEffects] effect_name() record_type()
 
         rule effect_name() =
           [T::LowercaseIdent] [T::Dot] [T::UppercaseIdent]
@@ -521,11 +719,20 @@ peg::parser!{
           / module_name() [T::Dot] ident()
 
         rule apply() =
-          apply_expr() full_expr()+
+          apply_expr() full_expr()+ end()
 
         rule apply_expr() =
           var()
           / tag()
+
+        rule end() =
+          [T::CloseIndent]
+          / [T::SameIndent]
+          / end_of_file()
+
+        rule end_of_file() =
+         ![_]
+          
     }
 }
 
@@ -547,30 +754,50 @@ fn test_basic_expr() {
 }
 
 #[test]
-fn test_app_header() {
-  //app "test-app" packages {} imports [] provides [] to blah
-  assert_eq!(tokenparser::header(&[
-    T::KeywordApp, T::String,
-    T::KeywordPackages, T::OpenCurly, T::CloseCurly,
-    T::KeywordImports, T::OpenSquare, T::CloseSquare,
-    T::KeywordProvides, T::OpenSquare, T::CloseSquare,
-    T::KeywordTo, T::LowercaseIdent  
-  ]), Ok(()));
+fn test_app_header_1() {
+  let tokens = test_tokenize( r#"app "test-app" packages {} imports [] provides [] to blah"#);
+  
+  assert_eq!(tokenparser::header(&tokens), Ok(()));
+}
+
+#[test]
+fn test_app_header_2() {
+  let tokens = test_tokenize( r#"
+app "test-app"
+    packages { pf: "platform" }
+    imports []
+    provides [ main ] to pf
+"#);
+
+  assert_eq!(tokenparser::header(&tokens), Ok(()));
 }
 
 #[test]
 fn test_interface_header() {
-  //interface Foo.Bar.Baz exposes [] imports []
-  assert_eq!(tokenparser::header(&[
-    T::KeywordInterface, T::UppercaseIdent, T::Dot, T::UppercaseIdent, T::Dot, T::UppercaseIdent,
-    T::KeywordExposes, T::OpenSquare, T::CloseSquare,
-    T::KeywordImports, T::OpenSquare, T::CloseSquare,
-  ]), Ok(()));
+  let tokens = test_tokenize( r#"
+interface Foo.Bar.Baz exposes [] imports []
+"#);
+
+  assert_eq!(tokenparser::header(&tokens), Ok(()));
+}
+
+#[test]
+fn test_interface_header_2() {
+  let tokens = test_tokenize( r#"
+
+  interface Base64.Encode
+      exposes [ toBytes ]
+      imports [ Bytes.Encode.{ Encoder } ]
+
+"#);
+
+  assert_eq!(tokenparser::header(&tokens), Ok(()));
 }
 
 #[test]
 fn test_platform_header() {
-  /*platform "examples/cli"
+
+    let tokens = test_tokenize( r#"platform "examples/cli"
     requires {}{ main : Task {} [] }
     exposes []
     packages {}
@@ -581,23 +808,9 @@ fn test_platform_header() {
             getLine : Effect Str,
             putLine : Str -> Effect {},
             twoArguments : Int, Int -> Effect {}
-        }*/
-
-  assert_eq!(tokenparser::header(&[
-    T::KeywordPlatform, T::String,
-    T::KeywordRequires, T::OpenCurly, T::CloseCurly, T::OpenCurly, T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::OpenCurly, T::CloseCurly, T::OpenSquare, T::CloseSquare, T::CloseCurly,
-    T::KeywordExposes, T::OpenSquare, T::CloseSquare,
-    T::KeywordPackages, T::OpenCurly, T::CloseCurly,
-    T::KeywordImports, T::OpenSquare, T::UppercaseIdent, T::Dot, T::OpenCurly, T::UppercaseIdent, T::CloseCurly, T::CloseSquare,
-    T::KeywordProvides, T::OpenSquare, T::LowercaseIdent, T::CloseSquare,
-    T::KeywordEffects, T::LowercaseIdent, T::Dot, T::UppercaseIdent,
-    T::OpenCurly,
-    T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::UppercaseIdent , T::Comma,
-    T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::Arrow, T::UppercaseIdent, T::OpenCurly, T::CloseCurly, T::Comma,
-    T::LowercaseIdent, T::Colon, T::UppercaseIdent, T::Comma, T::UppercaseIdent, T::Arrow, T::UppercaseIdent, T::OpenCurly, T::CloseCurly,
-    T::CloseCurly
-    
-  ]), Ok(()));
+        }"#);
+    dbg!(&tokens);
+    assert_eq!(tokenparser::header(&tokens), Ok(()));
 }
 
 #[test]
@@ -616,39 +829,40 @@ fn test_order_of_ops() {
 
 #[test]
 fn test_hello() {
-  let lex = Token::lexer( r#"
-  app "test-app"
-      packages { pf: "platform" }
-      imports []
-      provides [ main ] to pf
-  
-  main = "Hello, world!"
-  "#);
+  let tokens = test_tokenize( r#"
+app "test-app"
+    packages { pf: "platform" }
+    imports []
+    provides [ main ] to pf
 
-  let tokens: Vec<Token> = lex.collect();
-
+main = "Hello, world!"
+"#);
+  dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
 #[test]
-fn test_fibo_def() {
-  let lex = Token::lexer( 
-    r#"
+fn test_fibo() {
+  let tokens = test_tokenize( r#"
+app "fib"
+  packages { pf: "platform" }
+  imports []
+  provides [ main ] to pf
+
+main = \n -> fib n 0 1
+
+# the clever implementation requires join points
 fib = \n, a, b ->
-    if n == 0 then
-        a
-    else
-        fib (n - 1) b (a + b)
-  "#);
-
-  let tokens: Vec<Token> = lex.collect();
-  /*dbg!(&tokens);
-  dbg!(tokens.len());*/
-
-  assert_eq!(tokenparser::def(&tokens), Ok(()));
+  if n == 0 then
+      a
+  else
+      fib (n - 1) b (a + b)
+"#);
+  dbg!(&tokens);
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
-#[test]
+/*#[test]
 fn astar_init_model() {
   let lex = Token::lexer( 
   r#"
@@ -667,7 +881,6 @@ initialModel = \start ->
 
   assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
-
-
+*/
 
 }
