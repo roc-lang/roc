@@ -753,49 +753,52 @@ fn link_linux(
 
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
-    Ok((
-        Command::new("ld")
-            // Don't allow LD_ env vars to affect this
-            .env_clear()
-            .env("PATH", &env_path)
-            // Keep NIX_ env vars
-            .envs(
-                env::vars()
-                    .filter(|&(ref k, _)| k.starts_with("NIX_"))
-                    .collect::<HashMap<String, String>>(),
-            )
-            .args(&[
-                "--gc-sections",
-                "--eh-frame-hdr",
-                "-A",
-                arch_str(target),
-                "-pie",
-                libcrt_path.join("crti.o").to_str().unwrap(),
-                libcrt_path.join("crtn.o").to_str().unwrap(),
-            ])
-            .args(&base_args)
-            .args(&["-dynamic-linker", ld_linux])
-            .args(input_paths)
-            // ld.lld requires this argument, and does not accept --arch
-            // .args(&["-L/usr/lib/x86_64-linux-gnu"])
-            .args(&[
-                // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
-                // for discussion and further references
-                "-lc",
-                "-lm",
-                "-lpthread",
-                "-ldl",
-                "-lrt",
-                "-lutil",
-                "-lc_nonshared",
-                libgcc_path.to_str().unwrap(),
-                // Output
-                "-o",
-                output_path.as_path().to_str().unwrap(), // app (or app.so or app.dylib etc.)
-            ])
-            .spawn()?,
-        output_path,
-    ))
+
+    let mut command = Command::new("ld");
+
+    command
+        // Don't allow LD_ env vars to affect this
+        .env_clear()
+        .env("PATH", &env_path)
+        // Keep NIX_ env vars
+        .envs(
+            env::vars()
+                .filter(|&(ref k, _)| k.starts_with("NIX_"))
+                .collect::<HashMap<String, String>>(),
+        )
+        .args(&[
+            "--gc-sections",
+            "--eh-frame-hdr",
+            "-A",
+            arch_str(target),
+            "-pie",
+            libcrt_path.join("crti.o").to_str().unwrap(),
+            libcrt_path.join("crtn.o").to_str().unwrap(),
+        ])
+        .args(&base_args)
+        .args(&["-dynamic-linker", ld_linux])
+        .args(input_paths)
+        // ld.lld requires this argument, and does not accept --arch
+        // .args(&["-L/usr/lib/x86_64-linux-gnu"])
+        .args(&[
+            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
+            // for discussion and further references
+            "-lc",
+            "-lm",
+            "-lpthread",
+            "-ldl",
+            "-lrt",
+            "-lutil",
+            "-lc_nonshared",
+            libgcc_path.to_str().unwrap(),
+            // Output
+            "-o",
+            output_path.as_path().to_str().unwrap(), // app (or app.so or app.dylib etc.)
+        ]);
+
+    let output = command.spawn()?;
+
+    Ok((output, output_path))
 }
 
 fn link_macos(

@@ -737,9 +737,17 @@ pub struct MonomorphizedModule<'a> {
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub entry_point: EntryPoint<'a>,
-    pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ExposedToHost {
+    /// usually `mainForHost`
+    pub values: MutMap<Symbol, Variable>,
+    /// exposed closure types, typically `Fx`
+    pub closure_types: Vec<Symbol>,
 }
 
 impl<'a> MonomorphizedModule<'a> {
@@ -837,7 +845,7 @@ enum Msg<'a> {
     /// all modules are now monomorphized, we are done
     FinishedAllSpecialization {
         subs: Subs,
-        exposed_to_host: MutMap<Symbol, Variable>,
+        exposed_to_host: ExposedToHost,
     },
 
     FailedToParse(FileError<'a, SyntaxError<'a>>),
@@ -875,7 +883,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub exposed_to_host: ExposedToHost,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
     /// have completed for a given module.
@@ -1008,7 +1016,7 @@ enum BuildTask<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
-        exposed_to_host: MutMap<Symbol, Variable>,
+        exposed_to_host: ExposedToHost,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -1475,7 +1483,7 @@ where
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
                 procedures: MutMap::default(),
-                exposed_to_host: MutMap::default(),
+                exposed_to_host: ExposedToHost::default(),
                 exposed_types,
                 arc_modules,
                 arc_shorthands,
@@ -1937,12 +1945,17 @@ fn update<'a>(
             };
 
             if is_host_exposed {
-                state.exposed_to_host.extend(
+                state.exposed_to_host.values.extend(
                     solved_module
                         .exposed_vars_by_symbol
                         .iter()
                         .map(|(k, v)| (*k, *v)),
                 );
+
+                state
+                    .exposed_to_host
+                    .closure_types
+                    .extend(solved_module.aliases.keys().copied());
             }
 
             if is_host_exposed && state.goal_phase == Phase::SolveTypes {
@@ -2177,7 +2190,7 @@ fn update<'a>(
 fn finish_specialization(
     state: State,
     subs: Subs,
-    exposed_to_host: MutMap<Symbol, Variable>,
+    exposed_to_host: ExposedToHost,
 ) -> Result<MonomorphizedModule, LoadingProblem> {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
@@ -2235,8 +2248,8 @@ fn finish_specialization(
     let entry_point = {
         let symbol = match platform_data {
             None => {
-                debug_assert_eq!(exposed_to_host.len(), 1);
-                *exposed_to_host.iter().next().unwrap().0
+                debug_assert_eq!(exposed_to_host.values.len(), 1);
+                *exposed_to_host.values.iter().next().unwrap().0
             }
             Some(PlatformData { provides, .. }) => provides,
         };
@@ -3884,7 +3897,7 @@ fn build_pending_specializations<'a>(
     mut layout_cache: LayoutCache<'a>,
     ptr_bytes: u32,
     // TODO remove
-    exposed_to_host: MutMap<Symbol, Variable>,
+    exposed_to_host: ExposedToHost,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
 
@@ -3924,7 +3937,7 @@ fn build_pending_specializations<'a>(
                 &mut module_thunks,
                 &mut mono_env,
                 def,
-                &exposed_to_host,
+                &exposed_to_host.values,
                 false,
             ),
             DeclareRec(defs) => {
@@ -3935,7 +3948,7 @@ fn build_pending_specializations<'a>(
                         &mut module_thunks,
                         &mut mono_env,
                         def,
-                        &exposed_to_host,
+                        &exposed_to_host.values,
                         true,
                     )
                 }
