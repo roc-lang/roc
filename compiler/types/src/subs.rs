@@ -1813,16 +1813,17 @@ impl UnionTags {
         it.map(f)
     }
 
-    pub fn unsorted_iterator_and_ext<'a>(
+    #[inline(always)]
+    pub fn unsorted_tags_and_ext<'a>(
         &'a self,
         subs: &'a Subs,
         ext: Variable,
-    ) -> (impl Iterator<Item = (&TagName, &[Variable])> + 'a, Variable) {
+    ) -> (UnsortedUnionTags<'a>, Variable) {
         let (it, ext) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
-
         let f = move |(label, slice): (_, SubsSlice<Variable>)| (label, subs.get_subs_slice(slice));
+        let it = it.map(f);
 
-        (it.map(f), ext)
+        (UnsortedUnionTags { tags: it.collect() }, ext)
     }
 
     #[inline(always)]
@@ -1874,6 +1875,25 @@ impl UnionTags {
 
             (Box::new(fields.into_iter()), ext)
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct UnsortedUnionTags<'a> {
+    pub tags: Vec<(&'a TagName, &'a [Variable])>,
+}
+
+impl<'a> UnsortedUnionTags<'a> {
+    pub fn is_newtype_wrapper(&self, _subs: &Subs) -> bool {
+        if self.tags.len() != 1 {
+            return false;
+        }
+        self.tags[0].1.len() == 1
+    }
+
+    pub fn get_newtype(&self, _subs: &Subs) -> (&TagName, Variable) {
+        let (tag_name, vars) = self.tags[0];
+        (tag_name, vars[0])
     }
 }
 
@@ -2023,6 +2043,21 @@ impl RecordFields {
             .expect("Something weird ended up in a record type");
 
         it
+    }
+
+    #[inline(always)]
+    pub fn unsorted_iterator_and_ext<'a>(
+        &'a self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> (
+        impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a,
+        Variable,
+    ) {
+        let (it, ext) = crate::types::gather_fields_unsorted_iter(subs, *self, ext)
+            .expect("Something weird ended up in a record type");
+
+        (it, ext)
     }
 
     /// Get a sorted iterator over the fields of this record type
