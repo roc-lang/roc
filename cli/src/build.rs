@@ -105,6 +105,21 @@ pub fn build_file<'a>(
     // To do this we will need to preprocess files just for their exported symbols.
     // Also, we should no longer need to do this once we have platforms on
     // a package repository, as we can then get precompiled hosts from there.
+
+    let exposed_values = loaded
+        .exposed_to_host
+        .values
+        .keys()
+        .map(|x| x.as_str(&loaded.interns).to_string())
+        .collect();
+
+    let exposed_closure_types = loaded
+        .exposed_to_host
+        .closure_types
+        .iter()
+        .map(|x| x.as_str(&loaded.interns).to_string())
+        .collect();
+
     let rebuild_thread = spawn_rebuild_thread(
         opt_level,
         surgically_link,
@@ -112,11 +127,8 @@ pub fn build_file<'a>(
         host_input_path.clone(),
         binary_path.clone(),
         target,
-        loaded
-            .exposed_to_host
-            .keys()
-            .map(|x| x.as_str(&loaded.interns).to_string())
-            .collect(),
+        exposed_values,
+        exposed_closure_types,
         target_valgrind,
     );
 
@@ -291,6 +303,7 @@ fn spawn_rebuild_thread(
     binary_path: PathBuf,
     target: &Triple,
     exported_symbols: Vec<String>,
+    exported_closure_types: Vec<String>,
     target_valgrind: bool,
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
@@ -305,6 +318,7 @@ fn spawn_rebuild_thread(
                     &thread_local_target,
                     host_input_path.as_path(),
                     exported_symbols,
+                    exported_closure_types,
                     target_valgrind,
                 )
                 .unwrap();
