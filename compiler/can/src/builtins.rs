@@ -1421,10 +1421,6 @@ fn str_trim_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrimRight, var_store)
 }
 
-// TODO GIESCH
-// Use a LetNonRec to re-find prefix len in then branch
-// understand how to use the LetNonRec var
-
 /// Str.dropPrefix : Str, Str -> Str
 fn str_drop_prefix(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let str_arg = Symbol::ARG_1;
@@ -1476,6 +1472,7 @@ fn str_drop_prefix(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         // TODO ensure reusing str_var here is safe (again)
+        // and/or just ask to talk through this whole fn
         vec![(str_var, str_arg), (str_var, prefix_arg)],
         var_store,
         body,
@@ -2077,9 +2074,6 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
         len_var,
     )
 }
-
-// TODO GIESCH
-// read and understand this
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
 ///

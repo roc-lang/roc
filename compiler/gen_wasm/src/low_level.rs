@@ -249,7 +249,10 @@ impl<'a> LowLevelCall<'a> {
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
             // TODO GIESCH
-            StrDropPrefixUnsafe => todo!(),
+            // does anything else need to be done for wasm?
+            StrDropPrefixUnsafe => {
+                self.load_args_and_call_zig(backend, bitcode::STR_DROP_PREFIX_UNSAFE)
+            }
 
             // List
             ListLen => match backend.storage.get(&self.arguments[0]) {

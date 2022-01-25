@@ -1707,27 +1707,6 @@ pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
     return RocStr.empty();
 }
 
-// TODO GIESCH
-// dropSuffix : Str, Str -> Result Str {}
-// dropPrefix : Str, Str -> Result Str {}
-//
-// Str.#dropLeftNBytesUnsave and Str.#dropRightNBytesUnsafe Str, Nat -> Str
-// then, the can/src/builtins uses with startsWith/endsWith to return a result,
-// like list_get does for List.#getUnsafe
-
-// TODO GIESCH
-// steps:
-// 1. add the LowLevel (and symbol?) for suffix/prefix match and dropleft/dropright
-//    (do the prefix version all the way first)
-// 2. add the builtin_defs_map entry that calls those builtins
-// 3. add ownership config/impl
-//    [owned, borrowed] - TODO double check this is correct
-// ...
-// ...
-// N. add roc source code tests
-
-// TODO fix these docs or make the API less weird
-
 // NOTE
 // this is unsafe in that it ignores unicode correctness
 // the suffix is only used as a way to pass its byte length
@@ -1897,7 +1876,7 @@ fn utf8BeginByte(byte: u8) bool {
 test "trim prefix: full match" {
     const string_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
     const string = RocStr.init(string_bytes, string_bytes.len);
-    // NOTE 'string' is deinitted by dropping the whole thing as a prefix
+    // NOTE 'string' is deinitted by trimming the prefix because it's a full match
 
     const prefix_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
     const prefix = RocStr.init(prefix_bytes, prefix_bytes.len);
@@ -1946,7 +1925,7 @@ test "trim prefix: no match" {
 test "trim suffix: full match" {
     const string_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
     const string = RocStr.init(string_bytes, string_bytes.len);
-    // NOTE 'string' is deinitted by dropping the whole thing as a prefix
+    // NOTE 'string' is deinitted by trimming the suffix because it's a full match
 
     const suffix_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
     const suffix = RocStr.init(suffix_bytes, suffix_bytes.len);

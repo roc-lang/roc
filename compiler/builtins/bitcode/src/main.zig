@@ -139,8 +139,6 @@ comptime {
         num.exportParseFloat(T, ROC_BUILTINS ++ "." ++ STR ++ ".to_float.");
     }
 
-    // TODO GIESCH
-    // use/fix these
     exportStrFn(str.dropPrefixUnsafe, "drop_prefix_unsafe");
     exportStrFn(str.dropSuffixUnsafe, "drop_suffix_unsafe");
 }

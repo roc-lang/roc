@@ -291,7 +291,7 @@ pub fn str_drop_prefix_unsafe<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[str_i128.into(), str_prefix_i128.into()],
-        bitcode::STR_DROP_PREFIX,
+        bitcode::STR_DROP_PREFIX_UNSAFE,
     )
 }
 

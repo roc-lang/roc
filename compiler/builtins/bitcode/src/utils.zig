@@ -238,8 +238,6 @@ pub fn unsafeReallocate(
     return new_source;
 }
 
-// TODO GIESCH read and understand this
-
 pub const RocResult = extern struct {
     bytes: ?[*]u8,
 

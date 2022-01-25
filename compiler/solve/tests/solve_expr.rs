@@ -3890,18 +3890,6 @@ mod solve_expr {
     }
 
     #[test]
-    fn str_drop_suffix() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                Str.dropSuffix
-                "#
-            ),
-            "Str, Str -> Str",
-        );
-    }
-
-    #[test]
     fn list_take_first() {
         infer_eq_without_problem(
             indoc!(
