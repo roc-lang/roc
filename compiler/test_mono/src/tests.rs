@@ -136,9 +136,9 @@ fn compiles_to_ir(test_name: &str, src: &str) {
     assert_eq!(type_problems, Vec::new());
     assert_eq!(mono_problems, Vec::new());
 
-    debug_assert_eq!(exposed_to_host.len(), 1);
+    debug_assert_eq!(exposed_to_host.values.len(), 1);
 
-    let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
+    let main_fn_symbol = exposed_to_host.values.keys().copied().next().unwrap();
 
     verify_procedures(test_name, procedures, main_fn_symbol);
 }
