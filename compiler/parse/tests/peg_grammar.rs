@@ -430,7 +430,7 @@ peg::parser!{
       pub rule module() =
         header() module_defs()
 
-      pub rule full_expr() = bool_or_expr()
+      pub rule full_expr() = [T::OpenIndent]? bool_or_expr() [T::CloseIndent]?
       
       pub rule expr() =
           closure()
@@ -474,17 +474,17 @@ peg::parser!{
 
         rule record() =
           empty_record()
-          / [T::OpenCurly]  assigned_fields() [T::CloseCurly]
+          / [T::OpenCurly] __ assigned_fields() __ [T::CloseCurly]
 
         rule assigned_fields() =
-          (assigned_field() [T::Comma])* assigned_field()? [T::Comma]?
+          (__ assigned_field() [T::Comma])* __ assigned_field()? [T::Comma]?
 
         rule assigned_field() =
           required_value()
-          / [T::LowercaseIdent]
+          / __ [T::LowercaseIdent]
 
         rule required_value() =
-          [T::LowercaseIdent] [T::Colon] full_expr()
+          __ [T::LowercaseIdent] [T::Colon] full_expr()
 
         rule empty_record() = [T::OpenCurly] [T::CloseCurly]
 
@@ -492,7 +492,10 @@ peg::parser!{
 
         rule record_type() =
           empty_record()
-          / [T::OpenCurly] (record_field_type() [T::Comma])* record_field_type() [T::Comma]? [T::CloseCurly]
+          / [T::OpenCurly] record_field_types_i() [T::CloseCurly]
+
+        rule record_field_types() =
+          (record_field_type() [T::Comma])* record_field_type() [T::Comma]?
 
         rule record_field_type() =
           ident() [T::Colon] type_annotation()
@@ -520,7 +523,7 @@ peg::parser!{
           [T::Dot] ident()
 
         pub rule header() =
-          ([T::SameIndent] / [T::OpenIndent])? almost_header()
+          __ almost_header()
 
         pub rule almost_header() =
           app_header()
@@ -537,10 +540,10 @@ peg::parser!{
           [T::KeywordPlatform] [T::String] [T::OpenIndent]? requires() exposes() packages() imports() provides() effects() end()// check String to be nonempty?
 
         rule packages() =
-          [T::SameIndent]? [T::KeywordPackages] record() 
+          __ [T::KeywordPackages] record() 
 
         rule imports() =
-          [T::SameIndent]? [T::KeywordImports] imports_list()
+          __ [T::KeywordImports] imports_list()
 
         rule imports_list() =
           empty_list()
@@ -557,7 +560,7 @@ peg::parser!{
           ident()
 
         rule provides() =
-          [T::SameIndent]? [T::KeywordProvides] provides_list() ([T::KeywordTo] provides_to())?
+          __ [T::KeywordProvides] provides_list() ([T::KeywordTo] provides_to())?
 
         rule provides_to() =
          [T::String]
@@ -568,7 +571,7 @@ peg::parser!{
           / [T::OpenSquare] exposed_names() [T::CloseSquare]
 
         rule exposes() =
-          [T::SameIndent]? [T::KeywordExposes] [T::OpenSquare] exposed_names() [T::CloseSquare]
+          __ [T::KeywordExposes] [T::OpenSquare] exposed_names() [T::CloseSquare]
 
         rule exposed_names() =
           (ident() [T::Comma])* ident()? [T::Comma]?
@@ -587,7 +590,7 @@ peg::parser!{
           [T::LowercaseIdent] [T::Colon] type_annotation()
 
         rule effects() =
-          [T::SameIndent]? [T::KeywordEffects] effect_name() record_type()
+          __ [T::KeywordEffects] effect_name() record_type_i()
 
         rule effect_name() =
           [T::LowercaseIdent] [T::Dot] [T::UppercaseIdent]
@@ -687,11 +690,14 @@ peg::parser!{
           def()+ full_expr()
 
         pub rule def() =
-          annotated_body()
-          / annotation()
-          / body()
-          / alias()
-          / expect()
+          __ // __ for optional indent
+            (
+              annotated_body()
+              / annotation()
+              / body()
+              / alias()
+              / expect()
+            )
 
         rule module_defs() =
           def() def()*
@@ -730,9 +736,25 @@ peg::parser!{
           / [T::SameIndent]
           / end_of_file()
 
+        // for optionalindents
+        // underscore rules do not require parentheses  
+        rule __() =
+          (
+            [T::OpenIndent]
+          / [T::CloseIndent]
+          / [T::SameIndent]
+        )?
+
         rule end_of_file() =
          ![_]
-          
+
+        rule record_type_i() = 
+          [T::OpenIndent] record_type() [T::CloseIndent]
+          / record_type()
+
+        rule record_field_types_i() =
+          [T::OpenIndent] record_field_types() [T::CloseIndent]
+          / record_field_types()
     }
 }
 
@@ -795,7 +817,15 @@ fn test_interface_header_2() {
 }
 
 #[test]
-fn test_platform_header() {
+fn test_platform_header_1() {
+
+    let tokens = test_tokenize( r#"platform "rtfeldman/blah" requires {} { main : {} } exposes [] packages {} imports [] provides [] effects fx.Blah {}"#);
+    
+    assert_eq!(tokenparser::header(&tokens), Ok(()));
+}
+
+#[test]
+fn test_platform_header_2() {
 
     let tokens = test_tokenize( r#"platform "examples/cli"
     requires {}{ main : Task {} [] }
@@ -809,8 +839,66 @@ fn test_platform_header() {
             putLine : Str -> Effect {},
             twoArguments : Int, Int -> Effect {}
         }"#);
+    
     dbg!(&tokens);
     assert_eq!(tokenparser::header(&tokens), Ok(()));
+}
+
+#[test]
+fn test_record_def_1() {
+
+    let tokens = test_tokenize( r#"x = { content: 4 }"#);
+
+    assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn test_record_def_2() {
+
+  let tokens = test_tokenize( r#"
+x =
+   { content: 4 }"#);
+  dbg!(&tokens);
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn test_record_def_3() {
+
+  let tokens = test_tokenize( r#"
+x =
+   {
+     a: 4,
+     b: 5
+    }"#);
+  dbg!(&tokens);
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn test_record_def_4() {
+
+  let tokens = test_tokenize( r#"
+x =
+   {
+     a: 4,
+       b: 5,
+     c: 6,
+       }"#);
+  dbg!(&tokens);
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn test_record_def_5() {
+
+  let tokens = test_tokenize( r#"
+x =
+   {
+   a: 4,
+   }"#);
+   
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
 
 #[test]
