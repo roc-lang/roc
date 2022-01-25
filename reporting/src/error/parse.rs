@@ -3410,6 +3410,35 @@ fn to_requires_report<'a>(
             }
         }
 
+        ERequires::Open(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting a list of type names like "),
+                    alloc.keyword("{}"),
+                    alloc.reflow(" or "),
+                    alloc.keyword("{ Model }"),
+                    alloc.reflow(" next. A full "),
+                    alloc.keyword("requires"),
+                    alloc.reflow(" definition looks like"),
+                ]),
+                alloc
+                    .parser_suggestion("requires { Model, Msg } {main : Effect {}}")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD REQUIRES".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
 }
