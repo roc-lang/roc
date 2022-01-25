@@ -2085,7 +2085,6 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
     let bool_var = var_store.fresh();
-
     let len_var = var_store.fresh();
     let list_var = var_store.fresh();
     let elem_var = var_store.fresh();
