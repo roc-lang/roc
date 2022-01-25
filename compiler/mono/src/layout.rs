@@ -524,14 +524,23 @@ impl std::fmt::Debug for SetElement<'_> {
 
 impl std::fmt::Debug for LambdaSet<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let entries = self.set.iter().map(|x| SetElement {
-            symbol: x.0,
-            layout: x.1,
-        });
-        let set = f.debug_list().entries(entries).finish();
+        struct Helper<'a> {
+            set: &'a [(Symbol, &'a [Layout<'a>])],
+        }
+
+        impl std::fmt::Debug for Helper<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let entries = self.set.iter().map(|x| SetElement {
+                    symbol: x.0,
+                    layout: x.1,
+                });
+
+                f.debug_list().entries(entries).finish()
+            }
+        }
 
         f.debug_struct("LambdaSet")
-            .field("set", &set)
+            .field("set", &Helper { set: self.set })
             .field("representation", &self.representation)
             .finish()
     }
