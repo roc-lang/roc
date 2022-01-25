@@ -6142,7 +6142,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── BAD REQUIRES RIGIDS ─────────────────────────────────────────────────────────
+                ── BAD REQUIRES ────────────────────────────────────────────────────────────────
 
                 I am partway through parsing a header, but I got stuck here:
 
@@ -6150,10 +6150,10 @@ I need all branches in an `if` to have the same type!
                 2│      requires { main : Effect {} }
                                    ^
 
-                I am expecting a list of rigids like `{}` or `{model=>Model}` next. A full
+                I am expecting a list of type names like `{}` or `{ Model }` next. A full
                 `requires` definition looks like
 
-                    requires {model=>Model, msg=>Msg} {main : Effect {}}
+                    requires { Model, Msg } {main : Effect {}}
             "#
             ),
         )
