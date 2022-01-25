@@ -390,7 +390,7 @@ fn can_annotation_help(
             ) {
                 Ok(symbol) => symbol,
 
-                Err((original_region, shadow)) => {
+                Err((original_region, shadow, _new_symbol)) => {
                     let problem = Problem::Shadowed(original_region, shadow.clone());
 
                     env.problem(roc_problem::can::Problem::ShadowingInAnnotation {

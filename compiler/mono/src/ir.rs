@@ -1980,12 +1980,12 @@ fn pattern_to_when<'a>(
             // for underscore we generate a dummy Symbol
             (env.unique_symbol(), body)
         }
-        Shadowed(region, loc_ident) => {
+        Shadowed(region, loc_ident, new_symbol) => {
             let error = roc_problem::can::RuntimeError::Shadowing {
                 original_region: *region,
                 shadow: loc_ident.clone(),
             };
-            (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
+            (*new_symbol, Loc::at_zero(RuntimeError(error)))
         }
 
         UnsupportedPattern(region) => {
@@ -5118,40 +5118,41 @@ fn register_capturing_closure<'a>(
 
         let is_self_recursive = !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
-        // does this function capture any local values?
-        let function_layout = layout_cache.raw_from_var(env.arena, function_type, env.subs);
-
-        let captured_symbols = match function_layout {
-            Ok(RawFunctionLayout::Function(_, lambda_set, _)) => {
-                if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
-                    CapturedSymbols::None
-                } else {
-                    let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
-                    temp.sort();
-                    CapturedSymbols::Captured(temp.into_bump_slice())
+        let captured_symbols = match *env.subs.get_content_without_compacting(function_type) {
+            Content::Structure(FlatType::Func(_, closure_var, _)) => {
+                match LambdaSet::from_var(env.arena, env.subs, closure_var, env.ptr_bytes) {
+                    Ok(lambda_set) => {
+                        if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
+                            CapturedSymbols::None
+                        } else {
+                            let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
+                            temp.sort();
+                            CapturedSymbols::Captured(temp.into_bump_slice())
+                        }
+                    }
+                    Err(_) => {
+                        // just allow this. see https://github.com/rtfeldman/roc/issues/1585
+                        if captured_symbols.is_empty() {
+                            CapturedSymbols::None
+                        } else {
+                            let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
+                            temp.sort();
+                            CapturedSymbols::Captured(temp.into_bump_slice())
+                        }
+                    }
                 }
             }
-            Ok(RawFunctionLayout::ZeroArgumentThunk(_)) => {
-                // top-level thunks cannot capture any variables
+            _ => {
+                // This is a value (zero-argument thunk); it cannot capture any variables.
                 debug_assert!(
                     captured_symbols.is_empty(),
                     "{:?} with layout {:?} {:?} {:?}",
                     &captured_symbols,
-                    function_layout,
+                    layout_cache.raw_from_var(env.arena, function_type, env.subs),
                     env.subs,
                     (function_type, closure_type, closure_ext_var),
                 );
                 CapturedSymbols::None
-            }
-            Err(_) => {
-                // just allow this. see https://github.com/rtfeldman/roc/issues/1585
-                if captured_symbols.is_empty() {
-                    CapturedSymbols::None
-                } else {
-                    let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
-                    temp.sort();
-                    CapturedSymbols::Captured(temp.into_bump_slice())
-                }
             }
         };
 
@@ -7652,7 +7653,7 @@ fn from_can_pattern_help<'a>(
             }
         }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
-        Shadowed(region, ident) => Err(RuntimeError::Shadowing {
+        Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
         }),

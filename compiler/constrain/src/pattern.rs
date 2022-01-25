@@ -48,12 +48,11 @@ fn headers_from_annotation_help(
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> bool {
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             headers.insert(*symbol, annotation.clone());
             true
         }
         Underscore
-        | Shadowed(_, _)
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
         | NumLiteral(_, _, _)
@@ -159,11 +158,11 @@ pub fn constrain_pattern(
                 PresenceConstraint::IsOpen,
             ));
         }
-        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) | Shadowed(_, _) => {
+        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) => {
             // Neither the _ pattern nor erroneous ones add any constraints.
         }
 
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             if destruct_position {
                 state.constraints.push(Constraint::Present(
                     expected.get_type_ref().clone(),

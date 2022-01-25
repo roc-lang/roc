@@ -1,4 +1,4 @@
-use roc_reporting::internal_error;
+use roc_error_macros::internal_error;
 
 use super::serialize::{parse_u32_or_panic, SkipBytes};
 

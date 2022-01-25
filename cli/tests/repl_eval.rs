@@ -925,4 +925,38 @@ mod repl_eval {
             ),
         );
     }
+
+    #[test]
+    fn issue_2343_complete_mono_with_shadowed_vars() {
+        expect_failure(
+            indoc!(
+                r#"
+                b = False
+                f = \b ->
+                    when b is
+                        True -> 5
+                        False -> 15
+                f b
+                "#
+            ),
+            indoc!(
+                r#"
+                ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
+
+                The b name is first defined here:
+
+                4│      b = False
+                        ^
+
+                But then it's defined a second time here:
+
+                5│      f = \b ->
+                             ^
+
+                Since these variables have the same name, it's easy to use the wrong
+                one on accident. Give one of them a new name.
+                "#
+            ),
+        );
+    }
 }
