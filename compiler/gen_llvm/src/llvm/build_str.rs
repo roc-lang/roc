@@ -278,11 +278,8 @@ pub fn str_trim_right<'a, 'ctx, 'env>(
     call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_RIGHT)
 }
 
-// TODO GIESCH
-// this is where the startsWith/endsWith checks should be?
-
-/// Str.dropPrefix : Str, Str -> Str
-pub fn str_drop_prefix<'a, 'ctx, 'env>(
+/// Str.#dropPrefixUnsafe : Str, Str -> Str
+pub fn str_drop_prefix_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     str_symbol: Symbol,
@@ -295,23 +292,6 @@ pub fn str_drop_prefix<'a, 'ctx, 'env>(
         env,
         &[str_i128.into(), str_prefix_i128.into()],
         bitcode::STR_DROP_PREFIX,
-    )
-}
-
-/// Str.dropSuffix : Str, Str -> Str
-pub fn str_drop_suffix<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str_symbol: Symbol,
-    str_suffix_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    let str_suffix_i128 = str_symbol_to_c_abi(env, scope, str_suffix_symbol);
-
-    call_bitcode_fn(
-        env,
-        &[str_i128.into(), str_suffix_i128.into()],
-        bitcode::STR_DROP_SUFFIX,
     )
 }
 

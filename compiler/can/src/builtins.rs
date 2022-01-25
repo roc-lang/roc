@@ -85,8 +85,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_TRIM => str_trim,
         STR_TRIM_LEFT => str_trim_left,
         STR_TRIM_RIGHT => str_trim_right,
-        STR_DROP_PREFIX => str_drop_prefix,
-        STR_DROP_SUFFIX => str_drop_suffix,
+        STR_DROP_PREFIX_UNSAFE => str_drop_prefix,
         STR_TO_DEC => str_to_num,
         STR_TO_F64 => str_to_num,
         STR_TO_F32 => str_to_num,
@@ -1422,14 +1421,66 @@ fn str_trim_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrimRight, var_store)
 }
 
+// TODO GIESCH
+// Use a LetNonRec to re-find prefix len in then branch
+// understand how to use the LetNonRec var
+
 /// Str.dropPrefix : Str, Str -> Str
 fn str_drop_prefix(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::StrDropPrefix, var_store)
-}
+    let str_arg = Symbol::ARG_1;
+    let prefix_arg = Symbol::ARG_2;
 
-/// Str.dropSuffix : Str, Str -> Str
-fn str_drop_suffix(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::StrDropSuffix, var_store)
+    let str_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = If {
+        cond_var: bool_var,
+        branch_var: var_store.fresh(),
+        branches: vec![(
+            // prefix match condition
+            no_region(RunLowLevel {
+                op: LowLevel::StrStartsWith,
+                args: vec![(str_var, Var(str_arg)), (str_var, Var(prefix_arg))],
+                ret_var: bool_var,
+            }),
+            // then branch
+            no_region(
+                // Ok
+                tag(
+                    "Ok",
+                    vec![RunLowLevel {
+                        op: LowLevel::StrDropPrefixUnsafe,
+                        args: vec![(str_var, Var(str_arg)), (str_var, Var(prefix_arg))],
+                        ret_var: ret_var,
+                    }],
+                    var_store,
+                ),
+            ),
+        )],
+
+        final_else: Box::new(
+            // else-branch
+            no_region(
+                // Err
+                tag(
+                    "Err",
+                    // TODO what tag should this be?
+                    vec![tag("NoMatch", Vec::new(), var_store)],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    defn(
+        symbol,
+        // TODO ensure reusing str_var here is safe (again)
+        vec![(str_var, str_arg), (str_var, prefix_arg)],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 /// Str.toNum : Str -> Result (Num *) [ InvalidNumStr ]*
@@ -2027,6 +2078,9 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+// TODO GIESCH
+// read and understand this
+
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
 ///
 /// List.get :
@@ -2037,6 +2091,7 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
     let bool_var = var_store.fresh();
+
     let len_var = var_store.fresh();
     let list_var = var_store.fresh();
     let elem_var = var_store.fresh();

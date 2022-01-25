@@ -709,16 +709,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // trim : Str -> Str
     add_top_level_function_type!(Symbol::STR_TRIM, vec![str_type()], Box::new(str_type()));
 
-    // dropPrefix : Str, Str -> Str
+    // #dropPrefix : Str, Str -> Str
     add_top_level_function_type!(
-        Symbol::STR_DROP_PREFIX,
-        vec![str_type(), str_type()],
-        Box::new(str_type())
-    );
-
-    // dropSuffix : Str, Str -> Str
-    add_top_level_function_type!(
-        Symbol::STR_DROP_SUFFIX,
+        Symbol::STR_DROP_PREFIX_UNSAFE,
         vec![str_type(), str_type()],
         Box::new(str_type())
     );

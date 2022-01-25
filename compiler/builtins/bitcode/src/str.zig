@@ -1726,10 +1726,17 @@ pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
 // ...
 // N. add roc source code tests
 
-// NOTE this is unsafe in that it ignores unicode correctness
+// TODO fix these docs or make the API less weird
+
+// NOTE
+// this is unsafe in that it ignores unicode correctness
+// the suffix is only used as a way to pass its byte length
 // it's the caller's responsibility to ensure that
 // the right n bytes are a valid group of full codepoints
-pub fn dropRightNBytesUnsafe(string: RocStr, n: usize) callconv(.C) RocStr {
+// where n is the length of the given suffix
+pub fn dropSuffixUnsafe(string: RocStr, suffix: RocStr) callconv(.C) RocStr {
+    const n = suffix.len();
+
     if (n == 0) {
         return string;
     }
@@ -1754,9 +1761,13 @@ pub fn dropRightNBytesUnsafe(string: RocStr, n: usize) callconv(.C) RocStr {
 }
 
 // NOTE this is unsafe in that it ignores unicode correctness
+// the prefix is only used as a way to pass its byte length
 // it's the caller's responsibility to ensure that
 // the left n bytes are a valid group of full codepoints
-pub fn dropLeftNBytesUnsafe(string: RocStr, n: usize) callconv(.C) RocStr {
+// where n is the length of the given prefix
+pub fn dropPrefixUnsafe(string: RocStr, prefix: RocStr) callconv(.C) RocStr {
+    const n = prefix.len();
+
     if (n == 0) {
         return string;
     }
@@ -1895,7 +1906,7 @@ test "trim prefix: full match" {
     const match = startsWith(string, prefix);
     try expect(match);
 
-    const result = dropLeftNBytesUnsafe(string, prefix.len());
+    const result = dropPrefixUnsafe(string, prefix);
     try expect(result.eq(RocStr.empty()));
 }
 
@@ -1915,7 +1926,7 @@ test "trim prefix: partial match" {
     const expected = RocStr.init(suffix, suffix.len);
     defer expected.deinit();
 
-    const result = dropLeftNBytesUnsafe(string, prefix.len());
+    const result = dropPrefixUnsafe(string, prefix);
     try expect(result.eq(expected));
 }
 
@@ -1944,7 +1955,7 @@ test "trim suffix: full match" {
     const match = endsWith(string, suffix);
     try expect(match);
 
-    const result = dropRightNBytesUnsafe(string, suffix.len());
+    const result = dropSuffixUnsafe(string, suffix);
     try expect(result.eq(RocStr.empty()));
 }
 
@@ -1964,7 +1975,7 @@ test "trim suffix: partial match" {
     const expected = RocStr.init(prefix, prefix.len);
     defer expected.deinit();
 
-    const result = dropRightNBytesUnsafe(string, suffix.len());
+    const result = dropSuffixUnsafe(string, suffix);
     try expect(result.eq(expected));
 }
 
