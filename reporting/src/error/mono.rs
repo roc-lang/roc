@@ -1,4 +1,5 @@
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
+use roc_error_macros::internal_error;
 use roc_region::all::LineInfo;
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
@@ -158,7 +159,7 @@ fn pattern_to_doc_help<'b>(
         },
         Ctor(union, tag_id, args) => {
             match union.render_as {
-                RenderAs::Guard => panic!("can this happen? inform Folkert"),
+                RenderAs::Guard => internal_error!("can this happen? inform Folkert"),
                 RenderAs::Record(field_names) => {
                     let mut arg_docs = Vec::with_capacity(args.len());
 

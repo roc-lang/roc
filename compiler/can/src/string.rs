@@ -1,6 +1,7 @@
 // use bumpalo::collections::string::String;
 // use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_error_macros::internal_error;
 use roc_parse::ast::Expr;
 // use roc_parse::ast::{Attempting, Expr};
 // use roc_parse::ident;
@@ -12,7 +13,7 @@ use roc_region::all::Region;
 // use std::iter::Peekable;
 
 pub fn canonical_string_literal<'a>(_arena: &Bump, _raw: &'a str, _region: Region) -> Expr<'a> {
-    panic!("TODO restore canonicalization");
+    internal_error!("TODO restore canonicalization");
 }
 // let mut problems = std::vec::Vec::new();
 

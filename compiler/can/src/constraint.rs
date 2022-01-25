@@ -1,5 +1,6 @@
 use crate::expected::{Expected, PExpected};
 use roc_collections::all::{MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::{ident::TagName, symbol::Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::types::{Category, PatternCategory, Type};
@@ -53,18 +54,18 @@ impl Constraint {
         validate_help(self, &Declared::default(), &mut unbound);
 
         if !unbound.type_variables.is_empty() {
-            panic!("found unbound type variables {:?}", &unbound.type_variables);
+            internal_error!("found unbound type variables {:?}", &unbound.type_variables);
         }
 
         if !unbound.lambda_set_variables.is_empty() {
-            panic!(
+            internal_error!(
                 "found unbound lambda set variables {:?}",
                 &unbound.lambda_set_variables
             );
         }
 
         if !unbound.recursion_variables.is_empty() {
-            panic!(
+            internal_error!(
                 "found unbound recursion variables {:?}",
                 &unbound.recursion_variables
             );
@@ -101,7 +102,7 @@ fn subtract(declared: &Declared, detail: &VariableDetail, accum: &mut VariableDe
     // lambda set variables are always flex
     for var in &detail.lambda_set_variables {
         if declared.rigid_vars.contains(var) {
-            panic!("lambda set variable {:?} is declared as rigid", var);
+            internal_error!("lambda set variable {:?} is declared as rigid", var);
         }
 
         if !declared.flex_vars.contains(var) {
@@ -112,7 +113,7 @@ fn subtract(declared: &Declared, detail: &VariableDetail, accum: &mut VariableDe
     // recursion vars should be always rigid
     for var in &detail.recursion_variables {
         if declared.flex_vars.contains(var) {
-            panic!("recursion variable {:?} is declared as flex", var);
+            internal_error!("recursion variable {:?} is declared as flex", var);
         }
 
         if !declared.rigid_vars.contains(var) {

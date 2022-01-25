@@ -2,6 +2,7 @@ use crate::target::{arch_str, target_triple_str};
 #[cfg(feature = "llvm")]
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
+use roc_error_macros::internal_error;
 // #[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
@@ -46,7 +47,7 @@ pub fn link(
             operating_system: OperatingSystem::Darwin,
             ..
         } => link_macos(target, output_path, input_paths, link_type),
-        _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
+        _ => internal_error!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
 
@@ -63,7 +64,7 @@ fn find_zig_str_path() -> PathBuf {
         return zig_str_path;
     }
 
-    panic!("cannot find `str.zig`. Launch me from either the root of the roc repo or one level down(roc/examples, roc/cli...)")
+    internal_error!("cannot find `str.zig`. Launch me from either the root of the roc repo or one level down(roc/examples, roc/cli...)")
 }
 
 fn find_wasi_libc_path() -> PathBuf {
@@ -79,7 +80,7 @@ fn find_wasi_libc_path() -> PathBuf {
         return wasi_libc_path;
     }
 
-    panic!("cannot find `wasi-libc.a`")
+    internal_error!("cannot find `wasi-libc.a`")
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -165,15 +166,15 @@ pub fn build_zig_host_native(
 
     let zig_env_json = if zig_env_output.status.success() {
         std::str::from_utf8(&zig_env_output.stdout).unwrap_or_else(|utf8_err| {
-            panic!(
+            internal_error!(
                 "`zig env` failed; its stderr output was invalid utf8 ({:?})",
                 utf8_err
             );
         })
     } else {
         match std::str::from_utf8(&zig_env_output.stderr) {
-            Ok(stderr) => panic!("`zig env` failed - stderr output was: {:?}", stderr),
-            Err(utf8_err) => panic!(
+            Ok(stderr) => internal_error!("`zig env` failed - stderr output was: {:?}", stderr),
+            Err(utf8_err) => internal_error!(
                 "`zig env` failed; its stderr output was invalid utf8 ({:?})",
                 utf8_err
             ),
@@ -184,11 +185,11 @@ pub fn build_zig_host_native(
         Ok(Value::Object(map)) => match map.get("std_dir") {
             Some(Value::String(std_dir)) => PathBuf::from(Path::new(std_dir)),
             _ => {
-                panic!("Expected JSON containing a `std_dir` String field from `zig env`, but got: {:?}", zig_env_json);
+                internal_error!("Expected JSON containing a `std_dir` String field from `zig env`, but got: {:?}", zig_env_json);
             }
         },
         _ => {
-            panic!(
+            internal_error!(
                 "Expected JSON containing a `std_dir` field from `zig env`, but got: {:?}",
                 zig_env_json
             );
@@ -449,7 +450,7 @@ pub fn rebuild_host(
                     target_valgrind,
                 )
             }
-            _ => panic!("Unsupported architecture {:?}", target.architecture),
+            _ => internal_error!("Unsupported architecture {:?}", target.architecture),
         };
 
         validate_output("host.zig", &zig_executable(), output)
@@ -704,7 +705,7 @@ fn link_linux(
             }
         }
         Architecture::Aarch64(_) => library_path(["/lib", "ld-linux-aarch64.so.1"]),
-        _ => panic!(
+        _ => internal_error!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
             target.architecture
         ),
@@ -981,13 +982,17 @@ pub fn module_to_dylib(
 fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
     if !output.status.success() {
         match std::str::from_utf8(&output.stderr) {
-            Ok(stderr) => panic!(
+            Ok(stderr) => internal_error!(
                 "Failed to rebuild {} - stderr of the `{}` command was:\n{}",
-                file_name, cmd_name, stderr
+                file_name,
+                cmd_name,
+                stderr
             ),
-            Err(utf8_err) => panic!(
+            Err(utf8_err) => internal_error!(
                 "Failed to rebuild {} - stderr of the `{}` command was invalid utf8 ({:?})",
-                file_name, cmd_name, utf8_err
+                file_name,
+                cmd_name,
+                utf8_err
             ),
         }
     }
@@ -1000,5 +1005,7 @@ fn init_arch(target: &Triple) {
 
 #[cfg(not(feature = "llvm"))]
 fn init_arch(_target: &Triple) {
-    panic!("Tried to initialize LLVM when crate was not built with `feature = \"llvm\"` enabled");
+    internal_error!(
+        "Tried to initialize LLVM when crate was not built with `feature = \"llvm\"` enabled"
+    );
 }

@@ -1,6 +1,7 @@
 use crate::ident::{Ident, ModuleName};
 use crate::module_err::{IdentIdNotFound, ModuleIdNotFound, ModuleResult};
 use roc_collections::all::{default_hasher, MutMap, SendMap};
+use roc_error_macros::internal_error;
 use roc_ident::IdentStr;
 use roc_region::all::Region;
 use snafu::OptionExt;
@@ -59,7 +60,7 @@ impl Symbol {
             .module_ids
             .get_name(self.module_id())
             .unwrap_or_else(|| {
-                panic!(
+                internal_error!(
                     "module_string could not find IdentIds for module {:?} in {:?}",
                     self.module_id(),
                     interns
@@ -76,7 +77,7 @@ impl Symbol {
             .all_ident_ids
             .get(&self.module_id())
             .unwrap_or_else(|| {
-                panic!(
+                internal_error!(
                     "ident_string could not find IdentIds for module {:?} in {:?}",
                     self.module_id(),
                     interns
@@ -86,7 +87,7 @@ impl Symbol {
         ident_ids
             .get_name(self.ident_id())
             .unwrap_or_else(|| {
-                panic!(
+                internal_error!(
                     "ident_string's IdentIds did not contain an entry for {} in module {:?}",
                     self.ident_id().0,
                     self.module_id()
@@ -224,9 +225,10 @@ impl Interns {
 
     pub fn module_name(&self, module_id: ModuleId) -> &ModuleName {
         self.module_ids.get_name(module_id).unwrap_or_else(|| {
-            panic!(
+            internal_error!(
                 "Unable to find interns entry for module_id {:?} in Interns {:?}",
-                module_id, self
+                module_id,
+                self
             )
         })
     }
@@ -238,13 +240,14 @@ impl Interns {
             Some(ident_ids) => match ident_ids.get_id(&ident) {
                 Some(ident_id) => Symbol::new(module_id, *ident_id),
                 None => {
-                    panic!("Interns::symbol could not find ident entry for {:?} for module {:?} in Interns {:?}", ident, module_id, self);
+                    internal_error!("Interns::symbol could not find ident entry for {:?} for module {:?} in Interns {:?}", ident, module_id, self);
                 }
             },
             None => {
-                panic!(
+                internal_error!(
                     "Interns::symbol could not find entry for module {:?} in Interns {:?}",
-                    module_id, self
+                    module_id,
+                    self
                 );
             }
         }
@@ -317,7 +320,7 @@ impl ModuleId {
         interns
             .module_ids
             .get_name(self)
-            .unwrap_or_else(|| panic!("Could not find ModuleIds for {:?}", self))
+            .unwrap_or_else(|| internal_error!("Could not find ModuleIds for {:?}", self))
     }
 }
 
@@ -341,9 +344,10 @@ impl fmt::Debug for ModuleId {
             match names.get(&self.0) {
                 Some(str_ref) => write!(f, "{}", str_ref.clone()),
                 None => {
-                    panic!(
+                    internal_error!(
                         "Could not find a Debug name for module ID {} in {:?}",
-                        self.0, names,
+                        self.0,
+                        names,
                     );
                 }
             }

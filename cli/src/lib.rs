@@ -5,6 +5,7 @@ use build::{BuildOutcome, BuiltFile};
 use bumpalo::Bump;
 use clap::{App, AppSettings, Arg, ArgMatches};
 use roc_build::link::LinkType;
+use roc_error_macros::internal_error;
 use roc_load::file::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use std::env;
@@ -264,7 +265,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         matches.is_present(FLAG_DEV),
     ) {
         (true, false) => OptLevel::Optimize,
-        (true, true) => panic!("development cannot be optimized!"),
+        (true, true) => internal_error!("development cannot be optimized!"),
         (false, true) => OptLevel::Development,
         (false, false) => OptLevel::Normal,
     };
@@ -280,9 +281,10 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let precompiled = matches.is_present(FLAG_PRECOMPILED);
 
     if surgically_link && !roc_linker::supported(&link_type, &target) {
-        panic!(
+        internal_error!(
             "Link type, {:?}, with target, {}, not supported by roc linker",
-            link_type, target
+            link_type,
+            target
         );
     }
 
@@ -401,7 +403,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
             Ok(1)
         }
         Err(other) => {
-            panic!("build_file failed with error:\n{:?}", other);
+            internal_error!("build_file failed with error:\n{:?}", other);
         }
     }
 }
@@ -424,7 +426,7 @@ fn roc_run(cmd: &mut Command) -> io::Result<i32> {
     // Run the compiled app
     let exit_status = cmd
                         .spawn()
-                        .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
+                        .unwrap_or_else(|err| internal_error!("Failed to run app after building it: {:?}", err))
                         .wait()
                         .expect("TODO gracefully handle block_on failing when `roc` spawns a subprocess for the compiled app");
 
@@ -466,7 +468,7 @@ fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
             Ok(WasiError::Exit(0)) => {
                 // we run the `_start` function, so exit(0) is expected
             }
-            other => panic!("Wasmer error: {:?}", other),
+            other => internal_error!("Wasmer error: {:?}", other),
         },
     }
 }

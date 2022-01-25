@@ -3,6 +3,7 @@ use roc_cli::{
     build_app, docs, format, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
     CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
 };
+use roc_error_macros::internal_error;
 use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
 use std::io;
@@ -58,7 +59,7 @@ fn main() -> io::Result<()> {
                     Ok(1)
                 }
                 Err(other) => {
-                    panic!("build_file failed with error:\n{:?}", other);
+                    internal_error!("build_file failed with error:\n{:?}", other);
                 }
             }
         }
@@ -210,5 +211,5 @@ fn launch_editor(project_dir_path: Option<&Path>) -> io::Result<()> {
 
 #[cfg(not(feature = "editor"))]
 fn launch_editor(_project_dir_path: Option<&Path>) -> io::Result<()> {
-    panic!("Cannot launch the editor because this build of roc did not include `feature = \"editor\"`!");
+    internal_error!("Cannot launch the editor because this build of roc did not include `feature = \"editor\"`!");
 }

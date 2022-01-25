@@ -6,6 +6,7 @@ use roc_build::program::FunctionIterator;
 use roc_can::builtins::builtin_defs_map;
 use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::OptLevel;
@@ -74,9 +75,9 @@ fn create_llvm_module<'a>(
         Ok(x) => x,
         Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
             println!("{}", report);
-            panic!();
+            internal_error!();
         }
-        Err(e) => panic!("{:?}", e),
+        Err(e) => internal_error!("{:?}", e),
     };
 
     use roc_load::file::MonomorphizedModule;
@@ -244,14 +245,14 @@ fn create_llvm_module<'a>(
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);
     } else {
-        panic!("Main function {} failed LLVM verification in NON-OPTIMIZED build. Uncomment things nearby to see more details.", main_fn_name);
+        internal_error!("Main function {} failed LLVM verification in NON-OPTIMIZED build. Uncomment things nearby to see more details.", main_fn_name);
     }
 
     module_pass.run_on(env.module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        panic!("Errors defining module:\n\n{}", errors.to_string());
+        internal_error!("Errors defining module:\n\n{}", errors.to_string());
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
@@ -444,7 +445,7 @@ fn wasm_roc_panic(address: u32, tag_id: u32) {
                 string = slice.to_str().unwrap();
             });
 
-            panic!("Roc failed with message: {:?}", string)
+            internal_error!("Roc failed with message: {:?}", string)
         }
         _ => todo!(),
     }
@@ -458,7 +459,7 @@ thread_local! {
 
 #[allow(dead_code)]
 fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
-    panic!("wasm entered the main function; this should never happen!")
+    internal_error!("wasm entered the main function; this should never happen!")
 }
 
 #[allow(dead_code)]
@@ -495,7 +496,7 @@ where
         Ok(result) => {
             let address = match result[0] {
                 wasmer::Value::I32(a) => a,
-                _ => panic!(),
+                _ => internal_error!(),
             };
 
             let output = <T as crate::helpers::llvm::FromWasm32Memory>::decode(
@@ -513,7 +514,7 @@ where
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         match $crate::helpers::llvm::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
-            Err(msg) => panic!("Wasm test failed: {:?}", msg),
+            Err(msg) => internal_error!("Wasm test failed: {:?}", msg),
             Ok(actual) => {
                 #[allow(clippy::bool_assert_comparison)]
                 assert_eq!($transform(actual), $expected, "Wasm test failed")

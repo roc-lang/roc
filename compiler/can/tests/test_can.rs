@@ -16,6 +16,7 @@ mod test_can {
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
     use roc_can::expr::{ClosureData, Recursive};
+    use roc_error_macros::internal_error;
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::{Position, Region};
     use std::{f64, i64};
@@ -36,7 +37,7 @@ mod test_can {
                 assert_eq!(expected, actual);
             }
             actual => {
-                panic!("Expected a Float, but got: {:?}", actual);
+                internal_error!("Expected a Float, but got: {:?}", actual);
             }
         }
     }
@@ -50,7 +51,7 @@ mod test_can {
                 assert_eq!(expected, actual);
             }
             actual => {
-                panic!("Expected an Int *, but got: {:?}", actual);
+                internal_error!("Expected an Int *, but got: {:?}", actual);
             }
         }
     }
@@ -64,7 +65,7 @@ mod test_can {
                 assert_eq!(expected, actual);
             }
             actual => {
-                panic!("Expected a Num, but got: {:?}", actual);
+                internal_error!("Expected a Num, but got: {:?}", actual);
             }
         }
     }
@@ -665,13 +666,16 @@ mod test_can {
                         ..
                     })) => recursion.clone(),
                     Some(other) => {
-                        panic!("assignment at {} is not a closure, but a {:?}", i, other)
+                        internal_error!("assignment at {} is not a closure, but a {:?}", i, other)
                     }
                     None => {
                         if i > 0 {
                             get_closure(&body.value, i - 1)
                         } else {
-                            panic!("Looking for assignment at {} but the list is too short", i)
+                            internal_error!(
+                                "Looking for assignment at {} but the list is too short",
+                                i
+                            )
                         }
                     }
                 }
@@ -687,13 +691,17 @@ mod test_can {
                             ..
                         }) => recursion.clone(),
                         other => {
-                            panic!("assignment at {} is not a closure, but a {:?}", i, other)
+                            internal_error!(
+                                "assignment at {} is not a closure, but a {:?}",
+                                i,
+                                other
+                            )
                         }
                     }
                 }
             }
             // Closure(_, recursion, _, _) if i == 0 => recursion.clone(),
-            _ => panic!(
+            _ => internal_error!(
                 "expression is not a LetRec or a LetNonRec, but rather {:?}",
                 expr
             ),
@@ -1000,7 +1008,7 @@ mod test_can {
         match loc_expr.value {
             RuntimeError(RuntimeError::CircularDef(_)) => (),
             actual => {
-                panic!("Expected a CircularDef runtime error, but got {:?}", actual);
+                internal_error!("Expected a CircularDef runtime error, but got {:?}", actual);
             }
         }
     }

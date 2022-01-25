@@ -114,7 +114,7 @@ fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
     .spawn()
-    .unwrap_or_else(|_| panic!("Failed to benchmark {}.", branch_name));
+    .unwrap_or_else(|_| internal_error!("Failed to benchmark {}.", branch_name));
 
     let stdout = cmd_child.stdout.as_mut().unwrap();
     let stdout_reader = BufReader::new(stdout);
@@ -157,7 +157,7 @@ fn remove(file_or_folder: &str) {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .output()
-        .unwrap_or_else(|_| panic!("Something went wrong trying to remove {}", file_or_folder));
+        .unwrap_or_else(|_| internal_error!("Something went wrong trying to remove {}", file_or_folder));
 }
 
 #[derive(Clap)]

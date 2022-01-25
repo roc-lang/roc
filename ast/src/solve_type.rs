@@ -3,6 +3,7 @@
 use bumpalo::Bump;
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{BumpMap, BumpMapDefault, MutMap};
+use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -110,15 +111,15 @@ impl Pools {
     }
 
     pub fn get_mut(&mut self, rank: Rank) -> &mut Vec<Variable> {
-        self.0
-            .get_mut(rank.into_usize())
-            .unwrap_or_else(|| panic!("Compiler bug: could not find pool at rank {}", rank))
+        self.0.get_mut(rank.into_usize()).unwrap_or_else(|| {
+            internal_error!("Compiler bug: could not find pool at rank {}", rank)
+        })
     }
 
     pub fn get(&self, rank: Rank) -> &Vec<Variable> {
-        self.0
-            .get(rank.into_usize())
-            .unwrap_or_else(|| panic!("Compiler bug: could not find pool at rank {}", rank))
+        self.0.get(rank.into_usize()).unwrap_or_else(|| {
+            internal_error!("Compiler bug: could not find pool at rank {}", rank)
+        })
     }
 
     pub fn iter(&self) -> std::slice::Iter<'_, Vec<Variable>> {
@@ -128,7 +129,7 @@ impl Pools {
     pub fn split_last(&self) -> (&Vec<Variable>, &[Vec<Variable>]) {
         self.0
             .split_last()
-            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"))
+            .unwrap_or_else(|| internal_error!("Attempted to split_last() on non-empty Pools"))
     }
 
     pub fn extend_to(&mut self, n: usize) {

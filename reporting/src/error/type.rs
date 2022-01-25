@@ -1,5 +1,6 @@
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{Index, MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -115,7 +116,7 @@ pub fn type_problem<'b>(
                     report(title, doc, filename)
                 }
 
-                other => panic!("unhandled bad type: {:?}", other),
+                other => internal_error!("unhandled bad type: {:?}", other),
             }
         }
     }
@@ -930,7 +931,7 @@ fn to_expr_report<'b>(
                 )
             }
             Reason::LowLevelOpArg { op, arg_index } => {
-                panic!(
+                internal_error!(
                     "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
                     arg_index.ordinal(),
                     op
@@ -940,7 +941,7 @@ fn to_expr_report<'b>(
                 foreign_symbol,
                 arg_index,
             } => {
-                panic!(
+                internal_error!(
                     "Compiler bug: argument #{} to foreign symbol {:?} was the wrong type!",
                     arg_index.ordinal(),
                     foreign_symbol
@@ -1221,13 +1222,13 @@ fn format_category<'b>(
         ),
         CallResult(None, _) => (this_is, alloc.text(":")),
         LowLevelOpResult(op) => {
-            panic!(
+            internal_error!(
                 "Compiler bug: invalid return type from low-level op {:?}",
                 op
             );
         }
         ForeignCall => {
-            panic!("Compiler bug: invalid return type from foreign call",);
+            internal_error!("Compiler bug: invalid return type from foreign call",);
         }
 
         Uniqueness => (

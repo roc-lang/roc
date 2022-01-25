@@ -1,6 +1,7 @@
 use crate::helpers::{example_file, run_cmd, run_roc};
 use criterion::{black_box, measurement::Measurement, BenchmarkGroup};
 use rlimit::{setrlimit, Resource};
+use roc_error_macros::internal_error;
 use std::path::Path;
 
 fn exec_bench_w_input<T: Measurement>(
@@ -15,7 +16,7 @@ fn exec_bench_w_input<T: Measurement>(
     let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
 
     if !compile_out.stderr.is_empty() {
-        panic!("{}", compile_out.stderr);
+        internal_error!("{}", compile_out.stderr);
     }
 
     assert!(
@@ -48,9 +49,10 @@ fn check_cmd_output(
     let out = run_cmd(&cmd_str, &[stdin_str], &[]);
 
     if !&out.stdout.ends_with(expected_ending) {
-        panic!(
+        internal_error!(
             "expected output to end with {:?} but instead got {:#?}",
-            expected_ending, out
+            expected_ending,
+            out
         );
     }
     assert!(out.status.success());

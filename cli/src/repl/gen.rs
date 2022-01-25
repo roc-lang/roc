@@ -6,6 +6,7 @@ use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
@@ -64,7 +65,7 @@ pub fn gen_and_eval<'a>(
             return Ok(ReplOutput::Problems(vec![report]));
         }
         Err(e) => {
-            panic!("error while loading module: {:?}", e)
+            internal_error!("error while loading module: {:?}", e)
         }
     };
 
@@ -209,7 +210,7 @@ pub fn gen_and_eval<'a>(
         if main_fn.verify(true) {
             function_pass.run_on(&main_fn);
         } else {
-            panic!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name);
+            internal_error!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name);
         }
 
         module_pass.run_on(env.module);
@@ -219,7 +220,7 @@ pub fn gen_and_eval<'a>(
 
         // Verify the module
         if let Err(errors) = env.module.verify() {
-            panic!(
+            internal_error!(
                 "Errors defining module:\n{}\n\nUncomment things nearby to see more details.",
                 errors.to_string()
             );

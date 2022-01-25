@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use libloading::Library;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::build::tag_pointer_tag_id_bits_and_mask;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::called_via::CalledVia;
@@ -1175,7 +1176,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                     Expr::Apply(loc_tag_expr, payload, CalledVia::Space)
                 }
                 other => {
-                    panic!("Unexpected FlatType {:?} in num_to_ast", other);
+                    internal_error!("Unexpected FlatType {:?} in num_to_ast", other);
                 }
             }
         }
@@ -1185,7 +1186,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
             num_to_ast(env, num_expr, content)
         }
         other => {
-            panic!("Unexpected FlatType {:?} in num_to_ast", other);
+            internal_error!("Unexpected FlatType {:?} in num_to_ast", other);
         }
     }
 }

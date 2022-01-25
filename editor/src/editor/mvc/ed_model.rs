@@ -218,6 +218,7 @@ pub mod test_ed_model {
     use roc_ast::lang::env::Env;
     use roc_ast::mem_pool::pool::Pool;
     use roc_ast::module::load_module;
+    use roc_error_macros::internal_error;
     use roc_load::file::LoadedModule;
     use roc_module::symbol::IdentIds;
     use roc_module::symbol::ModuleIds;
@@ -295,13 +296,14 @@ pub mod test_ed_model {
         let temp_file_full_path = temp_dir.path().join(temp_file_path_buf);
 
         let mut file = File::create(temp_file_full_path.clone()).unwrap_or_else(|_| {
-            panic!(
+            internal_error!(
                 "Failed to create temporary file for path {:?}",
                 temp_file_full_path
             )
         });
-        writeln!(file, "{}", clean_code_str)
-            .unwrap_or_else(|_| panic!("Failed to write {:?} to file: {:?}", clean_code_str, file));
+        writeln!(file, "{}", clean_code_str).unwrap_or_else(|_| {
+            internal_error!("Failed to write {:?} to file: {:?}", clean_code_str, file)
+        });
 
         let loaded_module = load_module(&temp_file_full_path);
 

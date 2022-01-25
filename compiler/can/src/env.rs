@@ -1,5 +1,6 @@
 use crate::procedure::References;
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
@@ -125,7 +126,7 @@ impl<'a> Env<'a> {
                             }
                         },
                         None => {
-                            panic!(
+                            internal_error!(
                                 "Module {} exists, but is not recorded in dep_idents",
                                 module_name
                             )

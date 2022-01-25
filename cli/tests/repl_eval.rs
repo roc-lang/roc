@@ -4,6 +4,7 @@ extern crate indoc;
 #[cfg(test)]
 mod repl_eval {
     use cli_utils::helpers;
+    use roc_error_macros::internal_error;
     use roc_test_utils::assert_multiline_str_eq;
 
     const ERROR_MESSAGE_START: char = '─';
@@ -30,7 +31,7 @@ mod repl_eval {
             None => {
                 assert_multiline_str_eq!("", out.stderr.as_str());
                 assert!(out.status.success());
-                panic!(
+                internal_error!(
                     "I expected a failure, but there is no error message in stdout:\n\n{}",
                     &out.stdout
                 );

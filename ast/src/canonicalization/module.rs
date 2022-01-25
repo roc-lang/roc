@@ -5,6 +5,7 @@
 use bumpalo::Bump;
 use roc_can::operator::desugar_def;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -129,7 +130,7 @@ pub fn canonicalize_module_defs<'a>(
                     lookups.push((symbol, expr_var, region));
                 }
                 Err((_shadowed_symbol, _region)) => {
-                    panic!("TODO gracefully handle shadowing in imports.")
+                    internal_error!("TODO gracefully handle shadowing in imports.")
                 }
             }
         } else {
@@ -215,7 +216,7 @@ pub fn canonicalize_module_defs<'a>(
                     }
 
                     InvalidCycle(identifiers, _) => {
-                        panic!("TODO gracefully handle potentially attempting to expose invalid cyclic defs {:?}" , identifiers);
+                        internal_error!("TODO gracefully handle potentially attempting to expose invalid cyclic defs {:?}" , identifiers);
                     }
                     Builtin(def) => {
                         // Builtins cannot be exposed in module declarations.

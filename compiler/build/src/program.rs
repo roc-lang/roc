@@ -1,3 +1,4 @@
+use roc_error_macros::internal_error;
 #[cfg(feature = "llvm")]
 use roc_gen_llvm::llvm::build::module_from_builtins;
 #[cfg(feature = "llvm")]
@@ -316,7 +317,7 @@ pub fn gen_from_mono_module_llvm(
         // write the ll code to a file, so we can modify it
         env.module.print_to_file(&app_ll_file).unwrap();
 
-        panic!(
+        internal_error!(
             "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {}",
             app_ll_file,
             errors.to_string(),
@@ -354,10 +355,10 @@ pub fn gen_from_mono_module_llvm(
             Err(error) => {
                 use std::io::ErrorKind;
                 match error.kind() {
-                    ErrorKind::NotFound => panic!(
+                    ErrorKind::NotFound => internal_error!(
                         r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
                     ),
-                    _ => panic!("{:?}", error),
+                    _ => internal_error!("{:?}", error),
                 }
             }
         }
@@ -394,7 +395,10 @@ pub fn gen_from_mono_module_llvm(
                         .output()
                         .or_else(|_| Command::new("llc").args(llc_args).output())
                         .map_err(|_| {
-                            panic!("We couldn't find llc-{} on your machine!", LLVM_VERSION);
+                            internal_error!(
+                                "We couldn't find llc-{} on your machine!",
+                                LLVM_VERSION
+                            );
                         });
             }
 
@@ -431,7 +435,7 @@ pub fn gen_from_mono_module_llvm(
                 // module.print_to_file(app_ll_file);
                 module.write_bitcode_to_path(app_o_file);
             }
-            _ => panic!(
+            _ => internal_error!(
                 "TODO gracefully handle unsupported architecture: {:?}",
                 target.architecture
             ),

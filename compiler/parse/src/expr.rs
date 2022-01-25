@@ -15,6 +15,7 @@ use crate::state::State;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
@@ -1085,7 +1086,7 @@ fn parse_expr_operator<'a>(
                             Ok(good) => {
                                 type_arguments.push(Loc::at(argument.region, good));
                             }
-                            Err(_) => panic!(),
+                            Err(_) => internal_error!(),
                         }
                     }
 
@@ -2101,7 +2102,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
             let mut answer = match iter.next() {
                 Some(ident) => Expr::Var { module_name, ident },
                 None => {
-                    panic!("Parsed an Ident::Access with no parts");
+                    internal_error!("Parsed an Ident::Access with no parts");
                 }
             };
 

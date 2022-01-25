@@ -8,6 +8,7 @@ mod insert_doc_syntax_highlighting {
     use bumpalo::{collections::String as BumpString, Bump};
     use roc_ast::module::load_module;
     use roc_docs::{syntax_highlight_expr, syntax_highlight_top_level_defs};
+    use roc_error_macros::internal_error;
     use roc_load::file::LoadedModule;
     use tempfile::tempdir;
     use uuid::Uuid;
@@ -35,7 +36,7 @@ mod insert_doc_syntax_highlighting {
                     assert_eq!(highlighted_code_str, want);
                 }
                 Err(syntax_error) => {
-                    panic!("Unexpected parse failure when parsing this for rendering in docs:\n\n{}\n\nParse error was:\n\n{:?}\n\n", code_str, syntax_error)
+                    internal_error!("Unexpected parse failure when parsing this for rendering in docs:\n\n{}\n\nParse error was:\n\n{:?}\n\n", code_str, syntax_error)
                 }
             };
         } else {
@@ -50,7 +51,7 @@ mod insert_doc_syntax_highlighting {
                     assert_eq!(highlighted_code_str, want);
                 }
                 Err(syntax_error) => {
-                    panic!("Unexpected parse failure when parsing this for rendering in docs:\n\n{}\n\nParse error was:\n\n{:?}\n\n", code_str, syntax_error)
+                    internal_error!("Unexpected parse failure when parsing this for rendering in docs:\n\n{}\n\nParse error was:\n\n{:?}\n\n", code_str, syntax_error)
                 }
             };
         }
@@ -74,7 +75,7 @@ main = "Hello, world!"
         let temp_file_full_path = temp_dir.path().join(temp_file_path_buf);
 
         let mut file = File::create(temp_file_full_path.clone()).unwrap_or_else(|_| {
-            panic!(
+            internal_error!(
                 "Failed to create temporary file for path {:?}",
                 temp_file_full_path
             )
@@ -84,8 +85,9 @@ main = "Hello, world!"
         full_code_str.push_str("\n\n");
         full_code_str.push_str(code_str);
 
-        writeln!(file, "{}", full_code_str)
-            .unwrap_or_else(|_| panic!("Failed to write {:?} to file: {:?}", HELLO_WORLD, file));
+        writeln!(file, "{}", full_code_str).unwrap_or_else(|_| {
+            internal_error!("Failed to write {:?} to file: {:?}", HELLO_WORLD, file)
+        });
 
         load_module(&temp_file_full_path)
     }

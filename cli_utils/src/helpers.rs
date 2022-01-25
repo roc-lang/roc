@@ -5,6 +5,7 @@ extern crate roc_module;
 extern crate tempfile;
 
 use roc_cli::repl::{INSTRUCTIONS, WELCOME_MESSAGE};
+use roc_error_macros::internal_error;
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -38,7 +39,7 @@ pub fn path_to_roc_binary() -> PathBuf {
                     path
                 })
             })
-            .unwrap_or_else(|| panic!("CARGO_BIN_PATH wasn't set, and couldn't be inferred from context. Can't run CLI tests."));
+            .unwrap_or_else(|| internal_error!("CARGO_BIN_PATH wasn't set, and couldn't be inferred from context. Can't run CLI tests."));
 
     path.push("roc");
 
@@ -77,7 +78,7 @@ pub fn run_cmd(cmd_name: &str, stdin_vals: &[&str], args: &[&str]) -> Out {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
+        .unwrap_or_else(|_| internal_error!("failed to execute cmd `{}` in CLI test", cmd_name));
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
@@ -91,7 +92,7 @@ pub fn run_cmd(cmd_name: &str, stdin_vals: &[&str], args: &[&str]) -> Out {
 
     let output = child
         .wait_with_output()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
+        .unwrap_or_else(|_| internal_error!("failed to execute cmd `{}` in CLI test", cmd_name));
 
     Out {
         stdout: String::from_utf8(output.stdout).unwrap(),
@@ -116,7 +117,7 @@ pub fn run_with_valgrind(stdin_vals: &[&str], args: &[&str]) -> (Out, String) {
     if let Some(suppressions_file_os_str) = env::var_os("VALGRIND_SUPPRESSIONS") {
         match suppressions_file_os_str.to_str() {
             None => {
-                panic!("Could not determine suppression file location from OsStr");
+                internal_error!("Could not determine suppression file location from OsStr");
             }
             Some(suppressions_file) => {
                 let mut buf = String::new();
@@ -358,12 +359,12 @@ pub fn repl_eval(input: &str) -> Out {
         // The repl crashed before completing the evaluation.
         // This is most likely due to a segfault.
         if output.status.to_string() == "signal: 11" {
-            panic!(
+            internal_error!(
                 "repl segfaulted during the test. Stderr was {:?}",
                 String::from_utf8(output.stderr).unwrap()
             );
         } else {
-            panic!("repl exited unexpectedly before finishing evaluation. Exit status was {:?} and stderr was {:?}", output.status, String::from_utf8(output.stderr).unwrap());
+            internal_error!("repl exited unexpectedly before finishing evaluation. Exit status was {:?} and stderr was {:?}", output.status, String::from_utf8(output.stderr).unwrap());
         }
     } else {
         let expected_after_answer = "\n".to_string();

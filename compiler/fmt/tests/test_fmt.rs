@@ -6,6 +6,7 @@ extern crate roc_fmt;
 #[cfg(test)]
 mod test_fmt {
     use bumpalo::Bump;
+    use roc_error_macros::internal_error;
     use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_def;
     use roc_fmt::module::fmt_module;
@@ -26,7 +27,7 @@ mod test_fmt {
 
                 assert_multiline_str_eq!(expected, buf.as_str());
             }
-            Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", input, error)
+            Err(error) => internal_error!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", input, error)
         };
     }
 
@@ -61,11 +62,11 @@ mod test_fmt {
                             fmt_def(&mut buf, arena.alloc(loc_def.value), 0);
                         }
                     }
-                    Err(error) => panic!("Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
+                    Err(error) => internal_error!("Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
                 }
                 assert_multiline_str_eq!(expected, buf.as_str())
             }
-            Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
+            Err(error) => internal_error!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
         };
     }
 

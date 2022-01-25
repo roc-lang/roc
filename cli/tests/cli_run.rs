@@ -15,6 +15,7 @@ mod cli_run {
         example_file, examples_dir, extract_valgrind_errors, fixture_file, known_bad_file, run_cmd,
         run_roc, run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
     };
+    use roc_error_macros::internal_error;
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::path::{Path, PathBuf};
@@ -87,7 +88,7 @@ mod cli_run {
 
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], &all_flags[..]].concat());
         if !compile_out.stderr.is_empty() {
-            panic!("roc build had stderr: {}", compile_out.stderr);
+            internal_error!("roc build had stderr: {}", compile_out.stderr);
         }
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);
@@ -110,7 +111,7 @@ mod cli_run {
 
             if valgrind_out.status.success() {
                 let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
-                    panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nvalgrind xml was: \"{}\"\n\nvalgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
+                    internal_error!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nvalgrind xml was: \"{}\"\n\nvalgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
                 });
 
                 if !memory_errors.is_empty() {
@@ -131,7 +132,7 @@ mod cli_run {
                             println!("    {}", text);
                         }
                     }
-                    panic!("Valgrind reported memory errors");
+                    internal_error!("Valgrind reported memory errors");
                 }
             } else {
                 let exit_code = match valgrind_out.status.code() {
@@ -139,7 +140,7 @@ mod cli_run {
                     None => "no exit code".to_string(),
                 };
 
-                panic!("`valgrind` exited with {}. valgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", exit_code, valgrind_out.stdout, valgrind_out.stderr);
+                internal_error!("`valgrind` exited with {}. valgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", exit_code, valgrind_out.stdout, valgrind_out.stderr);
             }
 
             valgrind_out
@@ -157,9 +158,10 @@ mod cli_run {
             )
         };
         if !&out.stdout.ends_with(expected_ending) {
-            panic!(
+            internal_error!(
                 "expected output to end with {:?} but instead got {:#?}",
-                expected_ending, out.stdout
+                expected_ending,
+                out.stdout
             );
         }
         assert!(out.status.success());
@@ -180,7 +182,7 @@ mod cli_run {
 
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags.as_slice()].concat());
         if !compile_out.stderr.is_empty() {
-            panic!("{}", compile_out.stderr);
+            internal_error!("{}", compile_out.stderr);
         }
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);
@@ -189,9 +191,10 @@ mod cli_run {
         let stdout = crate::run_with_wasmer(&path, stdin);
 
         if !stdout.ends_with(expected_ending) {
-            panic!(
+            internal_error!(
                 "expected output to end with {:?} but instead got {:#?}",
-                expected_ending, stdout
+                expected_ending,
+                stdout
             );
         }
     }
@@ -657,9 +660,10 @@ mod cli_run {
     #[cfg(not(debug_assertions))]
     fn check_for_tests(examples_dir: &str, all_examples: &mut MutMap<&str, Example<'_>>) {
         let entries = std::fs::read_dir(examples_dir).unwrap_or_else(|err| {
-            panic!(
+            internal_error!(
                 "Error trying to read {} as an examples directory: {}",
-                examples_dir, err
+                examples_dir,
+                err
             );
         });
 
@@ -672,7 +676,7 @@ mod cli_run {
                 // We test benchmarks separately
                 if example_dir_name != "benchmarks" {
                     all_examples.remove(example_dir_name.as_str()).unwrap_or_else(|| {
-                    panic!("The example directory {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name);
+                    internal_error!("The example directory {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name);
                 });
                 }
             }
@@ -688,9 +692,10 @@ mod cli_run {
         use std::io::Read;
 
         let entries = std::fs::read_dir(benchmarks_dir).unwrap_or_else(|err| {
-            panic!(
+            internal_error!(
                 "Error trying to read {} as a benchmark directory: {}",
-                benchmarks_dir, err
+                benchmarks_dir,
+                err
             );
         });
 
@@ -711,7 +716,7 @@ mod cli_run {
                 // Only app modules in this directory are considered benchmarks.
                 if "app".as_bytes() == buf && !benchmark_file_name.contains("RBTreeDel") {
                     all_benchmarks.remove(benchmark_file_name.as_str()).unwrap_or_else(|| {
-                        panic!("The benchmark {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", benchmarks_dir, benchmark_file_name);
+                        internal_error!("The benchmark {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", benchmarks_dir, benchmark_file_name);
                     });
                 }
             }

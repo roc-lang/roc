@@ -11,6 +11,7 @@ use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -1044,9 +1045,10 @@ fn canonicalize_pending_def<'a>(
                 // Since everywhere in the code it'll be referred to by its defined name,
                 // remove its generated name from the closure map. (We'll re-insert it later.)
                 let references = env.closures.remove(symbol).unwrap_or_else(|| {
-                    panic!(
+                    internal_error!(
                         "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                        symbol, env.closures
+                        symbol,
+                        env.closures
                     )
                 });
 
@@ -1187,9 +1189,10 @@ fn canonicalize_pending_def<'a>(
                 // Since everywhere in the code it'll be referred to by its defined name,
                 // remove its generated name from the closure map. (We'll re-insert it later.)
                 let references = env.closures.remove(symbol).unwrap_or_else(|| {
-                    panic!(
+                    internal_error!(
                         "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                        symbol, env.closures
+                        symbol,
+                        env.closures
                     )
                 });
 

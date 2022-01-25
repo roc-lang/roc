@@ -7,6 +7,7 @@ extern crate roc_std;
 
 #[cfg(test)]
 mod test_roc_std {
+    use roc_error_macros::internal_error;
     use roc_std::RocResult;
 
     #[test]
@@ -19,7 +20,7 @@ mod test_roc_std {
                 assert_eq!(answer.as_str(), greeting);
             }
             Err(()) => {
-                panic!("Received an Err when Ok was expected.")
+                internal_error!("Received an Err when Ok was expected.")
             }
         }
     }

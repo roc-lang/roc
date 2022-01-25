@@ -24,6 +24,7 @@ roc_gen_llvm = { path = "../gen_llvm", optional = true }
 roc_gen_wasm = { path = "../gen_wasm", optional = true }
 roc_gen_dev = { path = "../gen_dev", default-features = false }
 roc_reporting = { path = "../../reporting" }
+roc_error_macros = { path = "../../error_macros" }
 roc_std = { path = "../../roc_std" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 libloading = "0.7.1"

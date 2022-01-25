@@ -8,6 +8,7 @@ use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_load::docs::DocEntry::DocDef;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
@@ -434,9 +435,9 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>, std_lib: StdLib) -> Vec<L
             Ok(loaded) => modules.push(loaded),
             Err(LoadingProblem::FormattedReport(report)) => {
                 println!("{}", report);
-                panic!();
+                internal_error!();
             }
-            Err(e) => panic!("{:?}", e),
+            Err(e) => internal_error!("{:?}", e),
         }
     }
 
@@ -735,7 +736,7 @@ fn doc_url<'a>(
             }
             Err(_) => {
                 // TODO return Err here
-                panic!(
+                internal_error!(
                 "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module. Scope was: {:?}",
                 ident, scope
             );
@@ -751,7 +752,7 @@ fn doc_url<'a>(
                     // If it's not exposed, then we can't link to it!
                     if !exposed_values.contains(&ident) {
                         // TODO return Err here
-                        panic!(
+                        internal_error!(
                             "Tried to generate an automatic link in docs for `{}.{}`, but `{}` does not expose `{}`.",
                             module_name, ident, module_name, ident);
                     }
@@ -770,7 +771,7 @@ fn doc_url<'a>(
                         }
                         _ => {
                             // TODO return Err here
-                            panic!(
+                            internal_error!(
                                 "Tried to generate an automatic link in docs for `{}.{}`, but `{}` is not exposed in `{}`.",
                                 module_name, ident, ident, module_name);
                         }
@@ -779,7 +780,7 @@ fn doc_url<'a>(
             }
             None => {
                 // TODO return Err here
-                panic!("Tried to generate a doc link for `{}.{}` but the `{}` module was not imported!", module_name, ident, module_name);
+                internal_error!("Tried to generate a doc link for `{}.{}` but the `{}` module was not imported!", module_name, ident, module_name);
             }
         }
     }
@@ -976,7 +977,7 @@ fn markdown_to_html(
                         docs_parser.push(Event::Html(CowStr::from(highlighted_code_str)));
                     }
                     Err(syntax_error) => {
-                        panic!("Unexpected parse failure when parsing this for rendering in docs:\n\n{}\n\nParse error was:\n\n{:?}\n\n", code_str, syntax_error)
+                        internal_error!("Unexpected parse failure when parsing this for rendering in docs:\n\n{}\n\nParse error was:\n\n{:?}\n\n", code_str, syntax_error)
                     }
                 };
 

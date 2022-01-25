@@ -10,6 +10,7 @@ use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -812,31 +813,31 @@ pub fn canonicalize_expr<'a>(
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
         bad_expr @ ast::Expr::ParensAround(_) => {
-            panic!(
+            internal_error!(
                 "A ParensAround did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::SpaceBefore(_, _) => {
-            panic!(
+            internal_error!(
                 "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::SpaceAfter(_, _) => {
-            panic!(
+            internal_error!(
                 "A SpaceAfter did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::BinOps { .. } => {
-            panic!(
+            internal_error!(
                 "A binary operator chain did not get desugared somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::UnaryOp(_, _) => {
-            panic!(
+            internal_error!(
                 "A unary operator did not get desugared somehow: {:#?}",
                 bad_expr
             );
@@ -1157,7 +1158,7 @@ fn canonicalize_field<'a>(
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
-            panic!("Somehow a LabelOnly record field was not desugared!");
+            internal_error!("Somehow a LabelOnly record field was not desugared!");
         }
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
@@ -1165,7 +1166,7 @@ fn canonicalize_field<'a>(
         }
 
         Malformed(_string) => {
-            panic!("TODO canonicalize malformed record field");
+            internal_error!("TODO canonicalize malformed record field");
         }
     }
 }

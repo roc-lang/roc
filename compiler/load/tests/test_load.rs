@@ -21,6 +21,7 @@ mod test_load {
     use roc_can::def::Def;
     use roc_collections::all::MutMap;
     use roc_constrain::module::SubsByModule;
+    use roc_error_macros::internal_error;
     use roc_load::file::LoadedModule;
     use roc_module::ident::ModuleName;
     use roc_module::symbol::{Interns, ModuleId};
@@ -39,7 +40,7 @@ mod test_load {
         let arena = &arena;
 
         match multiple_modules_help(arena, files) {
-            Err(io_error) => panic!("IO trouble: {:?}", io_error),
+            Err(io_error) => internal_error!("IO trouble: {:?}", io_error),
             Ok(Err(LoadingProblem::FormattedReport(buf))) => Err(buf),
             Ok(Err(loading_problem)) => Err(format!("{:?}", loading_problem)),
             Ok(Ok(mut loaded_module)) => {
@@ -143,9 +144,9 @@ mod test_load {
             Ok(x) => x,
             Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
                 println!("{}", report);
-                panic!("{}", report);
+                internal_error!("{}", report);
             }
-            Err(e) => panic!("{:?}", e),
+            Err(e) => internal_error!("{:?}", e),
         };
 
         let home = loaded_module.module_id;
@@ -192,7 +193,7 @@ mod test_load {
             let expected_type = expected_types
                 .remove(fully_qualified.as_str())
                 .unwrap_or_else(|| {
-                    panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
+                    internal_error!("Defs included an unexpected symbol: {:?}", fully_qualified)
                 });
 
             assert_eq!((&symbol, expected_type), (&symbol, actual_str.as_str()));
@@ -237,7 +238,7 @@ mod test_load {
                 }
                 Builtin(_) => {}
                 cycle @ InvalidCycle(_) => {
-                    panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
+                    internal_error!("Unexpected cyclic def in module declarations: {:?}", cycle);
                 }
             };
         }

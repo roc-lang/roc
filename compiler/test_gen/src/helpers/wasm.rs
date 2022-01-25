@@ -212,7 +212,7 @@ where
         Ok(result) => {
             let address = match result[0] {
                 wasmer::Value::I32(a) => a,
-                _ => panic!(),
+                _ => internal_error!(),
             };
 
             if false {
@@ -258,7 +258,7 @@ where
         Err(e) => return Err(format!("{:?}", e)),
         Ok(result) => match result[0] {
             wasmer::Value::I32(a) => a,
-            _ => panic!(),
+            _ => internal_error!(),
         },
     };
 
@@ -273,7 +273,7 @@ where
     let refcount_vector_len: WasmPtr<i32> = WasmPtr::new(refcount_vector_addr as u32);
     let actual_len = refcount_vector_len.deref(memory).unwrap().get();
     if actual_len != expected_len {
-        panic!("Expected {} refcounts but got {}", expected_len, actual_len);
+        internal_error!("Expected {} refcounts but got {}", expected_len, actual_len);
     }
 
     // Read the actual refcount values
@@ -334,7 +334,7 @@ macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         let phantom = std::marker::PhantomData;
         match $crate::helpers::wasm::assert_wasm_evals_to_help::<$ty>($src, phantom) {
-            Err(msg) => panic!("{:?}", msg),
+            Err(msg) => internal_error!("{:?}", msg),
             Ok(actual) => {
                 assert_eq!($transform(actual), $expected)
             }
@@ -384,7 +384,7 @@ macro_rules! assert_refcounts {
         let result =
             $crate::helpers::wasm::assert_wasm_refcounts_help::<$ty>($src, phantom, num_refcounts);
         match result {
-            Err(msg) => panic!("{:?}", msg),
+            Err(msg) => internal_error!("{:?}", msg),
             Ok(actual_refcounts) => {
                 assert_eq!(&actual_refcounts, $expected_refcounts)
             }

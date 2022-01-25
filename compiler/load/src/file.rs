@@ -13,6 +13,7 @@ use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
+use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName, TagName};
 use roc_module::symbol::{
     IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, PackageQualified,
@@ -1207,7 +1208,9 @@ impl<'a> LoadStart<'a> {
                 Err(LoadingProblem::ParsingFailed(problem)) => {
                     let module_ids = Arc::try_unwrap(arc_modules)
                         .unwrap_or_else(|_| {
-                            panic!("There were still outstanding Arc references to module_ids")
+                            internal_error!(
+                                "There were still outstanding Arc references to module_ids"
+                            )
                         })
                         .into_inner()
                         .into_module_ids();
@@ -1441,7 +1444,7 @@ where
                                         match result {
                                             Ok(()) => {}
                                             Err(LoadingProblem::MsgChannelDied) => {
-                                                panic!("Msg channel closed unexpectedly.")
+                                                internal_error!("Msg channel closed unexpectedly.")
                                             }
                                             Err(LoadingProblem::ParsingFailed(problem)) => {
                                                 msg_tx.send(Msg::FailedToParse(problem)).unwrap();
@@ -1575,7 +1578,7 @@ where
 
                         let module_ids = Arc::try_unwrap(state.arc_modules)
                             .unwrap_or_else(|_| {
-                                panic!("There were still outstanding Arc references to module_ids")
+                                internal_error!("There were still outstanding Arc references to module_ids")
                             })
                             .into_inner()
                             .into_module_ids();
@@ -1612,7 +1615,7 @@ where
 
                                 let module_ids = Arc::try_unwrap(arc_modules)
                             .unwrap_or_else(|_| {
-                                panic!(r"There were still outstanding Arc references to module_ids")
+                                internal_error!(r"There were still outstanding Arc references to module_ids")
                             })
                             .into_inner()
                             .into_module_ids();
@@ -2194,7 +2197,9 @@ fn finish_specialization(
     exposed_to_host: ExposedToHost,
 ) -> Result<MonomorphizedModule, LoadingProblem> {
     let module_ids = Arc::try_unwrap(state.arc_modules)
-        .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
+        .unwrap_or_else(|_| {
+            internal_error!("There were still outstanding Arc references to module_ids")
+        })
         .into_inner()
         .into_module_ids();
 
@@ -2301,7 +2306,9 @@ fn finish(
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
-        .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
+        .unwrap_or_else(|_| {
+            internal_error!("There were still outstanding Arc references to module_ids")
+        })
         .into_inner()
         .into_module_ids();
 
@@ -2641,7 +2648,7 @@ fn parse_header<'a>(
                             Ok((module_id, app_module_header_msg))
                         }
                     } else {
-                        panic!("could not find base")
+                        internal_error!("could not find base")
                     }
                 }
                 To::NewPackage(_package_name) => Ok((module_id, app_module_header_msg)),
@@ -3700,7 +3707,7 @@ where
             })
         }
         Err(runtime_error) => {
-            panic!(
+            internal_error!(
                 "TODO gracefully handle module canonicalization error {:?}",
                 runtime_error
             );

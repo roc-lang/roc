@@ -7,6 +7,7 @@ use roc_can::expr::{canonicalize_expr, Expr};
 use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
@@ -35,9 +36,10 @@ pub struct CanExprOut {
 #[allow(dead_code)]
 pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
     let loc_expr = roc_parse::test_helpers::parse_loc_with(arena, expr_str).unwrap_or_else(|e| {
-        panic!(
+        internal_error!(
             "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?} {:?}",
-            expr_str, e
+            expr_str,
+            e
         )
     });
 

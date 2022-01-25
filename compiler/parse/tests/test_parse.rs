@@ -15,6 +15,7 @@ extern crate roc_parse;
 mod test_parse {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
+    use roc_error_macros::internal_error;
     use roc_parse::ast::Expr::{self, *};
     use roc_parse::ast::StrLiteral::*;
     use roc_parse::ast::StrSegment::*;
@@ -84,7 +85,7 @@ mod test_parse {
                         } else if let Some(file) = file.strip_suffix(".result-ast") {
                             assert!(tests.contains(format!("{}/{}", &res, file).as_str()), "{}", file);
                         } else {
-                            panic!("unexpected test file found: {}", file);
+                            internal_error!("unexpected test file found: {}", file);
                         }
                     }
                 }

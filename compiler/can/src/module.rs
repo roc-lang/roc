@@ -6,6 +6,7 @@ use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -117,7 +118,7 @@ where
                     lookups.push((symbol, expr_var, region));
                 }
                 Err((_shadowed_symbol, _region)) => {
-                    panic!("TODO gracefully handle shadowing in imports.")
+                    internal_error!("TODO gracefully handle shadowing in imports.")
                 }
             }
         } else {
@@ -137,7 +138,7 @@ where
                     // here we do nothing special
                 }
                 Err((_shadowed_symbol, _region)) => {
-                    panic!("TODO gracefully handle shadowing in imports.")
+                    internal_error!("TODO gracefully handle shadowing in imports.")
                 }
             }
         }

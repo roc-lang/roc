@@ -32,7 +32,7 @@ pub fn assert_correct_variable_usage(constraint: &Constraint) {
 
         println!("difference: {:?}", &diff);
 
-        panic!("variable usage problem (see stdout for details)");
+        internal_error!("variable usage problem (see stdout for details)");
     }
 }
 

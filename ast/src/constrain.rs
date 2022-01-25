@@ -1981,6 +1981,7 @@ pub mod test_constrain {
     use bumpalo::Bump;
     use roc_can::expected::Expected;
     use roc_collections::all::MutMap;
+    use roc_error_macros::internal_error;
     use roc_module::{
         ident::Lowercase,
         symbol::{IdentIds, Interns, ModuleIds, Symbol},
@@ -2118,7 +2119,7 @@ pub mod test_constrain {
 
                 assert_eq!(actual_str, expected_str);
             }
-            Err(e) => panic!("syntax error {:?}", e),
+            Err(e) => internal_error!("syntax error {:?}", e),
         }
     }
 

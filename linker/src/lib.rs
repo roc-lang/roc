@@ -11,6 +11,7 @@ use object::{
 };
 use roc_build::link::{rebuild_host, LinkType};
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
 use std::cmp::Ordering;
 use std::convert::TryFrom;
@@ -166,7 +167,7 @@ pub fn build_and_preprocess_host(
         false,
     )? != 0
     {
-        panic!("Failed to preprocess host");
+        internal_error!("Failed to preprocess host");
     }
     Ok(())
 }
@@ -186,7 +187,7 @@ pub fn link_preprocessed_host(
         false,
     )? != 0
     {
-        panic!("Failed to surgically link host");
+        internal_error!("Failed to surgically link host");
     }
     Ok(())
 }
@@ -258,11 +259,11 @@ fn generate_dynamic_lib(
 
     if !output.status.success() {
         match std::str::from_utf8(&output.stderr) {
-            Ok(stderr) => panic!(
+            Ok(stderr) => internal_error!(
                 "Failed to link dummy shared library - stderr of the `ld` command was:\n{}",
                 stderr
             ),
-            Err(utf8_err) => panic!(
+            Err(utf8_err) => internal_error!(
                 "Failed to link dummy shared library  - stderr of the `ld` command was invalid utf8 ({:?})",
                 utf8_err
             ),
