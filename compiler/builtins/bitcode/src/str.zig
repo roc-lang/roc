@@ -16,7 +16,7 @@ const InPlace = enum(u8) {
 };
 
 const SMALL_STR_MAX_LENGTH = small_string_size - 1;
-const small_string_size = 2 * @sizeOf(usize);
+const small_string_size = @sizeOf(RocStr);
 const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);
 
 fn init_blank_small_string(comptime n: usize) [n]u8 {
@@ -37,8 +37,9 @@ pub const RocStr = extern struct {
     pub const alignment = @alignOf(usize);
 
     pub inline fn empty() RocStr {
+        const small_str_flag: isize = std.math.minInt(isize);
         return RocStr{
-            .str_len = 0,
+            .str_len = @bitCast(usize, small_str_flag),
             .str_bytes = null,
         };
     }
@@ -80,7 +81,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn deinit(self: RocStr) void {
-        if (!self.isSmallStr() and !self.isEmpty()) {
+        if (!self.isSmallStr()) {
             utils.decref(self.str_bytes, self.str_len, RocStr.alignment);
         }
     }
@@ -105,11 +106,8 @@ pub const RocStr = extern struct {
     }
 
     pub fn eq(self: RocStr, other: RocStr) bool {
-        const self_bytes_ptr: ?[*]const u8 = self.str_bytes;
-        const other_bytes_ptr: ?[*]const u8 = other.str_bytes;
-
         // If they are byte-for-byte equal, they're definitely equal!
-        if (self_bytes_ptr == other_bytes_ptr and self.str_len == other.str_len) {
+        if (self.str_bytes == other.str_bytes and self.str_len == other.str_len) {
             return true;
         }
 
@@ -121,28 +119,34 @@ pub const RocStr = extern struct {
             return false;
         }
 
-        const self_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &self);
-        const other_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &other);
-        const self_bytes: [*]const u8 = if (self.isSmallStr() or self.isEmpty()) self_u8_ptr else self_bytes_ptr orelse unreachable;
-        const other_bytes: [*]const u8 = if (other.isSmallStr() or other.isEmpty()) other_u8_ptr else other_bytes_ptr orelse unreachable;
+        // Now we have to look at the string contents
+        const self_bytes = self.asU8ptr();
+        const other_bytes = other.asU8ptr();
 
-        var index: usize = 0;
-
-        // TODO rewrite this into a for loop
-        const length = self.len();
-        while (index < length) {
-            if (self_bytes[index] != other_bytes[index]) {
+        // It's faster to compare pointer-sized words rather than bytes, as far as possible
+        // The bytes are always pointer-size aligned due to the refcount
+        const self_words = @ptrCast([*]const usize, @alignCast(@alignOf(usize), self_bytes));
+        const other_words = @ptrCast([*]const usize, @alignCast(@alignOf(usize), other_bytes));
+        var w: usize = 0;
+        while (w < self_len / @sizeOf(usize)) : (w += 1) {
+            if (self_words[w] != other_words[w]) {
                 return false;
             }
+        }
 
-            index = index + 1;
+        // Compare the leftover bytes
+        var b = w * @sizeOf(usize);
+        while (b < self_len) : (b += 1) {
+            if (self_bytes[b] != other_bytes[b]) {
+                return false;
+            }
         }
 
         return true;
     }
 
     pub fn clone(in_place: InPlace, str: RocStr) RocStr {
-        if (str.isSmallStr() or str.isEmpty()) {
+        if (str.isSmallStr()) {
             // just return the bytes
             return str;
         } else {
@@ -214,7 +218,8 @@ pub const RocStr = extern struct {
     }
 
     pub fn isEmpty(self: RocStr) bool {
-        return self.len() == 0;
+        comptime const empty_len = RocStr.empty().str_len;
+        return self.str_len == empty_len;
     }
 
     // If a string happens to be null-terminated already, then we can pass its
@@ -246,7 +251,7 @@ pub const RocStr = extern struct {
         } else {
             // This is a big string, and it's not empty, so we can safely
             // dereference the pointer.
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
             const capacity_or_refcount: isize = (ptr - 1)[0];
 
             // If capacity_or_refcount is positive, then it's a capacity value.
@@ -277,7 +282,7 @@ pub const RocStr = extern struct {
             // to first change its flag to mark it as a small string!
             return longest_small_str;
         } else {
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
             const capacity_or_refcount: isize = (ptr - 1)[0];
 
             if (capacity_or_refcount > 0) {
@@ -294,11 +299,6 @@ pub const RocStr = extern struct {
     }
 
     pub fn isUnique(self: RocStr) bool {
-        // the empty string is unique (in the sense that copying it will not leak memory)
-        if (self.isEmpty()) {
-            return true;
-        }
-
         // small strings can be copied
         if (self.isSmallStr()) {
             return true;
@@ -309,7 +309,7 @@ pub const RocStr = extern struct {
     }
 
     fn isRefcountOne(self: RocStr) bool {
-        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
@@ -321,8 +321,8 @@ pub const RocStr = extern struct {
 
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        // return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
-        if (self.isSmallStr() or self.isEmpty()) {
+        // return if (self.isSmallStr()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
+        if (self.isSmallStr()) {
             const as_int = @ptrToInt(&self);
             const as_ptr = @intToPtr([*]u8, as_int);
             return as_ptr;
@@ -342,7 +342,7 @@ pub const RocStr = extern struct {
         @memcpy(dest, src, self.len());
     }
 
-    test "RocStr.eq: equal" {
+    test "RocStr.eq: small, equal" {
         const str1_len = 3;
         var str1: [str1_len]u8 = "abc".*;
         const str1_ptr: [*]u8 = &str1;
@@ -359,7 +359,7 @@ pub const RocStr = extern struct {
         roc_str2.deinit();
     }
 
-    test "RocStr.eq: not equal different length" {
+    test "RocStr.eq: small, not equal, different length" {
         const str1_len = 4;
         var str1: [str1_len]u8 = "abcd".*;
         const str1_ptr: [*]u8 = &str1;
@@ -378,7 +378,7 @@ pub const RocStr = extern struct {
         try expect(!roc_str1.eq(roc_str2));
     }
 
-    test "RocStr.eq: not equal same length" {
+    test "RocStr.eq: small, not equal, same length" {
         const str1_len = 3;
         var str1: [str1_len]u8 = "acb".*;
         const str1_ptr: [*]u8 = &str1;
@@ -395,6 +395,67 @@ pub const RocStr = extern struct {
         }
 
         try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, equal" {
+        const content = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content, content.len);
+        const roc_str2 = RocStr.init(content, content.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, different lengths, unequal" {
+        const content1 = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content1, content1.len);
+        const content2 = "012345678901234567890";
+        const roc_str2 = RocStr.init(content2, content2.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, different content, unequal" {
+        const content1 = "012345678901234567890123456789!!";
+        const roc_str1 = RocStr.init(content1, content1.len);
+        const content2 = "012345678901234567890123456789--";
+        const roc_str2 = RocStr.init(content2, content2.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, garbage after end, equal" {
+        const content = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content, content.len);
+        const roc_str2 = RocStr.init(content, content.len);
+        try expect(roc_str1.str_bytes != roc_str2.str_bytes);
+
+        // Insert garbage after the end of each string
+        roc_str1.str_bytes.?[30] = '!';
+        roc_str1.str_bytes.?[31] = '!';
+        roc_str2.str_bytes.?[30] = '-';
+        roc_str2.str_bytes.?[31] = '-';
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(roc_str1.eq(roc_str2));
     }
 };
 
@@ -466,7 +527,7 @@ fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     const delimiter_bytes_ptrs = delimiter.asU8ptr();
     const delimiter_len = delimiter.len();
 
-    if (str_len > delimiter_len) {
+    if (str_len > delimiter_len and delimiter_len > 0) {
         const end_index: usize = str_len - delimiter_len + 1;
         while (str_index <= end_index) {
             var delimiter_index: usize = 0;
@@ -498,6 +559,40 @@ fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     }
 
     array[ret_array_index] = RocStr.init(str_bytes + slice_start_index, str_len - slice_start_index);
+}
+
+test "strSplitInPlace: empty delimiter" {
+    // Str.split "abc" "" == [ "abc" ]
+    const str_arr = "abc";
+    const str = RocStr.init(str_arr, str_arr.len);
+
+    const delimiter_arr = "";
+    const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len);
+
+    var array: [1]RocStr = undefined;
+    const array_ptr: [*]RocStr = &array;
+
+    strSplitInPlace(array_ptr, str, delimiter);
+
+    var expected = [1]RocStr{
+        str,
+    };
+
+    defer {
+        for (array) |roc_str| {
+            roc_str.deinit();
+        }
+
+        for (expected) |roc_str| {
+            roc_str.deinit();
+        }
+
+        str.deinit();
+        delimiter.deinit();
+    }
+
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
 }
 
 test "strSplitInPlace: no delimiter" {
@@ -673,7 +768,7 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
 
     var count: usize = 1;
 
-    if (str_len > delimiter_len) {
+    if (str_len > delimiter_len and delimiter_len > 0) {
         var str_index: usize = 0;
         const end_cond: usize = str_len - delimiter_len + 1;
 

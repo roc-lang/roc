@@ -1,7 +1,7 @@
 app "test-base64"
-    packages { base: "platform" }
-    imports [base.Task, Base64 ]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [ pf.Task, Base64 ]
+    provides [ main ] to pf
 
 IO a : Task.Task a []
 
@@ -12,11 +12,13 @@ main =
             Task.putLine "sadness"
 
         Ok encoded ->
-            Task.after (Task.putLine (Str.concat "encoded: " encoded)) \_ ->
-                when Base64.toStr encoded is
-                    Ok decoded -> 
-                        Task.putLine (Str.concat "decoded: " decoded)
+            Task.after
+                (Task.putLine (Str.concat "encoded: " encoded))
+                \_ ->
+                    when Base64.toStr encoded is
+                        Ok decoded ->
+                            Task.putLine (Str.concat "decoded: " decoded)
 
-                    Err _ -> 
-                        Task.putLine "sadness"
+                        Err _ ->
+                            Task.putLine "sadness"
 

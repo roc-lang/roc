@@ -941,6 +941,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrTrimLeft => arena.alloc_slice_copy(&[owned]),
         StrTrimRight => arena.alloc_slice_copy(&[owned]),
         StrSplit => arena.alloc_slice_copy(&[borrowed, borrowed]),
+        StrToNum => arena.alloc_slice_copy(&[borrowed]),
         ListSingle => arena.alloc_slice_copy(&[irrelevant]),
         ListRepeat => arena.alloc_slice_copy(&[irrelevant, borrowed]),
         ListReverse => arena.alloc_slice_copy(&[owned]),
@@ -971,11 +972,13 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),
 
-        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumSub | NumSubWrap | NumSubChecked
-        | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare
-        | NumDivUnchecked | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf | NumPow
-        | NumPowInt | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy
-        | NumShiftRightBy | NumShiftRightZfBy => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
+        | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulChecked | NumGt
+        | NumGte | NumLt | NumLte | NumCompare | NumDivUnchecked | NumDivCeilUnchecked
+        | NumRemUnchecked | NumIsMultipleOf | NumPow | NumPowInt | NumBitwiseAnd
+        | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy | NumShiftRightBy | NumShiftRightZfBy => {
+            arena.alloc_slice_copy(&[irrelevant, irrelevant])
+        }
 
         NumToStr | NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumLogUnchecked
         | NumRound | NumCeiling | NumFloor | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos
@@ -1006,8 +1009,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         ExpectTrue => arena.alloc_slice_copy(&[irrelevant]),
 
-        RefCountGetPtr | RefCountInc | RefCountDec => {
-            unreachable!("Refcounting lowlevel calls are inserted *after* borrow checking");
+        PtrCast | RefCountInc | RefCountDec => {
+            unreachable!("Only inserted *after* borrow checking: {:?}", op);
         }
     }
 }

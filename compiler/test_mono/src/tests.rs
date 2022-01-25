@@ -982,17 +982,17 @@ fn closure_in_list() {
     indoc!(
         r#"
         app "test" provides [ main ] to "./platform"
-    
+
         foo = \{} ->
             x = 41
-    
+
             f = \{} -> x
-    
+
             [ f ]
-    
+
         main =
             items = foo {}
-    
+
             List.len items
         "#
     )
@@ -1005,7 +1005,7 @@ fn somehow_drops_definitions() {
         r#"
         app "test" provides [ main ] to "./platform"
 
-        one : I64 
+        one : I64
         one = 1
 
         two : I64
@@ -1037,7 +1037,7 @@ fn specialize_closures() {
         apply = \f, x -> f x
 
         main =
-            one : I64 
+            one : I64
             one = 1
 
             two : I64
@@ -1108,6 +1108,131 @@ fn empty_list_of_function_type() {
                 Ok f -> f "foo"
                 Err _ -> "bad!"
             "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_ints() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            x = 100
+
+            f : U8, U32 -> Nat
+            f = \_, _ -> 18
+
+            f x x
+        "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_floats() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            x = 100.0
+
+            f : F32, F64 -> Nat
+            f = \_, _ -> 18
+
+            f x x
+        "#
+    )
+}
+
+#[mono_test]
+#[ignore = "TODO"]
+fn monomorphized_ints_aliased() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            y = 100
+            w1 = y
+            w2 = y
+
+            f = \_, _ -> 1
+
+            f1 : U8, U32 -> Nat
+            f1 = f
+
+            f2 : U32, U8 -> Nat
+            f2 = f
+
+            f1 w1 w2 + f2 w1 w2
+        "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_tag() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            b = False
+            f : Bool, [True, False, Idk] -> U8
+            f = \_, _ -> 18
+            f b b
+        "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_tag_with_aliased_args() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            b = False
+            c = False
+            a = A b c
+            f : [A Bool Bool] -> Nat
+            f = \_ -> 1
+            f a
+        "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_list() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            l = [1, 2, 3]
+
+            f : List U8, List U16 -> Nat
+            f = \_, _ -> 18
+
+            f l l
+        "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_applied_tag() {
+    indoc!(
+        r#"
+        app "test" provides [ main ] to "./platform"
+
+        main =
+            a = A "A"
+            f = \x ->
+                when x is
+                    A y -> y
+                    B y -> y
+            f a
+        "#
     )
 }
 

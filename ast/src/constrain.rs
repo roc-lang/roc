@@ -30,6 +30,17 @@ use crate::{
     mem_pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone},
 };
 
+/// A presence constraint is an additive constraint that defines the lower bound
+/// of a type. For example, `Present(t1, IncludesTag(A, []))` means that the
+/// type `t1` must contain at least the tag `A`. The additive nature of these
+/// constraints makes them behaviorally different from unification-based constraints.
+#[derive(Debug)]
+pub enum PresenceConstraint<'a> {
+    IncludesTag(TagName, BumpVec<'a, Type2>),
+    IsOpen,
+    Pattern(Region, PatternCategory, PExpected<Type2>),
+}
+
 #[derive(Debug)]
 pub enum Constraint<'a> {
     Eq(Type2, Expected<Type2>, Category, Region),
@@ -40,6 +51,7 @@ pub enum Constraint<'a> {
     Let(&'a LetConstraint<'a>),
     // SaveTheEnvironment,
     True, // Used for things that always unify, e.g. blanks and runtime errors
+    Present(Type2, PresenceConstraint<'a>),
 }
 
 #[derive(Debug)]
@@ -782,7 +794,15 @@ pub fn constrain_expr<'a>(
                         constraints: BumpVec::with_capacity_in(1, arena),
                     };
 
-                    constrain_pattern(arena, env, pattern, region, pattern_expected, &mut state);
+                    constrain_pattern(
+                        arena,
+                        env,
+                        pattern,
+                        region,
+                        pattern_expected,
+                        &mut state,
+                        false,
+                    );
                     state.vars.push(*expr_var);
 
                     let def_expr = env.pool.get(*expr_id);
@@ -1302,6 +1322,7 @@ fn constrain_when_branch<'a>(
             region,
             pattern_expected.shallow_clone(),
             &mut state,
+            true,
         );
     }
 
@@ -1346,6 +1367,23 @@ fn constrain_when_branch<'a>(
     }
 }
 
+fn make_pattern_constraint(
+    region: Region,
+    category: PatternCategory,
+    actual: Type2,
+    expected: PExpected<Type2>,
+    presence_con: bool,
+) -> Constraint<'static> {
+    if presence_con {
+        Constraint::Present(
+            actual,
+            PresenceConstraint::Pattern(region, category, expected),
+        )
+    } else {
+        Constraint::Pattern(region, category, actual, expected)
+    }
+}
+
 /// This accepts PatternState (rather than returning it) so that the caller can
 /// initialize the Vecs in PatternState using with_capacity
 /// based on its knowledge of their lengths.
@@ -1356,15 +1394,35 @@ pub fn constrain_pattern<'a>(
     region: Region,
     expected: PExpected<Type2>,
     state: &mut PatternState2<'a>,
+    destruct_position: bool,
 ) {
     use Pattern2::*;
 
     match pattern {
+        Underscore if destruct_position => {
+            // This is an underscore in a position where we destruct a variable,
+            // like a when expression:
+            //   when x is
+            //     A -> ""
+            //     _ -> ""
+            // so, we know that "x" (in this case, a tag union) must be open.
+            state.constraints.push(Constraint::Present(
+                expected.get_type(),
+                PresenceConstraint::IsOpen,
+            ));
+        }
+
         Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) | Shadowed { .. } => {
             // Neither the _ pattern nor erroneous ones add any constraints.
         }
 
         Identifier(symbol) => {
+            if destruct_position {
+                state.constraints.push(Constraint::Present(
+                    expected.get_type_ref().shallow_clone(),
+                    PresenceConstraint::IsOpen,
+                ));
+            }
             state.headers.insert(*symbol, expected.get_type());
         }
 
@@ -1446,7 +1504,7 @@ pub fn constrain_pattern<'a>(
 
                 let field_type = match destruct_type {
                     DestructType::Guard(guard_var, guard_id) => {
-                        state.constraints.push(Constraint::Pattern(
+                        state.constraints.push(make_pattern_constraint(
                             region,
                             PatternCategory::PatternGuard,
                             Type2::Variable(*guard_var),
@@ -1456,6 +1514,7 @@ pub fn constrain_pattern<'a>(
                                 // TODO: region should be from guard_id
                                 region,
                             ),
+                            destruct_position,
                         ));
 
                         state.vars.push(*guard_var);
@@ -1463,12 +1522,20 @@ pub fn constrain_pattern<'a>(
                         let guard = env.pool.get(*guard_id);
 
                         // TODO: region should be from guard_id
-                        constrain_pattern(arena, env, guard, region, expected, state);
+                        constrain_pattern(
+                            arena,
+                            env,
+                            guard,
+                            region,
+                            expected,
+                            state,
+                            destruct_position,
+                        );
 
                         types::RecordField::Demanded(env.pool.add(pat_type))
                     }
                     DestructType::Optional(expr_var, expr_id) => {
-                        state.constraints.push(Constraint::Pattern(
+                        state.constraints.push(make_pattern_constraint(
                             region,
                             PatternCategory::PatternDefault,
                             Type2::Variable(*expr_var),
@@ -1478,6 +1545,7 @@ pub fn constrain_pattern<'a>(
                                 // TODO: region should be from expr_id
                                 region,
                             ),
+                            destruct_position,
                         ));
 
                         state.vars.push(*expr_var);
@@ -1521,11 +1589,12 @@ pub fn constrain_pattern<'a>(
                 region,
             );
 
-            let record_con = Constraint::Pattern(
+            let record_con = make_pattern_constraint(
                 region,
                 PatternCategory::Record,
                 Type2::Variable(*whole_var),
                 expected,
+                destruct_position,
             );
 
             state.constraints.push(whole_con);
@@ -1540,7 +1609,16 @@ pub fn constrain_pattern<'a>(
             let tag_name = TagName::Global(name.as_str(env.pool).into());
 
             constrain_tag_pattern(
-                arena, env, region, expected, state, *whole_var, *ext_var, arguments, tag_name,
+                arena,
+                env,
+                region,
+                expected,
+                state,
+                *whole_var,
+                *ext_var,
+                arguments,
+                tag_name,
+                destruct_position,
             );
         }
         PrivateTag {
@@ -1552,7 +1630,16 @@ pub fn constrain_pattern<'a>(
             let tag_name = TagName::Private(*name);
 
             constrain_tag_pattern(
-                arena, env, region, expected, state, *whole_var, *ext_var, arguments, tag_name,
+                arena,
+                env,
+                region,
+                expected,
+                state,
+                *whole_var,
+                *ext_var,
+                arguments,
+                tag_name,
+                destruct_position,
             );
         }
     }
@@ -1569,6 +1656,7 @@ fn constrain_tag_pattern<'a>(
     ext_var: Variable,
     arguments: &PoolVec<(Variable, PatternId)>,
     tag_name: TagName,
+    destruct_position: bool,
 ) {
     let mut argument_types = Vec::with_capacity(arguments.len());
 
@@ -1591,31 +1679,42 @@ fn constrain_tag_pattern<'a>(
         );
 
         // TODO region should come from pattern
-        constrain_pattern(arena, env, pattern, region, expected, state);
+        constrain_pattern(arena, env, pattern, region, expected, state, false);
     }
 
-    let whole_con = Constraint::Eq(
-        Type2::Variable(whole_var),
-        Expected::NoExpectation(Type2::TagUnion(
-            PoolVec::new(
-                vec![(
-                    tag_name.clone(),
-                    PoolVec::new(argument_types.into_iter(), env.pool),
-                )]
-                .into_iter(),
-                env.pool,
+    let whole_con = if destruct_position {
+        Constraint::Present(
+            expected.get_type_ref().shallow_clone(),
+            PresenceConstraint::IncludesTag(
+                tag_name.clone(),
+                BumpVec::from_iter_in(argument_types.into_iter(), arena),
             ),
-            env.pool.add(Type2::Variable(ext_var)),
-        )),
-        Category::Storage(std::file!(), std::line!()),
-        region,
-    );
+        )
+    } else {
+        Constraint::Eq(
+            Type2::Variable(whole_var),
+            Expected::NoExpectation(Type2::TagUnion(
+                PoolVec::new(
+                    vec![(
+                        tag_name.clone(),
+                        PoolVec::new(argument_types.into_iter(), env.pool),
+                    )]
+                    .into_iter(),
+                    env.pool,
+                ),
+                env.pool.add(Type2::Variable(ext_var)),
+            )),
+            Category::Storage(std::file!(), std::line!()),
+            region,
+        )
+    };
 
-    let tag_con = Constraint::Pattern(
+    let tag_con = make_pattern_constraint(
         region,
         PatternCategory::Ctor(tag_name),
         Type2::Variable(whole_var),
         expected,
+        destruct_position,
     );
 
     state.vars.push(whole_var);
@@ -1660,6 +1759,7 @@ fn constrain_untyped_args<'a>(
             Region::zero(),
             pattern_expected,
             &mut pattern_state,
+            false,
         );
 
         vars.push(*pattern_var);
@@ -1885,7 +1985,7 @@ pub mod test_constrain {
         ident::Lowercase,
         symbol::{IdentIds, Interns, ModuleIds, Symbol},
     };
-    use roc_parse::parser::SyntaxError;
+    use roc_parse::parser::{SourceError, SyntaxError};
     use roc_region::all::Region;
     use roc_types::{
         pretty_print::{content_to_string, name_all_type_vars},
@@ -2028,7 +2128,7 @@ pub mod test_constrain {
         env: &mut Env<'a>,
         scope: &mut Scope,
         region: Region,
-    ) -> Result<(Expr2, Output), SyntaxError<'a>> {
+    ) -> Result<(Expr2, Output), SourceError<'a, SyntaxError<'a>>> {
         match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
             Ok(loc_expr) => Ok(loc_expr_to_expr2(arena, loc_expr, env, scope, region)),
             Err(fail) => Err(fail),
@@ -2225,7 +2325,7 @@ pub mod test_constrain {
             indoc!(
                 r#"
                 person = { name: "roc" }
-    
+
                 person
                 "#
             ),
@@ -2239,8 +2339,8 @@ pub mod test_constrain {
             indoc!(
                 r#"
                 person = { name: "roc" }
-    
-                { person & name: "bird" } 
+
+                { person & name: "bird" }
                 "#
             ),
             "{ name : Str }",
@@ -2362,7 +2462,7 @@ pub mod test_constrain {
             indoc!(
                 r#"
                 x = 1
-    
+
                 \{} -> x
                 "#
             ),
@@ -2610,6 +2710,170 @@ pub mod test_constrain {
                 "#
             ),
             "{ email : Str, name : Str }a -> { email : Str, name : Str }a",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position1() {
+        infer_eq(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A -> X
+                       B -> Y
+                 "#
+            ),
+            "[ A, B ] -> [ X, Y ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position2() {
+        infer_eq(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A -> X
+                       B -> Y
+                       _ -> Z
+                 "#
+            ),
+            "[ A, B ]* -> [ X, Y, Z ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position3() {
+        infer_eq(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       A N -> Y
+                 "#
+            ),
+            "[ A [ M, N ] ] -> [ X, Y ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position4() {
+        infer_eq(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       A N -> Y
+                       A _ -> Z
+                 "#
+            ),
+            "[ A [ M, N ]* ] -> [ X, Y, Z ]*",
+        )
+    }
+
+    #[test]
+    #[ignore = "TODO: currently [ A [ M [ J ]*, N [ K ]* ] ] -> [ X ]*"]
+    fn infer_union_input_position5() {
+        infer_eq(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A (M J) -> X
+                       A (N K) -> X
+                 "#
+            ),
+            "[ A [ M [ J ], N [ K ] ] ] -> [ X ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position6() {
+        infer_eq(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       B   -> X
+                       A N -> X
+                 "#
+            ),
+            "[ A [ M, N ], B ] -> [ X ]*",
+        )
+    }
+
+    #[test]
+    #[ignore = "TODO: currently [ A ]* -> [ A, X ]*"]
+    fn infer_union_input_position7() {
+        infer_eq(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                         A -> X
+                         t -> t
+                 "#
+            ),
+            // TODO: we could be a bit smarter by subtracting "A" as a possible
+            // tag in the union known by t, which would yield the principal type
+            // [ A, ]a -> [ X ]a
+            "[ A, X ]a -> [ A, X ]a",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position8() {
+        infer_eq(
+            indoc!(
+                r#"
+                 \opt ->
+                     when opt is
+                         Some ({tag: A}) -> 1
+                         Some ({tag: B}) -> 1
+                         None -> 0
+                 "#
+            ),
+            "[ None, Some { tag : [ A, B ] }* ] -> Num *",
+        )
+    }
+
+    #[test]
+    #[ignore = "TODO: panicked at 'Invalid Cycle', ast/src/lang/core/def/def.rs:1208:21"]
+    fn infer_union_input_position9() {
+        infer_eq(
+            indoc!(
+                r#"
+                 opt : [ Some Str, None ]
+                 opt = Some ""
+                 rcd = { opt }
+
+                 when rcd is
+                     { opt: Some s } -> s
+                     { opt: None } -> "?"
+                 "#
+            ),
+            "Str",
+        )
+    }
+
+    #[test]
+    #[ignore = "TODO: currently <type mismatch> -> Num a"]
+    fn infer_union_input_position10() {
+        infer_eq(
+            indoc!(
+                r#"
+                 \r ->
+                     when r is
+                         { x: Blue, y ? 3 } -> y
+                         { x: Red, y ? 5 } -> y
+                 "#
+            ),
+            "{ x : [ Blue, Red ], y ? Num a }* -> Num a",
         )
     }
 }

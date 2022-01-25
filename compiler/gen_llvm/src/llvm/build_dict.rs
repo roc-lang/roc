@@ -27,7 +27,9 @@ impl Alignment {
         let value_align = value.alignment_bytes(ptr_bytes);
 
         let mut bits = key_align.max(value_align) as u8;
-        debug_assert!(bits == 4 || bits == 8 || bits == 16);
+
+        // alignment must be a power of 2
+        debug_assert!(bits.is_power_of_two());
 
         let value_before_key_flag = 0b1000_0000;
 

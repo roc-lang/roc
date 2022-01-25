@@ -1,13 +1,13 @@
 Apply(
-    |L 0-0, C 0-4| Var {
+    @0-4 Var {
         module_name: "",
         ident: "whee",
     },
     [
-        |L 0-0, C 6-8| Num(
+        @6-8 Num(
             "12",
         ),
-        |L 0-0, C 10-12| Num(
+        @10-12 Num(
             "34",
         ),
     ],

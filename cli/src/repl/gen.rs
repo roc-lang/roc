@@ -12,6 +12,7 @@ use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::file::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use roc_parse::parser::SyntaxError;
+use roc_region::all::LineInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
@@ -91,6 +92,7 @@ pub fn gen_and_eval<'a>(
             continue;
         }
 
+        let line_info = LineInfo::new(&module_src);
         let src_lines: Vec<&str> = src.split('\n').collect();
         let palette = DEFAULT_PALETTE;
 
@@ -98,7 +100,7 @@ pub fn gen_and_eval<'a>(
         let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
         for problem in can_problems.into_iter() {
-            let report = can_problem(&alloc, module_path.clone(), problem);
+            let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -107,7 +109,7 @@ pub fn gen_and_eval<'a>(
         }
 
         for problem in type_problems {
-            if let Some(report) = type_problem(&alloc, module_path.clone(), problem) {
+            if let Some(report) = type_problem(&alloc, &line_info, module_path.clone(), problem) {
                 let mut buf = String::new();
 
                 report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -117,7 +119,7 @@ pub fn gen_and_eval<'a>(
         }
 
         for problem in mono_problems {
-            let report = mono_problem(&alloc, module_path.clone(), problem);
+            let report = mono_problem(&alloc, &line_info, module_path.clone(), problem);
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -238,7 +240,7 @@ pub fn gen_and_eval<'a>(
                 ptr_bytes,
             )
         };
-        let mut expr = bumpalo::collections::String::new_in(&arena);
+        let mut expr = roc_fmt::Buf::new_in(&arena);
 
         use eval::ToAstProblem::*;
         match res_answer {
@@ -246,6 +248,7 @@ pub fn gen_and_eval<'a>(
                 answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
             }
             Err(FunctionLayout) => {
+                expr.indent(0);
                 expr.push_str("<function>");
             }
         }

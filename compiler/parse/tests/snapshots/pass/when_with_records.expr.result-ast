@@ -1,15 +1,15 @@
 When(
-    |L 0-0, C 5-6| Var {
+    @5-6 Var {
         module_name: "",
         ident: "x",
     },
     [
         WhenBranch {
             patterns: [
-                |L 1-1, C 1-6| SpaceBefore(
+                @11-16 SpaceBefore(
                     RecordDestructure(
                         [
-                            |L 1-1, C 3-4| Identifier(
+                            @13-14 Identifier(
                                 "y",
                             ),
                         ],
@@ -19,20 +19,20 @@ When(
                     ],
                 ),
             ],
-            value: |L 1-1, C 10-11| Num(
+            value: @20-21 Num(
                 "2",
             ),
             guard: None,
         },
         WhenBranch {
             patterns: [
-                |L 2-2, C 1-9| SpaceBefore(
+                @23-31 SpaceBefore(
                     RecordDestructure(
                         [
-                            |L 2-2, C 3-4| Identifier(
+                            @25-26 Identifier(
                                 "z",
                             ),
-                            |L 2-2, C 6-7| Identifier(
+                            @28-29 Identifier(
                                 "w",
                             ),
                         ],
@@ -42,7 +42,7 @@ When(
                     ],
                 ),
             ],
-            value: |L 2-2, C 13-14| Num(
+            value: @35-36 Num(
                 "4",
             ),
             guard: None,

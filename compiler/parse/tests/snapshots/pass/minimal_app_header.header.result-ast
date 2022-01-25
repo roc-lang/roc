@@ -1,16 +1,14 @@
 App {
     header: AppHeader {
-        name: |L 0-0, C 4-14| PlainLine(
+        name: @4-14 PlainLine(
             "test-app",
         ),
         packages: [],
         imports: [],
         provides: [],
-        to: |L 0-0, C 30-38| NewPackage(
-            Path(
-                PlainLine(
-                    "./blah",
-                ),
+        to: @30-38 NewPackage(
+            PackageName(
+                "./blah",
             ),
         ),
         before_header: [],

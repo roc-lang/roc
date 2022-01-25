@@ -1,4 +1,4 @@
-interface AStar exposes [ findPath, Model, initialModel, cheapestOpen, reconstructPath ] imports [Quicksort]
+interface AStar exposes [ findPath, Model, initialModel, cheapestOpen, reconstructPath ] imports [ Quicksort ]
 
 findPath = \costFn, moveFn, start, end ->
     astar costFn moveFn end (initialModel start)
@@ -8,36 +8,35 @@ Model position :
         evaluated : Set position,
         openSet : Set position,
         costs : Dict position F64,
-        cameFrom : Dict position position
+        cameFrom : Dict position position,
     }
 
 initialModel : position -> Model position
 initialModel = \start ->
     {
-        evaluated : Set.empty,
-        openSet : Set.single start,
-        costs : Dict.single start 0,
-        cameFrom : Dict.empty
+        evaluated: Set.empty,
+        openSet: Set.single start,
+        costs: Dict.single start 0,
+        cameFrom: Dict.empty,
     }
-
 
 cheapestOpen : (position -> F64), Model position -> Result position {}
 cheapestOpen = \costFn, model ->
     model.openSet
         |> Set.toList
-        |> List.keepOks (\position ->
-            when Dict.get model.costs position is
-                Err _ ->
-                    Err {}
+        |> List.keepOks
+        (\position ->
+                when Dict.get model.costs position is
+                    Err _ ->
+                        Err {}
 
-                Ok cost ->
-                    Ok { cost: cost + costFn position, position }
-                    )
+                    Ok cost ->
+                        Ok { cost: cost + costFn position, position }
+        )
         |> Quicksort.sortBy .cost
         |> List.first
         |> Result.map .position
         |> Result.mapErr (\_ -> {})
-
 
 reconstructPath : Dict position position, position -> List position
 reconstructPath = \cameFrom, goal ->
@@ -64,7 +63,7 @@ updateCost = \current, neighbor, model ->
     newModel =
         { model &
             costs: newCosts,
-            cameFrom: newCameFrom
+            cameFrom: newCameFrom,
         }
 
     when Dict.get model.costs neighbor is
@@ -74,20 +73,18 @@ updateCost = \current, neighbor, model ->
         Ok previousDistance ->
             if distanceTo < previousDistance then
                 newModel
-
             else
                 model
 
 astar : (position, position -> F64), (position -> Set position), position, Model position -> Result (List position) {}
 astar = \costFn, moveFn, goal, model ->
     when cheapestOpen (\source -> costFn source goal) model is
-        Err {} ->
+        Err {  } ->
             Err {}
 
         Ok current ->
             if current == goal then
                 Ok (reconstructPath model.cameFrom goal)
-
             else
                 modelPopped =
                     { model &
@@ -104,7 +101,7 @@ astar = \costFn, moveFn, goal, model ->
                 modelWithNeighbors : Model position
                 modelWithNeighbors =
                     { modelPopped &
-                        openSet: Set.union modelPopped.openSet newNeighbors
+                        openSet: Set.union modelPopped.openSet newNeighbors,
                     }
 
                 walker : Model position, position -> Model position
@@ -133,8 +130,3 @@ astar = \costFn, moveFn, goal, model ->
 #         Set.walk newNeighbors modelWithNeighbors (\n, m -> updateCost current n m)
 #
 #     modelWithCosts
-
-
-
-
-

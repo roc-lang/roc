@@ -182,8 +182,12 @@ pub struct LinkingSegment {
 }
 
 impl Serialize for LinkingSegment {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
-        todo!();
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(self.name.len() as u32);
+        buffer.append_slice(self.name.as_bytes());
+        let align_bytes_pow2 = self.alignment as u32;
+        buffer.encode_u32(align_bytes_pow2);
+        buffer.encode_u32(self.flags);
     }
 }
 
@@ -417,35 +421,25 @@ impl Serialize for SymInfo {
 //  Linking subsections
 //----------------------------------------------------------------
 
+#[repr(u8)]
 #[derive(Debug)]
-pub enum LinkingSubSection<'a> {
-    /// Extra metadata about the data segments.
-    SegmentInfo(Vec<'a, LinkingSegment>),
-    /// Specifies a list of constructor functions to be called at startup.
-    /// These constructors will be called in priority order after memory has been initialized.
-    InitFuncs(Vec<'a, LinkingInitFunc>),
-    /// Specifies the COMDAT groups of associated linking objects, which are linked only once and all together.
-    ComdatInfo(Vec<'a, LinkingComdat<'a>>),
-    /// Specifies extra information about the symbols present in the module.
-    SymbolTable(Vec<'a, SymInfo>),
+enum SubSectionId {
+    SegmentInfo = 5,
+    InitFuncs = 6,
+    ComdatInfo = 7,
+    SymbolTable = 8,
 }
 
-impl<'a> Serialize for LinkingSubSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_u8(match self {
-            Self::SegmentInfo(_) => 5,
-            Self::InitFuncs(_) => 6,
-            Self::ComdatInfo(_) => 7,
-            Self::SymbolTable(_) => 8,
-        });
+fn serialize_subsection<I: Serialize, T: SerialBuffer>(
+    buffer: &mut T,
+    id: SubSectionId,
+    items: &[I],
+) {
+    if !items.is_empty() {
+        buffer.append_u8(id as u8);
         let payload_len_index = buffer.reserve_padded_u32();
         let payload_start_index = buffer.size();
-        match self {
-            Self::SegmentInfo(items) => items.serialize(buffer),
-            Self::InitFuncs(items) => items.serialize(buffer),
-            Self::ComdatInfo(items) => items.serialize(buffer),
-            Self::SymbolTable(items) => items.serialize(buffer),
-        }
+        items.serialize(buffer);
         buffer.overwrite_padded_u32(
             payload_len_index,
             (buffer.size() - payload_start_index) as u32,
@@ -459,25 +453,26 @@ impl<'a> Serialize for LinkingSubSection<'a> {
 
 const LINKING_VERSION: u8 = 2;
 
+/// The spec describes this in very weird way, so we're doing something saner.
+/// They call it an "array" of subsections with different variants, BUT this "array"
+/// has an implicit length, and none of the items can be repeated, so a struct is better.
+/// No point writing code to "find" the symbol table, when we know there's exactly one.
 #[derive(Debug)]
 pub struct LinkingSection<'a> {
-    pub subsections: Vec<'a, LinkingSubSection<'a>>,
+    pub symbol_table: Vec<'a, SymInfo>,
+    pub segment_info: Vec<'a, LinkingSegment>,
+    pub init_funcs: Vec<'a, LinkingInitFunc>,
+    pub comdat_info: Vec<'a, LinkingComdat<'a>>,
 }
 
 impl<'a> LinkingSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         LinkingSection {
-            subsections: Vec::with_capacity_in(1, arena),
+            symbol_table: Vec::with_capacity_in(16, arena),
+            segment_info: Vec::with_capacity_in(16, arena),
+            init_funcs: Vec::with_capacity_in(0, arena),
+            comdat_info: Vec::with_capacity_in(0, arena),
         }
-    }
-
-    pub fn symbol_table_mut(&mut self) -> &mut Vec<'a, SymInfo> {
-        for sub in self.subsections.iter_mut() {
-            if let LinkingSubSection::SymbolTable(syminfos) = sub {
-                return syminfos;
-            }
-        }
-        panic!("Symbol table not found");
     }
 }
 
@@ -485,9 +480,12 @@ impl<'a> Serialize for LinkingSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_custom_section_header(buffer, "linking");
         buffer.append_u8(LINKING_VERSION);
-        for subsection in self.subsections.iter() {
-            subsection.serialize(buffer);
-        }
+
+        serialize_subsection(buffer, SubSectionId::SymbolTable, &self.symbol_table);
+        serialize_subsection(buffer, SubSectionId::SegmentInfo, &self.segment_info);
+        serialize_subsection(buffer, SubSectionId::InitFuncs, &self.init_funcs);
+        serialize_subsection(buffer, SubSectionId::ComdatInfo, &self.comdat_info);
+
         update_section_size(buffer, header_indices);
     }
 }

@@ -116,13 +116,13 @@ mod test_file {
             indoc!(
                 r#"
                     interface Simple
-                        exposes [ 
+                        exposes [
                         v, x
                          ]
                         imports []
-    
+
                     v : Str
-                    
+
                     v = "Value!"
 
                     x : Int

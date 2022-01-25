@@ -1,13 +1,13 @@
 procedure Test.0 ():
-    let Test.6 = true;
+    let Test.6 : Builtin(Bool) = true;
     if Test.6 then
-        let Test.7 = 1i64;
+        let Test.7 : Builtin(Int(I64)) = 1i64;
         ret Test.7;
     else
-        let Test.4 = false;
+        let Test.4 : Builtin(Bool) = false;
         if Test.4 then
-            let Test.5 = 2i64;
+            let Test.5 : Builtin(Int(I64)) = 2i64;
             ret Test.5;
         else
-            let Test.3 = 3i64;
+            let Test.3 : Builtin(Int(I64)) = 3i64;
             ret Test.3;

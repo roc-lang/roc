@@ -359,7 +359,7 @@ impl fmt::Debug for ModuleId {
     }
 }
 
-/// base.Task
+/// pf.Task
 /// 1. build mapping from short name to package
 /// 2. when adding new modules from package we need to register them in some other map (this module id goes with short name) (shortname, module-name) -> moduleId
 /// 3. pass this around to other modules getting headers parsed. when parsing interfaces we need to use this map to reference shortnames
@@ -903,78 +903,78 @@ define_builtins! {
         15 NUM_F32: "F32" imported // the Num.F32 type alias
         16 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
         17 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
-        18 NUM_MAX_INT: "maxInt"
-        19 NUM_MIN_INT: "minInt"
-        20 NUM_MAX_FLOAT: "maxFloat"
-        21 NUM_MIN_FLOAT: "minFloat"
-        22 NUM_ABS: "abs"
-        23 NUM_NEG: "neg"
-        24 NUM_ADD: "add"
-        25 NUM_SUB: "sub"
-        26 NUM_MUL: "mul"
-        27 NUM_LT: "isLt"
-        28 NUM_LTE: "isLte"
-        29 NUM_GT: "isGt"
-        30 NUM_GTE: "isGte"
-        31 NUM_TO_FLOAT: "toFloat"
-        32 NUM_SIN: "sin"
-        33 NUM_COS: "cos"
-        34 NUM_TAN: "tan"
-        35 NUM_IS_ZERO: "isZero"
-        36 NUM_IS_EVEN: "isEven"
-        37 NUM_IS_ODD: "isOdd"
-        38 NUM_IS_POSITIVE: "isPositive"
-        39 NUM_IS_NEGATIVE: "isNegative"
-        40 NUM_REM: "rem"
-        41 NUM_DIV_FLOAT: "div"
-        42 NUM_DIV_INT: "divFloor"
-        43 NUM_MOD_INT: "modInt"
-        44 NUM_MOD_FLOAT: "modFloat"
-        45 NUM_SQRT: "sqrt"
-        46 NUM_LOG: "log"
-        47 NUM_ROUND: "round"
-        48 NUM_COMPARE: "compare"
-        49 NUM_POW: "pow"
-        50 NUM_CEILING: "ceiling"
-        51 NUM_POW_INT: "powInt"
-        52 NUM_FLOOR: "floor"
-        53 NUM_ADD_WRAP: "addWrap"
-        54 NUM_ADD_CHECKED: "addChecked"
-        55 NUM_ATAN: "atan"
-        56 NUM_ACOS: "acos"
-        57 NUM_ASIN: "asin"
-        58 NUM_AT_SIGNED128: "@Signed128"
-        59 NUM_SIGNED128: "Signed128" imported
-        60 NUM_AT_SIGNED64: "@Signed64"
-        61 NUM_SIGNED64: "Signed64" imported
-        62 NUM_AT_SIGNED32: "@Signed32"
-        63 NUM_SIGNED32: "Signed32" imported
-        64 NUM_AT_SIGNED16: "@Signed16"
-        65 NUM_SIGNED16: "Signed16" imported
-        66 NUM_AT_SIGNED8: "@Signed8"
-        67 NUM_SIGNED8: "Signed8" imported
-        68 NUM_AT_UNSIGNED128: "@Unsigned128"
-        69 NUM_UNSIGNED128: "Unsigned128" imported
-        70 NUM_AT_UNSIGNED64: "@Unsigned64"
-        71 NUM_UNSIGNED64: "Unsigned64" imported
-        72 NUM_AT_UNSIGNED32: "@Unsigned32"
-        73 NUM_UNSIGNED32: "Unsigned32" imported
-        74 NUM_AT_UNSIGNED16: "@Unsigned16"
-        75 NUM_UNSIGNED16: "Unsigned16" imported
-        76 NUM_AT_UNSIGNED8: "@Unsigned8"
-        77 NUM_UNSIGNED8: "Unsigned8" imported
-        78 NUM_AT_BINARY64: "@Binary64"
-        79 NUM_BINARY64: "Binary64" imported
-        80 NUM_AT_BINARY32: "@Binary32"
-        81 NUM_BINARY32: "Binary32" imported
-        82 NUM_BITWISE_AND: "bitwiseAnd"
-        83 NUM_BITWISE_XOR: "bitwiseXor"
-        84 NUM_BITWISE_OR: "bitwiseOr"
-        85 NUM_SHIFT_LEFT: "shiftLeftBy"
-        86 NUM_SHIFT_RIGHT: "shiftRightBy"
-        87 NUM_SHIFT_RIGHT_ZERO_FILL: "shiftRightZfBy"
-        88 NUM_SUB_WRAP: "subWrap"
-        89 NUM_SUB_CHECKED: "subChecked"
+        18 NUM_MAX_FLOAT: "maxFloat"
+        19 NUM_MIN_FLOAT: "minFloat"
+        20 NUM_ABS: "abs"
+        21 NUM_NEG: "neg"
+        22 NUM_ADD: "add"
+        23 NUM_SUB: "sub"
+        24 NUM_MUL: "mul"
+        25 NUM_LT: "isLt"
+        26 NUM_LTE: "isLte"
+        27 NUM_GT: "isGt"
+        28 NUM_GTE: "isGte"
+        29 NUM_TO_FLOAT: "toFloat"
+        30 NUM_SIN: "sin"
+        31 NUM_COS: "cos"
+        32 NUM_TAN: "tan"
+        33 NUM_IS_ZERO: "isZero"
+        34 NUM_IS_EVEN: "isEven"
+        35 NUM_IS_ODD: "isOdd"
+        36 NUM_IS_POSITIVE: "isPositive"
+        37 NUM_IS_NEGATIVE: "isNegative"
+        38 NUM_REM: "rem"
+        39 NUM_DIV_FLOAT: "div"
+        40 NUM_DIV_INT: "divFloor"
+        41 NUM_MOD_INT: "modInt"
+        42 NUM_MOD_FLOAT: "modFloat"
+        43 NUM_SQRT: "sqrt"
+        44 NUM_LOG: "log"
+        45 NUM_ROUND: "round"
+        46 NUM_COMPARE: "compare"
+        47 NUM_POW: "pow"
+        48 NUM_CEILING: "ceiling"
+        49 NUM_POW_INT: "powInt"
+        50 NUM_FLOOR: "floor"
+        51 NUM_ADD_WRAP: "addWrap"
+        52 NUM_ADD_CHECKED: "addChecked"
+        53 NUM_ADD_SATURATED: "addSaturated"
+        54 NUM_ATAN: "atan"
+        55 NUM_ACOS: "acos"
+        56 NUM_ASIN: "asin"
+        57 NUM_AT_SIGNED128: "@Signed128"
+        58 NUM_SIGNED128: "Signed128" imported
+        59 NUM_AT_SIGNED64: "@Signed64"
+        60 NUM_SIGNED64: "Signed64" imported
+        61 NUM_AT_SIGNED32: "@Signed32"
+        62 NUM_SIGNED32: "Signed32" imported
+        63 NUM_AT_SIGNED16: "@Signed16"
+        64 NUM_SIGNED16: "Signed16" imported
+        65 NUM_AT_SIGNED8: "@Signed8"
+        66 NUM_SIGNED8: "Signed8" imported
+        67 NUM_AT_UNSIGNED128: "@Unsigned128"
+        68 NUM_UNSIGNED128: "Unsigned128" imported
+        69 NUM_AT_UNSIGNED64: "@Unsigned64"
+        70 NUM_UNSIGNED64: "Unsigned64" imported
+        71 NUM_AT_UNSIGNED32: "@Unsigned32"
+        72 NUM_UNSIGNED32: "Unsigned32" imported
+        73 NUM_AT_UNSIGNED16: "@Unsigned16"
+        74 NUM_UNSIGNED16: "Unsigned16" imported
+        75 NUM_AT_UNSIGNED8: "@Unsigned8"
+        76 NUM_UNSIGNED8: "Unsigned8" imported
+        77 NUM_AT_BINARY64: "@Binary64"
+        78 NUM_BINARY64: "Binary64" imported
+        79 NUM_AT_BINARY32: "@Binary32"
+        80 NUM_BINARY32: "Binary32" imported
+        81 NUM_BITWISE_AND: "bitwiseAnd"
+        82 NUM_BITWISE_XOR: "bitwiseXor"
+        83 NUM_BITWISE_OR: "bitwiseOr"
+        84 NUM_SHIFT_LEFT: "shiftLeftBy"
+        85 NUM_SHIFT_RIGHT: "shiftRightBy"
+        86 NUM_SHIFT_RIGHT_ZERO_FILL: "shiftRightZfBy"
+        87 NUM_SUB_WRAP: "subWrap"
+        88 NUM_SUB_CHECKED: "subChecked"
+        89 NUM_SUB_SATURATED: "subSaturated"
         90 NUM_MUL_WRAP: "mulWrap"
         91 NUM_MUL_CHECKED: "mulChecked"
         92 NUM_INT: "Int" imported
@@ -983,16 +983,33 @@ define_builtins! {
         95 NUM_NATURAL: "Natural" imported
         96 NUM_NAT: "Nat" imported
         97 NUM_INT_CAST: "intCast"
-        98 NUM_MAX_I128: "maxI128"
-        99 NUM_IS_MULTIPLE_OF: "isMultipleOf"
-        100 NUM_AT_DECIMAL: "@Decimal"
-        101 NUM_DECIMAL: "Decimal" imported
-        102 NUM_DEC: "Dec" imported // the Num.Dectype alias
-        103 NUM_BYTES_TO_U16: "bytesToU16"
-        104 NUM_BYTES_TO_U32: "bytesToU32"
-        105 NUM_CAST_TO_NAT: "#castToNat"
-        106 NUM_DIV_CEIL: "divCeil"
-        107 NUM_TO_STR: "toStr"
+        98 NUM_IS_MULTIPLE_OF: "isMultipleOf"
+        99 NUM_AT_DECIMAL: "@Decimal"
+        100 NUM_DECIMAL: "Decimal" imported
+        101 NUM_DEC: "Dec" imported // the Num.Dectype alias
+        102 NUM_BYTES_TO_U16: "bytesToU16"
+        103 NUM_BYTES_TO_U32: "bytesToU32"
+        104 NUM_CAST_TO_NAT: "#castToNat"
+        105 NUM_DIV_CEIL: "divCeil"
+        106 NUM_TO_STR: "toStr"
+        107 NUM_MIN_I8: "minI8"
+        108 NUM_MAX_I8: "maxI8"
+        109 NUM_MIN_U8: "minU8"
+        110 NUM_MAX_U8: "maxU8"
+        111 NUM_MIN_I16: "minI16"
+        112 NUM_MAX_I16: "maxI16"
+        113 NUM_MIN_U16: "minU16"
+        114 NUM_MAX_U16: "maxU16"
+        115 NUM_MIN_I32: "minI32"
+        116 NUM_MAX_I32: "maxI32"
+        117 NUM_MIN_U32: "minU32"
+        118 NUM_MAX_U32: "maxU32"
+        119 NUM_MIN_I64: "minI64"
+        120 NUM_MAX_I64: "maxI64"
+        121 NUM_MIN_U64: "minU64"
+        122 NUM_MAX_U64: "maxU64"
+        123 NUM_MIN_I128: "minI128"
+        124 NUM_MAX_I128: "maxI128"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -1029,6 +1046,21 @@ define_builtins! {
         18 STR_TRIM: "trim"
         19 STR_TRIM_LEFT: "trimLeft"
         20 STR_TRIM_RIGHT: "trimRight"
+        21 STR_TO_DEC: "toDec"
+        22 STR_TO_F64: "toF64"
+        23 STR_TO_F32: "toF32"
+        24 STR_TO_NAT: "toNat"
+        25 STR_TO_U128: "toU128"
+        26 STR_TO_I128: "toI128"
+        27 STR_TO_U64: "toU64"
+        28 STR_TO_I64: "toI64"
+        29 STR_TO_U32: "toU32"
+        30 STR_TO_I32: "toI32"
+        31 STR_TO_U16: "toU16"
+        32 STR_TO_I16: "toI16"
+        33 STR_TO_U8: "toU8"
+        34 STR_TO_I8: "toI8"
+
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -1058,34 +1090,37 @@ define_builtins! {
         24 LIST_MAP2: "map2"
         25 LIST_MAP3: "map3"
         26 LIST_PRODUCT: "product"
-        27 LIST_SUM_ADD: "#sumadd"
-        28 LIST_PRODUCT_MUL: "#productmul"
-        29 LIST_WALK_UNTIL: "walkUntil"
-        30 LIST_RANGE: "range"
-        31 LIST_SORT_WITH: "sortWith"
-        32 LIST_DROP: "drop"
-        33 LIST_SWAP: "swap"
-        34 LIST_DROP_AT: "dropAt"
-        35 LIST_DROP_LAST: "dropLast"
-        36 LIST_MIN: "min"
-        37 LIST_MIN_LT: "#minlt"
-        38 LIST_MAX: "max"
-        39 LIST_MAX_GT: "#maxGt"
-        40 LIST_MAP4: "map4"
-        41 LIST_DROP_FIRST: "dropFirst"
-        42 LIST_JOIN_MAP: "joinMap"
-        43 LIST_JOIN_MAP_CONCAT: "#joinMapConcat"
-        44 LIST_ANY: "any"
-        45 LIST_TAKE_FIRST: "takeFirst"
-        46 LIST_TAKE_LAST: "takeLast"
-        47 LIST_FIND: "find"
-        48 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
-        49 LIST_SUBLIST: "sublist"
-        50 LIST_INTERSPERSE: "intersperse"
-        51 LIST_INTERSPERSE_CLOS: "#intersperseClos"
-        52 LIST_SPLIT: "split"
-        53 LIST_SPLIT_CLOS: "#splitClos"
-        54 LIST_ALL: "all"
+        27 LIST_WALK_UNTIL: "walkUntil"
+        28 LIST_RANGE: "range"
+        29 LIST_SORT_WITH: "sortWith"
+        30 LIST_DROP: "drop"
+        31 LIST_SWAP: "swap"
+        32 LIST_DROP_AT: "dropAt"
+        33 LIST_DROP_LAST: "dropLast"
+        34 LIST_MIN: "min"
+        35 LIST_MIN_LT: "#minlt"
+        36 LIST_MAX: "max"
+        37 LIST_MAX_GT: "#maxGt"
+        38 LIST_MAP4: "map4"
+        39 LIST_DROP_FIRST: "dropFirst"
+        40 LIST_JOIN_MAP: "joinMap"
+        41 LIST_JOIN_MAP_CONCAT: "#joinMapConcat"
+        42 LIST_ANY: "any"
+        43 LIST_TAKE_FIRST: "takeFirst"
+        44 LIST_TAKE_LAST: "takeLast"
+        45 LIST_FIND: "find"
+        46 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
+        47 LIST_SUBLIST: "sublist"
+        48 LIST_INTERSPERSE: "intersperse"
+        49 LIST_INTERSPERSE_CLOS: "#intersperseClos"
+        50 LIST_SPLIT: "split"
+        51 LIST_SPLIT_CLOS: "#splitClos"
+        52 LIST_ALL: "all"
+        53 LIST_DROP_IF: "dropIf"
+        54 LIST_DROP_IF_PREDICATE: "#dropIfPred"
+        55 LIST_SORT_ASC: "sortAsc"
+        56 LIST_SORT_DESC: "sortDesc"
+        57 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

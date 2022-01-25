@@ -61,7 +61,7 @@ Let's try calling a function:
 ```
 
 In this expression, we're calling the `Str.concat` function
-passing two arguments: the string `"Hi "` and the string `" there!"`. The
+passing two arguments: the string `"Hi "` and the string `"there!"`. The
 `Str.concat` function *concatenates* two strings together (that is, it puts
 one after the other) and returns the resulting combined string of
 `"Hi there!"`.
@@ -225,9 +225,9 @@ addAndStringify = \num1, num2 ->
         Num.toStr sum
 ```
 
-We did a two things here:
+We did two things here:
 * We introduced a local def named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it will not be accessible outside that function.
-* We added an `if` / `then` / `else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`
+* We added an `if` / `then` / `else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
 
 Of note, we couldn't have done `total = num1 + num2` because that would be
 redefining `total` in the global scope, and defs can't be redefined. (However, we could use the name
@@ -275,7 +275,7 @@ convention is to write `else if` on the same line.
 
 ## Records
 
-Currently our `addAndStringify` funcion takes two arguments. We can instead make
+Currently our `addAndStringify` function takes two arguments. We can instead make
 it take one argument like so:
 
 ```coffee
@@ -290,8 +290,9 @@ Records are not objects; they don't have methods or inheritance, they just store
 
 We create the record when we write `{ birds: 5, iguanas: 7 }`. This defines
 a record with two *fields* - namely, the `birds` field and the `iguanas` field -
-and then gives assigns the number `5` to the `birds` field and the number `7` to the
-`iguanas` field.
+and then assigns the number `5` to the `birds` field and the number `7` to the
+`iguanas` field. Order doesn't matter with record fields; we could have also specified
+`iguanas` first and `birds` second, and Roc would consider it the exact same record.
 
 When we write `counts.birds`, it accesses the `birds` field of the `counts` record,
 and when we write `counts.iguanas` it accesses the `iguanas` field. When we use `==`
@@ -328,6 +329,21 @@ values - including other records, or even functions!
 { birds: 4, nestedRecord: { someFunction: (\arg -> arg + 1), name: "Sam" } }
 ```
 
+### Record shorthands
+
+Roc has a couple of shorthands you can use to express some record-related operations more concisely.
+
+Instead of writing `\record -> record.x` we can write `.x` and it will evaluate to the same thing:
+a function that takes a record and returns its `x` field. You can do this with any field you want.
+For example:
+
+```elm
+returnFoo = .foo
+
+returnFoo { foo: "hi!", bar: "blah" }
+# returns "hi!"
+```
+
 Whenever we're setting a field to be a def that has the same name as the field -
 for example, `{ x: x }` - we can shorten it to just writing the name of the def alone -
 for example, `{ x }`. We can do this with as many fields as we like, e.g.
@@ -352,7 +368,7 @@ addAndStringify = \{ birds, iguanas: lizards } ->
     Num.toStr (birds + lizards)
 ```
 
-In this version, we created a `lizards` def that's assigned to the record's `iguanas`field.
+In this version, we created a `lizards` def that's assigned to the record's `iguanas` field.
 (We could also do something similar with the `birds` field if we like.)
 
 It's possible to destructure a record while still naming it. Here's an example where we
@@ -448,7 +464,7 @@ stoplightStr =
         Yellow -> "yellow"
 ```
 
-This results in in the same value for `stoplightStr`. In both the `when` version and the `if` version, we
+This results in the same value for `stoplightStr`. In both the `when` version and the `if` version, we
 have three conditional branches, and each of them evaluates to a string. The difference is how the
 conditions are specified; here, we specify between `when` and `is` that we're making comparisons against
 `stoplightColor`, and then we specify the different things we're comparing it to: `Red`, `Green`, and `Yellow`.
@@ -545,6 +561,15 @@ This makes two changes to our earlier `stoplightColor` / `stoplightStr` example.
 Any tag can be given a payload like this. A payload doesn't have to be a string; we could also have said (for example) `Custom { r: 40, g: 60, b: 80 }` to specify an RGB color instead of a string. Then in our `when` we could have written `Custom record ->` and then after the `->` used `record.r`, `record.g`, and `record.b` to access the `40`, `60`, `80` values. We could also have written `Custom { r, g, b } ->` to *destructure* the record, and then
 accessed these `r`, `g`, and `b` defs after the `->` instead.
 
+A tag can also have a payload with more than one value. Instead of `Custom { r: 40, g: 60, b: 80 }` we could
+write `Custom 40 60 80`. If we did that, then instead of destructuring a record with `Custom { r, g, b } ->`
+inside a `when`, we would write `Custom r g b ->` to destructure the values directly out of the payload.
+
+We refer to whatever comes before a `->` in a `when` expression as a *pattern* - so for example, in the
+`Custom description -> description` branch, `Custom description` would be a pattern. In programming, using
+patterns in branching conditionals like `when` is known as [pattern matching](https://en.wikipedia.org/wiki/Pattern_matching). You may hear people say things like "let's pattern match on `Custom` here" as a way to
+suggest making a `when` branch that begins with something like `Custom description ->`.
+
 ## Lists
 
 Another thing we can do in Roc is to make a *list* of values. Here's an example:
@@ -579,8 +604,8 @@ This returns `[ 2, 4, 6 ]`. `List.map` takes two arguments:
 1. An input list
 2. A function that will be called on each element of that list
 
-It then returns a list which it creates by calling the given function on each element in the input
-the list. In this example, `List.map` calls the function `\num -> num * 2` on each element in
+It then returns a list which it creates by calling the given function on each element in the input list.
+In this example, `List.map` calls the function `\num -> num * 2` on each element in
 `[ 1, 2, 3 ]` to get a new list of `[ 2, 4, 6 ]`.
 
 We can also give `List.map` a named function, instead of an anonymous one:
@@ -633,7 +658,7 @@ incompatibility (like `Num.negate` on a list of strings).
 We can use tags with payloads to make a list that contains a mixture of different types. For example:
 
 ```coffee
-List.map [ StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem, -3 ] \elem ->
+List.map [ StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3 ] \elem ->
     when elem is
         NumElem num -> Num.isNegative num
         StrElem str -> Str.isCapitalized str
@@ -653,6 +678,24 @@ Instead, we're using a `when` to tell when we've got a string or a number, and t
 
 We could take this as far as we like, adding more different tags (e.g. `BoolElem True`) and then adding
 more branches to the `when` to handle them appropriately.
+
+### Using tags as functions
+
+Let's say I want to apply a tag to a bunch of elements in a list. For example:
+
+```elm
+List.map [ "a", "b", "c", ] \str -> Foo str
+```
+
+This is a perfectly reasonable way to write it, but I can also write it like this:
+
+```elm
+List.map [ "a", "b", "c", ] Foo
+```
+
+These two versions compile to the same thing. As a convenience, Roc lets you specify
+a tag name where a function is expected; when you do this, the compiler infers that you
+want a function which uses all of its arguments as the payload to the given tag.
 
 ### `List.any` and `List.all`
 
@@ -807,8 +850,8 @@ List.get [ "a", "b", "c" ] 1
 ```
 
 The `|>` operator takes the value that comes before the `|>` and passes it as the first argument to whatever
-comes after the `|>` - so in example above, the `|>` takes `List.get [ "a", "b", "c" ] 1` and passes that value
-as the first argument to `Result.withDefault` - making `""` the second argument to `Result.withDefault`.
+comes after the `|>` - so in the example above, the `|>` takes `List.get [ "a", "b", "c" ] 1` and passes that
+value as the first argument to `Result.withDefault` - making `""` the second argument to `Result.withDefault`.
 
 We can take this a step further like so:
 
@@ -994,7 +1037,7 @@ Any of these will work, because `elem`, `value`, and `a` are all *type variables
 two or more types in the same annotation. So you can read `List elem -> List elem` as "takes a list and returns
 a list that has the same element type." Just like `List.reverse` does!
 
-You can choose any name you like for a type variable, but it has to be lowercase. (You may heve noticed all the
+You can choose any name you like for a type variable, but it has to be lowercase. (You may have noticed all the
 types we've used until now are uppercase; that is no accident! Lowercase types are always type variables, so
 all other named types have to be uppercase.) All three of the above type annotations are equivalent;
 the only difference is that we chose different names (`elem`, `value`, and `a`) for their type variables.
@@ -1007,17 +1050,153 @@ of the type annotation, or even the function's implementation! The only way to h
 Similarly, the only way to have a function whose type is `a -> a` is if the function's implementation returns
 its argument without modifying it in any way. This is known as [the identity function](https://en.wikipedia.org/wiki/Identity_function).
 
-### Numeric types
+## Numeric types
 
-[ This part of the tutorial has not been written yet. Coming soon! ]
+Roc has different numeric types that each have different tradeoffs.
+They can all be broken down into two categories: [fractions](https://en.wikipedia.org/wiki/Fraction),
+and [integers](https://en.wikipedia.org/wiki/Integer). In Roc we call these `Frac` and `Int` for short.
 
-### Open and closed records
+### Integers
 
-[ This part of the tutorial has not been written yet. Coming soon! ]
+Roc's integer types have two important characteristics: their *size* and their [*signedness*](https://en.wikipedia.org/wiki/Signedness).
+Together, these two characteristics determine the range of numbers the integer type can represent.
 
-### Open and closed tag unions
+For example, the Roc type `U8` can represent the numbers 0 through 255, whereas the `I16` type can represent
+the numbers -32768 through 32767. You can actually infer these ranges from their names (`U8` and `I16`) alone!
 
-[ This part of the tutorial has not been written yet. Coming soon! ]
+The `U` in `U8` indicates that it's *unsigned*, meaning that it can't have a minus [sign](https://en.wikipedia.org/wiki/Sign_(mathematics)), and therefore can't be negative. The fact that it's unsigned tells us immediately that
+its lowest value is zero. The 8 in `U8` means it is 8 [bits](https://en.wikipedia.org/wiki/Bit) in size, which
+means it has room to represent 2⁸ (which is equal to 256) different numbers. Since one of those 256 different numbers
+is 0, we can look at `U8` and know that it goes from `0` (since it's unsigned) to `255` (2⁸ - 1, since it's 8 bits).
+
+If we change `U8` to `I8`, making it a *signed* 8-bit integer, the range changes. Because it's still 8 bits, it still
+has room to represent 2⁸ (that is, 256) different numbers. However, now in addition to one of those 256 numbers
+being zero, about half of rest will be negative, and the others positive. So instead of ranging from, say -255
+to 255 (which, counting zero, would represent 511 different numbers; too many to fit in 8 bits!) an `I8` value
+ranges from -128 to 127.
+
+Notice that the negative extreme is `-128` versus `127` (not `128`) on the positive side. That's because of
+needing room for zero; the slot for zero is taken from the positive range because zero doesn't have a minus sign.
+So in general, you can find the lowest signed number by taking its total range (256 different numbers in the case
+of an 8-bit integer) and dividing it in half (half of 256 is 128, so -128 is `I8`'s lowest number). To find the
+highest number, take the positive version of the lowest number (so, convert `-128` to `128`) and then subtract 1
+to make room for zero (so, `128` becomes `127`; `I8` ranges from -128 to 127).
+
+Following this pattern, the 16 in `I16` means that it's a signed 16 bit integer.
+That tells us it has room to represent 2¹⁶ (which is equal to 65536) different numbers. Half of 65536 is 32768,
+so the lowest `I16` would be -32768, and the highest would be 32767. Knowing that, we can also quickly tell that
+the lowest `U16` would be zero (since it always is for unsigned integers), and the higeest `U16` would be 65536.
+
+Choosing a size depends on your performance needs and the range of numbers you want to represent. Consider:
+
+* Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
+* Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
+* Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
+
+Here are the different fixed-size integer types that Roc supports:
+
+| Range                                                        | Type  | Size     |
+| -----------------------------------------------------------: | :---- | :------- |
+|                                             `-128`<br/>`127` | `I8`  | 1 Byte   |
+|                                                `0`<br/>`255` | `U8`  | 1 Byte   |
+|                                       `-32_768`<br/>`32_767` | `I16` | 2 Bytes  |
+|                                             `0`<br/>`65_535` | `U16` | 2 Bytes  |
+|                         `-2_147_483_648`<br/>`2_147_483_647` | `I32` | 4 Bytes  |
+|                     `0`<br/>(over 4 billion) `4_294_967_295` | `U32` | 4 Bytes  |
+| `-9_223_372_036_854_775_808`<br/>`9_223_372_036_854_775_807` | `I64` | 8 Bytes  |
+|   `0`<br/>(over 18 quintillion) `18_446_744_073_709_551_615` | `U64` | 8 Bytes  |
+|  `-170_141_183_460_469_231_731_687_303_715_884_105_728`<br/>`170_141_183_460_469_231_731_687_303_715_884_105_727`  | `I128` | 16 Bytes |
+| `0`<br/>(over 340 undecillion) `340_282_366_920_938_463_463_374_607_431_768_211_455` | `U128` | 16 Bytes |
+
+Roc also has one variable-size integer type: `Nat` (short for "natural number").
+The size of `Nat` is equal to the size of a memory address, which varies by system.
+For example, when compiling for a 64-bit system, `Nat` works the same way as `U64`.
+When compiling for a 32-bit system, it works the same way as `U32`. Most popular
+computing devices today are 64-bit, so `Nat` is usually the same as `U64`, but
+Web Assembly is typically 32-bit - so when running a Roc program built for Web Assembly,
+`Nat` will work like a `U32` in that program.
+
+A common use for `Nat` is to store the length of a collection like a `List`;
+there's a function `List.len : List * -> Nat` which returns the length of the given list.
+64-bit systems can represent longer lists in memory than 32-bit systems can,
+which is why the length of a list is represented as a `Nat`.
+
+If any operation would result in an integer that is either too big
+or too small to fit in that range (e.g. calling `Int.maxI32 + 1`, which adds 1 to
+the highest possible 32-bit integer), then the operation will *overflow*.
+When an overflow occurs, the program will crash.
+
+As such, it's very important to design your integer operations not to exceed these bounds!
+
+### Fractions
+
+Roc has three fractional types:
+
+* `F32`, a 32-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
+* `F64`, a 64-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
+* `Dec`, a 128-bit decimal [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
+
+These are different from integers in that they can represent numbers with fractional components,
+such as 1.5 and -0.123.
+
+`Dec` is the best default choice for representing base-10 decimal numbers
+like currency, because it is base-10 under the hood. In contrast,
+`F64` and `F32` are base-2 under the hood, which can lead to decimal
+precision loss even when doing addition and subtraction. For example, when
+using `F64`, running 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125,
+whereas when using `Dec`, 0.1 + 0.2 returns 0.3.
+
+`F32` and `F64` have direct hardware support on common processors today. There is no hardware support
+for fixed-point decimals, so under the hood, a `Dec` is an `I128`; operations on it perform
+[base-10 fixed-point arithmetic](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
+with 18 decimal places of precision.
+
+This means a `Dec` can represent whole numbers up to slightly over 170
+quintillion, along with 18 decimal places. (To be precise, it can store
+numbers betwween `-170_141_183_460_469_231_731.687303715884105728`
+and `170_141_183_460_469_231_731.687303715884105727`.) Why 18
+decimal places? It's the highest number of decimal places where you can still
+convert any `U64] to a `Dec` without losing information.
+
+While the fixed-point `Dec` has a fixed range, the floating-point `F32` and `F64` do not.
+Instead, outside of a certain range they start to lose precision instead of immediately overflowing
+the way integers and `Dec` do. `F64` can represent [between 15 and 17 significant digits](https://en.wikipedia.org/wiki/Double-precision_floating-point_format) before losing precision, whereas `F32` can only represent [between 6 and 9](https://en.wikipedia.org/wiki/Single-precision_floating-point_format#IEEE_754_single-precision_binary_floating-point_format:_binary32).
+
+There are some use cases where `F64` and `F32` can be better choices than `Dec`
+despite their precision drawbacks. For example, in graphical applications they
+can be a better choice for representing coordinates because they take up less memory,
+various relevant calculations run faster, and decimal precision loss isn't as big a concern
+when dealing with screen coordinates as it is when dealing with something like currency.
+
+### Num, Int, and Frac
+
+Some operations work on specific numeric types - such as `I64` or `Dec` - but operations support
+multiple numeric types. For example, the `Num.abs` function works on any number, since you can
+take the [absolute value](https://en.wikipedia.org/wiki/Absolute_value) of integers and fractions alike.
+Its type is:
+
+```elm
+abs : Num a -> Num a
+```
+
+This type says `abs` takes a number and then returns a number of the same type. That's because the
+`Num` type is compatible with both integers and fractions.
+
+There's also an `Int` type which is only compatible with integers, and a `Frac` type which is only
+compatible with fractions. For example:
+
+```elm
+Num.xor : Int a, Int a -> Int a
+```
+
+```elm
+Num.cos : Frac a -> Frac a
+```
+
+When you write a number literal in Roc, it has the type `Num *`. So you could call `Num.xor 1 1`
+and also `Num.cos 1` and have them all work as expected; the number literal `1` has the type
+`Num *`, which is compatible with the more constrained types `Int` and `Frac`. For the same reason,
+you can pass number literals to functions expecting even more constrained types, like `I32` or `F64`.
 
 ## Interface modules
 
@@ -1053,7 +1232,7 @@ Let's take a closer look at the part of `Hello.roc` above `main`:
 
 ```coffee
 app "hello"
-    packages [ pf: "examples/cli/platform" ]
+    packages { pf: "examples/cli/platform" }
     imports [ pf.Stdout ]
     provides main to pf
 ```
@@ -1071,12 +1250,12 @@ without running it by running `roc build Hello.roc`.
 The remaining lines all involve the *platform* this application is built on:
 
 ```coffee
-packages [ pf: "examples/cli/platform" ]
+packages { pf: "examples/cli/platform" }
 imports [ pf.Stdout ]
 provides main to pf
 ```
 
-The `packages [ pf: "examples/cli/platform" ]` part says two things:
+The `packages { pf: "examples/cli/platform" }` part says two things:
 
 - We're going to be using a *package* (that is, a collection of modules) called `"examples/cli/platform"`
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
@@ -1099,7 +1278,7 @@ When we write `imports [ pf.Stdout ]`, it specifies that the `Stdout`
 module comes from the `pf` package.
 
 Since `pf` was the name we chose for the `examples/cli/platform` package
-(when we wrote `packages [ pf: "examples/cli/platform" ]`), this `imports` line
+(when we wrote `packages { pf: "examples/cli/platform" }`), this `imports` line
 tells the Roc compiler that when we call `Stdout.line`, it should look for that
 `line` function in the `Stdout` module of the `examples/cli/platform` package.
 
@@ -1110,7 +1289,7 @@ tells the Roc compiler that when we call `Stdout.line`, it should look for that
 Tasks are technically not part of the Roc language, but they're very common in
 platforms. Let's use the CLI platform in `examples/cli` as an example!
 
-In the Tutorial platform, we have four operations we can do:
+In the CLI platform, we have four operations we can do:
 
 * Write a string to the console
 * Read a string from user input
@@ -1329,6 +1508,426 @@ Some important things to note about backpassing and `await`:
 * `await` is not a language keyword in Roc! It's referring to the `Task.await` function, which we imported unqualified by writing `Task.{ await }` in our module imports. (That said, it is playing a similar role here to the `await` keyword in languages that have `async`/`await` keywords, even though in this case it's a function instead of a special keyword.)
 * Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 * Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
+
+# Appendix: Advanced Concepts
+
+Here are some concepts you likely won't need as a beginner, but may want to know about eventually.
+This is listed as an appendix rather than the main tutorial, to emphasize that it's totally fine
+to stop reading here and go build things!
+
+## Open Records and Closed Records
+
+Let's say I write a function which takes a record with a `firstName`
+and `lastName` field, and puts them together with a space in between:
+
+```swift
+fullName = \user ->
+    "\(user.firstName) \(user.lastName)"
+```
+
+I can pass this function a record that has more fields than just
+`firstName` and `lastName`, as long as it has *at least* both of those fields
+(and both of them are strings). So any of these calls would work:
+
+* `fullName { firstName: "Sam", lastName: "Sample" }`
+* `fullName { firstName: "Sam", lastName: "Sample", email: "blah@example.com" }`
+* `fullName { age: 5, firstName: "Sam", things: 3, lastName: "Sample", role: Admin }`
+
+This `user` argument is an *open record* - that is, a description of a minimum set of fields
+on a record, and their types. When a function takes an open record as an argument,
+it's okay if you pass it a record with more fields than just the ones specified.
+
+In contrast, a *closed record* is one that requires an exact set of fields (and their types),
+with no additional fields accepted.
+
+If we add a type annotation to this `fullName` function, we can choose to have it accept either
+an open record or a closed record:
+
+```coffee
+# Closed record
+fullName : { firstName : Str, lastName : Str } -> Str
+fullName = \user - >
+    "\(user.firstName) \(user.lastName)"
+```
+
+```coffee
+# Open record (because of the `*`)
+fullName : { firstName : Str, lastName : Str }* -> Str
+fullName = \user - >
+    "\(user.firstName) \(user.lastName)"
+```
+
+The `*` in the type `{ firstName : Str, lastName : Str }*` is what makes it an open record type.
+This `*` is the *wildcard type* we saw earlier with empty lists. (An empty list has the type `List *`,
+in contrast to something like `List Str` which is a list of strings.)
+
+This is because record types can optionally end in a type variable. Just like how we can have `List *`
+or `List a -> List a`, we can also have `{ first : Str, last : Str }*` or
+`{ first : Str, last : Str }a -> { first: Str, last : Str }a`. The differences are that in `List a`,
+the type variable is required and appears with a space after `List`; in a record, the type variable
+is optional, and appears (with no space) immediately after `}`.
+
+If the type variable in a record type is a `*` (such as in `{ first : Str, last : Str }*`), then
+it's an open record. If the type variable is missing, then it's a closed record. You can also specify
+a closed record by putting a `{}` as the type variable (so for example, `{ email : Str }{}` is another way to write
+`{ email : Str }`). In practice, closed records are basically always written without the `{}` on the end,
+but later on we'll see a situation where putting types other than `*` in that spot can be useful.
+
+## Constrained Records
+
+The type variable can also be a named type variable, like so:
+
+```coffee
+addHttps : { url : Str }a -> { url : Str }a
+addHttps = \record ->
+    { record & url: "https://\(record.url)" }
+```
+
+This function uses *constrained records* in its type. The annotation is saying:
+* This function takes a record which has at least a `url` field, and possibly others
+* That `url` field has the type `Str`
+* It returns a record of exactly the same type as the one it was given
+
+So if we give this function a record with five fields, it will return a record with those
+same five fields. The only requirement is that one of those fields must be `url : Str`.
+
+In practice, constrained records appear in type annotations much less often than open or closed records do.
+
+Here's when you can typically expect to encounter these three flavors of type variables in records:
+
+- *Open records* are what the compiler infers when you use a record as an argument, or when destructuring it (for example, `{ x, y } =`).
+- *Closed records* are what the compiler infers when you create a new record (for example, `{ x: 5, y: 6 }`)
+- *Constrained records* are what the compiler infers when you do a record update (for example, `{ user & email: newEmail }`)
+
+Of note, you can pass a closed record to a function that accepts a smaller open record, but not the reverse.
+So a function `{ a : Str, b : Bool }* -> Str` can accept an `{ a : Str, b : Bool, c : Bool }` record,
+but a function `{ a : Str, b : Bool, c : Bool } -> Str` would not accept an `{ a : Str, b : Bool }*` record.
+
+This is because if a function accepts `{ a : Str, b : Bool, c : Bool }`, that means it might access the `c`
+field of that record. So if you passed it a record that was not guaranteed to have all three of those fields
+present (such as an `{ a : Str, b : Bool }*` record, which only guarantees that the fields `a` and `b` are present),
+the function might try to access a `c` field at runtime that did not exist!
+
+## Type Variables in Record Annotations
+
+You can add type annotations to make record types less flexible than what the compiler infers, but not more
+flexible. For example, you can use an annotation to tell the compiler to treat a record as closed when it would
+be inferred as open (or constrained), but you can't use an annotation to make a record open when it would be
+inferred as closed.
+
+If you like, you can always annotate your functions as accepting open records. However, in practice this may not
+always be the nicest choice. For example, let's say you have a `User` type alias, like so:
+
+```coffee
+User :
+    {
+        email : Str,
+        firstName : Str,
+        lastName : Str,
+    }
+```
+
+This defines `User` to be a closed record, which in practice is the most common way records named `User`
+tend to be defined.
+
+If you want to have a function take a `User`, you might write its type like so:
+
+```elm
+isValid : User -> Bool
+```
+
+If you want to have a function return a `User`, you might write its type like so:
+
+```elm
+userFromEmail : Str -> User
+```
+
+A function which takes a user and returns a user might look like this:
+
+```elm
+capitalizeNames : User -> User
+```
+
+This is a perfectly reasonable way to write all of these functions. However, I
+might decide that I really want the `isValid` function to take an open record -
+that is, a record with *at least* the fields of this `User` record, but possibly others as well.
+
+Since open records have a type variable (like `*` in `{ email : Str }*` or `a` in
+`{ email : Str }a -> { email : Str }a`), in order to do this I'd need to add a
+type variable to the `User` type alias:
+
+```coffee
+User a :
+    {
+        email : Str,
+        firstName : Str,
+        lastName : Str,
+    }a
+```
+
+Notice that the `a` type variable appears not only in `User a` but also in `}a` at the end of the
+record type!
+
+Using `User a` type alias, I can still write the same three functions, but now their types need to look different.
+This is what the first one would look like:
+
+```elm
+isValid : User * -> Bool
+```
+
+Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias,
+which takes it from `{ email : Str, … }a` to `{ email : Str, … }*`. Now I can pass it any
+record that has at least the fields in `User`, and possibly others as well, which was my goal.
+
+```elm
+userFromEmail : Str -> User {}
+```
+
+Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias,
+which takes it from `{ email : Str, … }a` to `{ email : Str, … }{}`. As noted earlier,
+this is another way to specify a closed record: putting a `{}` after it, in the same place that
+you'd find a `*` in an open record.
+
+> **Aside:** This works because you can form new record types by replacing the type variable with
+> other record types. For example, `{ a : Str, b : Str }` can also be written `{ a : Str }{ b : Str }`.
+> You can chain these more than once, e.g. `{ a : Str }{ b : Str }{ c : Str, d : Str }`.
+> This is more useful when used with type annotations; for example, `{ a : Str, b : Str }User` describes
+> a closed record consisting of all the fields in the closed record `User`, plus `a : Str` and `b : Str`.
+
+This function still returns the same record as it always did, it just needs to be annotated as
+`User {}` now instead of just `User`, because the `User` type alias has a variable in it that must be
+specified.
+
+The third function might need to use a named type variable:
+
+```elm
+capitalizeNames : User a -> User a
+```
+
+If this function does a record update on the given user, and returns that - for example, if its
+definition were `capitalizeNames = \user -> { user & email: "blah" }` - then it needs to use the
+same named type variable for both the argument and return value.
+
+However, if returns a new `User` that it created from scratch, then its type could instead be:
+
+```elm
+capitalizeNames : User * -> User {}
+```
+
+This says that it takes a record with at least the fields specified in the `User` type alias,
+and possibly others...and then returns a record with exactly the fields specified in the `User`
+type alias, and no others.
+
+These three examples illustrate why it's relatively uncommon to use open records for type aliases:
+it makes a lot of types need to incorporate a type variable that otherwise they could omit,
+all so that `isValid` can be given something that has not only the fields `User` has, but
+some others as well. (In the case of a `User` record in particular, it may be that the extra
+fields were included due to a mistake rather than on purpose, and accepting an open record could
+prevent the compiler from raising an error that would have revealed the mistake.)
+
+That said, this is a useful technique to know about if you want to (for example) make a record
+type that accumulates more and more fields as it progresses through a series of operations.
+
+## Open and Closed Tag Unions
+
+Just like how Roc has open records and closed records, it also has open and closed tag unions.
+
+The *open tag union* (or *open union* for short) `[ Foo Str, Bar Bool ]*` represents a tag that might
+be `Foo Str` and might be `Bar Bool`, but might also be some other tag whose type isn't known at compile time.
+
+Because an open union represents possibilities that are impossible to know ahead of time, any `when` I use on a
+`[ Foo Str, Bar Bool ]*` value must include a catch-all `_ ->` branch. Otherwise, if one of those
+unknown tags were to come up, the `when` would not know what to do with it! For example:
+
+```coffee
+example : [ Foo Str, Bar Bool ]* -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+        _ -> False
+```
+
+In contrast, a *closed tag union* (or *closed union*) like `[ Foo Str, Bar Bool ]` (without the `*`)
+represents an exhaustive set of possible tags. If I use a `when` on one of these, I can match on `Foo`
+only and then on `Bar` only, with no need for a catch-all branch. For example:
+
+```coffee
+example : [ Foo Str, Bar Bool ] -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+```
+
+If we were to remove the type annotations from the previous two code examples, Roc would infer the same
+types for them anyway.
+
+It would infer `tag : [ Foo Str, Bar Bool ]` for the latter example because the `when tag is` expression
+only includes a `Foo Str` branch and a `Bar Bool` branch, and nothing else. Since the `when` doesn't handle
+any other possibilities, these two tags must be the only possible ones the `tag` argument could be.
+
+It would infer `tag : [ Foo Str, Bar Bool ]*` for the former example because the `when tag is` expression
+includes a `Foo Str` branch and a `Bar Bool` branch - meaning we know about at least those two specific
+possibilities - but also a `_ ->` branch, indicating that there may be other tags we don't know about. Since
+the `when` is flexible enough to handle all possible tags, `tag` gets inferred as an open union.
+
+Putting these together, whether a tag union is inferred to be open or closed depends on which possibilities
+the implementation actually handles.
+
+> **Aside:** As with open and closed records, we can use type annotations to make tag union types less flexible
+> than what would be inferred. If we added a `_ ->` branch to the second example above, the compiler would still
+> accept `example : [ Foo Str, Bar Bool ] -> Bool` as the type annotation, even though the catch-all branch
+> would permit the more flexible `example : [ Foo Str, Bar Bool ]* -> Bool` annotation instead.
+
+## Combining Open Unions
+
+When we make a new record, it's inferred to be a closed record. For example, in `foo { a: "hi" }`,
+the type of `{ a: "hi" }` is inferred to be `{ a : Str }`. In contrast, when we make a new tag, it's inferred
+to be an open union. So in `foo (Bar "hi")`, the type of `Bar "hi"` is inferred to be `[ Bar Str ]*`.
+
+This is because open unions can accumulate additional tags based on how they're used in the program,
+whereas closed unions cannot. For example, let's look at this conditional:
+
+```elm
+if x > 5 then
+    "foo"
+else
+    7
+```
+
+This will be a type mismatch because the two branches have incompatible types. Strings and numbers are not
+type-compatible! Now let's look at another example:
+
+```elm
+if x > 5 then
+    Ok "foo"
+else
+    Err "bar"
+```
+
+This shouldn't be a type mismatch, because we can see that the two branches are compatible; they are both
+tags that could easily coexist in the same tag union. But if the compiler inferred the type of `Ok "foo"` to be
+the closed union `[ Ok Str ]`, and likewise for `Err "bar"` and `[ Err Str ]`, then this would have to be
+a type mismatch - because those two closed unions are incompatible.
+
+Instead, the compiler infers `Ok "foo"` to be the open union `[ Ok Str ]*`, and `Err "bar"` to be the open
+union `[ Err Str ]*`. Then, when using them together in this conditional, the inferred type of the conditional
+becomes `[ Ok Str, Err Str ]*` - that is, the combination of the unions in each of its branches. (Branches in
+a `when` work the same way with open unions.)
+
+Earlier we saw how a function which accepts an open union must account for more possibilities, by including
+catch-all `_ ->` patterns in its `when` expressions. So *accepting* an open union means you have more requirements.
+In contrast, when you already *have* a value which is an open union, you have fewer requirements. A value
+which is an open union (like `Ok "foo"`, which has the type `[ Ok Str ]*`) can be provided to anything that's
+expecting a tag union (no matter whether it's open or closed), as long as the expected tag union includes at least
+the tags in the open union you're providing.
+
+So if I have an `[ Ok Str ]*` value, I can pass it functions with any of these types (among others):
+
+* `[ Ok Str ]* -> Bool`
+* `[ Ok Str ] -> Bool`
+* `[ Ok Str, Err Bool ]* -> Bool`
+* `[ Ok Str, Err Bool ] -> Bool`
+* `[ Ok Str, Err Bool, Whatever ]* -> Bool`
+* `[ Ok Str, Err Bool, Whatever ] -> Bool`
+* `Result Str Bool -> Bool`
+* `[ Err Bool, Whatever ]* -> Bool`
+
+That last one works because a function accepting an open union can accept any unrecognized tag, including
+`Ok Str` - even though it is not mentioned as one of the tags in `[ Err Bool, Whatever ]*`! Remember, when
+a function accepts an open tag union, any `when` branches on that union must include a catch-all `_ ->` branch,
+which is the branch that will end up handling the `Ok Str` value we pass in.
+
+However, I could not pass an `[ Ok Str ]*` to a function with a *closed* tag union argument that did not
+mention `Ok Str` as one of its tags. So if I tried to pass `[ Ok Str ]*` to a function with the type
+`[ Err Bool, Whatever ] -> Str`, I would get a type mismatch - because a `when` in that function could
+be handling the `Err Bool` possibility and the `Whatever` possibility, and since it would not necessarily have
+a catch-all `_ ->` branch, it might not know what to do with an `Ok Str` if it received one.
+
+> **Note:** It wouldn't be accurate to say that a function which accepts an open union handles
+> "all possible tags." For example, if I have a function `[ Ok Str ]* -> Bool` and I pass it
+> `Ok 5`, that will still be a type mismatch. If you think about it, a `when` in that function might
+> have the branch `Ok str ->` which assumes there's a string inside that `Ok`, and if `Ok 5` type-checked,
+> then that assumption would be false and things would break!
+>
+> So `[ Ok Str ]*` is more restrictive than `[]*`. It's basically saying "this may or may not be an `Ok` tag,
+> but if it is an `Ok` tag, then it's guaranteed to have a payload of exactly `Str`."
+
+In summary, here's a way to think about the difference between open unions in a value you have, compared to a value you're accepting:
+
+* If you *have* a closed union, that means it has all the tags it ever will, and can't accumulate more.
+* If you *have* an open union, that means it can accumulate more tags through conditional branches.
+* If you *accept* a closed union, that means you only have to handle the possibilities listed in the union.
+* If you *accept* an open union, that means you have to handle the possibility that it has a tag you can't know about.
+
+## Type Variables in Tag Unions
+
+Earlier we saw these two examples, one with an open tag union and the other with a closed one:
+
+```coffee
+example : [ Foo Str, Bar Bool ]* -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+        _ -> False
+```
+
+```coffee
+example : [ Foo Str, Bar Bool ] -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+```
+
+Similarly to how there are open records with a `*`, closed records with nothing,
+and constrained records with a named type variable, we can also have *constrained tag unions*
+with a named type variable. Here's an example:
+
+```coffee
+example : [ Foo Str, Bar Bool ]a -> [ Foo Str, Bar Bool ]a
+example = \tag ->
+    when tag is
+        Foo str -> Bar (Str.isEmpty str)
+        Bar _ -> Bar False
+        other -> other
+```
+
+This type says that the `example` function will take either a `Foo Str` tag, or a `Bar Bool` tag,
+or possibly another tag we don't know about at compile time - and it also says that the function's
+return type is the same as the type of its argument.
+
+So if we give this function a `[ Foo Str, Bar Bool, Baz (List Str) ]` argument, then it will be guaranteed
+to return a `[ Foo Str, Bar Bool, Baz (List Str) ]` value. This is more constrained than a function that
+returned `[ Foo Str, Bar Bool ]*` because that would say it could return *any* other tag (in addition to
+the `Foo Str` and `Bar Bool` we already know about).
+
+If we removed the type annotation from `example` above, Roc's compiler would infer the same type anyway.
+This may be surprising if you look closely at the body of the function, because:
+
+* The return type includes `Foo Str`, but no branch explicitly returns `Foo`. Couldn't the return type be `[ Bar Bool ]a` instead?
+* The argument type includes `Bar Bool` even though we never look at `Bar`'s payload. Couldn't the argument type be inferred to be `Bar *` instead of `Bar Bool`, since we never look at it?
+
+The reason it has this type is the `other -> other` branch. Take a look at that branch, and ask this question:
+"What is the type of `other`?" There has to be exactly one answer! It can't be the case that `other` has one
+type before the `->` and another type after it; whenever you see a named value in Roc, it is guaranteed to have
+the same type everywhere it appears in that scope.
+
+For this reason, any time you see a function that only runs a `when` on its only argument, and that `when`
+includes a branch like `x -> x` or `other -> other`, the function's argument type and return type must necessarily
+be equivalent.
+
+> **Note:** Just like with records, you can also replace the type variable in tag union types with a concrete type.
+> For example, `[ Foo Str ][ Bar Bool ][ Baz (List Str) ]` is equivalent to `[ Foo Str, Bar Bool, Baz (List Str) ]`.
+>
+> Also just like with records, you can use this to compose tag union type aliases. For example, you can write
+> `NetworkError : [ Timeout, Disconnected ]` and then `Problem : [ InvalidInput, UnknownFormat ]NetworkError`
+
+## Phantom Types
+
+[ This part of the tutorial has not been written yet. Coming soon! ]
 
 ## Operator Desugaring Table
 

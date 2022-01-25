@@ -1,5 +1,6 @@
 use crate::ast::Base;
-use crate::parser::{ENumber, ParseResult, Parser, Progress, State};
+use crate::parser::{ENumber, ParseResult, Parser, Progress};
+use crate::state::State;
 
 pub enum NumLiteral<'a> {
     Float(&'a str),
@@ -13,9 +14,9 @@ pub enum NumLiteral<'a> {
 
 pub fn positive_number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber> {
     move |_arena, state: State<'a>| {
-        match state.bytes.get(0) {
+        match state.bytes().get(0) {
             Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
-                parse_number_base(false, state.bytes, state)
+                parse_number_base(false, state.bytes(), state)
             }
             _ => {
                 // this is not a number at all
@@ -27,13 +28,13 @@ pub fn positive_number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber>
 
 pub fn number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber> {
     move |_arena, state: State<'a>| {
-        match state.bytes.get(0) {
+        match state.bytes().get(0) {
             Some(first_byte) if *first_byte == b'-' => {
                 // drop the minus
-                parse_number_base(true, &state.bytes[1..], state)
+                parse_number_base(true, &state.bytes()[1..], state)
             }
             Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
-                parse_number_base(false, state.bytes, state)
+                parse_number_base(false, state.bytes(), state)
             }
             _ => {
                 // this is not a number at all
@@ -66,9 +67,7 @@ fn chomp_number_base<'a>(
 
     let string = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
 
-    let new = state.advance_without_indenting_ee(chomped + 2 + is_negative as usize, |_, _| {
-        ENumber::LineTooLong
-    })?;
+    let new = state.advance(chomped + 2 + is_negative as usize);
 
     Ok((
         Progress::MadeProgress,
@@ -99,11 +98,9 @@ fn chomp_number_dec<'a>(
     }
 
     let string =
-        unsafe { std::str::from_utf8_unchecked(&state.bytes[0..chomped + is_negative as usize]) };
+        unsafe { std::str::from_utf8_unchecked(&state.bytes()[0..chomped + is_negative as usize]) };
 
-    let new = state.advance_without_indenting_ee(chomped + is_negative as usize, |_, _| {
-        ENumber::LineTooLong
-    })?;
+    let new = state.advance(chomped + is_negative as usize);
 
     Ok((
         Progress::MadeProgress,

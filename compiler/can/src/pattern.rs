@@ -7,7 +7,7 @@ use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -18,12 +18,12 @@ pub enum Pattern {
         whole_var: Variable,
         ext_var: Variable,
         tag_name: TagName,
-        arguments: Vec<(Variable, Located<Pattern>)>,
+        arguments: Vec<(Variable, Loc<Pattern>)>,
     },
     RecordDestructure {
         whole_var: Variable,
         ext_var: Variable,
-        destructs: Vec<Located<RecordDestruct>>,
+        destructs: Vec<Loc<RecordDestruct>>,
     },
     IntLiteral(Variable, Box<str>, i64),
     NumLiteral(Variable, Box<str>, i64),
@@ -32,7 +32,7 @@ pub enum Pattern {
     Underscore,
 
     // Runtime Exceptions
-    Shadowed(Region, Located<Ident>),
+    Shadowed(Region, Loc<Ident>, Symbol),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
     // parse error patterns
@@ -50,8 +50,8 @@ pub struct RecordDestruct {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DestructType {
     Required,
-    Optional(Variable, Located<Expr>),
-    Guard(Variable, Located<Pattern>),
+    Optional(Variable, Loc<Expr>),
+    Guard(Variable, Loc<Pattern>),
 }
 
 pub fn symbols_from_pattern(pattern: &Pattern) -> Vec<Symbol> {
@@ -65,7 +65,7 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
     use Pattern::*;
 
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             symbols.push(*symbol);
         }
 
@@ -92,8 +92,6 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
         | Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => {}
-
-        Shadowed(_, _) => {}
     }
 }
 
@@ -104,7 +102,7 @@ pub fn canonicalize_pattern<'a>(
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
     region: Region,
-) -> (Output, Located<Pattern>) {
+) -> (Output, Loc<Pattern>) {
     use roc_parse::ast::Pattern::*;
     use PatternType::*;
 
@@ -121,13 +119,14 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::Identifier(symbol)
             }
-            Err((original_region, shadow)) => {
+            Err((original_region, shadow, new_symbol)) => {
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                     original_region,
                     shadow: shadow.clone(),
                 }));
+                output.references.bound_symbols.insert(new_symbol);
 
-                Pattern::Shadowed(original_region, shadow)
+                Pattern::Shadowed(original_region, shadow, new_symbol)
             }
         },
         GlobalTag(name) => {
@@ -258,7 +257,7 @@ pub fn canonicalize_pattern<'a>(
                             Ok(symbol) => {
                                 output.references.bound_symbols.insert(symbol);
 
-                                destructs.push(Located {
+                                destructs.push(Loc {
                                     region: loc_pattern.region,
                                     value: RecordDestruct {
                                         var: var_store.fresh(),
@@ -268,7 +267,7 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow)) => {
+                            Err((original_region, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
@@ -278,7 +277,8 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                                opt_erroneous =
+                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
                             }
                         };
                     }
@@ -297,7 +297,7 @@ pub fn canonicalize_pattern<'a>(
 
                         output.union(new_output);
 
-                        destructs.push(Located {
+                        destructs.push(Loc {
                             region: loc_pattern.region,
                             value: RecordDestruct {
                                 var: var_store.fresh(),
@@ -329,7 +329,7 @@ pub fn canonicalize_pattern<'a>(
 
                                 output.union(expr_output);
 
-                                destructs.push(Located {
+                                destructs.push(Loc {
                                     region: loc_pattern.region,
                                     value: RecordDestruct {
                                         var: var_store.fresh(),
@@ -339,7 +339,7 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow)) => {
+                            Err((original_region, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
@@ -349,7 +349,8 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                                opt_erroneous =
+                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
                             }
                         };
                     }
@@ -391,7 +392,7 @@ pub fn canonicalize_pattern<'a>(
 
     (
         output,
-        Located {
+        Loc {
             region,
             value: can_pattern,
         },
@@ -432,7 +433,7 @@ fn malformed_pattern(env: &mut Env, problem: MalformedPatternProblem, region: Re
 
 pub fn bindings_from_patterns<'a, I>(loc_patterns: I) -> Vec<(Symbol, Region)>
 where
-    I: Iterator<Item = &'a Located<Pattern>>,
+    I: Iterator<Item = &'a Loc<Pattern>>,
 {
     let mut answer = Vec::new();
 
@@ -452,7 +453,7 @@ fn add_bindings_from_patterns(
     use Pattern::*;
 
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             answer.push((*symbol, *region));
         }
         AppliedTag {
@@ -464,7 +465,7 @@ fn add_bindings_from_patterns(
             }
         }
         RecordDestructure { destructs, .. } => {
-            for Located {
+            for Loc {
                 region,
                 value: RecordDestruct { symbol, .. },
             } in destructs
@@ -477,7 +478,6 @@ fn add_bindings_from_patterns(
         | FloatLiteral(_, _, _)
         | StrLiteral(_)
         | Underscore
-        | Shadowed(_, _)
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => (),
     }

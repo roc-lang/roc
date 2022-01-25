@@ -17,7 +17,7 @@ mod test_can {
     use roc_can::expr::Expr::{self, *};
     use roc_can::expr::{ClosureData, Recursive};
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
-    use roc_region::all::Region;
+    use roc_region::all::{Position, Region};
     use std::{f64, i64};
 
     fn assert_can(input: &str, expected: Expr) {
@@ -368,9 +368,11 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 1);
+        assert_eq!(problems.len(), 2);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            // Due to one of the shadows
+            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -389,9 +391,11 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 1);
+        assert_eq!(problems.len(), 2);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            // Due to one of the shadows
+            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -410,10 +414,12 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 1);
+        assert_eq!(problems.len(), 2);
         println!("{:#?}", problems);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            // Due to one of the shadows
+            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -524,7 +530,7 @@ mod test_can {
     fn annotation_followed_with_unrelated_affectation() {
         let src = indoc!(
             r#"
-                F : Str 
+                F : Str
 
                 x = 1
 
@@ -545,10 +551,10 @@ mod test_can {
     fn two_annotations_followed_with_unrelated_affectation() {
         let src = indoc!(
             r#"
-                G : Str 
+                G : Str
 
-                F : {} 
-                
+                F : {}
+
                 x = 1
 
                 x
@@ -629,7 +635,7 @@ mod test_can {
     fn incorrect_optional_value() {
         let src = indoc!(
             r#"
-                { x ? 42 }                
+                { x ? 42 }
             "#
         );
         let arena = Bump::new();
@@ -943,8 +949,8 @@ mod test_can {
 
         let problem = Problem::RuntimeError(RuntimeError::CircularDef(vec![CycleEntry {
             symbol: interns.symbol(home, "x".into()),
-            symbol_region: Region::new(0, 0, 0, 1),
-            expr_region: Region::new(0, 0, 4, 5),
+            symbol_region: Region::new(Position::new(0), Position::new(1)),
+            expr_region: Region::new(Position::new(4), Position::new(5)),
         }]));
 
         assert_eq!(is_circular_def, true);
@@ -974,18 +980,18 @@ mod test_can {
         let problem = Problem::RuntimeError(RuntimeError::CircularDef(vec![
             CycleEntry {
                 symbol: interns.symbol(home, "x".into()),
-                symbol_region: Region::new(0, 0, 0, 1),
-                expr_region: Region::new(0, 0, 4, 5),
+                symbol_region: Region::new(Position::new(0), Position::new(1)),
+                expr_region: Region::new(Position::new(4), Position::new(5)),
             },
             CycleEntry {
                 symbol: interns.symbol(home, "y".into()),
-                symbol_region: Region::new(1, 1, 0, 1),
-                expr_region: Region::new(1, 1, 4, 5),
+                symbol_region: Region::new(Position::new(6), Position::new(7)),
+                expr_region: Region::new(Position::new(10), Position::new(11)),
             },
             CycleEntry {
                 symbol: interns.symbol(home, "z".into()),
-                symbol_region: Region::new(2, 2, 0, 1),
-                expr_region: Region::new(2, 2, 4, 5),
+                symbol_region: Region::new(Position::new(12), Position::new(13)),
+                expr_region: Region::new(Position::new(16), Position::new(17)),
             },
         ]));
 
@@ -1004,7 +1010,7 @@ mod test_can {
         let src = indoc!(
             r#"
                 x = Dict.empty
-                
+
                 Dict.len x
             "#
         );

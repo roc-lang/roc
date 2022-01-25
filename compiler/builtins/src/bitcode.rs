@@ -201,22 +201,28 @@ macro_rules! float_intrinsic {
 
 #[macro_export]
 macro_rules! int_intrinsic {
-    ($name:literal) => {{
+    ($signed_name:literal, $unsigned_name:literal) => {{
         let mut output = IntrinsicName::default();
 
-        output.options[4] = concat!($name, ".i8");
-        output.options[5] = concat!($name, ".i16");
-        output.options[6] = concat!($name, ".i32");
-        output.options[7] = concat!($name, ".i64");
-        output.options[8] = concat!($name, ".i128");
-        output.options[9] = concat!($name, ".i8");
-        output.options[10] = concat!($name, ".i16");
-        output.options[11] = concat!($name, ".i32");
-        output.options[12] = concat!($name, ".i64");
-        output.options[13] = concat!($name, ".i128");
+        // The indeces align with the `Index` impl for `IntrinsicName`.
+        output.options[4] = concat!($unsigned_name, ".i8");
+        output.options[5] = concat!($unsigned_name, ".i16");
+        output.options[6] = concat!($unsigned_name, ".i32");
+        output.options[7] = concat!($unsigned_name, ".i64");
+        output.options[8] = concat!($unsigned_name, ".i128");
+
+        output.options[9] = concat!($signed_name, ".i8");
+        output.options[10] = concat!($signed_name, ".i16");
+        output.options[11] = concat!($signed_name, ".i32");
+        output.options[12] = concat!($signed_name, ".i64");
+        output.options[13] = concat!($signed_name, ".i128");
 
         output
     }};
+
+    ($name:literal) => {
+        int_intrinsic!($name, $name)
+    };
 }
 
 pub const NUM_ASIN: IntrinsicName = float_intrinsic!("roc_builtins.num.asin");
@@ -242,6 +248,9 @@ pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";
 pub const STR_NUMBER_OF_BYTES: &str = "roc_builtins.str.number_of_bytes";
 pub const STR_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.str.from_int");
 pub const STR_FROM_FLOAT: &str = "roc_builtins.str.from_float";
+pub const STR_TO_INT: IntrinsicName = int_intrinsic!("roc_builtins.str.to_int");
+pub const STR_TO_FLOAT: IntrinsicName = float_intrinsic!("roc_builtins.str.to_float");
+pub const STR_TO_DECIMAL: &str = "roc_builtins.str.to_decimal";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
 pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
 pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
@@ -299,6 +308,7 @@ pub const LIST_ANY: &str = "roc_builtins.list.any";
 pub const LIST_ALL: &str = "roc_builtins.list.all";
 pub const LIST_FIND_UNSAFE: &str = "roc_builtins.list.find_unsafe";
 
+pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";
 pub const DEC_NEQ: &str = "roc_builtins.dec.neq";

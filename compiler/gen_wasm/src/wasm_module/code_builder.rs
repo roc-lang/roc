@@ -1,18 +1,20 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use core::panic;
+use roc_error_macros::internal_error;
 
 use roc_module::symbol::Symbol;
 
 use super::linking::{IndexRelocType, OffsetRelocType, RelocationEntry};
 use super::opcodes::{OpCode, OpCode::*};
 use super::serialize::{SerialBuffer, Serialize};
-use crate::{round_up_to_alignment, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
+use crate::{
+    round_up_to_alignment, DEBUG_LOG_SETTINGS, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
+};
 
-const ENABLE_DEBUG_LOG: bool = false;
 macro_rules! log_instruction {
     ($($x: expr),+) => {
-        if ENABLE_DEBUG_LOG { println!($($x,)*); }
+        if DEBUG_LOG_SETTINGS.instructions { println!($($x,)*); }
     };
 }
 
@@ -35,29 +37,19 @@ impl Serialize for ValueType {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum BlockType {
-    NoResult,
-    Value(ValueType),
-}
-
-impl BlockType {
-    pub fn as_byte(&self) -> u8 {
-        match self {
-            Self::NoResult => 0x40,
-            Self::Value(t) => *t as u8,
+impl From<u8> for ValueType {
+    fn from(x: u8) -> Self {
+        match x {
+            0x7f => Self::I32,
+            0x7e => Self::I64,
+            0x7d => Self::F32,
+            0x7c => Self::F64,
+            _ => internal_error!("Invalid ValueType 0x{:02x}", x),
         }
     }
 }
 
-impl From<Option<ValueType>> for BlockType {
-    fn from(opt: Option<ValueType>) -> Self {
-        match opt {
-            Some(ty) => BlockType::Value(ty),
-            None => BlockType::NoResult,
-        }
-    }
-}
+const BLOCK_NO_RESULT: u8 = 0x40;
 
 /// A control block in our model of the VM
 /// Child blocks cannot "see" values from their parent block
@@ -66,25 +58,17 @@ struct VmBlock<'a> {
     opcode: OpCode,
     /// the stack of values for this block
     value_stack: Vec<'a, Symbol>,
-    /// whether this block pushes a result value to its parent
-    has_result: bool,
 }
 
 impl std::fmt::Debug for VmBlock<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "{:?} {}",
-            self.opcode,
-            if self.has_result {
-                "Result"
-            } else {
-                "NoResult"
-            }
-        ))
+        f.write_fmt(format_args!("{:?}", self.opcode))
     }
 }
 
-/// Wasm memory alignment. (Rust representation matches Wasm encoding)
+/// Wasm memory alignment for load/store instructions.
+/// Rust representation matches Wasm encoding.
+/// It's an error to specify alignment higher than the "natural" alignment of the instruction
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
 pub enum Align {
@@ -92,10 +76,6 @@ pub enum Align {
     Bytes2 = 1,
     Bytes4 = 2,
     Bytes8 = 3,
-    Bytes16 = 4,
-    Bytes32 = 5,
-    Bytes64 = 6,
-    // ... we can add more if we need them ...
 }
 
 impl From<u32> for Align {
@@ -104,11 +84,13 @@ impl From<u32> for Align {
             1 => Align::Bytes1,
             2 => Align::Bytes2,
             4 => Align::Bytes4,
-            8 => Align::Bytes8,
-            16 => Align::Bytes16,
-            32 => Align::Bytes32,
-            64 => Align::Bytes64,
-            _ => panic!("{:?}-byte alignment not supported", x),
+            _ => {
+                if x.count_ones() == 1 {
+                    Align::Bytes8 // Max value supported by any Wasm instruction
+                } else {
+                    internal_error!("Cannot align to {} bytes", x);
+                }
+            }
         }
     }
 }
@@ -186,13 +168,18 @@ pub struct CodeBuilder<'a> {
     relocations: Vec<'a, RelocationEntry>,
 }
 
+impl<'a> Serialize for CodeBuilder<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        self.serialize_without_relocs(buffer);
+    }
+}
+
 #[allow(clippy::new_without_default)]
 impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         let mut vm_block_stack = Vec::with_capacity_in(8, arena);
         let function_block = VmBlock {
             opcode: BLOCK,
-            has_result: true,
             value_stack: Vec::with_capacity_in(8, arena),
         };
         vm_block_stack.push(function_block);
@@ -236,7 +223,7 @@ impl<'a> CodeBuilder<'a> {
         let pushed_at = self.code.len();
         let top_symbol: &mut Symbol = current_stack
             .last_mut()
-            .unwrap_or_else(|| unreachable!("Empty stack when trying to set Symbol {:?}", sym));
+            .unwrap_or_else(|| internal_error!("Empty stack when trying to set Symbol {:?}", sym));
         *top_symbol = sym;
 
         VmSymbolState::Pushed { pushed_at }
@@ -296,7 +283,9 @@ impl<'a> CodeBuilder<'a> {
         use VmSymbolState::*;
 
         match vm_state {
-            NotYetPushed => unreachable!("Symbol {:?} has no value yet. Nothing to load.", symbol),
+            NotYetPushed => {
+                internal_error!("Symbol {:?} has no value yet. Nothing to load.", symbol)
+            }
 
             Pushed { pushed_at } => {
                 match self.current_stack().last() {
@@ -309,30 +298,12 @@ impl<'a> CodeBuilder<'a> {
                     _ => {
                         // Symbol is not on top of the stack.
                         // We should have saved it to a local, so go back and do that now.
-
-                        // It should still be on the stack in the block where it was assigned. Remove it.
-                        let mut found = false;
-                        for block in self.vm_block_stack.iter_mut() {
-                            if let Some(found_index) =
-                                block.value_stack.iter().position(|&s| s == symbol)
-                            {
-                                block.value_stack.remove(found_index);
-                                found = true;
-                            }
-                        }
-
-                        // Go back to the code position where it was pushed, and save it to a local
-                        if found {
-                            self.add_insertion(pushed_at, SETLOCAL, next_local_id.0);
-                        } else {
-                            if ENABLE_DEBUG_LOG {
-                                println!(
-                                    "{:?} has been popped implicitly. Leaving it on the stack.",
-                                    symbol
-                                );
-                            }
-                            self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
-                        }
+                        self.store_pushed_symbol_to_local(
+                            symbol,
+                            vm_state,
+                            pushed_at,
+                            next_local_id,
+                        );
 
                         // Recover the value again at the current position
                         self.get_local(next_local_id);
@@ -357,6 +328,60 @@ impl<'a> CodeBuilder<'a> {
                 // Tell the caller it no longer has a VirtualMachineSymbolState
                 None
             }
+        }
+    }
+
+    /// Go back and store a Symbol in a local variable, without loading it at the current position
+    pub fn store_symbol_to_local(
+        &mut self,
+        symbol: Symbol,
+        vm_state: VmSymbolState,
+        next_local_id: LocalId,
+    ) {
+        use VmSymbolState::*;
+
+        match vm_state {
+            NotYetPushed => {
+                // Nothing to do
+            }
+            Pushed { pushed_at } => {
+                self.store_pushed_symbol_to_local(symbol, vm_state, pushed_at, next_local_id)
+            }
+            Popped { pushed_at } => {
+                self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
+            }
+        }
+    }
+
+    fn store_pushed_symbol_to_local(
+        &mut self,
+        symbol: Symbol,
+        vm_state: VmSymbolState,
+        pushed_at: usize,
+        local_id: LocalId,
+    ) {
+        debug_assert!(matches!(vm_state, VmSymbolState::Pushed { .. }));
+
+        // Update our stack model at the position where we're going to set the SETLOCAL
+        let mut found = false;
+        for block in self.vm_block_stack.iter_mut() {
+            if let Some(found_index) = block.value_stack.iter().position(|&s| s == symbol) {
+                block.value_stack.remove(found_index);
+                found = true;
+            }
+        }
+
+        // Go back to the code position where it was pushed, and save it to a local
+        if found {
+            self.add_insertion(pushed_at, SETLOCAL, local_id.0);
+        } else {
+            if DEBUG_LOG_SETTINGS.instructions {
+                println!(
+                    "{:?} has been popped implicitly. Leaving it on the stack.",
+                    symbol
+                );
+            }
+            self.add_insertion(pushed_at, TEELOCAL, local_id.0);
         }
     }
 
@@ -432,7 +457,7 @@ impl<'a> CodeBuilder<'a> {
 
     /// Build the function header: local declarations, stack frame push/pop code, and function length
     /// After this, all bytes have been generated (but not yet serialized) and we know the final size.
-    pub fn build_fn_header(
+    pub fn build_fn_header_and_footer(
         &mut self,
         local_types: &[ValueType],
         frame_size: i32,
@@ -442,9 +467,9 @@ impl<'a> CodeBuilder<'a> {
 
         if frame_size != 0 {
             if let Some(frame_ptr_id) = frame_pointer {
-                let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
+                let aligned_size = round_up_to_alignment!(frame_size, FRAME_ALIGNMENT_BYTES);
                 self.build_stack_frame_push(aligned_size, frame_ptr_id);
-                self.build_stack_frame_pop(aligned_size, frame_ptr_id);
+                self.build_stack_frame_pop(aligned_size, frame_ptr_id); // footer
             }
         }
 
@@ -462,6 +487,26 @@ impl<'a> CodeBuilder<'a> {
         SERIALIZE
 
     ***********************************************************/
+
+    pub fn size(&self) -> usize {
+        self.inner_length.len() + self.preamble.len() + self.code.len() + self.insert_bytes.len()
+    }
+
+    /// Serialize all byte vectors in the right order
+    /// Also update relocation offsets relative to the base offset (code section body start)
+    pub fn serialize_without_relocs<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_slice(&self.inner_length);
+        buffer.append_slice(&self.preamble);
+
+        let mut code_pos = 0;
+        for Insertion { at, start, end } in self.insertions.iter() {
+            buffer.append_slice(&self.code[code_pos..(*at)]);
+            buffer.append_slice(&self.insert_bytes[*start..*end]);
+            code_pos = *at;
+        }
+
+        buffer.append_slice(&self.code[code_pos..self.code.len()]);
+    }
 
     /// Serialize all byte vectors in the right order
     /// Also update relocation offsets relative to the base offset (code section body start)
@@ -523,7 +568,16 @@ impl<'a> CodeBuilder<'a> {
     /// Emits the opcode and simulates VM stack push/pop
     fn inst_base(&mut self, opcode: OpCode, pops: usize, push: bool) {
         let current_stack = self.current_stack_mut();
-        let new_len = current_stack.len() - pops as usize;
+        let stack_size = current_stack.len();
+
+        debug_assert!(
+            stack_size >= pops,
+            "Wasm value stack underflow. Tried to pop {} but only {} available",
+            pops,
+            stack_size
+        );
+
+        let new_len = stack_size - pops as usize;
         current_stack.truncate(new_len);
         if push {
             current_stack.push(Symbol::WASM_TMP);
@@ -542,23 +596,19 @@ impl<'a> CodeBuilder<'a> {
     }
 
     /// Block instruction
-    fn inst_block(&mut self, opcode: OpCode, pops: usize, block_type: BlockType) {
+    fn inst_block(&mut self, opcode: OpCode, pops: usize) {
         self.inst_base(opcode, pops, false);
-        self.code.push(block_type.as_byte());
+
+        // We don't support block result types. Too hard to track types through arbitrary control flow.
+        self.code.push(BLOCK_NO_RESULT);
 
         // Start a new block with a fresh value stack
         self.vm_block_stack.push(VmBlock {
             opcode,
             value_stack: Vec::with_capacity_in(8, self.arena),
-            has_result: block_type != BlockType::NoResult,
         });
 
-        log_instruction!(
-            "{:10} {:?}\t{:?}",
-            format!("{:?}", opcode),
-            block_type,
-            &self.vm_block_stack
-        );
+        log_instruction!("{:10}\t{:?}", format!("{:?}", opcode), &self.vm_block_stack);
     }
 
     fn inst_imm32(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u32) {
@@ -611,14 +661,14 @@ impl<'a> CodeBuilder<'a> {
     instruction_no_args!(unreachable_, UNREACHABLE, 0, false);
     instruction_no_args!(nop, NOP, 0, false);
 
-    pub fn block(&mut self, ty: BlockType) {
-        self.inst_block(BLOCK, 0, ty);
+    pub fn block(&mut self) {
+        self.inst_block(BLOCK, 0);
     }
-    pub fn loop_(&mut self, ty: BlockType) {
-        self.inst_block(LOOP, 0, ty);
+    pub fn loop_(&mut self) {
+        self.inst_block(LOOP, 0);
     }
-    pub fn if_(&mut self, ty: BlockType) {
-        self.inst_block(IF, 1, ty);
+    pub fn if_(&mut self) {
+        self.inst_block(IF, 1);
     }
     pub fn else_(&mut self) {
         // Reuse the 'then' block but clear its value stack
@@ -627,13 +677,20 @@ impl<'a> CodeBuilder<'a> {
     }
 
     pub fn end(&mut self) {
-        self.inst_base(END, 0, false);
+        // We need to drop any unused values from the VM stack in order to pass Wasm validation.
+        // This happens, for example, in test `gen_tags::if_guard_exhaustiveness`
+        let n_unused = self
+            .vm_block_stack
+            .last()
+            .map(|block| block.value_stack.len())
+            .unwrap_or(0);
 
-        let ended_block = self.vm_block_stack.pop().unwrap();
-        if ended_block.has_result {
-            let result = ended_block.value_stack.last().unwrap();
-            self.current_stack_mut().push(*result)
+        for _ in 0..n_unused {
+            self.drop_();
         }
+
+        self.inst_base(END, 0, false);
+        self.vm_block_stack.pop();
 
         log_instruction!("END       \t\t{:?}", &self.vm_block_stack);
     }
@@ -648,7 +705,7 @@ impl<'a> CodeBuilder<'a> {
     }
     #[allow(dead_code)]
     fn br_table() {
-        panic!("TODO");
+        todo!("br instruction");
     }
 
     instruction_no_args!(return_, RETURN, 0, false);
@@ -684,7 +741,9 @@ impl<'a> CodeBuilder<'a> {
 
     #[allow(dead_code)]
     fn call_indirect() {
-        panic!("Not implemented. Roc doesn't use function pointers");
+        unimplemented!(
+            "There is no plan to implement call_indirect. Roc doesn't use function pointers"
+        );
     }
 
     instruction_no_args!(drop_, DROP, 1, false);

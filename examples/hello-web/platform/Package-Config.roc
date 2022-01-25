@@ -1,5 +1,5 @@
-platform examples/hello-world
-    requires {}{ main : Str }
+platform "examples/hello-world"
+    requires {} { main : Str }
     exposes []
     packages {}
     imports []

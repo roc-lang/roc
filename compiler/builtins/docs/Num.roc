@@ -2,91 +2,106 @@ interface Num
     exposes
         [
             Num,
-            Int,
-            Float,
-            Natural,
-            Nat,
-            Decimal,
-            Dec,
-            Integer,
-            FloatingPoint,
-            I128,
-            U128,
-            I64,
-            U64,
-            I32,
-            U32,
-            I16,
-            U16,
-            I8,
-            U8,
-            F64,
-            F32,
-            maxInt,
-            minInt,
-            maxFloat,
-            minFloat,
-            abs,
-            neg,
-            add,
-            sub,
-            mul,
-            isLt,
-            isLte,
-            isGt,
-            isGte,
-            toFloat,
-            sin,
-            cos,
-            tan,
-            isZero,
-            isEven,
-            isOdd,
-            isPositive,
-            isNegative,
-            rem,
-            div,
-            divFloor,
-            modInt,
-            modFloat,
-            sqrt,
-            log,
-            round,
-            compare,
-            pow,
-            ceiling,
-            powInt,
-            floor,
-            addWrap,
-            addChecked,
-            atan,
-            acos,
-            toStr,
-            Signed128,
-            Signed64,
-            Signed32,
-            Signed16,
-            Signed8,
-            Unsigned128,
-            Unsigned64,
-            Unsigned32,
-            Unsigned16,
-            Unsigned8,
             Binary64,
             Binary32,
+            Dec,
+            Decimal,
+            Float,
+            FloatingPoint,
+            F32,
+            F64,
+            I8,
+            I16,
+            I32,
+            I64,
+            I128,
+            Int,
+            Integer,
+            Nat,
+            Natural,
+            Signed8,
+            Signed16,
+            Signed32,
+            Signed64,
+            Signed128,
+            U8,
+            U16,
+            U32,
+            U64,
+            U128,
+            Unsigned8,
+            Unsigned16,
+            Unsigned32,
+            Unsigned64,
+            Unsigned128,
+            abs,
+            acos,
+            add,
+            addChecked,
+            addWrap,
+            atan,
             bitwiseAnd,
-            bitwiseXor,
             bitwiseOr,
+            bitwiseXor,
+            ceiling,
+            compare,
+            cos,
+            div,
+            divFloor,
+            floor,
+            intCast,
+            isEven,
+            isGt,
+            isGte,
+            isLt,
+            isLte,
+            isMultipleOf,
+            isNegative,
+            isOdd,
+            isPositive,
+            isZero,
+            log,
+            maxFloat,
+            maxI8,
+            maxU8,
+            maxI16,
+            maxU16,
+            maxI32,
+            maxU32,
+            maxI64,
+            maxU64,
+            maxI128,
+            minFloat,
+            minI8,
+            minU8,
+            minI16,
+            minU16,
+            minI32,
+            minU32,
+            minI64,
+            minU64,
+            minI128,
+            modInt,
+            modFloat,
+            mul,
+            mulChecked,
+            mulWrap,
+            neg,
+            pow,
+            powInt,
+            rem,
+            round,
             shiftLeftBy,
             shiftRightBy,
             shiftRightZfBy,
-            subWrap,
+            sin,
+            sub,
             subChecked,
-            mulWrap,
-            mulChecked,
-            intCast,
-            maxI128,
-            isMultipleOf
+            subWrap,
+            sqrt,
+            tan,
+            toFloat,
+            toStr
         ]
     imports []
 
@@ -102,7 +117,7 @@ interface Num
 ##
 ## The number 1.5 technically has the type `Num (Fraction *)`, so when you pass
 ## two of them to [Num.add], the answer you get is `3.0 : Num (Fraction *)`.
-#
+##
 ## Similarly, the number 0x1 (that is, the integer 1 in hexadecimal notation)
 ## technically has the type `Num (Integer *)`, so when you pass two of them to
 ## [Num.add], the answer you get is `2 : Num (Integer *)`.
@@ -359,47 +374,47 @@ Nat : Int [ @Natural ]
 ##
 ## | Range                                                  | Type  | Size     |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                -128` | #I8   | 1 Byte   |
+## | `                                                -128` | [I8]  | 1 Byte   |
 ## | `                                                 127` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U8   | 1 Byte   |
+## | `                                                   0` | [U8]  | 1 Byte   |
 ## | `                                                 255` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                             -32_768` | #I16  | 2 Bytes  |
+## | `                                             -32_768` | [I16] | 2 Bytes  |
 ## | `                                              32_767` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U16  | 2 Bytes  |
+## | `                                                   0` | [U16] | 2 Bytes  |
 ## | `                                              65_535` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                      -2_147_483_648` | #I32  | 4 Bytes  |
+## | `                                      -2_147_483_648` | [I32] | 4 Bytes  |
 ## | `                                       2_147_483_647` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U32  | 4 Bytes  |
+## | `                                                   0` | [U32] | 4 Bytes  |
 ## | ` (over 4 billion)                      4_294_967_295` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                          -9_223_372_036_854_775_808` | #I64  | 8 Bytes  |
+## | `                          -9_223_372_036_854_775_808` | [I64] | 8 Bytes  |
 ## | `                           9_223_372_036_854_775_807` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `                                                   0` | #U64  | 8 Bytes  |
+## | `                                                   0` | [U64] | 8 Bytes  |
 ## | ` (over 18 quintillion)    18_446_744_073_709_551_615` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | `-170_141_183_460_469_231_731_687_303_715_884_105_728` | #I128 | 16 Bytes |
+## | `-170_141_183_460_469_231_731_687_303_715_884_105_728` | [I128]| 16 Bytes |
 ## | ` 170_141_183_460_469_231_731_687_303_715_884_105_727` |       |          |
 ## |--------------------------------------------------------|-------|----------|
-## | ` (over 340 undecillion)                            0` | #U128 | 16 Bytes |
+## | ` (over 340 undecillion)                            0` | [U128]| 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## Roc also has one variable-size integer type: #Nat. The size of #Nat is equal
+## Roc also has one variable-size integer type: [Nat]. The size of [Nat] is equal
 ## to the size of a memory address, which varies by system. For example, when
-## compiling for a 64-bit system, #Nat is the same as #U64. When compiling for a
-## 32-bit system, it's the same as #U32.
+## compiling for a 64-bit system, [Nat] is the same as [U64]. When compiling for a
+## 32-bit system, it's the same as [U32].
 ##
-## A common use for #Nat is to store the length ("len" for short) of a
-## collection like #List, #Set, or #Map. 64-bit systems can represent longer
+## A common use for [Nat] is to store the length ("len" for short) of a
+## collection like a [List]. 64-bit systems can represent longer
 ## lists in memory than 32-bit systems can, which is why the length of a list
-## is represented as a #Nat in Roc.
+## is represented as a [Nat] in Roc.
 ##
-## If any operation would result in an #Int that is either too big
+## If any operation would result in an [Int] that is either too big
 ## or too small to fit in that range (e.g. calling `Int.maxI32 + 1`),
 ## then the operation will *overflow*. When an overflow occurs, the program will crash.
 ##
@@ -501,7 +516,16 @@ add : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.add] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-addCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
+addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+
+## Add two numbers, clamping on the maximum representable number rather than
+## overflowing.
+##
+## This is the same as [Num.add] except for the saturating behavior if the
+## addition is to overflow.
+## For example, if `x : U8` is 200 and `y : U8` is 100, `addSaturated x y` will
+## yield 255, the maximum value of a `U8`.
+addSaturated : Num a, Num a -> Num a
 
 ## Subtract two numbers of the same type.
 ##
@@ -528,7 +552,16 @@ sub : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.sub] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-subCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
+subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+
+## Subtract two numbers, clamping on the minimum representable number rather
+## than overflowing.
+##
+## This is the same as [Num.sub] except for the saturating behavior if the
+## subtraction is to overflow.
+## For example, if `x : U8` is 10 and `y : U8` is 20, `subSaturated x y` will
+## yield 0, the minimum value of a `U8`.
+subSaturated : Num a, Num a -> Num a
 
 ## Multiply two numbers of the same type.
 ##
@@ -621,13 +654,13 @@ toStr : Num * -> Str
 ## Examples:
 ##
 ## In some countries (e.g. USA and UK), a comma is used to separate thousands:
-## >>> Num.format 1_000_000 { base: Decimal, wholeSep: { mark: ",", places: 3 } }
+## >>> Num.format 1_000_000 { pf: Decimal, wholeSep: { mark: ",", places: 3 } }
 ##
 ## Sometimes when rendering bits, it's nice to group them into groups of 4:
-## >>> Num.format 1_000_000 { base: Binary, wholeSep: { mark: " ", places: 4 } }
+## >>> Num.format 1_000_000 { pf: Binary, wholeSep: { mark: " ", places: 4 } }
 ##
 ## It's also common to render hexadecimal in groups of 2:
-## >>> Num.format 1_000_000 { base: Hexadecimal, wholeSep: { mark: " ", places: 2 } }
+## >>> Num.format 1_000_000 { pf: Hexadecimal, wholeSep: { mark: " ", places: 2 } }
 format :
     Num *,
     {
@@ -749,6 +782,15 @@ not : Int a -> Int a
 
 ## Limits
 
+## The lowest number that can be stored in a #Nat without underflowing its
+## available memory and crashing.
+##
+## For reference, this is the number zero, because #Nat is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
+minNat : Nat
+
 ## The highest number that can be stored in a #Nat without overflowing its
 ## available memory and crashing.
 ##
@@ -757,81 +799,190 @@ not : Int a -> Int a
 ## 32-bit system, this will be equal to #Num.maxU32.
 maxNat : Nat
 
-## The number zero.
+## The lowest number that can be stored in an #I8 without underflowing its
+## available memory and crashing.
 ##
-## #Num.minNat is the lowest number that can be stored in a #Nat, which is zero
-## because #Nat is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
-## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
-minNat : Nat
+## For reference, this number is `-128`.
+##
+## Note that the positive version of this number is larger than #Int.maxI8,
+## which means if you call #Num.abs on #Int.minI8, it will overflow and crash!
+minI8 : I8
+
+## The highest number that can be stored in an #I8 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `127`.
+##
+## Note that this is smaller than the positive version of #Int.minI8,
+## which means if you call #Num.abs on #Int.minI8, it will overflow and crash!
+maxI8 : I8
+
+## The lowest number that can be stored in a #U8 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is zero, because #U8 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
+minU8 : U8
+
+## The highest number that can be stored in a #U8 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `255`.
+maxU8 : U8
+
+## The lowest number that can be stored in an #I16 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is `-32_768`.
+##
+## Note that the positive version of this number is larger than #Int.maxI16,
+## which means if you call #Num.abs on #Int.minI16, it will overflow and crash!
+minI16 : I16
+
+## The highest number that can be stored in an #I16 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `32_767`.
+##
+## Note that this is smaller than the positive version of #Int.minI16,
+## which means if you call #Num.abs on #Int.minI16, it will overflow and crash!
+maxI16 : I16
+
+## The lowest number that can be stored in a #U16 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is zero, because #U16 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
+minU16 : U16
+
+## The highest number that can be stored in a #U16 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `65_535`.
+maxU16 : U16
+
+## The lowest number that can be stored in an #I32 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is `-2_147_483_648`.
+##
+## Note that the positive version of this number is larger than #Int.maxI32,
+## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
+minI32 : I32
 
 ## The highest number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
-## Note that this is smaller than the positive version of #Int.minI32
+## For reference, this number is `2_147_483_647`,
+## which is over 2 million.
+##
+## Note that this is smaller than the positive version of #Int.minI32,
 ## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
 maxI32 : I32
 
-## The min number that can be stored in an #I32 without overflowing its
+## The lowest number that can be stored in a #U32 without underflowing its
 ## available memory and crashing.
 ##
-## Note that the positive version of this number is this is larger than
-## #Int.maxI32, which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
-minI32 : I32
-
-## The highest number that can be stored in a #U64 without overflowing its
-## available memory and crashing.
-##
-## For reference, that number is `18_446_744_073_709_551_615`, which is over 18 quintillion.
-maxU64 : U64
-
-## The number zero.
-##
-## #Num.minU64 is the lowest number that can be stored in a #U64, which is zero
-## because #U64 is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
-## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
-minU64 : U64
+## For reference, this number is zero, because #U32 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
+minU32 : U32
 
 ## The highest number that can be stored in a #U32 without overflowing its
 ## available memory and crashing.
 ##
-## For reference, that number is `4_294_967_295`, which is over 4 million.
+## For reference, this number is `4_294_967_295`,
+## which is over 4 million.
 maxU32 : U32
 
-## The number zero.
+## The min number that can be stored in an #I64 without underflowing its
+## available memory and crashing.
 ##
-## #Num.minU32 is the lowest number that can be stored in a #U32, which is zero
-## because #U32 is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## For reference, this number is `-`.
+##
+## Note that the positive version of this number is larger than #Int.maxI64,
+## which means if you call #Num.abs on #Int.minI64, it will overflow and crash!
+minI64 : I64
+
+## The highest number that can be stored in an #I64 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is ``,
+## which is over 2 million.
+##
+## Note that this is smaller than the positive version of #Int.minI64,
+## which means if you call #Num.abs on #Int.minI64, it will overflow and crash!
+maxI64 : I64
+
+## The lowest number that can be stored in a #U64 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is zero because #U64 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
 ## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
-minU32 : U32
+minU64 : U64
 
-## The highest supported #F64 value you can have, which is approximately 1.8 × 10^308.
+## The highest number that can be stored in a #U64 without overflowing its
+## available memory and crashing.
 ##
-## If you go higher than this, your running Roc code will crash - so be careful not to!
-maxF64 : F64
+## For reference, this number is `18_446_744_073_709_551_615`,
+## which is over 18 quintillion.
+maxU64 : U64
 
-## The lowest supported #F64 value you can have, which is approximately -1.8 × 10^308.
+## The lowest number that can be stored in an #I128 without underflowing its
+## available memory and crashing.
 ##
-## If you go lower than this, your running Roc code will crash - so be careful not to!
-minF64 : F64
+## For reference, this number is `-170_141_183_460_469_231_731_687_303_715_884_105_728`.
+##
+## Note that the positive version of this number is larger than #Int.maxI128,
+## which means if you call #Num.abs on #Int.minI128, it will overflow and crash!
+minI128 : I128
 
-## The highest supported #F32 value you can have, which is approximately 1.8 × 10^308.
+## The highest number that can be stored in an #I128 without overflowing its
+## available memory and crashing.
 ##
-## If you go higher than this, your running Roc code will crash - so be careful not to!
-maxF32 : F32
+## For reference, this number is `170_141_183_460_469_231_731_687_303_715_884_105_727`,
+## which is over 2 million.
+##
+## Note that this is smaller than the positive version of #Int.minI128,
+## which means if you call #Num.abs on #Int.minI128, it will overflow and crash!
+maxI128 : I128
 
 ## The lowest supported #F32 value you can have, which is approximately -1.8 × 10^308.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
 minF32 : F32
 
-## The highest supported #F64 value you can have, which is approximately 1.8 × 10^308.
+## The highest supported #F32 value you can have, which is approximately 1.8 × 10^308.
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
-maxDec : Dec
+maxF32 : F32
 
 ## The lowest supported #F64 value you can have, which is approximately -1.8 × 10^308.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
+minF64 : F64
+
+## The highest supported #F64 value you can have, which is approximately 1.8 × 10^308.
+##
+## If you go higher than this, your running Roc code will crash - so be careful not to!
+maxF64 : F64
+
+## The lowest supported #Dec value you can have,
+## which is precisely -170_141_183_460_469_231_731.687303715884105728.
+##
+## If you go lower than this, your running Roc code will crash - so be careful not to!
+minDec : Dec
+
+## The highest supported #Dec value you can have,
+## which is precisely 170_141_183_460_469_231_731.687303715884105727.
+##
+## If you go higher than this, your running Roc code will crash - so be careful not to!
 maxDec : Dec
 
 ## Constants

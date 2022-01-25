@@ -18,10 +18,10 @@ fn vs_main(
     [[location(1)]] in_color: vec4<f32>,
 ) -> VertexOutput {
     var out: VertexOutput;
-    
+
     out.position = u_globals.ortho * vec4<f32>(in_position, 0.0, 1.0);
     out.color = in_color;
-    
+
     return out;
 }
 

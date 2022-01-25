@@ -30,6 +30,8 @@ For NQueens, input 10 in the terminal and press enter.
 
 [examples/benchmarks](examples/benchmarks) contains larger examples.
 
+**Tip:** when programming in roc, we recommend to execute `./roc check myproject/Foo.roc` before `./roc myproject/Foo.roc` or `./roc build myproject/Foo.roc`. `./roc check` can produce clear error messages in cases where building/running may panic.
+
 ## Applications and Platforms
 
 Applications are often built on a *framework.* Typically, both application and framework are written in the same language.
@@ -68,8 +70,6 @@ The core Roc language and standard library include no I/O operations, which give
 * A high-performance build tool (or text editor) written in Rust can be a Roc platform with a strong plugin security model. For example, it could expose only operations allowing plugin authors to modify the contents of certain files, rather than allowing plugins arbitrary read/write access to the entire filesystem.
 * A VR or [Arduino](https://www.arduino.cc/) platform can expose uncommon I/O operations supported by that hardware, while omitting common I/O operations that are unsupported (such as reading keyboard input from a terminal that doesn't exist).
 * A high-performance Web server written in Rust can be a Roc platform where all I/O operations are implemented in terms of Streams or Observables rather than a more traditional asynchronous abstraction like Futures or Promises. This would mean all code in that platform's ecosystem would be necessarily built on a common streaming abstraction.
-
-Each Roc platform gets its own separate package repository, with packages built on top of the API that platform exposes. This means each platform has its own ecosystem where everything is built on top of the same shared set of platform-specific primitives.
 
 ## Project Goals
 

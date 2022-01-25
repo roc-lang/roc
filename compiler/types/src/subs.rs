@@ -708,6 +708,29 @@ impl Variable {
     pub const fn index(&self) -> u32 {
         self.0
     }
+
+    pub const fn get_reserved(symbol: Symbol) -> Option<Variable> {
+        // Must be careful here: the variables must in fact be in Subs
+        match symbol {
+            Symbol::NUM_I128 => Some(Variable::I128),
+            Symbol::NUM_I64 => Some(Variable::I64),
+            Symbol::NUM_I32 => Some(Variable::I32),
+            Symbol::NUM_I16 => Some(Variable::I16),
+            Symbol::NUM_I8 => Some(Variable::I8),
+
+            Symbol::NUM_U128 => Some(Variable::U128),
+            Symbol::NUM_U64 => Some(Variable::U64),
+            Symbol::NUM_U32 => Some(Variable::U32),
+            Symbol::NUM_U16 => Some(Variable::U16),
+            Symbol::NUM_U8 => Some(Variable::U8),
+
+            Symbol::NUM_NAT => Some(Variable::NAT),
+
+            Symbol::BOOL_BOOL => Some(Variable::BOOL),
+
+            _ => None,
+        }
+    }
 }
 
 impl From<Variable> for OptVariable {
@@ -1012,6 +1035,8 @@ fn define_integer_types(subs: &mut Subs) {
 }
 
 impl Subs {
+    pub const RESULT_TAG_NAMES: SubsSlice<TagName> = SubsSlice::new(0, 2);
+
     pub fn new() -> Self {
         Self::with_capacity(0)
     }
@@ -1019,10 +1044,15 @@ impl Subs {
     pub fn with_capacity(capacity: usize) -> Self {
         let capacity = capacity.max(Variable::NUM_RESERVED_VARS);
 
+        let mut tag_names = Vec::with_capacity(32);
+
+        tag_names.push(TagName::Global("Err".into()));
+        tag_names.push(TagName::Global("Ok".into()));
+
         let mut subs = Subs {
             utable: UnificationTable::default(),
             variables: Default::default(),
-            tag_names: Default::default(),
+            tag_names,
             field_names: Default::default(),
             record_fields: Default::default(),
             // store an empty slice at the first position
@@ -1235,6 +1265,48 @@ impl Subs {
         occurs(self, &ImSet::default(), var)
     }
 
+    pub fn mark_tag_union_recursive(
+        &mut self,
+        recursive: Variable,
+        tags: UnionTags,
+        ext_var: Variable,
+    ) {
+        let description = self.get(recursive);
+
+        let rec_var = self.fresh_unnamed_flex_var();
+        self.set_rank(rec_var, description.rank);
+        self.set_content(
+            rec_var,
+            Content::RecursionVar {
+                opt_name: None,
+                structure: recursive,
+            },
+        );
+
+        let new_variable_slices = SubsSlice::reserve_variable_slices(self, tags.len());
+
+        let it = new_variable_slices.indices().zip(tags.iter_all());
+        for (variable_slice_index, (_, slice_index)) in it {
+            let slice = self[slice_index];
+
+            let new_variables = VariableSubsSlice::reserve_into_subs(self, slice.len());
+            for (target_index, var_index) in new_variables.indices().zip(slice) {
+                let var = self[var_index];
+                self.variables[target_index] = self.explicit_substitute(recursive, rec_var, var);
+            }
+
+            self.variable_slices[variable_slice_index] = new_variables;
+        }
+
+        let new_ext_var = self.explicit_substitute(recursive, rec_var, ext_var);
+
+        let new_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
+
+        let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
+
+        self.set_content(recursive, Content::Structure(flat_type));
+    }
+
     pub fn explicit_substitute(
         &mut self,
         from: Variable,
@@ -1291,6 +1363,15 @@ impl Subs {
 
     pub fn commit_snapshot(&mut self, snapshot: Snapshot<InPlace<Variable>>) {
         self.utable.commit(snapshot)
+    }
+
+    /// Checks whether the content of `var`, or any nested content, satisfies the `predicate`.
+    pub fn var_contains_content<P>(&self, var: Variable, predicate: P) -> bool
+    where
+        P: Fn(&Content) -> bool + Copy,
+    {
+        let mut seen_recursion_vars = MutSet::default();
+        var_contains_content_help(self, var, predicate, &mut seen_recursion_vars)
     }
 }
 
@@ -1732,16 +1813,17 @@ impl UnionTags {
         it.map(f)
     }
 
-    pub fn unsorted_iterator_and_ext<'a>(
+    #[inline(always)]
+    pub fn unsorted_tags_and_ext<'a>(
         &'a self,
         subs: &'a Subs,
         ext: Variable,
-    ) -> (impl Iterator<Item = (&TagName, &[Variable])> + 'a, Variable) {
+    ) -> (UnsortedUnionTags<'a>, Variable) {
         let (it, ext) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
-
         let f = move |(label, slice): (_, SubsSlice<Variable>)| (label, subs.get_subs_slice(slice));
+        let it = it.map(f);
 
-        (it.map(f), ext)
+        (UnsortedUnionTags { tags: it.collect() }, ext)
     }
 
     #[inline(always)]
@@ -1793,6 +1875,25 @@ impl UnionTags {
 
             (Box::new(fields.into_iter()), ext)
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct UnsortedUnionTags<'a> {
+    pub tags: Vec<(&'a TagName, &'a [Variable])>,
+}
+
+impl<'a> UnsortedUnionTags<'a> {
+    pub fn is_newtype_wrapper(&self, _subs: &Subs) -> bool {
+        if self.tags.len() != 1 {
+            return false;
+        }
+        self.tags[0].1.len() == 1
+    }
+
+    pub fn get_newtype(&self, _subs: &Subs) -> (&TagName, Variable) {
+        let (tag_name, vars) = self.tags[0];
+        (tag_name, vars[0])
     }
 }
 
@@ -1938,9 +2039,25 @@ impl RecordFields {
         subs: &'a Subs,
         ext: Variable,
     ) -> impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a {
-        let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext);
+        let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext)
+            .expect("Something weird ended up in a record type");
 
         it
+    }
+
+    #[inline(always)]
+    pub fn unsorted_iterator_and_ext<'a>(
+        &'a self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> (
+        impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a,
+        Variable,
+    ) {
+        let (it, ext) = crate::types::gather_fields_unsorted_iter(subs, *self, ext)
+            .expect("Something weird ended up in a record type");
+
+        (it, ext)
     }
 
     /// Get a sorted iterator over the fields of this record type
@@ -1973,7 +2090,8 @@ impl RecordFields {
                 ext,
             )
         } else {
-            let record_structure = crate::types::gather_fields(subs, *self, ext);
+            let record_structure = crate::types::gather_fields(subs, *self, ext)
+                .expect("Something ended up weird in this record type");
 
             (
                 Box::new(record_structure.fields.into_iter()),
@@ -3389,4 +3507,80 @@ fn deep_copy_var_to_help<'a>(
             copy
         }
     }
+}
+
+fn var_contains_content_help<P>(
+    subs: &Subs,
+    var: Variable,
+    predicate: P,
+    seen_recursion_vars: &mut MutSet<Variable>,
+) -> bool
+where
+    P: Fn(&Content) -> bool + Copy,
+{
+    let mut stack = vec![var];
+
+    macro_rules! push_var_slice {
+        ($slice:expr) => {
+            stack.extend(subs.get_subs_slice($slice))
+        };
+    }
+
+    while let Some(var) = stack.pop() {
+        if seen_recursion_vars.contains(&var) {
+            continue;
+        }
+
+        let content = subs.get_content_without_compacting(var);
+
+        if predicate(content) {
+            return true;
+        }
+
+        use Content::*;
+        use FlatType::*;
+        match content {
+            FlexVar(_) | RigidVar(_) => {}
+            RecursionVar {
+                structure,
+                opt_name: _,
+            } => {
+                seen_recursion_vars.insert(var);
+                stack.push(*structure);
+            }
+            Structure(flat_type) => match flat_type {
+                Apply(_, vars) => push_var_slice!(*vars),
+                Func(args, clos, ret) => {
+                    push_var_slice!(*args);
+                    stack.push(*clos);
+                    stack.push(*ret);
+                }
+                Record(fields, var) => {
+                    push_var_slice!(fields.variables());
+                    stack.push(*var);
+                }
+                TagUnion(tags, ext_var) => {
+                    for i in tags.variables() {
+                        push_var_slice!(subs[i]);
+                    }
+                    stack.push(*ext_var);
+                }
+                FunctionOrTagUnion(_, _, var) => stack.push(*var),
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    seen_recursion_vars.insert(*rec_var);
+                    for i in tags.variables() {
+                        push_var_slice!(subs[i]);
+                    }
+                    stack.push(*ext_var);
+                }
+                Erroneous(_) | EmptyRecord | EmptyTagUnion => {}
+            },
+            Alias(_, arguments, real_type_var) => {
+                push_var_slice!(arguments.variables());
+                stack.push(*real_type_var);
+            }
+            Error => {}
+        }
+    }
+    false
 }

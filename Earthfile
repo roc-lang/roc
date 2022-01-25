@@ -1,4 +1,4 @@
-FROM rust:1.56.1-slim-bullseye
+FROM rust:1.57.0-slim-bullseye
 WORKDIR /earthbuild
 
 prep-debian:
@@ -47,7 +47,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli cli_utils compiler docs editor ast code_markup utils test_utils reporting roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
+    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros utils test_utils reporting roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -117,7 +117,7 @@ build-nightly-release:
     RUN git log --pretty=format:'%h' -n 1 >> version.txt
     RUN printf " on: " >> version.txt
     RUN date >> version.txt
-    RUN cargo build --features with_sound --release
+    RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release
     RUN cd ./target/release && tar -czvf roc_linux_x86_64.tar.gz ./roc ../../LICENSE ../../LEGAL_DETAILS ../../examples/hello-world ../../examples/hello-rust ../../examples/hello-zig ../../compiler/builtins/bitcode/src/ ../../roc_std
     SAVE ARTIFACT ./target/release/roc_linux_x86_64.tar.gz AS LOCAL roc_linux_x86_64.tar.gz
 

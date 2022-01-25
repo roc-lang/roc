@@ -1,6 +1,7 @@
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_region::all::LineColumnRegion;
 use std::fmt;
 use std::path::PathBuf;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
@@ -391,9 +392,9 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn region_all_the_things(
         &'a self,
-        region: roc_region::all::Region,
-        sub_region1: roc_region::all::Region,
-        sub_region2: roc_region::all::Region,
+        region: LineColumnRegion,
+        sub_region1: LineColumnRegion,
+        sub_region2: LineColumnRegion,
         error_annotation: Annotation,
     ) -> DocBuilder<'a, Self, Annotation> {
         debug_assert!(region.contains(&sub_region1));
@@ -402,13 +403,13 @@ impl<'a> RocDocAllocator<'a> {
         // if true, the final line of the snippet will be some ^^^ that point to the region where
         // the problem is. Otherwise, the snippet will have a > on the lines that are in the region
         // where the problem is.
-        let error_highlight_line = region.start_line == region.end_line;
+        let error_highlight_line = region.start().line == region.end().line;
 
-        let max_line_number_length = (region.end_line + 1).to_string().len();
+        let max_line_number_length = (region.end().line + 1).to_string().len();
         let indent = 2;
 
         let mut result = self.nil();
-        for i in region.start_line..=region.end_line {
+        for i in region.start().line..=region.end().line {
             let line_number_string = (i + 1).to_string();
             let line_number = line_number_string;
             let this_line_number_length = line_number.len();
@@ -422,8 +423,8 @@ impl<'a> RocDocAllocator<'a> {
             };
 
             let highlight = !error_highlight_line
-                && ((i >= sub_region1.start_line && i <= sub_region1.end_line)
-                    || (i >= sub_region2.start_line && i <= sub_region2.end_line));
+                && ((i >= sub_region1.start().line && i <= sub_region1.end().line)
+                    || (i >= sub_region2.start().line && i <= sub_region2.end().line));
 
             let source_line = if highlight {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
@@ -446,28 +447,34 @@ impl<'a> RocDocAllocator<'a> {
 
             result = result.append(source_line);
 
-            if i != region.end_line {
+            if i != region.end().line {
                 result = result.append(self.line())
             }
         }
 
         if error_highlight_line {
-            let overlapping = sub_region2.start_col < sub_region1.end_col;
+            let overlapping = sub_region2.start().column < sub_region1.end().column;
 
             let highlight = if overlapping {
                 self.text(
-                    ERROR_UNDERLINE.repeat((sub_region2.end_col - sub_region1.start_col) as usize),
+                    ERROR_UNDERLINE
+                        .repeat((sub_region2.end().column - sub_region1.start().column) as usize),
                 )
             } else {
-                let highlight1 =
-                    ERROR_UNDERLINE.repeat((sub_region1.end_col - sub_region1.start_col) as usize);
+                let highlight1 = ERROR_UNDERLINE
+                    .repeat((sub_region1.end().column - sub_region1.start().column) as usize);
                 let highlight2 = if sub_region1 == sub_region2 {
                     "".repeat(0)
                 } else {
-                    ERROR_UNDERLINE.repeat((sub_region2.end_col - sub_region2.start_col) as usize)
+                    ERROR_UNDERLINE
+                        .repeat((sub_region2.end().column - sub_region2.start().column) as usize)
                 };
-                let in_between = " "
-                    .repeat((sub_region2.start_col.saturating_sub(sub_region1.end_col)) as usize);
+                let in_between = " ".repeat(
+                    (sub_region2
+                        .start()
+                        .column
+                        .saturating_sub(sub_region1.end().column)) as usize,
+                );
 
                 self.text(highlight1)
                     .append(self.text(in_between))
@@ -482,7 +489,7 @@ impl<'a> RocDocAllocator<'a> {
                 .append(if sub_region1.is_empty() && sub_region2.is_empty() {
                     self.nil()
                 } else {
-                    self.text(" ".repeat(sub_region1.start_col as usize))
+                    self.text(" ".repeat(sub_region1.start().column as usize))
                         .indent(indent)
                         .append(highlight)
                         .annotate(error_annotation)
@@ -496,26 +503,26 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn region_with_subregion(
         &'a self,
-        region: roc_region::all::Region,
-        sub_region: roc_region::all::Region,
+        region: LineColumnRegion,
+        sub_region: LineColumnRegion,
     ) -> DocBuilder<'a, Self, Annotation> {
         // debug_assert!(region.contains(&sub_region));
 
         // If the outer region takes more than 1 full screen (~60 lines), only show the inner region
-        if region.end_line - region.start_line > 60 {
+        if region.end().line - region.start().line > 60 {
             return self.region_with_subregion(sub_region, sub_region);
         }
 
         // if true, the final line of the snippet will be some ^^^ that point to the region where
         // the problem is. Otherwise, the snippet will have a > on the lines that are in the region
         // where the problem is.
-        let error_highlight_line = sub_region.start_line == region.end_line;
+        let error_highlight_line = sub_region.start().line == region.end().line;
 
-        let max_line_number_length = (region.end_line + 1).to_string().len();
+        let max_line_number_length = (region.end().line + 1).to_string().len();
         let indent = 2;
 
         let mut result = self.nil();
-        for i in region.start_line..=region.end_line {
+        for i in region.start().line..=region.end().line {
             let line_number_string = (i + 1).to_string();
             let line_number = line_number_string;
             let this_line_number_length = line_number.len();
@@ -531,8 +538,8 @@ impl<'a> RocDocAllocator<'a> {
             };
 
             let source_line = if !error_highlight_line
-                && i >= sub_region.start_line
-                && i <= sub_region.end_line
+                && i >= sub_region.start().line
+                && i <= sub_region.end().line
             {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
                     .append(self.text(line_number).annotate(Annotation::LineNumber))
@@ -554,14 +561,14 @@ impl<'a> RocDocAllocator<'a> {
 
             result = result.append(source_line);
 
-            if i != region.end_line {
+            if i != region.end().line {
                 result = result.append(self.line())
             }
         }
 
         if error_highlight_line {
-            let highlight_text =
-                ERROR_UNDERLINE.repeat((sub_region.end_col - sub_region.start_col) as usize);
+            let highlight_text = ERROR_UNDERLINE
+                .repeat((sub_region.end().column - sub_region.start().column) as usize);
 
             let highlight_line = self
                 .line()
@@ -571,7 +578,7 @@ impl<'a> RocDocAllocator<'a> {
                 .append(if highlight_text.is_empty() {
                     self.nil()
                 } else {
-                    self.text(" ".repeat(sub_region.start_col as usize))
+                    self.text(" ".repeat(sub_region.start().column as usize))
                         .indent(indent)
                         .append(self.text(highlight_text).annotate(Annotation::Error))
                 });
@@ -582,24 +589,25 @@ impl<'a> RocDocAllocator<'a> {
         result
     }
 
-    pub fn region(&'a self, region: roc_region::all::Region) -> DocBuilder<'a, Self, Annotation> {
+    pub fn region(&'a self, region: LineColumnRegion) -> DocBuilder<'a, Self, Annotation> {
         self.region_with_subregion(region, region)
     }
 
     pub fn region_without_error(
         &'a self,
-        region: roc_region::all::Region,
+        region: LineColumnRegion,
     ) -> DocBuilder<'a, Self, Annotation> {
         let mut result = self.nil();
-        for i in region.start_line..=region.end_line {
-            let line = if i == region.start_line {
-                if i == region.end_line {
-                    &self.src_lines[i as usize][region.start_col as usize..region.end_col as usize]
+        for i in region.start().line..=region.end().line {
+            let line = if i == region.start().line {
+                if i == region.end().line {
+                    &self.src_lines[i as usize]
+                        [region.start().column as usize..region.end().column as usize]
                 } else {
-                    &self.src_lines[i as usize][region.start_col as usize..]
+                    &self.src_lines[i as usize][region.start().column as usize..]
                 }
-            } else if i == region.end_line {
-                &self.src_lines[i as usize][0..region.end_col as usize]
+            } else if i == region.end().line {
+                &self.src_lines[i as usize][0..region.end().column as usize]
             } else {
                 self.src_lines[i as usize]
             };
@@ -612,7 +620,7 @@ impl<'a> RocDocAllocator<'a> {
 
             result = result.append(rest_of_line);
 
-            if i != region.end_line {
+            if i != region.end().line {
                 result = result.append(self.line())
             }
         }

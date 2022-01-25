@@ -1,7 +1,4 @@
-on:
-  pull_request:
-    paths-ignore:
-          - '**.md'
+on: [pull_request]
 
 name: Benchmarks
 
@@ -20,13 +17,13 @@ jobs:
       - uses: actions/checkout@v2
         with:
           ref: "trunk"
-          clean: "true" 
+          clean: "true"
 
       - name: Earthly version
         run: earthly --version
 
       - name: on trunk; prepare a self-contained benchmark folder
-        run: ./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=trunk +prep-bench-folder 
+        run: ./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=trunk +prep-bench-folder
 
       - uses: actions/checkout@v2
         with:

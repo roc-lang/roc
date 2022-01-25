@@ -1,4 +1,4 @@
-interface ConsList exposes [ConsList, empty, isEmpty, map, len] imports []
+interface ConsList exposes [ ConsList, empty, isEmpty, map, len ] imports []
 
 ConsList a : [ Cons a (ConsList a), Nil ]
 
@@ -8,11 +8,11 @@ empty = Nil
 len : ConsList a -> Int *
 len = \list ->
     when list is
-        Cons _ rest -> 1 + len rest
+        Cons _ rest ->
+            1 + len rest
 
         Nil ->
             0
-
 
 map : ConsList a, (a -> b) -> ConsList b
 map = \list, f ->
@@ -22,7 +22,6 @@ map = \list, f ->
 
         Nil ->
             Nil
-
 
 isEmpty : ConsList a -> Bool
 isEmpty = \list ->

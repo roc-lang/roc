@@ -2,7 +2,9 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
+use roc_mono::layout::Layout;
 
 use crate::layout::{
     CallConv, ReturnMethod, StackMemoryFormat, WasmLayout, ZigVersion, BUILTINS_ZIG_VERSION,
@@ -81,8 +83,10 @@ impl StoredValue {
 /// including the VM stack, local variables, and linear memory
 #[derive(Debug)]
 pub struct Storage<'a> {
+    pub return_var: Option<LocalId>,
     pub arg_types: Vec<'a, ValueType>,
     pub local_types: Vec<'a, ValueType>,
+    pub symbol_layouts: MutMap<Symbol, Layout<'a>>,
     pub symbol_storage_map: MutMap<Symbol, StoredValue>,
     pub stack_frame_pointer: Option<LocalId>,
     pub stack_frame_size: i32,
@@ -91,8 +95,10 @@ pub struct Storage<'a> {
 impl<'a> Storage<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         Storage {
+            return_var: None,
             arg_types: Vec::with_capacity_in(8, arena),
             local_types: Vec::with_capacity_in(32, arena),
+            symbol_layouts: MutMap::default(),
             symbol_storage_map: MutMap::default(),
             stack_frame_pointer: None,
             stack_frame_size: 0,
@@ -100,16 +106,24 @@ impl<'a> Storage<'a> {
     }
 
     pub fn clear(&mut self) {
+        self.return_var = None;
         self.arg_types.clear();
         self.local_types.clear();
+        self.symbol_layouts.clear();
         self.symbol_storage_map.clear();
         self.stack_frame_pointer = None;
         self.stack_frame_size = 0;
     }
 
-    /// Internal use only. If you think you want it externally, you really want `allocate`
+    /// Internal use only. See `allocate` or `create_anonymous_local`
     fn get_next_local_id(&self) -> LocalId {
         LocalId((self.arg_types.len() + self.local_types.len()) as u32)
+    }
+
+    pub fn create_anonymous_local(&mut self, value_type: ValueType) -> LocalId {
+        let id = self.get_next_local_id();
+        self.local_types.push(value_type);
+        id
     }
 
     /// Allocate storage for a Roc value
@@ -124,26 +138,28 @@ impl<'a> Storage<'a> {
     /// They are allocated a certain offset and size in the stack frame.
     pub fn allocate(
         &mut self,
-        wasm_layout: &WasmLayout,
+        layout: Layout<'a>,
         symbol: Symbol,
         kind: StoredValueKind,
     ) -> StoredValue {
         let next_local_id = self.get_next_local_id();
+        let wasm_layout = WasmLayout::new(&layout);
+        self.symbol_layouts.insert(symbol, layout);
 
         let storage = match wasm_layout {
             WasmLayout::Primitive(value_type, size) => match kind {
                 StoredValueKind::Parameter => {
-                    self.arg_types.push(*value_type);
+                    self.arg_types.push(value_type);
                     StoredValue::Local {
                         local_id: next_local_id,
-                        value_type: *value_type,
-                        size: *size,
+                        value_type,
+                        size,
                     }
                 }
                 _ => StoredValue::VirtualMachineStack {
                     vm_state: VmSymbolState::NotYetPushed,
-                    value_type: *value_type,
-                    size: *size,
+                    value_type,
+                    size,
                 },
             },
 
@@ -154,7 +170,7 @@ impl<'a> Storage<'a> {
             } => {
                 let location = match kind {
                     StoredValueKind::Parameter => {
-                        if *size > 0 {
+                        if size > 0 {
                             self.arg_types.push(PTR_TYPE);
                             StackMemoryLocation::PointerArg(next_local_id)
                         } else {
@@ -165,15 +181,15 @@ impl<'a> Storage<'a> {
                     }
 
                     StoredValueKind::Variable => {
-                        if self.stack_frame_pointer.is_none() && *size > 0 {
+                        if self.stack_frame_pointer.is_none() && size > 0 {
                             self.stack_frame_pointer = Some(next_local_id);
                             self.local_types.push(PTR_TYPE);
                         }
 
                         let offset =
-                            round_up_to_alignment(self.stack_frame_size, *alignment_bytes as i32);
+                            round_up_to_alignment!(self.stack_frame_size, alignment_bytes as i32);
 
-                        self.stack_frame_size = offset + (*size as i32);
+                        self.stack_frame_size = offset + (size as i32);
 
                         StackMemoryLocation::FrameOffset(offset as u32)
                     }
@@ -183,9 +199,9 @@ impl<'a> Storage<'a> {
 
                 StoredValue::StackMemory {
                     location,
-                    size: *size,
-                    alignment_bytes: *alignment_bytes,
-                    format: *format,
+                    size,
+                    alignment_bytes,
+                    format,
                 }
             }
         };
@@ -198,9 +214,10 @@ impl<'a> Storage<'a> {
     /// Get storage info for a given symbol
     pub fn get(&self, sym: &Symbol) -> &StoredValue {
         self.symbol_storage_map.get(sym).unwrap_or_else(|| {
-            panic!(
+            internal_error!(
                 "Symbol {:?} not found in function scope:\n{:?}",
-                sym, self.symbol_storage_map
+                sym,
+                self.symbol_storage_map
             )
         })
     }
@@ -311,9 +328,11 @@ impl<'a> Storage<'a> {
                     code_builder.i64_load(align, offset);
                 } else if *size <= 12 && BUILTINS_ZIG_VERSION == ZigVersion::Zig9 {
                     code_builder.i64_load(align, offset);
+                    code_builder.get_local(local_id);
                     code_builder.i32_load(align, offset + 8);
                 } else {
                     code_builder.i64_load(align, offset);
+                    code_builder.get_local(local_id);
                     code_builder.i64_load(align, offset + 8);
                 }
             }
@@ -335,7 +354,7 @@ impl<'a> Storage<'a> {
         let storage = self.get(&sym).to_owned();
         match storage {
             StoredValue::VirtualMachineStack { .. } | StoredValue::Local { .. } => {
-                unreachable!("these storage types are not returned by writing to a pointer")
+                internal_error!("these storage types are not returned by writing to a pointer")
             }
             StoredValue::StackMemory { location, size, .. } => {
                 if size == 0 {
@@ -400,7 +419,7 @@ impl<'a> Storage<'a> {
                 0 => {}
                 1 => wasm_args.push(*arg),
                 2 => wasm_args.extend_from_slice(&[*arg, *arg]),
-                n => unreachable!("Cannot have {} Wasm arguments for 1 Roc argument", n),
+                n => internal_error!("Cannot have {} Wasm arguments for 1 Roc argument", n),
             }
         }
 
@@ -471,7 +490,11 @@ impl<'a> Storage<'a> {
                     (ValueType::F32, 4) => code_builder.f32_store(Bytes4, to_offset),
                     (ValueType::F64, 8) => code_builder.f64_store(Bytes8, to_offset),
                     _ => {
-                        panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
+                        internal_error!(
+                            "Cannot store {:?} with alignment of {:?}",
+                            value_type,
+                            size
+                        );
                     }
                 };
                 size
@@ -496,6 +519,10 @@ impl<'a> Storage<'a> {
                 alignment_bytes,
                 ..
             } => {
+                if self.stack_frame_pointer.is_none() {
+                    self.stack_frame_pointer = Some(self.get_next_local_id());
+                }
+
                 let (to_ptr, to_offset) = location.local_and_offset(self.stack_frame_pointer);
                 copy_memory(
                     code_builder,
@@ -528,7 +555,11 @@ impl<'a> Storage<'a> {
                     (ValueType::F32, 4) => code_builder.f32_load(Bytes4, from_offset),
                     (ValueType::F64, 8) => code_builder.f64_load(Bytes8, from_offset),
                     _ => {
-                        panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
+                        internal_error!(
+                            "Cannot store {:?} with alignment of {:?}",
+                            value_type,
+                            size
+                        );
                     }
                 };
 
@@ -623,12 +654,13 @@ impl<'a> Storage<'a> {
             }
 
             _ => {
-                panic!("Cannot copy storage from {:?} to {:?}", from, to);
+                internal_error!("Cannot copy storage from {:?} to {:?}", from, to);
             }
         }
     }
 
-    /// Ensure a StoredValue has an associated local
+    /// Ensure a StoredValue has an associated local (which could be the frame pointer!)
+    ///
     /// This is useful when a value needs to be accessed from a more deeply-nested block.
     /// In that case we want to make sure it's not just stored in the VM stack, because
     /// blocks can't access the VM stack from outer blocks, but they can access locals.
@@ -645,15 +677,12 @@ impl<'a> Storage<'a> {
             size,
         } = storage
         {
-            let local_id = self.get_next_local_id();
-            if vm_state != VmSymbolState::NotYetPushed {
-                code_builder.load_symbol(symbol, vm_state, local_id);
-                code_builder.set_local(local_id);
-            }
+            let next_local_id = self.get_next_local_id();
+            code_builder.store_symbol_to_local(symbol, vm_state, next_local_id);
 
             self.local_types.push(value_type);
             let new_storage = StoredValue::Local {
-                local_id,
+                local_id: next_local_id,
                 value_type,
                 size,
             };

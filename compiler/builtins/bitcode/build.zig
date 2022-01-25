@@ -2,6 +2,7 @@ const std = @import("std");
 const mem = std.mem;
 const Builder = std.build.Builder;
 const CrossTarget = std.zig.CrossTarget;
+const Arch = std.Target.Cpu.Arch;
 
 pub fn build(b: *Builder) void {
     // b.setPreferredReleaseMode(builtin.Mode.Debug
@@ -21,7 +22,12 @@ pub fn build(b: *Builder) void {
     test_step.dependOn(&main_tests.step);
 
     // Targets
-    const host_target = b.standardTargetOptions(.{});
+    const host_target = b.standardTargetOptions(.{
+        .default_target = CrossTarget{
+            .cpu_model = .baseline,
+            // TODO allow for native target for maximum speed
+        }
+    });
     const i386_target = makeI386Target();
     const wasm32_target = makeWasm32Target();
 

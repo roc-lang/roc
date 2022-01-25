@@ -32,7 +32,8 @@ pub fn path_to_roc_binary() -> PathBuf {
             .or_else(|| {
                 env::current_exe().ok().map(|mut path| {
                     path.pop();
-                    if path.ends_with("deps") { path.pop();
+                    if path.ends_with("deps") {
+                        path.pop();
                     }
                     path
                 })
@@ -288,6 +289,19 @@ pub fn fixtures_dir(dir_name: &str) -> PathBuf {
 pub fn fixture_file(dir_name: &str, file_name: &str) -> PathBuf {
     let mut path = fixtures_dir(dir_name);
 
+    path.push(file_name);
+
+    path
+}
+
+#[allow(dead_code)]
+pub fn known_bad_file(file_name: &str) -> PathBuf {
+    let mut path = root_dir();
+
+    // Descend into cli/tests/known_bad/{file_name}
+    path.push("cli");
+    path.push("tests");
+    path.push("known_bad");
     path.push(file_name);
 
     path

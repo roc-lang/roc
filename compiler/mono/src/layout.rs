@@ -5,8 +5,9 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
+use roc_problem::can::RuntimeError;
 use roc_types::subs::{
-    Content, FlatType, RecordFields, Subs, UnionTags, Variable, VariableSubsSlice,
+    Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField};
 use std::collections::hash_map::Entry;
@@ -29,6 +30,15 @@ const GENERATE_NULLABLE: bool = true;
 pub enum LayoutProblem {
     UnresolvedTypeVar(Variable),
     Erroneous,
+}
+
+impl From<LayoutProblem> for RuntimeError {
+    fn from(lp: LayoutProblem) -> Self {
+        match lp {
+            LayoutProblem::UnresolvedTypeVar(_) => RuntimeError::UnresolvedTypeVar,
+            LayoutProblem::Erroneous => RuntimeError::ErroneousType,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -207,20 +217,24 @@ pub enum UnionLayout<'a> {
     /// A non-recursive tag union
     /// e.g. `Result a e : [ Ok a, Err e ]`
     NonRecursive(&'a [&'a [Layout<'a>]]),
-    /// A recursive tag union
+    /// A recursive tag union (general case)
     /// e.g. `Expr : [ Sym Str, Add Expr Expr ]`
     Recursive(&'a [&'a [Layout<'a>]]),
     /// A recursive tag union with just one constructor
+    /// Optimization: No need to store a tag ID (the payload is "unwrapped")
     /// e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
     NonNullableUnwrapped(&'a [Layout<'a>]),
-    /// A recursive tag union where the non-nullable variant(s) store the tag id
+    /// A recursive tag union that has an empty variant
+    /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
+    /// It has more than one other variant, so they need tag IDs (payloads are "wrapped")
     /// e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
     NullableWrapped {
         nullable_id: u16,
         other_tags: &'a [&'a [Layout<'a>]],
     },
-    /// A recursive tag union where the non-nullable variant does NOT store the tag id
+    /// A recursive tag union with only two variants, where one is empty.
+    /// Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
     /// e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
     NullableUnwrapped {
         nullable_id: bool,
@@ -324,14 +338,9 @@ impl<'a> UnionLayout<'a> {
 
     pub fn tag_id_builtin(&self) -> Builtin<'a> {
         match self {
-            UnionLayout::NonRecursive(_tags) => {
-                // let union_size = tags.len();
-                // Self::tag_id_builtin_help(union_size)
-
-                // The quicksort-benchmarks version of Quicksort.roc segfaults when
-                // this number is not I64. There must be some dependence on that fact
-                // somewhere in the code, I have not found where that is yet...
-                Builtin::Int(IntWidth::U64)
+            UnionLayout::NonRecursive(tags) => {
+                let union_size = tags.len();
+                Self::tag_id_builtin_help(union_size)
             }
             UnionLayout::Recursive(tags) => {
                 let union_size = tags.len();
@@ -352,7 +361,7 @@ impl<'a> UnionLayout<'a> {
     }
 
     fn stores_tag_id_in_pointer_bits(tags: &[&[Layout<'a>]], ptr_bytes: u32) -> bool {
-        tags.len() <= ptr_bytes as usize
+        tags.len() < ptr_bytes as usize
     }
 
     // i.e. it is not implicit and not stored in the pointer bits
@@ -422,9 +431,113 @@ impl<'a> UnionLayout<'a> {
         // because we store a refcount, the alignment must be at least the size of a pointer
         allocation.max(pointer_size)
     }
+
+    /// Size of the data in memory, whether it's stack or heap (for non-null tag ids)
+    pub fn data_size_and_alignment(&self, pointer_size: u32) -> (u32, u32) {
+        let id_data_layout = if self.stores_tag_id_as_data(pointer_size) {
+            Some(self.tag_id_layout())
+        } else {
+            None
+        };
+
+        self.data_size_and_alignment_help_match(id_data_layout, pointer_size)
+    }
+
+    /// Size of the data before the tag_id, if it exists.
+    /// Returns None if the tag_id is not stored as data in the layout.
+    pub fn data_size_without_tag_id(&self, pointer_size: u32) -> Option<u32> {
+        if !self.stores_tag_id_as_data(pointer_size) {
+            return None;
+        };
+
+        Some(
+            self.data_size_and_alignment_help_match(None, pointer_size)
+                .0,
+        )
+    }
+
+    fn data_size_and_alignment_help_match(
+        &self,
+        id_data_layout: Option<Layout>,
+        pointer_size: u32,
+    ) -> (u32, u32) {
+        match self {
+            Self::NonRecursive(tags) => {
+                Self::data_size_and_alignment_help(tags, id_data_layout, pointer_size)
+            }
+            Self::Recursive(tags) => {
+                Self::data_size_and_alignment_help(tags, id_data_layout, pointer_size)
+            }
+            Self::NonNullableUnwrapped(fields) => {
+                Self::data_size_and_alignment_help(&[fields], id_data_layout, pointer_size)
+            }
+            Self::NullableWrapped { other_tags, .. } => {
+                Self::data_size_and_alignment_help(other_tags, id_data_layout, pointer_size)
+            }
+            Self::NullableUnwrapped { other_fields, .. } => {
+                Self::data_size_and_alignment_help(&[other_fields], id_data_layout, pointer_size)
+            }
+        }
+    }
+
+    fn data_size_and_alignment_help(
+        variant_field_layouts: &[&[Layout]],
+        id_data_layout: Option<Layout>,
+        pointer_size: u32,
+    ) -> (u32, u32) {
+        let mut size = 0;
+        let mut alignment_bytes = 0;
+
+        for field_layouts in variant_field_layouts {
+            let mut data = Layout::Struct(field_layouts);
+
+            let fields_and_id;
+            if let Some(id_layout) = id_data_layout {
+                fields_and_id = [data, id_layout];
+                data = Layout::Struct(&fields_and_id);
+            }
+
+            let (variant_size, variant_alignment) = data.stack_size_and_alignment(pointer_size);
+            alignment_bytes = alignment_bytes.max(variant_alignment);
+            size = size.max(variant_size);
+        }
+
+        (size, alignment_bytes)
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Custom type so we can get the numeric representation of a symbol in tests (so `#UserApp.3`
+/// instead of `UserApp.foo`). The pretty name is not reliable when running many tests
+/// concurrently. The number does not change and will give a reliable output.
+struct SetElement<'a> {
+    symbol: Symbol,
+    layout: &'a [Layout<'a>],
+}
+
+impl std::fmt::Debug for SetElement<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let symbol_string = crate::ir::symbol_to_doc_string(self.symbol);
+
+        write!(f, "( {}, {:?})", symbol_string, self.layout)
+    }
+}
+
+impl std::fmt::Debug for LambdaSet<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let entries = self.set.iter().map(|x| SetElement {
+            symbol: x.0,
+            layout: x.1,
+        });
+        let set = f.debug_list().entries(entries).finish();
+
+        f.debug_struct("LambdaSet")
+            .field("set", &set)
+            .field("representation", &self.representation)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
     pub set: &'a [(Symbol, &'a [Layout<'a>])],
@@ -454,6 +567,11 @@ pub enum ClosureRepresentation<'a> {
 impl<'a> LambdaSet<'a> {
     pub fn runtime_representation(&self) -> Layout<'a> {
         *self.representation
+    }
+
+    /// Does the lambda set contain the given symbol?
+    pub fn contains(&self, symbol: Symbol) -> bool {
+        self.set.iter().any(|(s, _)| *s == symbol)
     }
 
     pub fn is_represented(&self) -> Option<Layout<'a>> {
@@ -722,7 +840,7 @@ impl<'a, 'b> Env<'a, 'b> {
     }
 }
 
-const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
+pub const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
     if alignment != 0 && width % alignment > 0 {
         width + alignment - (width % alignment)
     } else {
@@ -842,6 +960,14 @@ impl<'a> Layout<'a> {
         round_up_to_alignment(width, alignment)
     }
 
+    pub fn stack_size_and_alignment(&self, pointer_size: u32) -> (u32, u32) {
+        let width = self.stack_size_without_alignment(pointer_size);
+        let alignment = self.alignment_bytes(pointer_size);
+
+        let size = round_up_to_alignment(width, alignment);
+        (size, alignment)
+    }
+
     fn stack_size_without_alignment(&self, pointer_size: u32) -> u32 {
         use Layout::*;
 
@@ -860,23 +986,7 @@ impl<'a> Layout<'a> {
                 use UnionLayout::*;
 
                 match variant {
-                    NonRecursive(fields) => {
-                        let tag_id_builtin = variant.tag_id_builtin();
-
-                        fields
-                            .iter()
-                            .map(|tag_layout| {
-                                tag_layout
-                                    .iter()
-                                    .map(|field| field.stack_size(pointer_size))
-                                    .sum::<u32>()
-                            })
-                            .max()
-                            .map(|w| round_up_to_alignment(w, tag_id_builtin.alignment_bytes(pointer_size)))
-                            .unwrap_or_default()
-                            // the size of the tag_id
-                            + tag_id_builtin.stack_size(pointer_size)
-                    }
+                    NonRecursive(_) => variant.data_size_and_alignment(pointer_size).0,
 
                     Recursive(_)
                     | NullableWrapped { .. }
@@ -956,14 +1066,9 @@ impl<'a> Layout<'a> {
         use Layout::*;
 
         match self {
-            Union(variant) => {
-                use UnionLayout::*;
+            Union(UnionLayout::NonRecursive(_)) => false,
 
-                matches!(
-                    variant,
-                    Recursive(_) | NullableWrapped { .. } | NullableUnwrapped { .. }
-                )
-            }
+            Union(_) => true,
 
             RecursivePointer => true,
 
@@ -1436,23 +1541,17 @@ fn layout_from_flat_type<'a>(
         Record(fields, ext_var) => {
             // extract any values from the ext_var
 
-            let pairs_it = fields
-                .unsorted_iterator(subs, ext_var)
-                .filter_map(|(label, field)| {
-                    // drop optional fields
-                    let var = match field {
-                        RecordField::Optional(_) => return None,
-                        RecordField::Required(var) => var,
-                        RecordField::Demanded(var) => var,
-                    };
+            let mut pairs = Vec::with_capacity_in(fields.len(), arena);
+            for (label, field) in fields.unsorted_iterator(subs, ext_var) {
+                // drop optional fields
+                let var = match field {
+                    RecordField::Optional(_) => continue,
+                    RecordField::Required(var) => var,
+                    RecordField::Demanded(var) => var,
+                };
 
-                    Some((
-                        label,
-                        Layout::from_var(env, var).expect("invalid layout from var"),
-                    ))
-                });
-
-            let mut pairs = Vec::from_iter_in(pairs_it, arena);
+                pairs.push((label, Layout::from_var(env, var)?));
+            }
 
             pairs.sort_by(|(label1, layout1), (label2, layout2)| {
                 let size1 = layout1.alignment_bytes(ptr_bytes);
@@ -1472,18 +1571,26 @@ fn layout_from_flat_type<'a>(
             }
         }
         TagUnion(tags, ext_var) => {
+            let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
+
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            Ok(layout_from_tag_union(arena, tags, subs, env.ptr_bytes))
+            Ok(layout_from_tag_union(arena, &tags, subs, env.ptr_bytes))
         }
         FunctionOrTagUnion(tag_name, _, ext_var) => {
-            debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
+            debug_assert!(
+                ext_var_is_empty_tag_union(subs, ext_var),
+                "If ext_var wasn't empty, this wouldn't be a FunctionOrTagUnion!"
+            );
 
-            let tags = UnionTags::from_tag_name_index(tag_name);
+            let union_tags = UnionTags::from_tag_name_index(tag_name);
+            let (tags, _) = union_tags.unsorted_tags_and_ext(subs, ext_var);
 
-            Ok(layout_from_tag_union(arena, tags, subs, env.ptr_bytes))
+            Ok(layout_from_tag_union(arena, &tags, subs, env.ptr_bytes))
         }
         RecursiveTagUnion(rec_var, tags, ext_var) => {
+            let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
+
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
             // some observations
@@ -1495,9 +1602,8 @@ fn layout_from_flat_type<'a>(
             // That means none of the optimizations for enums or single tag tag unions apply
 
             let rec_var = subs.get_root_key_without_compacting(rec_var);
-            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
-
-            let tags_vec = cheap_sort_tags(arena, tags, subs);
+            let tags_vec = tags.tags;
+            let mut tag_layouts = Vec::with_capacity_in(tags_vec.len(), arena);
 
             let mut nullable = None;
 
@@ -1511,7 +1617,7 @@ fn layout_from_flat_type<'a>(
             }
 
             env.insert_seen(rec_var);
-            for (index, (_name, variables)) in tags_vec.into_iter().enumerate() {
+            for (index, &(_name, variables)) in tags_vec.iter().enumerate() {
                 if matches!(nullable, Some(i) if i == index as TagIdIntType) {
                     // don't add the nullable case
                     continue;
@@ -1519,8 +1625,7 @@ fn layout_from_flat_type<'a>(
 
                 let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
 
-                for var_index in variables {
-                    let var = subs[var_index];
+                for &var in variables {
                     // TODO does this cause problems with mutually recursive unions?
                     if rec_var == subs.get_root_key_without_compacting(var) {
                         tag_layout.push(Layout::RecursivePointer);
@@ -1571,12 +1676,14 @@ fn layout_from_flat_type<'a>(
     }
 }
 
+pub type SortedField<'a> = (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>);
+
 pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
     ptr_bytes: u32,
-) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
+) -> Result<Vec<'a, SortedField<'a>>, LayoutProblem> {
     let mut env = Env {
         arena,
         subs,
@@ -1584,7 +1691,10 @@ pub fn sort_record_fields<'a>(
         ptr_bytes,
     };
 
-    let (it, _) = gather_fields_unsorted_iter(subs, RecordFields::empty(), var);
+    let (it, _) = match gather_fields_unsorted_iter(subs, RecordFields::empty(), var) {
+        Ok(it) => it,
+        Err(_) => return Err(LayoutProblem::Erroneous),
+    };
 
     let it = it
         .into_iter()
@@ -1596,26 +1706,23 @@ pub fn sort_record_fields<'a>(
 fn sort_record_fields_help<'a>(
     env: &mut Env<'a, '_>,
     fields_map: impl Iterator<Item = (Lowercase, RecordField<Variable>)>,
-) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
+) -> Result<Vec<'a, SortedField<'a>>, LayoutProblem> {
     let ptr_bytes = env.ptr_bytes;
 
     // Sort the fields by label
     let mut sorted_fields = Vec::with_capacity_in(fields_map.size_hint().0, env.arena);
 
     for (label, field) in fields_map {
-        let var = match field {
-            RecordField::Demanded(v) => v,
-            RecordField::Required(v) => v,
+        match field {
+            RecordField::Demanded(v) | RecordField::Required(v) => {
+                let layout = Layout::from_var(env, v)?;
+                sorted_fields.push((label, v, Ok(layout)));
+            }
             RecordField::Optional(v) => {
-                let layout = Layout::from_var(env, v).expect("invalid layout from var");
+                let layout = Layout::from_var(env, v)?;
                 sorted_fields.push((label, v, Err(layout)));
-                continue;
             }
         };
-
-        let layout = Layout::from_var(env, var).expect("invalid layout from var");
-
-        sorted_fields.push((label, var, Ok(layout)));
     }
 
     sorted_fields.sort_by(
@@ -1631,7 +1738,7 @@ fn sort_record_fields_help<'a>(
         },
     );
 
-    sorted_fields
+    Ok(sorted_fields)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1801,13 +1908,14 @@ fn is_recursive_tag_union(layout: &Layout) -> bool {
 
 fn union_sorted_tags_help_new<'a>(
     arena: &'a Bump,
-    mut tags_vec: Vec<(&'_ TagName, VariableSubsSlice)>,
+    tags_list: &[(&'_ TagName, &[Variable])],
     opt_rec_var: Option<Variable>,
     subs: &Subs,
     ptr_bytes: u32,
 ) -> UnionVariant<'a> {
     // sort up front; make sure the ordering stays intact!
-    tags_vec.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    let mut tags_list = Vec::from_iter_in(tags_list.iter(), arena);
+    tags_list.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut env = Env {
         arena,
@@ -1816,27 +1924,26 @@ fn union_sorted_tags_help_new<'a>(
         ptr_bytes,
     };
 
-    match tags_vec.len() {
+    match tags_list.len() {
         0 => {
             // trying to instantiate a type with no values
             UnionVariant::Never
         }
         1 => {
-            let (tag_name, arguments) = tags_vec.remove(0);
+            let &(tag_name, arguments) = tags_list.remove(0);
             let tag_name = tag_name.clone();
 
             // just one tag in the union (but with arguments) can be a struct
-            let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut layouts = Vec::with_capacity_in(tags_list.len(), arena);
 
             // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
                 TagName::Private(Symbol::NUM_AT_NUM) => {
-                    let var = subs[arguments.into_iter().next().unwrap()];
+                    let var = arguments[0];
                     layouts.push(unwrap_num_tag(subs, var, ptr_bytes).expect("invalid num layout"));
                 }
                 _ => {
-                    for var_index in arguments {
-                        let var = subs[var_index];
+                    for &var in arguments {
                         match Layout::from_var(&mut env, var) {
                             Ok(layout) => {
                                 layouts.push(layout);
@@ -1879,7 +1986,7 @@ fn union_sorted_tags_help_new<'a>(
         }
         num_tags => {
             // default path
-            let mut answer = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut answer = Vec::with_capacity_in(tags_list.len(), arena);
             let mut has_any_arguments = false;
 
             let mut nullable: Option<(TagIdIntType, TagName)> = None;
@@ -1887,7 +1994,7 @@ fn union_sorted_tags_help_new<'a>(
             // only recursive tag unions can be nullable
             let is_recursive = opt_rec_var.is_some();
             if is_recursive && GENERATE_NULLABLE {
-                for (index, (name, variables)) in tags_vec.iter().enumerate() {
+                for (index, (name, variables)) in tags_list.iter().enumerate() {
                     if variables.is_empty() {
                         nullable = Some((index as TagIdIntType, (*name).clone()));
                         break;
@@ -1895,7 +2002,7 @@ fn union_sorted_tags_help_new<'a>(
                 }
             }
 
-            for (index, (tag_name, arguments)) in tags_vec.into_iter().enumerate() {
+            for (index, &(tag_name, arguments)) in tags_list.into_iter().enumerate() {
                 // reserve space for the tag discriminant
                 if matches!(nullable, Some((i, _)) if i  as usize == index) {
                     debug_assert!(arguments.is_empty());
@@ -1904,8 +2011,7 @@ fn union_sorted_tags_help_new<'a>(
 
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
-                for var_index in arguments {
-                    let var = subs[var_index];
+                for &var in arguments {
                     match Layout::from_var(&mut env, var) {
                         Ok(layout) => {
                             has_any_arguments = true;
@@ -2216,38 +2322,15 @@ pub fn union_sorted_tags_help<'a>(
     }
 }
 
-fn cheap_sort_tags<'a, 'b>(
-    arena: &'a Bump,
-    tags: UnionTags,
-    subs: &'b Subs,
-) -> Vec<'a, (&'b TagName, VariableSubsSlice)> {
-    let mut tags_vec = Vec::with_capacity_in(tags.len(), arena);
-
-    for (tag_index, index) in tags.iter_all() {
-        let tag = &subs[tag_index];
-        let slice = subs[index];
-
-        tags_vec.push((tag, slice));
-    }
-
-    tags_vec
-}
-
 fn layout_from_newtype<'a>(
     arena: &'a Bump,
-    tags: UnionTags,
+    tags: &UnsortedUnionTags,
     subs: &Subs,
     ptr_bytes: u32,
 ) -> Layout<'a> {
     debug_assert!(tags.is_newtype_wrapper(subs));
 
-    let slice_index = tags.variables().into_iter().next().unwrap();
-    let slice = subs[slice_index];
-    let var_index = slice.into_iter().next().unwrap();
-    let var = subs[var_index];
-
-    let tag_name_index = tags.tag_names().into_iter().next().unwrap();
-    let tag_name = &subs[tag_name_index];
+    let (tag_name, var) = tags.get_newtype(subs);
 
     if tag_name == &TagName::Private(Symbol::NUM_AT_NUM) {
         unwrap_num_tag(subs, var, ptr_bytes).expect("invalid Num argument")
@@ -2278,7 +2361,7 @@ fn layout_from_newtype<'a>(
 
 fn layout_from_tag_union<'a>(
     arena: &'a Bump,
-    tags: UnionTags,
+    tags: &UnsortedUnionTags,
     subs: &Subs,
     ptr_bytes: u32,
 ) -> Layout<'a> {
@@ -2288,14 +2371,13 @@ fn layout_from_tag_union<'a>(
         return layout_from_newtype(arena, tags, subs, ptr_bytes);
     }
 
-    let tags_vec = cheap_sort_tags(arena, tags, subs);
+    let tags_vec = &tags.tags;
 
     match tags_vec.get(0) {
         Some((tag_name, arguments)) if *tag_name == &TagName::Private(Symbol::NUM_AT_NUM) => {
             debug_assert_eq!(arguments.len(), 1);
 
-            let var_index = arguments.into_iter().next().unwrap();
-            let var = subs[var_index];
+            let &var = arguments.iter().next().unwrap();
 
             unwrap_num_tag(subs, var, ptr_bytes).expect("invalid Num argument")
         }
@@ -2369,7 +2451,10 @@ fn layout_from_tag_union<'a>(
 #[cfg(debug_assertions)]
 pub fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
-    let fields = roc_types::types::gather_fields(subs, RecordFields::empty(), ext_var);
+    let fields = match roc_types::types::gather_fields(subs, RecordFields::empty(), ext_var) {
+        Ok(fields) => fields,
+        Err(_) => return false,
+    };
 
     fields.fields.is_empty()
 }
@@ -2727,9 +2812,8 @@ mod test {
 
         let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
 
-        // at the moment, the tag id uses an I64, so
         let ptr_width = 8;
-        assert_eq!(layout.stack_size(ptr_width), 8);
-        assert_eq!(layout.alignment_bytes(ptr_width), 8);
+        assert_eq!(layout.stack_size(ptr_width), 1);
+        assert_eq!(layout.alignment_bytes(ptr_width), 1);
     }
 }
