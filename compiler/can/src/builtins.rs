@@ -1448,7 +1448,7 @@ fn str_drop_prefix(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     vec![RunLowLevel {
                         op: LowLevel::StrDropPrefixUnsafe,
                         args: vec![(str_var, Var(str_arg)), (str_var, Var(prefix_arg))],
-                        ret_var: ret_var,
+                        ret_var: str_var,
                     }],
                     var_store,
                 ),
