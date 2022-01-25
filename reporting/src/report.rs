@@ -1,3 +1,4 @@
+use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -275,7 +276,9 @@ impl<'a> RocDocAllocator<'a> {
         match tn {
             TagName::Global(uppercase) => self.global_tag_name(uppercase),
             TagName::Private(symbol) => self.private_tag_name(symbol),
-            TagName::Closure(_symbol) => unreachable!("closure tags are internal only"),
+            TagName::Closure(_symbol) => {
+                internal_error!("unreachable: closure tags are internal only")
+            }
         }
     }
 

@@ -414,10 +414,10 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         GreaterThanOrEq => (ModuleName::NUM, "isGte"),
         And => (ModuleName::BOOL, "and"),
         Or => (ModuleName::BOOL, "or"),
-        Pizza => unreachable!("Cannot desugar the |> operator"),
-        Assignment => unreachable!("Cannot desugar the = operator"),
-        HasType => unreachable!("Cannot desugar the : operator"),
-        Backpassing => unreachable!("Cannot desugar the <- operator"),
+        Pizza => internal_error!("unreachable: Cannot desugar the |> operator"),
+        Assignment => internal_error!("unreachable: Cannot desugar the = operator"),
+        HasType => internal_error!("unreachable: Cannot desugar the : operator"),
+        Backpassing => internal_error!("unreachable: Cannot desugar the <- operator"),
     }
 }
 

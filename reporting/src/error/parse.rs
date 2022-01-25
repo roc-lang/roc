@@ -1,3 +1,4 @@
+use roc_error_macros::internal_error;
 use roc_parse::parser::{FileError, SyntaxError};
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
@@ -309,7 +310,7 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Ident(_pos) => unreachable!("another branch would be taken"),
+        EExpr::Ident(_pos) => internal_error!("unreachable: another branch would be taken"),
 
         EExpr::QualifiedTag(pos) => {
             let surroundings = Region::new(start, *pos);
@@ -673,7 +674,9 @@ fn to_lambda_report<'a>(
             }
         },
 
-        ELambda::Start(_pos) => unreachable!("another branch would have been taken"),
+        ELambda::Start(_pos) => {
+            internal_error!("unreachable: another branch would have been taken")
+        }
 
         ELambda::Body(expr, pos) => {
             to_expr_report(alloc, lines, filename, Context::InDef(start), expr, pos)
@@ -764,7 +767,7 @@ fn to_str_report<'a>(
     use roc_parse::parser::EString;
 
     match *parse_problem {
-        EString::Open(_pos) => unreachable!("another branch would be taken"),
+        EString::Open(_pos) => internal_error!("unreachable: another branch would be taken"),
         EString::Format(expr, pos) => to_expr_report(
             alloc,
             lines,
@@ -1136,8 +1139,8 @@ fn to_if_report<'a>(
             pos,
         ),
 
-        EIf::If(_pos) => unreachable!("another branch would be taken"),
-        EIf::IndentIf(_pos) => unreachable!("another branch would be taken"),
+        EIf::If(_pos) => internal_error!("unreachable: another branch would be taken"),
+        EIf::IndentIf(_pos) => internal_error!("unreachable: another branch would be taken"),
 
         EIf::Then(pos) | EIf::IndentThenBranch(pos) | EIf::IndentThenToken(pos) => {
             to_unfinished_if_report(
@@ -1311,8 +1314,8 @@ fn to_when_report<'a>(
             ]),
         ),
 
-        EWhen::IfToken(_pos) => unreachable!("the if-token is optional"),
-        EWhen::When(_pos) => unreachable!("another branch would be taken"),
+        EWhen::IfToken(_pos) => internal_error!("unreachable: the if-token is optional"),
+        EWhen::When(_pos) => internal_error!("unreachable: another branch would be taken"),
 
         EWhen::Is(pos) | EWhen::IndentIs(pos) => to_unfinished_when_report(
             alloc,
@@ -1678,7 +1681,7 @@ fn to_precord_report<'a>(
                 }
             }
             Next::Other(Some(',')) => todo!(),
-            Next::Other(Some('}')) => unreachable!("or is it?"),
+            Next::Other(Some('}')) => internal_error!("unreachable: or is it?"),
             _ => {
                 let surroundings = Region::new(start, pos);
                 let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
@@ -1705,10 +1708,16 @@ fn to_precord_report<'a>(
         },
 
         PRecord::Colon(_) => {
-            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+            internal_error!(
+                "{}", // Suppress warning about curlies (non_fmt_panics)
+                "unreachable because `{ foo }` is a valid field; the colon is not required"
+            )
         }
         PRecord::Optional(_) => {
-            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+            internal_error!(
+                "{}", // Suppress warning about curlies (non_fmt_panics)
+                "unreachable because `{ foo }` is a valid field; the question mark is not required"
+            )
         }
 
         PRecord::Pattern(pattern, pos) => to_pattern_report(alloc, lines, filename, pattern, pos),
@@ -1797,11 +1806,17 @@ fn to_precord_report<'a>(
         }
 
         PRecord::IndentColon(_) => {
-            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+            internal_error!(
+                "{}", // Suppress warning about curlies (non_fmt_panics)
+                "unreachable because `{ foo }` is a valid field; the colon is not required"
+            )
         }
 
         PRecord::IndentOptional(_) => {
-            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+            internal_error!(
+                "{}", // Suppress warning about curlies (non_fmt_panics)
+                "unreachable because `{ foo }` is a valid field; the question mark is not required"
+            )
         }
 
         PRecord::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
@@ -2213,7 +2228,7 @@ fn to_trecord_report<'a>(
                 }
             }
             Next::Other(Some(',')) => todo!(),
-            Next::Other(Some('}')) => unreachable!("or is it?"),
+            Next::Other(Some('}')) => internal_error!("unreachable: or is it?"),
             _ => {
                 let surroundings = Region::new(start, pos);
                 let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
@@ -2240,10 +2255,16 @@ fn to_trecord_report<'a>(
         },
 
         ETypeRecord::Colon(_) => {
-            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+            internal_error!(
+                "{}", // Suppress warning about curlies (non_fmt_panics)
+                "unreachable because `{ foo }` is a valid field; the colon is not required"
+            )
         }
         ETypeRecord::Optional(_) => {
-            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+            internal_error!(
+                "{}", // Suppress warning about curlies (non_fmt_panics)
+                "unreachable because `{ foo }` is a valid field; the question mark is not required"
+            )
         }
 
         ETypeRecord::Type(tipe, pos) => to_type_report(alloc, lines, filename, tipe, pos),
@@ -2323,11 +2344,17 @@ fn to_trecord_report<'a>(
         }
 
         ETypeRecord::IndentColon(_) => {
-            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+            internal_error!(
+                "{}", // Suppress warning about curlies (non_fmt_panics)
+                "unreachable because `{ foo }` is a valid field; the colon is not required"
+            )
         }
 
         ETypeRecord::IndentOptional(_) => {
-            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+            internal_error!(
+                "{}", // Suppress warning about curlies (non_fmt_panics)
+                "unreachable because `{ foo }` is a valid field; the question mark is not required"
+            )
         }
 
         ETypeRecord::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),

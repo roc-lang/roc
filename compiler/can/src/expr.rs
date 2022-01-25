@@ -460,7 +460,7 @@ pub fn canonicalize_expr<'a>(
             )
         }
         ast::Expr::Backpassing(_, _, _) => {
-            unreachable!("Backpassing should have been desugared by now")
+            internal_error!("unreachable: Backpassing should have been desugared by now")
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             // The globally unique symbol that will refer to this closure once it gets converted
@@ -1536,7 +1536,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                         loc_answer.value
                     }
                     Some(_) => {
-                        unreachable!("Tried to inline a non-function");
+                        internal_error!("unreachable: Tried to inline a non-function");
                     }
                     None => {
                         unreachable!(

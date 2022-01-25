@@ -1,4 +1,5 @@
 use roc_collections::all::MutSet;
+use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
@@ -160,7 +161,7 @@ pub fn can_problem<'b>(
                 TopLevelDef => "a top-level definition:",
                 DefExpr => "a value definition:",
                 FunctionArg => "function arguments:",
-                WhenBranch => unreachable!("all patterns are allowed in a When"),
+                WhenBranch => internal_error!("unreachable: all patterns are allowed in a When"),
             };
 
             let suggestion = vec![
@@ -506,7 +507,7 @@ fn to_bad_ident_expr_report<'b>(
     use roc_parse::ident::BadIdent::*;
 
     match bad_ident {
-        Start(_) | Space(_, _) => unreachable!("these are handled in the parser"),
+        Start(_) | Space(_, _) => internal_error!("unreachable: these are handled in the parser"),
         WeirdDotAccess(pos) | StrayDot(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -654,7 +655,7 @@ fn to_bad_ident_pattern_report<'b>(
     use roc_parse::ident::BadIdent::*;
 
     match bad_ident {
-        Start(_) | Space(_, _) => unreachable!("these are handled in the parser"),
+        Start(_) | Space(_, _) => internal_error!("unreachable: these are handled in the parser"),
         WeirdDotAccess(pos) | StrayDot(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -831,12 +832,12 @@ fn pretty_runtime_error<'b>(
         RuntimeError::VoidValue => {
             // is used to communicate to the compiler that
             // a branch is unreachable; this should never reach a user
-            unreachable!("");
+            internal_error!("unreachable: ");
         }
 
         RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => {
             // only generated during layout generation
-            unreachable!("");
+            internal_error!("unreachable: ");
         }
 
         RuntimeError::Shadowing {
@@ -958,7 +959,7 @@ fn pretty_runtime_error<'b>(
         }
         RuntimeError::InvalidPrecedence(_, _) => {
             // do nothing, reported with PrecedenceProblem
-            unreachable!();
+            internal_error!("unreachable");
         }
         RuntimeError::MalformedIdentifier(_box_str, bad_ident, surroundings) => {
             doc = to_bad_ident_expr_report(alloc, lines, bad_ident, surroundings);
@@ -1168,7 +1169,7 @@ fn pretty_runtime_error<'b>(
             todo!("no implementation, unreachable")
         }
         RuntimeError::NonExhaustivePattern => {
-            unreachable!("not currently reported (but can blow up at runtime)")
+            internal_error!("unreachable: not currently reported (but can blow up at runtime)")
         }
         RuntimeError::ExposedButNotDefined(symbol) => {
             doc = alloc.stack(vec![alloc
@@ -1194,7 +1195,7 @@ fn to_circular_def_doc<'b>(
     // TODO "are you trying to mutate a variable?
     // TODO tip?
     match entries {
-        [] => unreachable!(),
+        [] => internal_error!("unreachable"),
         [first] => alloc
             .reflow("The ")
             .append(alloc.symbol_unqualified(first.symbol))

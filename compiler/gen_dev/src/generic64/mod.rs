@@ -491,7 +491,7 @@ impl<
                         offset: offset + setup_offset as u64,
                         name,
                     },
-                    Relocation::JmpToReturn { .. } => unreachable!(),
+                    Relocation::JmpToReturn { .. } => internal_error!("unreachable"),
                 }),
         );
         (out, out_relocs)

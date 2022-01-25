@@ -557,7 +557,7 @@ mod test_load {
             \u{1b}[4mNote\u{1b}[0m: I may be confused by indentation"
                 )
             ),
-            Ok(_) => unreachable!("we expect failure here"),
+            Ok(_) => internal_error!("unreachable: we expect failure here"),
         }
     }
 

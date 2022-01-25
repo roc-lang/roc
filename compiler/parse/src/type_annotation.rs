@@ -9,6 +9,7 @@ use crate::parser::{
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_error_macros::internal_error;
 use roc_region::all::{Loc, Position, Region};
 
 pub fn located_help<'a>(
@@ -371,7 +372,7 @@ fn applied_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, ETyp
                     }
                 }
                 TypeAnnotation::Malformed(_) => ctor,
-                _ => unreachable!(),
+                _ => internal_error!("unreachable"),
             }
         }
     )

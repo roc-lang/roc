@@ -948,7 +948,7 @@ fn to_expr_report<'b>(
                 );
             }
             Reason::FloatLiteral | Reason::IntLiteral | Reason::NumLiteral => {
-                unreachable!("I don't think these can be reached")
+                internal_error!("unreachable: I don't think these can be reached")
             }
 
             Reason::StrInterpolation => {
@@ -1172,7 +1172,7 @@ fn format_category<'b>(
         TagApply {
             tag_name: TagName::Closure(_name),
             args_count: _,
-        } => unreachable!("closure tags are for internal use only"),
+        } => internal_error!("unreachable: closure tags are for internal use only"),
 
         Record => (
             alloc.concat(vec![this_is, alloc.text(" a record")]),
@@ -1289,55 +1289,23 @@ fn to_pattern_report<'b>(
             }
         }
 
-        PExpected::ForReason(reason, expected_type, region) => match reason {
-            PReason::OptionalField => unreachable!("this will never be reached I think"),
-            PReason::TypedArg { opt_name, index } => {
-                let name = match opt_name {
-                    Some(n) => alloc.symbol_unqualified(n),
-                    None => alloc.text(" this definition "),
-                };
-                let doc = alloc.stack(vec![
-                    alloc
-                        .text("The ")
-                        .append(alloc.text(index.ordinal()))
-                        .append(alloc.text(" argument to "))
-                        .append(name.clone())
-                        .append(alloc.text(" is weird:")),
-                    alloc.region(lines.convert_region(region)),
-                    pattern_type_comparison(
-                        alloc,
-                        found,
-                        expected_type,
-                        add_pattern_category(
-                            alloc,
-                            alloc.text("The argument is a pattern that matches"),
-                            &category,
-                        ),
-                        alloc.concat(vec![
-                            alloc.text("But the annotation on "),
-                            name,
-                            alloc.text(" says the "),
-                            alloc.text(index.ordinal()),
-                            alloc.text(" argument should be:"),
-                        ]),
-                        vec![],
-                    ),
-                ]);
-
-                Report {
-                    filename,
-                    title: "TYPE MISMATCH".to_string(),
-                    doc,
-                    severity: Severity::RuntimeError,
+        PExpected::ForReason(reason, expected_type, region) => {
+            match reason {
+                PReason::OptionalField => {
+                    internal_error!("unreachable: this will never be reached I think")
                 }
-            }
-            PReason::WhenMatch { index } => {
-                if index == Index::FIRST {
+                PReason::TypedArg { opt_name, index } => {
+                    let name = match opt_name {
+                        Some(n) => alloc.symbol_unqualified(n),
+                        None => alloc.text(" this definition "),
+                    };
                     let doc = alloc.stack(vec![
                         alloc
-                            .text("The 1st pattern in this ")
-                            .append(alloc.keyword("when"))
-                            .append(alloc.text(" is causing a mismatch:")),
+                            .text("The ")
+                            .append(alloc.text(index.ordinal()))
+                            .append(alloc.text(" argument to "))
+                            .append(name.clone())
+                            .append(alloc.text(" is weird:")),
                         alloc.region(lines.convert_region(region)),
                         pattern_type_comparison(
                             alloc,
@@ -1345,15 +1313,15 @@ fn to_pattern_report<'b>(
                             expected_type,
                             add_pattern_category(
                                 alloc,
-                                alloc.text("The first pattern is trying to match"),
+                                alloc.text("The argument is a pattern that matches"),
                                 &category,
                             ),
                             alloc.concat(vec![
-                                alloc.text("But the expression between "),
-                                alloc.keyword("when"),
-                                alloc.text(" and "),
-                                alloc.keyword("is"),
-                                alloc.text(" has the type:"),
+                                alloc.text("But the annotation on "),
+                                name,
+                                alloc.text(" says the "),
+                                alloc.text(index.ordinal()),
+                                alloc.text(" argument should be:"),
                             ]),
                             vec![],
                         ),
@@ -1365,42 +1333,78 @@ fn to_pattern_report<'b>(
                         doc,
                         severity: Severity::RuntimeError,
                     }
-                } else {
-                    let doc = alloc.stack(vec![
-                        alloc
-                            .string(format!("The {} pattern in this ", index.ordinal()))
-                            .append(alloc.keyword("when"))
-                            .append(alloc.text(" does not match the previous ones:")),
-                        alloc.region(lines.convert_region(region)),
-                        pattern_type_comparison(
-                            alloc,
-                            found,
-                            expected_type,
-                            add_pattern_category(
+                }
+                PReason::WhenMatch { index } => {
+                    if index == Index::FIRST {
+                        let doc = alloc.stack(vec![
+                            alloc
+                                .text("The 1st pattern in this ")
+                                .append(alloc.keyword("when"))
+                                .append(alloc.text(" is causing a mismatch:")),
+                            alloc.region(lines.convert_region(region)),
+                            pattern_type_comparison(
                                 alloc,
-                                alloc.string(format!(
-                                    "The {} pattern is trying to match",
-                                    index.ordinal()
-                                )),
-                                &category,
+                                found,
+                                expected_type,
+                                add_pattern_category(
+                                    alloc,
+                                    alloc.text("The first pattern is trying to match"),
+                                    &category,
+                                ),
+                                alloc.concat(vec![
+                                    alloc.text("But the expression between "),
+                                    alloc.keyword("when"),
+                                    alloc.text(" and "),
+                                    alloc.keyword("is"),
+                                    alloc.text(" has the type:"),
+                                ]),
+                                vec![],
                             ),
-                            alloc.text("But all the previous branches match:"),
-                            vec![],
-                        ),
-                    ]);
+                        ]);
 
-                    Report {
-                        filename,
-                        title: "TYPE MISMATCH".to_string(),
-                        doc,
-                        severity: Severity::RuntimeError,
+                        Report {
+                            filename,
+                            title: "TYPE MISMATCH".to_string(),
+                            doc,
+                            severity: Severity::RuntimeError,
+                        }
+                    } else {
+                        let doc = alloc.stack(vec![
+                            alloc
+                                .string(format!("The {} pattern in this ", index.ordinal()))
+                                .append(alloc.keyword("when"))
+                                .append(alloc.text(" does not match the previous ones:")),
+                            alloc.region(lines.convert_region(region)),
+                            pattern_type_comparison(
+                                alloc,
+                                found,
+                                expected_type,
+                                add_pattern_category(
+                                    alloc,
+                                    alloc.string(format!(
+                                        "The {} pattern is trying to match",
+                                        index.ordinal()
+                                    )),
+                                    &category,
+                                ),
+                                alloc.text("But all the previous branches match:"),
+                                vec![],
+                            ),
+                        ]);
+
+                        Report {
+                            filename,
+                            title: "TYPE MISMATCH".to_string(),
+                            doc,
+                            severity: Severity::RuntimeError,
+                        }
                     }
                 }
+                PReason::TagArg { .. } | PReason::PatternGuard => {
+                    internal_error!("unreachable: I didn't think this could trigger. Please tell Folkert about it!")
+                }
             }
-            PReason::TagArg { .. } | PReason::PatternGuard => {
-                unreachable!("I didn't think this could trigger. Please tell Folkert about it!")
-            }
-        },
+        }
     }
 }
 

@@ -1266,7 +1266,7 @@ pub fn sort_can_defs(
                         }
                     }
                 }
-                Err(_) => unreachable!("there should be no cycles now!"),
+                Err(_) => internal_error!("unreachable: there should be no cycles now!"),
             }
 
             for problem in problems {

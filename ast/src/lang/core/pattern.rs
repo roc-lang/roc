@@ -6,6 +6,7 @@ use bumpalo::collections::Vec as BumpVec;
 use roc_can::expr::unescape_char;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_collections::all::BumpMap;
+use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, Symbol};
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
@@ -281,7 +282,7 @@ pub fn to_pattern2<'a>(
                         arguments: can_patterns,
                     }
                 }
-                _ => unreachable!("Other patterns cannot be applied"),
+                _ => internal_error!("unreachable: Other patterns cannot be applied"),
             }
         }
 
@@ -407,7 +408,9 @@ pub fn to_pattern2<'a>(
                             }
                         };
                     }
-                    _ => unreachable!("Any other pattern should have given a parse error"),
+                    _ => internal_error!(
+                        "unreachable: Any other pattern should have given a parse error"
+                    ),
                 }
             }
 
@@ -421,10 +424,10 @@ pub fn to_pattern2<'a>(
         }
 
         RequiredField(_name, _loc_pattern) => {
-            unreachable!("should have been handled in RecordDestructure");
+            internal_error!("unreachable: should have been handled in RecordDestructure");
         }
         OptionalField(_name, _loc_pattern) => {
-            unreachable!("should have been handled in RecordDestructure");
+            internal_error!("unreachable: should have been handled in RecordDestructure");
         }
 
         Malformed(_str) => {

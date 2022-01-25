@@ -1,6 +1,7 @@
 use crate::env::Env;
 use crate::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AliasHeader, AssignedField, Pattern, Tag, TypeAnnotation};
@@ -343,7 +344,9 @@ fn can_annotation_help(
                             substitutions.insert(var, Type::Variable(fresh));
                             lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
                         } else {
-                            unreachable!("at this point there should be only vars in there");
+                            internal_error!(
+                                "unreachable: at this point there should be only vars in there"
+                            );
                         }
                     }
 
@@ -422,7 +425,9 @@ fn can_annotation_help(
                     Pattern::Identifier(name) if name.chars().next().unwrap().is_lowercase() => {
                         name
                     }
-                    _ => unreachable!("I thought this was validated during parsing"),
+                    _ => {
+                        internal_error!("unreachable: I thought this was validated during parsing")
+                    }
                 };
                 let var_name = Lowercase::from(var);
 

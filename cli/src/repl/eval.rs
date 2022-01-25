@@ -219,7 +219,7 @@ fn tag_id_from_data(
                 // moment, remove if that is no longer the case
                 *(data_ptr.add(offset as usize) as *const i64) as i64
             }
-            _ => unreachable!("invalid tag id layout"),
+            _ => internal_error!("unreachable: invalid tag id layout"),
         }
     }
 }
@@ -428,7 +428,7 @@ fn jit_to_ast_help<'a>(
             ))
         }
         Layout::RecursivePointer => {
-            unreachable!("RecursivePointers can only be inside structures")
+            internal_error!("unreachable: RecursivePointers can only be inside structures")
         }
         Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
     };
@@ -445,7 +445,7 @@ fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
             env.arena
                 .alloc_str(&tag_name.as_ident_str(env.interns, env.home)),
         ),
-        TagName::Closure(_) => unreachable!("User cannot type this"),
+        TagName::Closure(_) => internal_error!("unreachable: User cannot type this"),
     }
 }
 
@@ -554,7 +554,7 @@ fn ptr_to_ast<'a>(
                     let content = env.subs.get_content_without_compacting(*structure);
                     ptr_to_ast(env, ptr, &union_layout, when_recursive, content)
                 }
-                other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
+                other => internal_error!("unreachable: Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
             }
         }
         (_, Layout::Union(UnionLayout::NonRecursive(union_layouts))) => {
@@ -562,7 +562,7 @@ fn ptr_to_ast<'a>(
 
             let tags = match content {
                 Content::Structure(FlatType::TagUnion(tags, _)) => tags,
-                other => unreachable!("Weird content for nonrecursive Union layout: {:?}", other),
+                other => internal_error!("unreachable: Weird content for nonrecursive Union layout: {:?}", other),
             };
 
             debug_assert_eq!(union_layouts.len(), tags.len());
@@ -573,7 +573,7 @@ fn ptr_to_ast<'a>(
                 UnionVariant::Wrapped(WrappedVariant::NonRecursive {
                     sorted_tag_layouts
                 }) => sorted_tag_layouts,
-                other => unreachable!("This layout tag union layout is nonrecursive but the variant isn't; found variant {:?}", other),
+                other => internal_error!("unreachable: This layout tag union layout is nonrecursive but the variant isn't; found variant {:?}", other),
             };
 
             // Because this is a `NonRecursive`, the tag ID is definitely after the data.
@@ -596,7 +596,7 @@ fn ptr_to_ast<'a>(
         (_, Layout::Union(union_layout @ UnionLayout::Recursive(union_layouts))) => {
             let (rec_var, tags) = match content {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
-                _ => unreachable!("any other content would have a different layout"),
+                _ => internal_error!("unreachable: any other content would have a different layout"),
             };
             debug_assert_eq!(union_layouts.len(), tags.len());
 
@@ -607,7 +607,7 @@ fn ptr_to_ast<'a>(
                 UnionVariant::Wrapped(WrappedVariant::Recursive {
                     sorted_tag_layouts
                 }) => sorted_tag_layouts,
-                _ => unreachable!("any other variant would have a different layout"),
+                _ => internal_error!("unreachable: any other variant would have a different layout"),
             };
 
             let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.target_info);
@@ -625,7 +625,7 @@ fn ptr_to_ast<'a>(
         (_, Layout::Union(UnionLayout::NonNullableUnwrapped(_))) => {
             let (rec_var, tags) = match unroll_recursion_var(env, content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
-                other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
+                other => internal_error!("unreachable: Unexpected content for NonNullableUnwrapped: {:?}", other),
             };
             debug_assert_eq!(tags.len(), 1);
 
@@ -635,7 +635,7 @@ fn ptr_to_ast<'a>(
                 UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
                     tag_name, fields,
                 }) => (tag_name, fields),
-                _ => unreachable!("any other variant would have a different layout"),
+                _ => internal_error!("unreachable: any other variant would have a different layout"),
             };
 
             let ptr_to_data = deref_ptr_of_ptr(ptr, env.target_info);
@@ -652,7 +652,7 @@ fn ptr_to_ast<'a>(
         (_, Layout::Union(UnionLayout::NullableUnwrapped { .. })) => {
             let (rec_var, tags) = match unroll_recursion_var(env, content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
-                other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
+                other => internal_error!("unreachable: Unexpected content for NonNullableUnwrapped: {:?}", other),
             };
             debug_assert!(tags.len() <= 2);
 
@@ -665,7 +665,7 @@ fn ptr_to_ast<'a>(
                     other_name,
                     other_fields,
                 }) => (nullable_name, other_name, other_fields),
-                _ => unreachable!("any other variant would have a different layout"),
+                _ => internal_error!("unreachable: any other variant would have a different layout"),
             };
 
             let ptr_to_data = deref_ptr_of_ptr(ptr, env.target_info);
@@ -685,7 +685,7 @@ fn ptr_to_ast<'a>(
         (_, Layout::Union(union_layout @ UnionLayout::NullableWrapped { .. })) => {
             let (rec_var, tags) = match unroll_recursion_var(env, content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
-                other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
+                other => internal_error!("unreachable: Unexpected content for NonNullableUnwrapped: {:?}", other),
             };
 
             let (vars_of_tag, union_variant) = get_tags_vars_and_variant(env, tags, Some(*rec_var));
@@ -696,7 +696,7 @@ fn ptr_to_ast<'a>(
                     nullable_name,
                     sorted_tag_layouts,
                 }) => (nullable_id, nullable_name, sorted_tag_layouts),
-                _ => unreachable!("any other variant would have a different layout"),
+                _ => internal_error!("unreachable: any other variant would have a different layout"),
             };
 
             let ptr_to_data = deref_ptr_of_ptr(ptr, env.target_info);
@@ -797,7 +797,7 @@ fn single_tag_union_to_ast<'a>(
         let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
         sequence_of_expr(env, ptr as *const u8, it, WhenRecursive::Unreachable).into_bump_slice()
     } else {
-        unreachable!()
+        internal_error!("unreachable")
     };
 
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
@@ -1015,7 +1015,10 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                     tag_name_to_expr(env, tag_name)
                 }
                 other => {
-                    unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
+                    internal_error!(
+                        "unreachable: Unexpected FlatType {:?} in bool_to_ast",
+                        other
+                    );
                 }
             }
         }
@@ -1025,7 +1028,10 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
             bool_to_ast(env, value, content)
         }
         other => {
-            unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
+            internal_error!(
+                "unreachable: Unexpected FlatType {:?} in bool_to_ast",
+                other
+            );
         }
     }
 }
@@ -1103,11 +1109,14 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                             let loc_tag_expr = Loc::at_zero(tag_expr);
                             Expr::Apply(env.arena.alloc(loc_tag_expr), &[], CalledVia::Space)
                         }
-                        _ => unreachable!("invalid union variant for a Byte!"),
+                        _ => internal_error!("unreachable: invalid union variant for a Byte!"),
                     }
                 }
                 other => {
-                    unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
+                    internal_error!(
+                        "unreachable: Unexpected FlatType {:?} in bool_to_ast",
+                        other
+                    );
                 }
             }
         }
@@ -1117,7 +1126,10 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
             byte_to_ast(env, value, content)
         }
         other => {
-            unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
+            internal_error!(
+                "unreachable: Unexpected FlatType {:?} in bool_to_ast",
+                other
+            );
         }
     }
 }

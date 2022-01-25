@@ -1,3 +1,4 @@
+use roc_error_macros::internal_error;
 use roc_linker::{build_app, preprocess, surgery, CMD_PREPROCESS, CMD_SURGERY};
 use std::io;
 
@@ -8,7 +9,7 @@ fn main() -> io::Result<()> {
         None => Ok::<i32, io::Error>(-1),
         Some((CMD_PREPROCESS, sub_matches)) => preprocess(sub_matches),
         Some((CMD_SURGERY, sub_matches)) => surgery(sub_matches),
-        _ => unreachable!(),
+        _ => internal_error!("unreachable"),
     }?;
     std::process::exit(exit_code);
 }

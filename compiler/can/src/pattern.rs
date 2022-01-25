@@ -2,6 +2,7 @@ use crate::env::Env;
 use crate::expr::{canonicalize_expr, unescape_char, Expr, Output};
 use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::scope::Scope;
+use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
@@ -157,7 +158,7 @@ pub fn canonicalize_pattern<'a>(
 
                     TagName::Private(Symbol::new(env.home, ident_id))
                 }
-                _ => unreachable!("Other patterns cannot be applied"),
+                _ => internal_error!("unreachable: Other patterns cannot be applied"),
             };
 
             let mut can_patterns = Vec::with_capacity(patterns.len());
@@ -354,7 +355,9 @@ pub fn canonicalize_pattern<'a>(
                             }
                         };
                     }
-                    _ => unreachable!("Any other pattern should have given a parse error"),
+                    _ => internal_error!(
+                        "unreachable: Any other pattern should have given a parse error"
+                    ),
                 }
             }
 
@@ -368,10 +371,10 @@ pub fn canonicalize_pattern<'a>(
         }
 
         RequiredField(_name, _loc_pattern) => {
-            unreachable!("should have been handled in RecordDestructure");
+            internal_error!("unreachable: should have been handled in RecordDestructure");
         }
         OptionalField(_name, _loc_pattern) => {
-            unreachable!("should have been handled in RecordDestructure");
+            internal_error!("unreachable: should have been handled in RecordDestructure");
         }
 
         Malformed(_str) => {

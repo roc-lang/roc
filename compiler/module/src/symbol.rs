@@ -608,7 +608,7 @@ impl IdentIds {
                         *vec_elt = new_ident_name.into();
                     } else {
                         // we get the index from by_id
-                        unreachable!()
+                        internal_error!("unreachable")
                     }
 
                     Ok(ident_id)

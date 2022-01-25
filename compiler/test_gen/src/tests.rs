@@ -19,6 +19,8 @@ mod helpers;
 pub mod wasm_str;
 
 use core::ffi::c_void;
+use roc_error_macros::internal_error;
+
 #[no_mangle]
 pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
     libc::malloc(size)
@@ -54,6 +56,6 @@ pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
             eprintln!("Roc hit a panic: {}", string);
             std::process::exit(1);
         }
-        Err(_) => unreachable!(),
+        Err(_) => internal_error!("unreachable"),
     }
 }

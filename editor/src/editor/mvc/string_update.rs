@@ -6,6 +6,7 @@ use roc_code_markup::markup::attribute::Attributes;
 use roc_code_markup::markup::nodes;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::syntax_highlight::HighlightStyle;
+use roc_error_macros::internal_error;
 
 use crate::editor::ed_error::EdResult;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -43,7 +44,7 @@ pub fn update_small_string(
                 // safe because we checked the length
                 mut_array_str.push(*new_char);
             } else {
-                unreachable!()
+                internal_error!("unreachable")
             }
         } else {
             let mut new_str = old_array_str.as_str().to_owned();

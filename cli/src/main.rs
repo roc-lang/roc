@@ -160,7 +160,7 @@ fn main() -> io::Result<()> {
 
             Ok(0)
         }
-        _ => unreachable!(),
+        _ => internal_error!("unreachable"),
     }?;
 
     std::process::exit(exit_code);

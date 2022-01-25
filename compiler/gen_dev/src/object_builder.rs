@@ -447,7 +447,7 @@ fn build_proc<'a, B: Backend<'a>>(
                     internal_error!("failed to find fn symbol for {:?}", name);
                 }
             }
-            Relocation::JmpToReturn { .. } => unreachable!(),
+            Relocation::JmpToReturn { .. } => internal_error!("unreachable"),
         };
         relocations.push((section_id, elfreloc));
     }

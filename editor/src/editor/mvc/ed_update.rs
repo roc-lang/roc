@@ -55,6 +55,7 @@ use roc_code_markup::markup::nodes::EQUALS;
 use roc_code_markup::slow_pool::MarkNodeId;
 use roc_code_markup::slow_pool::SlowPool;
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
@@ -802,7 +803,7 @@ impl<'a> SelectableLines for EdModel<'a> {
         _modifiers: &Modifiers,
         _virtual_keycode: VirtualKeyCode,
     ) -> UIResult<()> {
-        unreachable!("Use EdModel::ed_handle_key_down instead.")
+        internal_error!("unreachable: Use EdModel::ed_handle_key_down instead.")
     }
 }
 
@@ -879,7 +880,7 @@ pub fn handle_new_char_def(
                             ch,
                         )?
                     } else {
-                        unreachable!()
+                        internal_error!("unreachable")
                     }
                 } else {
                     InputOutcome::Ignored

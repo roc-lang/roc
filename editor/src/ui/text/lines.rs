@@ -13,6 +13,7 @@ use crate::ui::text::{
 use crate::ui::ui_error::UIResult;
 use crate::ui::util::is_newline;
 use crate::window::keyboard_input::Modifiers;
+use roc_error_macros::internal_error;
 use std::cmp::max;
 use std::cmp::min;
 use winit::event::VirtualKeyCode;
@@ -104,7 +105,7 @@ pub fn move_caret_left<T: Lines>(
     let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
         match old_selection_opt {
             Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
-            None => unreachable!(),
+            None => internal_error!("unreachable"),
         }
     } else if old_col_nr == 0 {
         if old_line_nr == 0 {
@@ -176,7 +177,7 @@ pub fn move_caret_right<T: Lines>(
     let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
         match old_selection_opt {
             Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
-            None => unreachable!(),
+            None => internal_error!("unreachable"),
         }
     } else {
         let curr_line_len = lines.line_len(old_line_nr)?;
@@ -253,7 +254,7 @@ pub fn move_caret_up<T: Lines>(
     let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
         match old_selection_opt {
             Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
-            None => unreachable!(),
+            None => internal_error!("unreachable"),
         }
     } else if old_line_nr == 0 {
         (old_line_nr, 0)
@@ -318,7 +319,7 @@ pub fn move_caret_down<T: Lines>(
     let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
         match old_selection_opt {
             Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
-            None => unreachable!(),
+            None => internal_error!("unreachable"),
         }
     } else if old_line_nr + 1 >= lines.nr_of_lines() {
         let curr_line_len = lines.line_len(old_line_nr)?;

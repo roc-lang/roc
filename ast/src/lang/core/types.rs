@@ -3,6 +3,7 @@
 #![allow(unused_imports)]
 // use roc_can::expr::Output;
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -496,7 +497,9 @@ pub fn to_type2<'a>(
                     Pattern::Identifier(name) if name.chars().next().unwrap().is_lowercase() => {
                         name
                     }
-                    _ => unreachable!("I thought this was validated during parsing"),
+                    _ => {
+                        internal_error!("unreachable: I thought this was validated during parsing")
+                    }
                 };
                 let var_name = Lowercase::from(var);
 

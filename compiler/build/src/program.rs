@@ -413,7 +413,7 @@ pub fn gen_from_mono_module_llvm(
                     .output()
                     .unwrap();
             }
-            _ => unreachable!(),
+            _ => internal_error!("unreachable"),
         }
     } else {
         // Emit the .o file

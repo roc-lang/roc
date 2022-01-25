@@ -11,6 +11,7 @@ use crate::graphics::style::DEFAULT_FONT_SIZE;
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
 use glyph_brush::OwnedSection;
+use roc_error_macros::internal_error;
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
 
 #[derive(Debug)]
@@ -58,7 +59,7 @@ pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>, font_size: f32)
     if let Some(glyph) = glyph_section_iter.next() {
         glyph_to_rect(glyph)
     } else {
-        unreachable!();
+        internal_error!("unreachable");
     }
 }
 

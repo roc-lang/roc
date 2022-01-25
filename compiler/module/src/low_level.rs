@@ -1,4 +1,5 @@
 use crate::symbol::Symbol;
+use roc_error_macros::internal_error;
 
 /// Low-level operations that get translated directly into e.g. LLVM instructions.
 /// These are always wrapped when exposed to end users, and can only make it
@@ -174,7 +175,7 @@ impl LowLevel {
             ListAll => 1,
             ListFindUnsafe => 1,
             DictWalk => 2,
-            _ => unreachable!(),
+            _ => internal_error!("unreachable"),
         }
     }
 }

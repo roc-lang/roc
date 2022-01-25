@@ -1,4 +1,5 @@
 use self::BinOp::*;
+use roc_error_macros::internal_error;
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -59,7 +60,7 @@ impl BinOp {
             Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan => 1,
             DoubleSlash | DoublePercent | Equals | NotEquals | LessThanOrEq | GreaterThanOrEq
             | And | Or | Pizza => 2,
-            Assignment | HasType | Backpassing => unreachable!(),
+            Assignment | HasType | Backpassing => internal_error!("unreachable"),
         }
     }
 }
@@ -103,7 +104,7 @@ impl BinOp {
             Equals | NotEquals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => {
                 NonAssociative
             }
-            Assignment | HasType | Backpassing => unreachable!(),
+            Assignment | HasType | Backpassing => internal_error!("unreachable"),
         }
     }
 
@@ -116,7 +117,7 @@ impl BinOp {
             And => 3,
             Or => 2,
             Pizza => 1,
-            Assignment | HasType | Backpassing => unreachable!(),
+            Assignment | HasType | Backpassing => internal_error!("unreachable"),
         }
     }
 }

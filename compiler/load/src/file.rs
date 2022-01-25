@@ -1105,7 +1105,7 @@ where
         target_info,
         look_up_builtin,
     )? {
-        Monomorphized(_) => unreachable!(""),
+        Monomorphized(_) => internal_error!("unreachable: "),
         TypeChecked(module) => Ok(module),
     }
 }
@@ -1138,7 +1138,7 @@ where
         look_up_builtin,
     )? {
         Monomorphized(module) => Ok(module),
-        TypeChecked(_) => unreachable!(""),
+        TypeChecked(_) => internal_error!("unreachable: "),
     }
 }
 
@@ -1171,7 +1171,7 @@ where
         look_up_builtin,
     )? {
         Monomorphized(module) => Ok(module),
-        TypeChecked(_) => unreachable!(""),
+        TypeChecked(_) => internal_error!("unreachable: "),
     }
 }
 
@@ -2177,16 +2177,16 @@ fn update<'a>(
             Ok(state)
         }
         Msg::FinishedAllTypeChecking { .. } => {
-            unreachable!();
+            internal_error!("unreachable");
         }
         Msg::FinishedAllSpecialization { .. } => {
-            unreachable!();
+            internal_error!("unreachable");
         }
         Msg::FailedToParse(_) => {
-            unreachable!();
+            internal_error!("unreachable");
         }
         Msg::FailedToReadFile { .. } => {
-            unreachable!();
+            internal_error!("unreachable");
         }
     }
 }
@@ -2236,7 +2236,7 @@ fn finish_specialization(
             Valid(To::ExistingPackage(shorthand)) => {
                 match (*state.arc_shorthands).lock().get(shorthand) {
                     Some(p_or_p) => *p_or_p,
-                    None => unreachable!(),
+                    None => internal_error!("unreachable"),
                 }
             }
             Valid(To::NewPackage(p_or_p)) => p_or_p,
@@ -2461,7 +2461,7 @@ fn load_module<'a>(
                 Some(PackageName(path)) => {
                     filename.push(path);
                 }
-                None => unreachable!("there is no shorthand named {:?}", shorthand),
+                None => internal_error!("unreachable: there is no shorthand named {:?}", shorthand),
             }
 
             // Convert dots in module name to directories
@@ -2772,7 +2772,7 @@ fn send_header<'a>(
     } = info;
 
     let declared_name: ModuleName = match &loc_name.value {
-        PkgConfig => unreachable!(),
+        PkgConfig => internal_error!("unreachable"),
         App(_) => ModuleName::APP.into(),
         Interface(module_name) => {
             // TODO check to see if module_name is consistent with filename.
@@ -4377,7 +4377,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
 
     let report = {
         match other {
-            Valid(_) => unreachable!(),
+            Valid(_) => internal_error!("unreachable"),
             NotSpecified => {
                 let doc = alloc.stack(vec![
                     alloc.reflow("I could not find a platform based on your input file."),

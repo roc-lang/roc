@@ -404,7 +404,7 @@ impl<'a> ExprState<'a> {
             let opchar = match loc_op.value {
                 BinOp::Assignment => "=",
                 BinOp::Backpassing => "<-",
-                _ => unreachable!(),
+                _ => internal_error!("unreachable"),
             };
 
             let fail = EExpr::BadOperator(opchar, loc_op.region.start());

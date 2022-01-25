@@ -4,6 +4,7 @@ use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
+use roc_error_macros::internal_error;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, WhenBranch,
@@ -338,9 +339,9 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::And => buf.push_str("&&"),
         called_via::BinOp::Or => buf.push_str("||"),
         called_via::BinOp::Pizza => buf.push_str("|>"),
-        called_via::BinOp::Assignment => unreachable!(),
-        called_via::BinOp::HasType => unreachable!(),
-        called_via::BinOp::Backpassing => unreachable!(),
+        called_via::BinOp::Assignment => internal_error!("unreachable"),
+        called_via::BinOp::HasType => internal_error!("unreachable"),
+        called_via::BinOp::Backpassing => internal_error!("unreachable"),
     }
 }
 

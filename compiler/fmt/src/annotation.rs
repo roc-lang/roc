@@ -3,6 +3,7 @@ use crate::{
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
+use roc_error_macros::internal_error;
 use roc_parse::ast::{AliasHeader, AssignedField, Expr, Tag, TypeAnnotation};
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -489,7 +490,7 @@ impl<'a> Formattable for Tag<'a> {
                     }
                 }
             }
-            Tag::SpaceBefore(_, _) | Tag::SpaceAfter(_, _) => unreachable!(),
+            Tag::SpaceBefore(_, _) | Tag::SpaceAfter(_, _) => internal_error!("unreachable"),
             Tag::Malformed(raw) => {
                 buf.indent(indent);
                 buf.push_str(raw);

@@ -167,7 +167,7 @@ fn sort_aliases_before_introduction(mut alias_symbols: MutMap<Symbol, Vec<Symbol
             .copied()
             .collect(),
 
-        Err(_loop_detected) => unreachable!("the groups cannot recurse"),
+        Err(_loop_detected) => internal_error!("unreachable: the groups cannot recurse"),
     }
 }
 
@@ -681,7 +681,7 @@ pub fn sort_can_defs(
                             Some(index) => {
                                 result.insert(*index);
                             }
-                            None => unreachable!("no index for symbol {:?}", succ),
+                            None => internal_error!("unreachable: no index for symbol {:?}", succ),
                         }
                     }
                 }
@@ -708,7 +708,7 @@ pub fn sort_can_defs(
                         }
                     }
                 }
-                Err(_) => unreachable!("there should be no cycles now!"),
+                Err(_) => internal_error!("unreachable: there should be no cycles now!"),
             }
 
             for problem in problems {
@@ -965,7 +965,7 @@ fn canonicalize_pending_def<'a>(
             }
         }
 
-        Alias { .. } => unreachable!("Aliases are handled in a separate pass"),
+        Alias { .. } => internal_error!("unreachable: Aliases are handled in a separate pass"),
         InvalidAlias => {
             // invalid aliases (shadowed, incorrect patterns) get ignored
         }
@@ -1333,7 +1333,7 @@ fn decl_to_let(var_store: &mut VarStore, decl: Declaration, loc_ret: Loc<Expr>) 
         }
         Declaration::Builtin(_) => {
             // Builtins should only be added to top-level decls, not to let-exprs!
-            unreachable!()
+            internal_error!("unreachable")
         }
     }
 }

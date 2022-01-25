@@ -1,3 +1,4 @@
+use roc_error_macros::internal_error;
 use roc_types::subs::VarStore;
 
 use crate::{
@@ -45,7 +46,7 @@ pub(crate) fn decl_to_let(
                 match def {
                     Def::AnnotationOnly { .. } => todo!(),
                     Def::Function(function_def) => function_defs.push(function_def),
-                    Def::Value(_) => unreachable!(),
+                    Def::Value(_) => internal_error!("unreachable"),
                 }
             }
 
@@ -64,7 +65,7 @@ pub(crate) fn decl_to_let(
         }
         Declaration::Builtin(_) => {
             // Builtins should only be added to top-level decls, not to let-exprs!
-            unreachable!()
+            internal_error!("unreachable")
         }
     }
 }
