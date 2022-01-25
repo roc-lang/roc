@@ -421,9 +421,11 @@ mod cli_run {
 
     macro_rules! benchmarks {
         ($($test_name:ident => $benchmark:expr,)+) => {
+
             $(
                 #[test]
                 #[cfg_attr(not(debug_assertions), serial(benchmark))]
+                #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
                 fn $test_name() {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);
