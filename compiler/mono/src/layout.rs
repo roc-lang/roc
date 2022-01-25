@@ -7,7 +7,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_types::subs::{
-    Content, FlatType, RecordFields, Subs, UnionTags, Variable, VariableSubsSlice,
+    Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField};
 use std::collections::hash_map::Entry;
@@ -1580,18 +1580,26 @@ fn layout_from_flat_type<'a>(
             }
         }
         TagUnion(tags, ext_var) => {
+            let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
+
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            Ok(layout_from_tag_union(arena, tags, subs, env.ptr_bytes))
+            Ok(layout_from_tag_union(arena, &tags, subs, env.ptr_bytes))
         }
         FunctionOrTagUnion(tag_name, _, ext_var) => {
-            debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
+            debug_assert!(
+                ext_var_is_empty_tag_union(subs, ext_var),
+                "If ext_var wasn't empty, this wouldn't be a FunctionOrTagUnion!"
+            );
 
-            let tags = UnionTags::from_tag_name_index(tag_name);
+            let union_tags = UnionTags::from_tag_name_index(tag_name);
+            let (tags, _) = union_tags.unsorted_tags_and_ext(subs, ext_var);
 
-            Ok(layout_from_tag_union(arena, tags, subs, env.ptr_bytes))
+            Ok(layout_from_tag_union(arena, &tags, subs, env.ptr_bytes))
         }
         RecursiveTagUnion(rec_var, tags, ext_var) => {
+            let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
+
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
             // some observations
@@ -1603,9 +1611,8 @@ fn layout_from_flat_type<'a>(
             // That means none of the optimizations for enums or single tag tag unions apply
 
             let rec_var = subs.get_root_key_without_compacting(rec_var);
-            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
-
-            let tags_vec = cheap_sort_tags(arena, tags, subs);
+            let tags_vec = tags.tags;
+            let mut tag_layouts = Vec::with_capacity_in(tags_vec.len(), arena);
 
             let mut nullable = None;
 
@@ -1619,7 +1626,7 @@ fn layout_from_flat_type<'a>(
             }
 
             env.insert_seen(rec_var);
-            for (index, (_name, variables)) in tags_vec.into_iter().enumerate() {
+            for (index, &(_name, variables)) in tags_vec.iter().enumerate() {
                 if matches!(nullable, Some(i) if i == index as TagIdIntType) {
                     // don't add the nullable case
                     continue;
@@ -1627,8 +1634,7 @@ fn layout_from_flat_type<'a>(
 
                 let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
 
-                for var_index in variables {
-                    let var = subs[var_index];
+                for &var in variables {
                     // TODO does this cause problems with mutually recursive unions?
                     if rec_var == subs.get_root_key_without_compacting(var) {
                         tag_layout.push(Layout::RecursivePointer);
@@ -1911,13 +1917,14 @@ fn is_recursive_tag_union(layout: &Layout) -> bool {
 
 fn union_sorted_tags_help_new<'a>(
     arena: &'a Bump,
-    mut tags_vec: Vec<(&'_ TagName, VariableSubsSlice)>,
+    tags_list: &[(&'_ TagName, &[Variable])],
     opt_rec_var: Option<Variable>,
     subs: &Subs,
     ptr_bytes: u32,
 ) -> UnionVariant<'a> {
     // sort up front; make sure the ordering stays intact!
-    tags_vec.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    let mut tags_list = Vec::from_iter_in(tags_list.iter(), arena);
+    tags_list.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut env = Env {
         arena,
@@ -1926,27 +1933,26 @@ fn union_sorted_tags_help_new<'a>(
         ptr_bytes,
     };
 
-    match tags_vec.len() {
+    match tags_list.len() {
         0 => {
             // trying to instantiate a type with no values
             UnionVariant::Never
         }
         1 => {
-            let (tag_name, arguments) = tags_vec.remove(0);
+            let &(tag_name, arguments) = tags_list.remove(0);
             let tag_name = tag_name.clone();
 
             // just one tag in the union (but with arguments) can be a struct
-            let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut layouts = Vec::with_capacity_in(tags_list.len(), arena);
 
             // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
                 TagName::Private(Symbol::NUM_AT_NUM) => {
-                    let var = subs[arguments.into_iter().next().unwrap()];
+                    let var = arguments[0];
                     layouts.push(unwrap_num_tag(subs, var, ptr_bytes).expect("invalid num layout"));
                 }
                 _ => {
-                    for var_index in arguments {
-                        let var = subs[var_index];
+                    for &var in arguments {
                         match Layout::from_var(&mut env, var) {
                             Ok(layout) => {
                                 layouts.push(layout);
@@ -1989,7 +1995,7 @@ fn union_sorted_tags_help_new<'a>(
         }
         num_tags => {
             // default path
-            let mut answer = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut answer = Vec::with_capacity_in(tags_list.len(), arena);
             let mut has_any_arguments = false;
 
             let mut nullable: Option<(TagIdIntType, TagName)> = None;
@@ -1997,7 +2003,7 @@ fn union_sorted_tags_help_new<'a>(
             // only recursive tag unions can be nullable
             let is_recursive = opt_rec_var.is_some();
             if is_recursive && GENERATE_NULLABLE {
-                for (index, (name, variables)) in tags_vec.iter().enumerate() {
+                for (index, (name, variables)) in tags_list.iter().enumerate() {
                     if variables.is_empty() {
                         nullable = Some((index as TagIdIntType, (*name).clone()));
                         break;
@@ -2005,7 +2011,7 @@ fn union_sorted_tags_help_new<'a>(
                 }
             }
 
-            for (index, (tag_name, arguments)) in tags_vec.into_iter().enumerate() {
+            for (index, &(tag_name, arguments)) in tags_list.into_iter().enumerate() {
                 // reserve space for the tag discriminant
                 if matches!(nullable, Some((i, _)) if i  as usize == index) {
                     debug_assert!(arguments.is_empty());
@@ -2014,8 +2020,7 @@ fn union_sorted_tags_help_new<'a>(
 
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
-                for var_index in arguments {
-                    let var = subs[var_index];
+                for &var in arguments {
                     match Layout::from_var(&mut env, var) {
                         Ok(layout) => {
                             has_any_arguments = true;
@@ -2326,38 +2331,15 @@ pub fn union_sorted_tags_help<'a>(
     }
 }
 
-fn cheap_sort_tags<'a, 'b>(
-    arena: &'a Bump,
-    tags: UnionTags,
-    subs: &'b Subs,
-) -> Vec<'a, (&'b TagName, VariableSubsSlice)> {
-    let mut tags_vec = Vec::with_capacity_in(tags.len(), arena);
-
-    for (tag_index, index) in tags.iter_all() {
-        let tag = &subs[tag_index];
-        let slice = subs[index];
-
-        tags_vec.push((tag, slice));
-    }
-
-    tags_vec
-}
-
 fn layout_from_newtype<'a>(
     arena: &'a Bump,
-    tags: UnionTags,
+    tags: &UnsortedUnionTags,
     subs: &Subs,
     ptr_bytes: u32,
 ) -> Layout<'a> {
     debug_assert!(tags.is_newtype_wrapper(subs));
 
-    let slice_index = tags.variables().into_iter().next().unwrap();
-    let slice = subs[slice_index];
-    let var_index = slice.into_iter().next().unwrap();
-    let var = subs[var_index];
-
-    let tag_name_index = tags.tag_names().into_iter().next().unwrap();
-    let tag_name = &subs[tag_name_index];
+    let (tag_name, var) = tags.get_newtype(subs);
 
     if tag_name == &TagName::Private(Symbol::NUM_AT_NUM) {
         unwrap_num_tag(subs, var, ptr_bytes).expect("invalid Num argument")
@@ -2388,7 +2370,7 @@ fn layout_from_newtype<'a>(
 
 fn layout_from_tag_union<'a>(
     arena: &'a Bump,
-    tags: UnionTags,
+    tags: &UnsortedUnionTags,
     subs: &Subs,
     ptr_bytes: u32,
 ) -> Layout<'a> {
@@ -2398,14 +2380,13 @@ fn layout_from_tag_union<'a>(
         return layout_from_newtype(arena, tags, subs, ptr_bytes);
     }
 
-    let tags_vec = cheap_sort_tags(arena, tags, subs);
+    let tags_vec = &tags.tags;
 
     match tags_vec.get(0) {
         Some((tag_name, arguments)) if *tag_name == &TagName::Private(Symbol::NUM_AT_NUM) => {
             debug_assert_eq!(arguments.len(), 1);
 
-            let var_index = arguments.into_iter().next().unwrap();
-            let var = subs[var_index];
+            let &var = arguments.iter().next().unwrap();
 
             unwrap_num_tag(subs, var, ptr_bytes).expect("invalid Num argument")
         }

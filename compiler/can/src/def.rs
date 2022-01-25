@@ -809,7 +809,7 @@ fn pattern_to_vars_by_symbol(
 ) {
     use Pattern::*;
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             vars_by_symbol.insert(*symbol, expr_var);
         }
 
@@ -832,8 +832,6 @@ fn pattern_to_vars_by_symbol(
         | Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => {}
-
-        Shadowed(_, _) => {}
     }
 }
 
@@ -884,7 +882,7 @@ fn canonicalize_pending_def<'a>(
                 Pattern::Identifier(symbol) => RuntimeError::NoImplementationNamed {
                     def_symbol: *symbol,
                 },
-                Pattern::Shadowed(region, loc_ident) => RuntimeError::Shadowing {
+                Pattern::Shadowed(region, loc_ident, _new_symbol) => RuntimeError::Shadowing {
                     original_region: *region,
                     shadow: loc_ident.clone(),
                 },
@@ -1502,7 +1500,7 @@ fn to_pending_def<'a>(
                     ))
                 }
 
-                Err((original_region, loc_shadowed_symbol)) => {
+                Err((original_region, loc_shadowed_symbol, _new_symbol)) => {
                     env.problem(Problem::ShadowingInAnnotation {
                         original_region,
                         shadow: loc_shadowed_symbol,

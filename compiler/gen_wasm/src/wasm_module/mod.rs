@@ -8,7 +8,7 @@ pub mod serialize;
 use bumpalo::Bump;
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 pub use linking::SymInfo;
-use roc_reporting::internal_error;
+use roc_error_macros::internal_error;
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
 use crate::wasm_module::serialize::SkipBytes;

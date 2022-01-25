@@ -89,10 +89,6 @@ isWhitespace = \char ->
         == 0x9# tab
 interpretCtx : Context -> Task Context InterpreterErrors
 interpretCtx = \ctx ->
-    Task.loop ctx interpretCtxLoop
-
-interpretCtxLoop : Context -> Task [ Step Context, Done Context ] InterpreterErrors
-interpretCtxLoop = \ctx ->
     when ctx.state is
         Executing if Context.inWhileScope ctx ->
             # Deal with the current while loop potentially looping.
@@ -108,11 +104,11 @@ interpretCtxLoop = \ctx ->
                                     if n == 0 then
                                         newScope = { scope & whileInfo: None }
 
-                                        Task.succeed (Step { popCtx & scopes: List.set ctx.scopes last newScope })
+                                        interpretCtx { popCtx & scopes: List.set ctx.scopes last newScope }
                                     else
                                         newScope = { scope & whileInfo: Some { state: InBody, body, cond } }
 
-                                        Task.succeed (Step { popCtx & scopes: List.append (List.set ctx.scopes last newScope) { data: None, buf: body, index: 0, whileInfo: None } })
+                                        interpretCtx { popCtx & scopes: List.append (List.set ctx.scopes last newScope) { data: None, buf: body, index: 0, whileInfo: None } }
 
                                 Err e ->
                                     Task.fail e
@@ -121,7 +117,7 @@ interpretCtxLoop = \ctx ->
                             # Just rand the body. Run the condition again.
                             newScope = { scope & whileInfo: Some { state: InCond, body, cond } }
 
-                            Task.succeed (Step { ctx & scopes: List.append (List.set ctx.scopes last newScope) { data: None, buf: cond, index: 0, whileInfo: None } })
+                            interpretCtx { ctx & scopes: List.append (List.set ctx.scopes last newScope) { data: None, buf: cond, index: 0, whileInfo: None } }
 
                         None ->
                             Task.fail NoScope
@@ -135,7 +131,7 @@ interpretCtxLoop = \ctx ->
             when result is
                 Ok (T val newCtx) ->
                     execCtx <- Task.await (stepExecCtx newCtx val)
-                    Task.succeed (Step execCtx)
+                    interpretCtx execCtx
 
                 Err NoScope ->
                     Task.fail NoScope
@@ -147,9 +143,9 @@ interpretCtxLoop = \ctx ->
 
                     # If no scopes left, all execution complete.
                     if List.isEmpty dropCtx.scopes then
-                        Task.succeed (Done dropCtx)
+                        Task.succeed dropCtx
                     else
-                        Task.succeed (Step dropCtx)
+                        interpretCtx dropCtx
 
         InComment ->
             result <- Task.attempt (Context.getChar ctx)
@@ -157,9 +153,9 @@ interpretCtxLoop = \ctx ->
                 Ok (T val newCtx) ->
                     if val == 0x7D then
                         # `}` end of comment
-                        Task.succeed (Step { newCtx & state: Executing })
+                        interpretCtx { newCtx & state: Executing }
                     else
-                        Task.succeed (Step { newCtx & state: InComment })
+                        interpretCtx { newCtx & state: InComment }
 
                 Err NoScope ->
                     Task.fail NoScope
@@ -178,13 +174,13 @@ interpretCtxLoop = \ctx ->
                         # so this is make i64 mul by 10 then convert back to i32.
                         nextAccum = (10 * Num.intCast accum) + Num.intCast (val - 0x30)
 
-                        Task.succeed (Step { newCtx & state: InNumber (Num.intCast nextAccum) })
+                        interpretCtx { newCtx & state: InNumber (Num.intCast nextAccum) }
                     else
                         # outside of number now, this needs to be executed.
                         pushCtx = Context.pushStack newCtx (Number accum)
 
                         execCtx <- Task.await (stepExecCtx { pushCtx & state: Executing } val)
-                        Task.succeed (Step execCtx)
+                        interpretCtx execCtx
 
                 Err NoScope ->
                     Task.fail NoScope
@@ -201,12 +197,12 @@ interpretCtxLoop = \ctx ->
                         when Str.fromUtf8 bytes is
                             Ok str ->
                                 {  } <- Task.await (Stdout.raw str)
-                                Task.succeed (Step { newCtx & state: Executing })
+                                interpretCtx { newCtx & state: Executing }
 
                             Err _ ->
                                 Task.fail BadUtf8
                     else
-                        Task.succeed (Step { newCtx & state: InString (List.append bytes val) })
+                        interpretCtx { newCtx & state: InString (List.append bytes val) }
 
                 Err NoScope ->
                     Task.fail NoScope
@@ -220,17 +216,17 @@ interpretCtxLoop = \ctx ->
                 Ok (T val newCtx) ->
                     if val == 0x5B then
                         # start of a nested lambda `[`
-                        Task.succeed (Step { newCtx & state: InLambda (depth + 1) (List.append bytes val) })
+                        interpretCtx { newCtx & state: InLambda (depth + 1) (List.append bytes val) }
                     else if val == 0x5D then
                         # `]` end of current lambda
                         if depth == 0 then
                             # end of all lambdas
-                            Task.succeed (Step (Context.pushStack { newCtx & state: Executing } (Lambda bytes)))
+                            interpretCtx (Context.pushStack { newCtx & state: Executing } (Lambda bytes))
                         else
                             # end of nested lambda
-                            Task.succeed (Step { newCtx & state: InLambda (depth - 1) (List.append bytes val) })
+                            interpretCtx { newCtx & state: InLambda (depth - 1) (List.append bytes val) }
                     else
-                        Task.succeed (Step { newCtx & state: InLambda depth (List.append bytes val) })
+                        interpretCtx { newCtx & state: InLambda depth (List.append bytes val) }
 
                 Err NoScope ->
                     Task.fail NoScope
@@ -256,14 +252,14 @@ interpretCtxLoop = \ctx ->
 
                     when result2 is
                         Ok a ->
-                            Task.succeed (Step a)
+                            interpretCtx a
 
                         Err e ->
                             Task.fail e
 
                 Ok (T 0x9F newCtx) ->
                     # This is supposed to flush io buffers. We don't buffer, so it does nothing
-                    Task.succeed (Step newCtx)
+                    interpretCtx newCtx
 
                 Ok (T x _) ->
                     data = Num.toStr (Num.intCast x)
@@ -280,7 +276,7 @@ interpretCtxLoop = \ctx ->
             result <- Task.attempt (Context.getChar { ctx & state: Executing })
             when result is
                 Ok (T x newCtx) ->
-                    Task.succeed (Step (Context.pushStack newCtx (Number (Num.intCast x))))
+                    interpretCtx (Context.pushStack newCtx (Number (Num.intCast x)))
 
                 Err NoScope ->
                     Task.fail NoScope

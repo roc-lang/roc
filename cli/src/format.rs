@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_def;
 use roc_fmt::module::fmt_module;
 use roc_fmt::Buf;
@@ -21,7 +22,6 @@ use roc_parse::{
     state::State,
 };
 use roc_region::all::{Loc, Region};
-use roc_reporting::{internal_error, user_error};
 
 pub fn format(files: std::vec::Vec<PathBuf>) {
     for file in files {
