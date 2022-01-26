@@ -17,14 +17,15 @@ use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
+use roc_target::TargetInfo;
 
 #[repr(transparent)]
 struct Alignment(u8);
 
 impl Alignment {
-    fn from_key_value_layout(key: &Layout, value: &Layout, ptr_bytes: u32) -> Alignment {
-        let key_align = key.alignment_bytes(ptr_bytes);
-        let value_align = value.alignment_bytes(ptr_bytes);
+    fn from_key_value_layout(key: &Layout, value: &Layout, target_info: TargetInfo) -> Alignment {
+        let key_align = key.alignment_bytes(target_info);
+        let value_align = value.alignment_bytes(target_info);
 
         let mut bits = key_align.max(value_align) as u8;
 
@@ -454,19 +455,18 @@ fn pass_dict_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     dict: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    match env.target_info {
-        4 => {
+    match env.target_info.ptr_width() {
+        roc_target::PtrWidth::Bytes4 => {
             let target_type = env.context.custom_width_int_type(96).into();
 
             complex_bitcast(env.builder, dict, target_type, "to_i96")
         }
-        8 => {
+        roc_target::PtrWidth::Bytes8 => {
             let dict_ptr = env.builder.build_alloca(zig_dict_type(env), "dict_ptr");
             env.builder.build_store(dict_ptr, dict);
 
             dict_ptr.into()
         }
-        _ => unreachable!(),
     }
 }
 

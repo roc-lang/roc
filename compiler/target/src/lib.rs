@@ -17,6 +17,20 @@ impl TargetInfo {
             architecture: Architecture::X86_64,
         }
     }
+
+    pub const fn default_wasm32() -> Self {
+        TargetInfo {
+            architecture: Architecture::Wasm32,
+        }
+    }
+}
+
+impl From<&target_lexicon::Triple> for TargetInfo {
+    fn from(triple: &target_lexicon::Triple) -> Self {
+        let architecture = Architecture::from(triple.architecture);
+
+        Self { architecture }
+    }
 }
 
 #[repr(u8)]

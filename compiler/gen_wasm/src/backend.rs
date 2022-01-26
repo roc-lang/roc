@@ -26,7 +26,7 @@ use crate::wasm_module::{
 };
 use crate::{
     copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, MEMORY_NAME,
-    PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
+    PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME, TARGET_INFO,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -943,7 +943,7 @@ impl<'a> WasmBackend<'a> {
             }
         };
         for field in field_layouts.iter().take(index as usize) {
-            offset += field.stack_size(PTR_SIZE);
+            offset += field.stack_size(TARGET_INFO);
         }
         self.storage
             .copy_value_from_memory(&mut self.code_builder, sym, local_id, offset);
@@ -1010,11 +1010,11 @@ impl<'a> WasmBackend<'a> {
         elems: &'a [ListLiteralElement<'a>],
     ) {
         if let StoredValue::StackMemory { location, .. } = storage {
-            let size = elem_layout.stack_size(PTR_SIZE) * (elems.len() as u32);
+            let size = elem_layout.stack_size(TARGET_INFO) * (elems.len() as u32);
 
             // Allocate heap space and store its address in a local variable
             let heap_local_id = self.storage.create_anonymous_local(PTR_TYPE);
-            let heap_alignment = elem_layout.alignment_bytes(PTR_SIZE);
+            let heap_alignment = elem_layout.alignment_bytes(TARGET_INFO);
             self.allocate_with_refcount(Some(size), heap_alignment, 1);
             self.code_builder.set_local(heap_local_id);
 
@@ -1099,9 +1099,9 @@ impl<'a> WasmBackend<'a> {
             return;
         }
 
-        let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(PTR_SIZE);
-        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(PTR_SIZE);
-        let (data_size, data_alignment) = union_layout.data_size_and_alignment(PTR_SIZE);
+        let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(TARGET_INFO);
+        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
+        let (data_size, data_alignment) = union_layout.data_size_and_alignment(TARGET_INFO);
 
         // We're going to use the pointer many times, so put it in a local variable
         let stored_with_local =
@@ -1138,7 +1138,7 @@ impl<'a> WasmBackend<'a> {
         if stores_tag_id_as_data {
             let id_offset = data_offset + data_size - data_alignment;
 
-            let id_align = union_layout.tag_id_builtin().alignment_bytes(PTR_SIZE);
+            let id_align = union_layout.tag_id_builtin().alignment_bytes(TARGET_INFO);
             let id_align = Align::from(id_align);
 
             self.code_builder.get_local(local_id);
@@ -1218,11 +1218,11 @@ impl<'a> WasmBackend<'a> {
             }
         };
 
-        if union_layout.stores_tag_id_as_data(PTR_SIZE) {
-            let (data_size, data_alignment) = union_layout.data_size_and_alignment(PTR_SIZE);
+        if union_layout.stores_tag_id_as_data(TARGET_INFO) {
+            let (data_size, data_alignment) = union_layout.data_size_and_alignment(TARGET_INFO);
             let id_offset = data_size - data_alignment;
 
-            let id_align = union_layout.tag_id_builtin().alignment_bytes(PTR_SIZE);
+            let id_align = union_layout.tag_id_builtin().alignment_bytes(TARGET_INFO);
             let id_align = Align::from(id_align);
 
             self.storage
@@ -1237,7 +1237,7 @@ impl<'a> WasmBackend<'a> {
                 Builtin::Int(IntWidth::U64) => self.code_builder.i64_load(id_align, id_offset),
                 x => internal_error!("Unexpected layout for tag union id {:?}", x),
             }
-        } else if union_layout.stores_tag_id_in_pointer(PTR_SIZE) {
+        } else if union_layout.stores_tag_id_in_pointer(TARGET_INFO) {
             self.storage
                 .load_symbols(&mut self.code_builder, &[structure]);
             self.code_builder.i32_const(3);
@@ -1284,7 +1284,7 @@ impl<'a> WasmBackend<'a> {
         let field_offset: u32 = field_layouts
             .iter()
             .take(index as usize)
-            .map(|field_layout| field_layout.stack_size(PTR_SIZE))
+            .map(|field_layout| field_layout.stack_size(TARGET_INFO))
             .sum();
 
         // Get pointer and offset to the tag's data
@@ -1304,7 +1304,7 @@ impl<'a> WasmBackend<'a> {
             }
         };
 
-        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(PTR_SIZE);
+        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
 
         let from_ptr = if stores_tag_id_in_pointer {
             let ptr = self.storage.create_anonymous_local(ValueType::I32);
