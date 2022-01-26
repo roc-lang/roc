@@ -29,6 +29,7 @@ pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
 #[cfg(feature = "llvm")]
 mod eval;
+mod from_memory;
 #[cfg(feature = "llvm")]
 mod gen;
 
