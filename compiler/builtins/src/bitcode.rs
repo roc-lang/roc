@@ -1,4 +1,5 @@
 use roc_module::symbol::Symbol;
+use roc_target::TargetInfo;
 use std::ops::Index;
 
 pub const BUILTINS_HOST_OBJ_PATH: &str = env!(
@@ -46,7 +47,7 @@ impl FloatWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self) -> u32 {
+    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
         use std::mem::align_of;
         use FloatWidth::*;
 
@@ -106,11 +107,10 @@ impl IntWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self) -> u32 {
+    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
         use std::mem::align_of;
         use IntWidth::*;
 
-        // TODO actually alignment is architecture-specific
         match self {
             U8 | I8 => align_of::<i8>() as u32,
             U16 | I16 => align_of::<i16>() as u32,
