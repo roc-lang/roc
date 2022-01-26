@@ -25,6 +25,8 @@ use roc_mono::ir::Proc;
 
 use roc_mono::ir::ProcLayout;
 
+const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
+
 /// Without this, some tests pass in `cargo test --release` but fail without
 /// the --release flag because they run out of stack space. This increases
 /// stack size for debug builds only, while leaving the stack space at the default
@@ -104,7 +106,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         &stdlib,
         src_dir,
         exposed_types,
-        8,
+        TARGET_INFO,
         builtin_defs_map,
     );
 

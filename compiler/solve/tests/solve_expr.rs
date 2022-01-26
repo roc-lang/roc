@@ -63,7 +63,7 @@ mod solve_expr {
                 &stdlib,
                 dir.path(),
                 exposed_types,
-                8,
+                roc_target::TargetInfo::default_x86_64(),
                 builtin_defs_map,
             );
 

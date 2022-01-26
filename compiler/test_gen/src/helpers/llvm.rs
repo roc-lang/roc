@@ -42,6 +42,8 @@ fn create_llvm_module<'a>(
 ) -> (&'static str, String, &'a Module<'a>) {
     use std::path::{Path, PathBuf};
 
+    let target_info = roc_target::TargetInfo::from(target);
+
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -56,8 +58,6 @@ fn create_llvm_module<'a>(
         module_src = &temp;
     }
 
-    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-
     let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
@@ -66,7 +66,7 @@ fn create_llvm_module<'a>(
         stdlib,
         src_dir,
         exposed_types,
-        ptr_bytes,
+        target_info,
         test_builtin_defs,
     );
 
@@ -213,7 +213,7 @@ fn create_llvm_module<'a>(
         context,
         interns,
         module,
-        target_info: ptr_bytes,
+        target_info,
         is_gen_test,
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
