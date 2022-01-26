@@ -196,15 +196,9 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     pub fn ptr_int(&self) -> IntType<'ctx> {
         let ctx = self.context;
 
-        match self.target_info {
-            1 => ctx.i8_type(),
-            2 => ctx.i16_type(),
-            4 => ctx.i32_type(),
-            8 => ctx.i64_type(),
-            _ => panic!(
-                "Invalid target: Roc does't support compiling to {}-bit systems.",
-                self.target_info * 8
-            ),
+        match self.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => ctx.i32_type(),
+            roc_target::PtrWidth::Bytes8 => ctx.i64_type(),
         }
     }
 
@@ -217,7 +211,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 
     pub fn small_str_bytes(&self) -> u32 {
-        self.target_info * 2
+        self.target_info.ptr_width() as u32 * 2
     }
 
     pub fn build_intrinsic_call(
@@ -318,12 +312,9 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     ) -> CallSiteValue<'ctx> {
         let false_val = self.context.bool_type().const_int(0, false);
 
-        let intrinsic_name = match self.target_info {
-            8 => LLVM_MEMSET_I64,
-            4 => LLVM_MEMSET_I32,
-            other => {
-                unreachable!("Unsupported number of ptr_bytes {:?}", other);
-            }
+        let intrinsic_name = match self.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes8 => LLVM_MEMSET_I64,
+            roc_target::PtrWidth::Bytes4 => LLVM_MEMSET_I32,
         };
 
         self.build_intrinsic_call(
@@ -1789,7 +1780,7 @@ fn tag_pointer_set_tag_id<'a, 'ctx, 'env>(
     pointer: PointerValue<'ctx>,
 ) -> PointerValue<'ctx> {
     // we only have 3 bits, so can encode only 0..7 (or on 32-bit targets, 2 bits to encode 0..3)
-    debug_assert!((tag_id as u32) < env.target_info);
+    debug_assert!((tag_id as u32) < env.target_info.ptr_width() as u32);
 
     let ptr_int = env.ptr_int();
 
@@ -1802,11 +1793,10 @@ fn tag_pointer_set_tag_id<'a, 'ctx, 'env>(
         .build_int_to_ptr(combined, pointer.get_type(), "to_ptr")
 }
 
-pub fn tag_pointer_tag_id_bits_and_mask(ptr_bytes: u32) -> (u64, u64) {
-    match ptr_bytes {
-        8 => (3, 0b0000_0111),
-        4 => (2, 0b0000_0011),
-        _ => unreachable!(),
+pub fn tag_pointer_tag_id_bits_and_mask(target_info: TargetInfo) -> (u64, u64) {
+    match target_info.ptr_width() {
+        roc_target::PtrWidth::Bytes8 => (3, 0b0000_0111),
+        roc_target::PtrWidth::Bytes4 => (2, 0b0000_0011),
     }
 }
 
@@ -2183,8 +2173,9 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let len_type = env.ptr_int();
+    let ptr_width_u32 = env.target_info.ptr_width() as u32;
 
-    let extra_bytes = alignment_bytes.max(env.target_info);
+    let extra_bytes = alignment_bytes.max(ptr_width_u32);
 
     let ptr = {
         // number of bytes we will allocated
@@ -2209,8 +2200,8 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
             .into_pointer_value();
 
         let index = match extra_bytes {
-            n if n == env.target_info => 1,
-            n if n == 2 * env.target_info => 2,
+            n if n == ptr_width_u32 => 1,
+            n if n == 2 * ptr_width_u32 => 2,
             _ => unreachable!("invalid extra_bytes, {}", extra_bytes),
         };
 
@@ -2229,11 +2220,11 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     };
 
     let refcount_ptr = match extra_bytes {
-        n if n == env.target_info => {
+        n if n == ptr_width_u32 => {
             // the allocated pointer is the same as the refcounted pointer
             unsafe { PointerToRefcount::from_ptr(env, ptr) }
         }
-        n if n == 2 * env.target_info => {
+        n if n == 2 * ptr_width_u32 => {
             // the refcount is stored just before the start of the actual data
             // but in this case (because of alignment) not at the start of the allocated buffer
             PointerToRefcount::from_ptr_to_data(env, data_ptr)
@@ -2288,10 +2279,11 @@ fn list_literal<'a, 'ctx, 'env>(
         let size = list_length * element_width as usize;
         let alignment = element_layout
             .alignment_bytes(env.target_info)
-            .max(env.target_info);
+            .max(env.target_info.ptr_width() as u32);
 
         let mut is_all_constant = true;
-        let zero_elements = (env.target_info as f64 / element_width as f64).ceil() as usize;
+        let zero_elements =
+            (env.target_info.ptr_width() as u8 as f64 / element_width as f64).ceil() as usize;
 
         // runtime-evaluated elements
         let mut runtime_evaluated_elements = Vec::with_capacity_in(list_length, env.arena);
@@ -3727,7 +3719,10 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 }
 
 pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
-    let type_ = env.context.i8_type().array_type(5 * env.target_info);
+    let type_ = env
+        .context
+        .i8_type()
+        .array_type(5 * env.target_info.ptr_width() as u32);
 
     let global = match env.module.get_global("roc_sjlj_buffer") {
         Some(global) => global,
@@ -3895,8 +3890,12 @@ fn make_exception_catcher<'a, 'ctx, 'env>(
     function_value
 }
 
-fn roc_result_layout<'a>(arena: &'a Bump, return_layout: Layout<'a>, ptr_bytes: u32) -> Layout<'a> {
-    let elements = [Layout::u64(), Layout::usize(ptr_bytes), return_layout];
+fn roc_result_layout<'a>(
+    arena: &'a Bump,
+    return_layout: Layout<'a>,
+    target_info: TargetInfo,
+) -> Layout<'a> {
+    let elements = [Layout::u64(), Layout::usize(target_info), return_layout];
 
     Layout::Struct(arena.alloc(elements))
 }
@@ -6076,8 +6075,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             {
                 bd.position_at_end(throw_block);
 
-                match env.target_info {
-                    8 => {
+                match env.target_info.ptr_width() {
+                    roc_target::PtrWidth::Bytes8 => {
                         let fn_ptr_type = context
                             .void_type()
                             .fn_type(&[], false)
@@ -6096,11 +6095,10 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                         bd.build_unconditional_branch(then_block);
                     }
-                    4 => {
+                    roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
                         throw_exception(env, "An expectation failed!");
                     }
-                    _ => unreachable!(),
                 }
             }
 
@@ -6196,7 +6194,7 @@ enum CCReturn {
 /// According to the C ABI, how should we return a value with the given layout?
 fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> CCReturn {
     let return_size = layout.stack_size(env.target_info);
-    let pass_result_by_pointer = return_size > 2 * env.target_info;
+    let pass_result_by_pointer = return_size > 2 * env.target_info.ptr_width() as u32;
 
     if return_size == 0 {
         CCReturn::Void
@@ -7130,7 +7128,9 @@ fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
     let ptr = unsafe {
         env.builder.build_in_bounds_gep(
             ptr,
-            &[env.ptr_int().const_int(env.target_info as u64, false)],
+            &[env
+                .ptr_int()
+                .const_int(env.target_info.ptr_width() as u64, false)],
             "get_rc_ptr",
         )
     };
@@ -7160,11 +7160,11 @@ fn define_global_str_literal<'a, 'ctx, 'env>(
         Some(current) => current,
 
         None => {
-            let size = message.bytes().len() + env.target_info as usize;
+            let size = message.bytes().len() + env.target_info.ptr_width() as usize;
             let mut bytes = Vec::with_capacity_in(size, env.arena);
 
             // insert NULL bytes for the refcount
-            for _ in 0..env.target_info {
+            for _ in 0..env.target_info.ptr_width() as usize {
                 bytes.push(env.context.i8_type().const_zero());
             }
 
@@ -7183,7 +7183,7 @@ fn define_global_str_literal<'a, 'ctx, 'env>(
             // strings are NULL-terminated, which means we can't store the refcount (which is 8
             // NULL bytes)
             global.set_constant(true);
-            global.set_alignment(env.target_info);
+            global.set_alignment(env.target_info.ptr_width() as u32);
             global.set_unnamed_addr(true);
             global.set_linkage(inkwell::module::Linkage::Private);
 

@@ -14,13 +14,14 @@ use roc_mono::layout::{
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
+use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 use std::cmp::{max_by_key, min_by_key};
 
 struct Env<'a, 'env> {
     arena: &'a Bump,
     subs: &'env Subs,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
     interns: &'env Interns,
     home: ModuleId,
 }
@@ -47,12 +48,12 @@ pub unsafe fn jit_to_ast<'a>(
     interns: &'a Interns,
     home: ModuleId,
     subs: &'a Subs,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let env = Env {
         arena,
         subs,
-        ptr_bytes,
+        target_info,
         interns,
         home,
     };
@@ -172,7 +173,7 @@ fn get_tags_vars_and_variant<'a>(
     let vars_of_tag: MutMap<_, _> = tags_vec.iter().cloned().collect();
 
     let union_variant =
-        union_sorted_tags_help(env.arena, tags_vec, opt_rec_var, env.subs, env.ptr_bytes);
+        union_sorted_tags_help(env.arena, tags_vec, opt_rec_var, env.subs, env.target_info);
 
     (vars_of_tag, union_variant)
 }
@@ -200,8 +201,12 @@ fn expr_of_tag<'a>(
 
 /// Gets the tag ID of a union variant, assuming that the tag ID is stored alongside (after) the
 /// tag data. The caller is expected to check that the tag ID is indeed stored this way.
-fn tag_id_from_data(union_layout: UnionLayout, data_ptr: *const u8, ptr_bytes: u32) -> i64 {
-    let offset = union_layout.data_size_without_tag_id(ptr_bytes).unwrap();
+fn tag_id_from_data(
+    union_layout: UnionLayout,
+    data_ptr: *const u8,
+    target_info: TargetInfo,
+) -> i64 {
+    let offset = union_layout.data_size_without_tag_id(target_info).unwrap();
 
     unsafe {
         match union_layout.tag_id_builtin() {
@@ -218,13 +223,12 @@ fn tag_id_from_data(union_layout: UnionLayout, data_ptr: *const u8, ptr_bytes: u
     }
 }
 
-fn deref_ptr_of_ptr(ptr_of_ptr: *const u8, ptr_bytes: u32) -> *const u8 {
+fn deref_ptr_of_ptr(ptr_of_ptr: *const u8, target_info: TargetInfo) -> *const u8 {
     unsafe {
-        match ptr_bytes {
+        match target_info.ptr_width() {
             // Our LLVM codegen represents pointers as i32/i64s.
-            4 => *(ptr_of_ptr as *const i32) as *const u8,
-            8 => *(ptr_of_ptr as *const i64) as *const u8,
-            _ => unreachable!(),
+            roc_target::PtrWidth::Bytes4 => *(ptr_of_ptr as *const i32) as *const u8,
+            roc_target::PtrWidth::Bytes8 => *(ptr_of_ptr as *const i64) as *const u8,
         }
     }
 }
@@ -236,20 +240,20 @@ fn deref_ptr_of_ptr(ptr_of_ptr: *const u8, ptr_bytes: u32) -> *const u8 {
 fn tag_id_from_recursive_ptr(
     union_layout: UnionLayout,
     rec_ptr: *const u8,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
 ) -> (i64, *const u8) {
-    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(ptr_bytes);
+    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(target_info);
     if tag_in_ptr {
-        let masked_ptr_to_data = deref_ptr_of_ptr(rec_ptr, ptr_bytes) as i64;
-        let (tag_id_bits, tag_id_mask) = tag_pointer_tag_id_bits_and_mask(ptr_bytes);
+        let masked_ptr_to_data = deref_ptr_of_ptr(rec_ptr, target_info) as i64;
+        let (tag_id_bits, tag_id_mask) = tag_pointer_tag_id_bits_and_mask(target_info);
         let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
 
         // Clear the tag ID data from the pointer
         let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits) << tag_id_bits) as *const u8;
         (tag_id as i64, ptr_to_data)
     } else {
-        let ptr_to_data = deref_ptr_of_ptr(rec_ptr, ptr_bytes);
-        let tag_id = tag_id_from_data(union_layout, ptr_to_data, ptr_bytes);
+        let ptr_to_data = deref_ptr_of_ptr(rec_ptr, target_info);
+        let tag_id = tag_id_from_data(union_layout, ptr_to_data, target_info);
         (tag_id, ptr_to_data)
     }
 }
@@ -388,7 +392,7 @@ fn jit_to_ast_help<'a>(
             let fields = [Layout::u64(), *layout];
             let layout = Layout::Struct(&fields);
 
-            let result_stack_size = layout.stack_size(env.ptr_bytes);
+            let result_stack_size = layout.stack_size(env.target_info);
 
             run_jit_function_dynamic_type!(
                 lib,
@@ -398,7 +402,7 @@ fn jit_to_ast_help<'a>(
             )
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
-            let size = layout.stack_size(env.ptr_bytes);
+            let size = layout.stack_size(env.target_info);
             Ok(run_jit_function_dynamic_type!(
                 lib,
                 main_fn_name,
@@ -412,7 +416,7 @@ fn jit_to_ast_help<'a>(
         | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
-            let size = layout.stack_size(env.ptr_bytes);
+            let size = layout.stack_size(env.target_info);
             Ok(run_jit_function_dynamic_type!(
                 lib,
                 main_fn_name,
@@ -506,7 +510,7 @@ fn ptr_to_ast<'a>(
         }
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
-            let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
+            let len = unsafe { *(ptr.offset(env.target_info.ptr_width() as isize) as *const usize) };
             let ptr = unsafe { *(ptr as *const *const u8) };
 
             list_to_ast(env, ptr, len, elem_layout, content)
@@ -573,7 +577,7 @@ fn ptr_to_ast<'a>(
 
             // Because this is a `NonRecursive`, the tag ID is definitely after the data.
             let tag_id =
-                tag_id_from_data(union_layout, ptr, env.ptr_bytes);
+                tag_id_from_data(union_layout, ptr, env.target_info);
 
             // use the tag ID as an index, to get its name and layout of any arguments
             let (tag_name, arg_layouts) =
@@ -605,7 +609,7 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.ptr_bytes);
+            let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.target_info);
 
             let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
             expr_of_tag(
@@ -633,7 +637,7 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
+            let ptr_to_data = deref_ptr_of_ptr(ptr, env.target_info);
 
             expr_of_tag(
                 env,
@@ -663,7 +667,7 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
+            let ptr_to_data = deref_ptr_of_ptr(ptr, env.target_info);
             if ptr_to_data.is_null() {
                 tag_name_to_expr(env, &nullable_name)
             } else {
@@ -694,11 +698,11 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
+            let ptr_to_data = deref_ptr_of_ptr(ptr, env.target_info);
             if ptr_to_data.is_null() {
                 tag_name_to_expr(env, &nullable_name)
             } else {
-                let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.ptr_bytes);
+                let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.target_info);
 
                 let tag_id = if tag_id > nullable_id.into() { tag_id - 1 } else { tag_id };
 
@@ -749,7 +753,7 @@ fn list_to_ast<'a>(
 
     let arena = env.arena;
     let mut output = Vec::with_capacity_in(len, arena);
-    let elem_size = elem_layout.stack_size(env.ptr_bytes) as usize;
+    let elem_size = elem_layout.stack_size(env.target_info) as usize;
 
     for index in 0..len {
         let offset_bytes = index * elem_size;
@@ -823,7 +827,7 @@ where
         output.push(&*arena.alloc(loc_expr));
 
         // Advance the field pointer to the next field.
-        field_ptr = unsafe { field_ptr.offset(layout.stack_size(env.ptr_bytes) as isize) };
+        field_ptr = unsafe { field_ptr.offset(layout.stack_size(env.target_info) as isize) };
     }
 
     output
@@ -908,7 +912,7 @@ fn struct_to_ast<'a>(
 
             // Advance the field pointer to the next field.
             field_ptr =
-                unsafe { field_ptr.offset(field_layout.stack_size(env.ptr_bytes) as isize) };
+                unsafe { field_ptr.offset(field_layout.stack_size(env.target_info) as isize) };
         }
 
         let output = output.into_bump_slice();
@@ -1083,8 +1087,13 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                         .map(|(a, b)| (a.clone(), b.to_vec()))
                         .collect();
 
-                    let union_variant =
-                        union_sorted_tags_help(env.arena, tags_vec, None, env.subs, env.ptr_bytes);
+                    let union_variant = union_sorted_tags_help(
+                        env.arena,
+                        tags_vec,
+                        None,
+                        env.subs,
+                        env.target_info,
+                    );
 
                     match union_variant {
                         UnionVariant::ByteUnion(tagnames) => {

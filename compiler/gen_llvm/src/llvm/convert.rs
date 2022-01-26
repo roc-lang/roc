@@ -4,6 +4,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_target::TargetInfo;
 
 fn basic_type_from_record<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
@@ -190,13 +191,13 @@ pub fn float_type_from_float_width<'a, 'ctx, 'env>(
 pub fn block_of_memory_slices<'ctx>(
     context: &'ctx Context,
     layouts: &[&[Layout<'_>]],
-    ptr_bytes: u32,
+    target_info: TargetInfo,
 ) -> BasicTypeEnum<'ctx> {
     let mut union_size = 0;
     for tag in layouts {
         let mut total = 0;
         for layout in tag.iter() {
-            total += layout.stack_size(ptr_bytes as u32);
+            total += layout.stack_size(target_info);
         }
 
         union_size = union_size.max(total);
@@ -208,13 +209,13 @@ pub fn block_of_memory_slices<'ctx>(
 pub fn block_of_memory<'ctx>(
     context: &'ctx Context,
     layout: &Layout<'_>,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
 ) -> BasicTypeEnum<'ctx> {
     // TODO make this dynamic
-    let mut union_size = layout.stack_size(ptr_bytes as u32);
+    let mut union_size = layout.stack_size(target_info);
 
     if let Layout::Union(UnionLayout::NonRecursive { .. }) = layout {
-        union_size -= ptr_bytes;
+        union_size -= target_info.ptr_width() as u32;
     }
 
     block_of_memory_help(context, union_size)
@@ -253,16 +254,10 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
 }
 
 /// The int type that the C ABI turns our RocList/RocStr into
-pub fn str_list_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
-    match ptr_bytes {
-        1 => ctx.i16_type(),
-        2 => ctx.i32_type(),
-        4 => ctx.i64_type(),
-        8 => ctx.i128_type(),
-        _ => panic!(
-            "Invalid target: Roc does't support compiling to {}-bit systems.",
-            ptr_bytes * 8
-        ),
+pub fn str_list_int(ctx: &Context, target_info: TargetInfo) -> IntType<'_> {
+    match target_info.ptr_width() {
+        roc_target::PtrWidth::Bytes4 => ctx.i32_type(),
+        roc_target::PtrWidth::Bytes8 => ctx.i64_type(),
     }
 }
 
