@@ -1,5 +1,5 @@
 platform "foo/barbaz"
-    requires {model=>Model} { main : {} }
+    requires {Model} { main : {} }
     exposes []
     packages { foo: "./foo" }
     imports []

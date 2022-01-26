@@ -290,7 +290,7 @@ pub fn gen_from_mono_module_llvm(
         // in gen_tests, the compiler provides roc_panic
         // and sets up the setjump/longjump exception handling
         is_gen_test: false,
-        exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
+        exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
     };
 
     roc_gen_llvm::llvm::build::build_procedures(
@@ -495,6 +495,7 @@ fn gen_from_mono_module_dev_wasm32(
 
     let exposed_to_host = loaded
         .exposed_to_host
+        .values
         .keys()
         .copied()
         .collect::<MutSet<_>>();
@@ -544,7 +545,7 @@ fn gen_from_mono_module_dev_assembly(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        exposed_to_host: exposed_to_host.keys().copied().collect(),
+        exposed_to_host: exposed_to_host.values.keys().copied().collect(),
         lazy_literals,
         generate_allocators,
     };

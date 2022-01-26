@@ -117,9 +117,13 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
         ..
     } = loaded;
 
-    debug_assert_eq!(exposed_to_host.len(), 1);
+    debug_assert_eq!(exposed_to_host.values.len(), 1);
 
-    let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
+    let exposed_to_host = exposed_to_host
+        .values
+        .keys()
+        .copied()
+        .collect::<MutSet<_>>();
 
     let env = roc_gen_wasm::Env {
         arena,

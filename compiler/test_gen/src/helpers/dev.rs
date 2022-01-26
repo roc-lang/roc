@@ -95,7 +95,7 @@ pub fn helper(
         // println!("=================================\n");
     }
 
-    debug_assert_eq!(exposed_to_host.len(), 1);
+    debug_assert_eq!(exposed_to_host.values.len(), 1);
     let main_fn_symbol = loaded.entry_point.symbol;
     let main_fn_layout = loaded.entry_point.layout;
 
@@ -179,7 +179,7 @@ pub fn helper(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        exposed_to_host: exposed_to_host.keys().copied().collect(),
+        exposed_to_host: exposed_to_host.values.keys().copied().collect(),
         lazy_literals,
         generate_allocators: true, // Needed for testing, since we don't have a platform
     };

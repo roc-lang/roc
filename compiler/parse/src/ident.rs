@@ -5,6 +5,23 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::Position;
 
+/// A global tag, for example. Must start with an uppercase letter
+/// and then contain only letters and numbers afterwards - no dots allowed!
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct UppercaseIdent<'a>(&'a str);
+
+impl<'a> From<&'a str> for UppercaseIdent<'a> {
+    fn from(string: &'a str) -> Self {
+        UppercaseIdent(string)
+    }
+}
+
+impl<'a> From<UppercaseIdent<'a>> for &'a str {
+    fn from(ident: UppercaseIdent<'a>) -> Self {
+        ident.0
+    }
+}
+
 /// The parser accepts all of these in any position where any one of them could
 /// appear. This way, canonicalization can give more helpful error messages like
 /// "you can't redefine this tag!" if you wrote `Foo = ...` or
@@ -87,6 +104,21 @@ pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
             }
         } else {
             uppercase_ident().parse(arena, state)
+        }
+    }
+}
+
+/// This could be:
+///
+/// * A module name
+/// * A type name
+/// * A global tag
+pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
+    move |_, state: State<'a>| match chomp_uppercase_part(state.bytes()) {
+        Err(progress) => Err((progress, (), state)),
+        Ok(ident) => {
+            let width = ident.len();
+            Ok((MadeProgress, ident.into(), state.advance(width)))
         }
     }
 }

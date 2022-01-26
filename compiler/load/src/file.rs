@@ -26,6 +26,7 @@ use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::PackageName;
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
+use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
@@ -736,9 +737,17 @@ pub struct MonomorphizedModule<'a> {
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub entry_point: EntryPoint<'a>,
-    pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ExposedToHost {
+    /// usually `mainForHost`
+    pub values: MutMap<Symbol, Variable>,
+    /// exposed closure types, typically `Fx`
+    pub closure_types: Vec<Symbol>,
 }
 
 impl<'a> MonomorphizedModule<'a> {
@@ -836,7 +845,7 @@ enum Msg<'a> {
     /// all modules are now monomorphized, we are done
     FinishedAllSpecialization {
         subs: Subs,
-        exposed_to_host: MutMap<Symbol, Variable>,
+        exposed_to_host: ExposedToHost,
     },
 
     FailedToParse(FileError<'a, SyntaxError<'a>>),
@@ -874,7 +883,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub exposed_to_host: ExposedToHost,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
     /// have completed for a given module.
@@ -1007,7 +1016,7 @@ enum BuildTask<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
-        exposed_to_host: MutMap<Symbol, Variable>,
+        exposed_to_host: ExposedToHost,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -1474,7 +1483,7 @@ where
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
                 procedures: MutMap::default(),
-                exposed_to_host: MutMap::default(),
+                exposed_to_host: ExposedToHost::default(),
                 exposed_types,
                 arc_modules,
                 arc_shorthands,
@@ -1936,12 +1945,17 @@ fn update<'a>(
             };
 
             if is_host_exposed {
-                state.exposed_to_host.extend(
+                state.exposed_to_host.values.extend(
                     solved_module
                         .exposed_vars_by_symbol
                         .iter()
                         .map(|(k, v)| (*k, *v)),
                 );
+
+                state
+                    .exposed_to_host
+                    .closure_types
+                    .extend(solved_module.aliases.keys().copied());
             }
 
             if is_host_exposed && state.goal_phase == Phase::SolveTypes {
@@ -2176,7 +2190,7 @@ fn update<'a>(
 fn finish_specialization(
     state: State,
     subs: Subs,
-    exposed_to_host: MutMap<Symbol, Variable>,
+    exposed_to_host: ExposedToHost,
 ) -> Result<MonomorphizedModule, LoadingProblem> {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
@@ -2234,8 +2248,8 @@ fn finish_specialization(
     let entry_point = {
         let symbol = match platform_data {
             None => {
-                debug_assert_eq!(exposed_to_host.len(), 1);
-                *exposed_to_host.iter().next().unwrap().0
+                debug_assert_eq!(exposed_to_host.values.len(), 1);
+                *exposed_to_host.values.iter().next().unwrap().0
             }
             Some(PlatformData { provides, .. }) => provides,
         };
@@ -2542,6 +2556,20 @@ fn parse_header<'a>(
 
             let packages = unspace(arena, header.packages.items);
 
+            let mut exposes = bumpalo::collections::Vec::new_in(arena);
+            exposes.extend(unspace(arena, header.provides.items));
+
+            if let Some(provided_types) = header.provides_types {
+                for provided_type in unspace(arena, provided_types.items) {
+                    let string: &str = provided_type.value.into();
+                    let exposed_name = ExposedName::new(string);
+
+                    exposes.push(Loc::at(provided_type.region, exposed_name));
+                }
+            }
+
+            let exposes = exposes.into_bump_slice();
+
             let info = HeaderInfo {
                 loc_name: Loc {
                     region: header.name.region,
@@ -2551,7 +2579,7 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages,
-                exposes: unspace(arena, header.provides.items),
+                exposes,
                 imports: unspace(arena, header.imports.items),
                 to_platform: Some(header.to.value),
             };
@@ -2920,6 +2948,7 @@ struct PlatformHeaderInfo<'a> {
     packages: &'a [Loc<PackageEntry<'a>>],
     provides: &'a [Loc<ExposedName<'a>>],
     requires: &'a [Loc<TypedIdent<'a>>],
+    requires_types: &'a [Loc<UppercaseIdent<'a>>],
     imports: &'a [Loc<ImportsEntry<'a>>],
 }
 
@@ -2940,6 +2969,7 @@ fn send_header_two<'a>(
         packages,
         provides,
         requires,
+        requires_types,
         imports,
     } = info;
 
@@ -3043,6 +3073,18 @@ fn send_header_two<'a>(
                 debug_assert!(!scope.contains_key(&ident.clone()));
 
                 scope.insert(ident, (symbol, entry.ident.region));
+            }
+
+            for entry in requires_types {
+                let string: &str = entry.value.into();
+                let ident: Ident = string.into();
+                let ident_id = ident_ids.get_or_insert(&ident);
+                let symbol = Symbol::new(app_module_id, ident_id);
+
+                // Since this value is exposed, add it to our module's default scope.
+                debug_assert!(!scope.contains_key(&ident.clone()));
+
+                scope.insert(ident, (symbol, entry.region));
             }
         }
 
@@ -3289,6 +3331,7 @@ fn fabricate_pkg_config_module<'a>(
             header.requires.signature.region,
             header.requires.signature.extract_spaces().item,
         )]),
+        requires_types: unspace(arena, header.requires.rigids.items),
         imports: unspace(arena, header.imports.items),
     };
 
@@ -3854,7 +3897,7 @@ fn build_pending_specializations<'a>(
     mut layout_cache: LayoutCache<'a>,
     ptr_bytes: u32,
     // TODO remove
-    exposed_to_host: MutMap<Symbol, Variable>,
+    exposed_to_host: ExposedToHost,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
 
@@ -3894,7 +3937,7 @@ fn build_pending_specializations<'a>(
                 &mut module_thunks,
                 &mut mono_env,
                 def,
-                &exposed_to_host,
+                &exposed_to_host.values,
                 false,
             ),
             DeclareRec(defs) => {
@@ -3905,7 +3948,7 @@ fn build_pending_specializations<'a>(
                         &mut module_thunks,
                         &mut mono_env,
                         def,
-                        &exposed_to_host,
+                        &exposed_to_host.values,
                         true,
                     )
                 }

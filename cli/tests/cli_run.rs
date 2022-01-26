@@ -87,7 +87,7 @@ mod cli_run {
 
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], &all_flags[..]].concat());
         if !compile_out.stderr.is_empty() {
-            panic!("{}", compile_out.stderr);
+            panic!("roc build had stderr: {}", compile_out.stderr);
         }
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);
@@ -381,6 +381,14 @@ mod cli_run {
             stdin: &["Giovanni\n", "Giorgio\n"],
             input_file: None,
             expected_ending: "Hi, Giovanni Giorgio!\n",
+            use_valgrind: true,
+        },
+        tui:"tui" => Example {
+            filename: "Main.roc",
+            executable_filename: "tui",
+            stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
+            input_file: None,
+            expected_ending: "Hello Worldfoo!\n",
             use_valgrind: true,
         },
         // custom_malloc:"custom-malloc" => Example {

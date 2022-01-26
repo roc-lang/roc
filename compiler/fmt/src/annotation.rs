@@ -4,6 +4,7 @@ use crate::{
     Buf,
 };
 use roc_parse::ast::{AliasHeader, AssignedField, Expr, Tag, TypeAnnotation};
+use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
 /// Does an AST node need parens around it?
@@ -104,6 +105,22 @@ where
 
     fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
         self.value.format(buf, indent)
+    }
+}
+
+impl<'a> Formattable for UppercaseIdent<'a> {
+    fn is_multiline(&self) -> bool {
+        false
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: Parens,
+        _newlines: Newlines,
+        _indent: u16,
+    ) {
+        buf.push_str((*self).into())
     }
 }
 
@@ -246,8 +263,9 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             }
 
             As(lhs, _spaces, AliasHeader { name, vars }) => {
-                // TODO use spaces?
-                lhs.value.format(buf, indent);
+                // TODO use _spaces?
+                lhs.value
+                    .format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
                 buf.spaces(1);
                 buf.push_str("as");
                 buf.spaces(1);

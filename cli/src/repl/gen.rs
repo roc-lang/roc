@@ -146,8 +146,8 @@ pub fn gen_and_eval<'a>(
             }
         }
 
-        debug_assert_eq!(exposed_to_host.len(), 1);
-        let (main_fn_symbol, main_fn_var) = exposed_to_host.iter().next().unwrap();
+        debug_assert_eq!(exposed_to_host.values.len(), 1);
+        let (main_fn_symbol, main_fn_var) = exposed_to_host.values.iter().next().unwrap();
         let main_fn_symbol = *main_fn_symbol;
         let main_fn_var = *main_fn_var;
 

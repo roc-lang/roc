@@ -2,12 +2,12 @@ use crate::ast::{Collection, CommentOrNewline, Def, Module, Spaced};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader,
-    ModuleName, PackageEntry, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    ModuleName, PackageEntry, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
-use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
+use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase_ident, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, specialize, specialize_region, word1, word2, EEffects, EExposes, EHeader,
+    backtrackable, optional, specialize, specialize_region, word1, EEffects, EExposes, EHeader,
     EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser, SourceError, SyntaxError,
 };
 use crate::state::State;
@@ -227,6 +227,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
             packages,
             imports,
             provides: provides.entries,
+            provides_types: provides.types,
             to: provides.to,
             before_header: &[] as &[_],
             after_app_keyword,
@@ -265,7 +266,7 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
         let (_, ((before_imports, after_imports), imports), state) =
             specialize(EHeader::Imports, imports()).parse(arena, state)?;
 
-        let (_, ((before_provides, after_provides), provides), state) =
+        let (_, ((before_provides, after_provides), (provides, _provides_type)), state) =
             specialize(EHeader::Provides, provides_without_to()).parse(arena, state)?;
 
         let (_, effects, state) = specialize(EHeader::Effects, effects()).parse(arena, state)?;
@@ -299,6 +300,7 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
 #[derive(Debug)]
 struct ProvidesTo<'a> {
     entries: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    types: Option<Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>>,
     to: Loc<To<'a>>,
 
     before_provides_keyword: &'a [CommentOrNewline<'a>],
@@ -337,11 +339,12 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides<'a>> {
             )
         ),
         |(
-            ((before_provides_keyword, after_provides_keyword), entries),
+            ((before_provides_keyword, after_provides_keyword), (entries, provides_types)),
             ((before_to_keyword, after_to_keyword), to),
         )| {
             ProvidesTo {
                 entries,
+                types: provides_types,
                 to,
                 before_provides_keyword,
                 after_provides_keyword,
@@ -357,7 +360,10 @@ fn provides_without_to<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+        (
+            Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+            Option<Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>>,
+        ),
     ),
     EProvides<'a>,
 > {
@@ -371,11 +377,46 @@ fn provides_without_to<'a>() -> impl Parser<
             EProvides::IndentProvides,
             EProvides::IndentListStart
         ),
+        and!(
+            collection_trailing_sep_e!(
+                word1(b'[', EProvides::ListStart),
+                exposes_entry(EProvides::Identifier),
+                word1(b',', EProvides::ListEnd),
+                word1(b']', EProvides::ListEnd),
+                min_indent,
+                EProvides::Open,
+                EProvides::Space,
+                EProvides::IndentListEnd,
+                Spaced::SpaceBefore
+            ),
+            // Optionally
+            optional(provides_types())
+        )
+    )
+}
+
+#[inline(always)]
+fn provides_types<'a>(
+) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>, EProvides<'a>> {
+    let min_indent = 1;
+
+    skip_first!(
+        // We only support spaces here, not newlines, because this is not intended
+        // to be the design forever. Someday it will hopefully work like Elm,
+        // where platform authors can provide functions like Browser.sandbox which
+        // present an API based on ordinary-looking type variables.
+        zero_or_more!(word1(
+            b' ',
+            // HACK: If this errors, EProvides::Provides is not an accurate reflection
+            // of what went wrong. However, this is both skipped and zero_or_more,
+            // so this error should never be visible to anyone in practice!
+            EProvides::Provides
+        )),
         collection_trailing_sep_e!(
-            word1(b'[', EProvides::ListStart),
-            exposes_entry(EProvides::Identifier),
+            word1(b'{', EProvides::ListStart),
+            provides_type_entry(EProvides::Identifier),
             word1(b',', EProvides::ListEnd),
-            word1(b']', EProvides::ListEnd),
+            word1(b'}', EProvides::ListEnd),
             min_indent,
             EProvides::Open,
             EProvides::Space,
@@ -383,6 +424,20 @@ fn provides_without_to<'a>() -> impl Parser<
             Spaced::SpaceBefore
         )
     )
+}
+
+fn provides_type_entry<'a, F, E>(
+    to_expectation: F,
+) -> impl Parser<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>, E>
+where
+    F: Fn(Position) -> E,
+    F: Copy,
+    E: 'a,
+{
+    loc!(map!(
+        specialize(|_, pos| to_expectation(pos), ident::uppercase()),
+        Spaced::Item
+    ))
 }
 
 fn exposes_entry<'a, F, E>(
@@ -439,10 +494,13 @@ fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a
 #[inline(always)]
 fn requires_rigids<'a>(
     min_indent: u32,
-) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, PlatformRigid<'a>>>>, ERequires<'a>> {
+) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>, ERequires<'a>> {
     collection_trailing_sep_e!(
         word1(b'{', ERequires::ListStart),
-        specialize(|_, pos| ERequires::Rigid(pos), loc!(requires_rigid())),
+        specialize(
+            |_, pos| ERequires::Rigid(pos),
+            loc!(map!(ident::uppercase(), Spaced::Item))
+        ),
         word1(b',', ERequires::ListEnd),
         word1(b'}', ERequires::ListEnd),
         min_indent,
@@ -450,17 +508,6 @@ fn requires_rigids<'a>(
         ERequires::Space,
         ERequires::IndentListEnd,
         Spaced::SpaceBefore
-    )
-}
-
-#[inline(always)]
-fn requires_rigid<'a>() -> impl Parser<'a, Spaced<'a, PlatformRigid<'a>>, ()> {
-    map!(
-        and!(
-            lowercase_ident(),
-            skip_first!(word2(b'=', b'>', |_| ()), uppercase_ident())
-        ),
-        |(rigid, alias)| Spaced::Item(PlatformRigid { rigid, alias })
     )
 }
 

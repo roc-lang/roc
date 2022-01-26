@@ -198,6 +198,7 @@ mod test_parse {
         pass/positive_float.expr,
         pass/positive_int.expr,
         pass/private_qualified_tag.expr,
+        pass/provides_type.header,
         pass/qualified_field.expr,
         pass/qualified_global_tag.expr,
         pass/qualified_var.expr,
@@ -205,6 +206,7 @@ mod test_parse {
         pass/record_func_type_decl.expr,
         pass/record_update.expr,
         pass/record_with_if.expr,
+        pass/requires_type.header,
         pass/single_arg_closure.expr,
         pass/single_underscore_closure.expr,
         pass/space_only_after_minus.expr,
@@ -264,8 +266,14 @@ mod test_parse {
         let result = func(&input);
 
         let actual_result = if should_pass {
+            eprintln!("The source code for this test did not successfully parse!\n");
+
             result.unwrap()
         } else {
+            eprintln!(
+                "The source code for this test successfully parsed, but it was not expected to!\n"
+            );
+
             result.unwrap_err()
         };
 
