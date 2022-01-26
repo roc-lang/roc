@@ -1341,10 +1341,10 @@ impl<'a> Builtin<'a> {
         // since both of those are one pointer size, the alignment of that structure is a pointer
         // size
         match self {
-            Int(int_width) => int_width.alignment_bytes(),
-            Float(float_width) => float_width.alignment_bytes(),
+            Int(int_width) => int_width.alignment_bytes(target_info),
+            Float(float_width) => float_width.alignment_bytes(target_info),
             Bool => align_of::<bool>() as u32,
-            Decimal => IntWidth::I128.alignment_bytes(),
+            Decimal => IntWidth::I128.alignment_bytes(target_info),
             Dict(_, _) => ptr_width,
             Set(_) => ptr_width,
             // we often treat these as i128 (64-bit systems)
