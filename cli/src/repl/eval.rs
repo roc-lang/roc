@@ -397,7 +397,7 @@ fn jit_to_ast_help<'a, M>(
                 lib,
                 main_fn_name,
                 result_stack_size as usize,
-                |bytes: *const u8| { ptr_to_ast(bytes as *const u8) }
+                |bytes: *const u8| { ptr_to_ast(bytes) }
             )
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
@@ -789,11 +789,11 @@ fn single_tag_union_to_ast<'a, M>(
 
     let output = if field_layouts.len() == payload_vars.len() {
         let it = payload_vars.iter().copied().zip(field_layouts);
-        sequence_of_expr(env, ptr as *const u8, it, WhenRecursive::Unreachable).into_bump_slice()
+        sequence_of_expr(env, ptr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else if field_layouts.is_empty() && !payload_vars.is_empty() {
         // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
         let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
-        sequence_of_expr(env, ptr as *const u8, it, WhenRecursive::Unreachable).into_bump_slice()
+        sequence_of_expr(env, ptr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else {
         unreachable!()
     };
@@ -816,7 +816,7 @@ where
     let mut output = Vec::with_capacity_in(sequence.len(), arena);
 
     // We'll advance this as we iterate through the fields
-    let mut field_ptr = ptr as *const u8;
+    let mut field_ptr = ptr;
 
     for (var, layout) in sequence {
         let content = subs.get_content_without_compacting(var);
