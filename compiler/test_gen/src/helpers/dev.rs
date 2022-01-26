@@ -57,7 +57,7 @@ pub fn helper(
         &stdlib,
         src_dir,
         exposed_types,
-        8,
+        roc_target::TargetInfo::default_x86_64(),
         builtin_defs_map,
     );
 

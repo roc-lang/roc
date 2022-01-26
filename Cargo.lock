@@ -3690,6 +3690,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_target",
  "roc_test_utils",
  "roc_types",
  "ven_pretty",
@@ -3712,6 +3713,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "tempfile",
@@ -4280,6 +4282,7 @@ dependencies = [
  "roc_reporting",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "target-lexicon",
@@ -4301,6 +4304,7 @@ dependencies = [
  "roc_load",
  "roc_module",
  "roc_mono",
+ "roc_target",
  "test_mono_macros",
 ]
 

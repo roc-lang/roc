@@ -31,6 +31,7 @@ roc_load = { path = "../load" }
 roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
 roc_build = { path = "../build" }
+roc_target = { path = "../target" }
 roc_std = { path = "../../roc_std" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 either = "1.6.1"

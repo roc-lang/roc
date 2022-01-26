@@ -28,6 +28,8 @@ mod test_load {
     use roc_types::subs::Subs;
     use std::collections::HashMap;
 
+    const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
+
     // HELPERS
 
     fn multiple_modules(files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
@@ -110,7 +112,7 @@ mod test_load {
                 arena.alloc(stdlib),
                 dir.path(),
                 exposed_types,
-                8,
+                TARGET_INFO,
                 builtin_defs_map,
             )
         };
@@ -134,7 +136,7 @@ mod test_load {
             arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
-            8,
+            TARGET_INFO,
             builtin_defs_map,
         );
         let mut loaded_module = match loaded {
@@ -305,7 +307,7 @@ mod test_load {
             arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
-            8,
+            TARGET_INFO,
             builtin_defs_map,
         );
 
