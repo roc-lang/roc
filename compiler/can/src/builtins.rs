@@ -85,7 +85,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_TRIM => str_trim,
         STR_TRIM_LEFT => str_trim_left,
         STR_TRIM_RIGHT => str_trim_right,
-        STR_DROP_PREFIX_UNSAFE => str_drop_prefix,
+        STR_DROP_PREFIX_PUBLIC => str_drop_prefix,
         STR_TO_DEC => str_to_num,
         STR_TO_F64 => str_to_num,
         STR_TO_F32 => str_to_num,

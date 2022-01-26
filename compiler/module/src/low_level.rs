@@ -213,6 +213,7 @@ impl LowLevelWrapperType {
             Symbol::STR_TRIM_LEFT => CanBeReplacedBy(StrTrimLeft),
             Symbol::STR_TRIM_RIGHT => CanBeReplacedBy(StrTrimRight),
             Symbol::STR_DROP_PREFIX_UNSAFE => CanBeReplacedBy(StrDropPrefixUnsafe),
+            Symbol::STR_DROP_PREFIX_PUBLIC => WrapperIsRequired,
             Symbol::STR_TO_DEC => WrapperIsRequired,
             Symbol::STR_TO_F64 => WrapperIsRequired,
             Symbol::STR_TO_F32 => WrapperIsRequired,
