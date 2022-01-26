@@ -256,8 +256,8 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
 /// The int type that the C ABI turns our RocList/RocStr into
 pub fn str_list_int(ctx: &Context, target_info: TargetInfo) -> IntType<'_> {
     match target_info.ptr_width() {
-        roc_target::PtrWidth::Bytes4 => ctx.i32_type(),
-        roc_target::PtrWidth::Bytes8 => ctx.i64_type(),
+        roc_target::PtrWidth::Bytes4 => ctx.i64_type(),
+        roc_target::PtrWidth::Bytes8 => ctx.i128_type(),
     }
 }
 
