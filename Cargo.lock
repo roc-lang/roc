@@ -3297,6 +3297,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_region",
+ "roc_target",
  "roc_types",
 ]
 
@@ -3526,6 +3527,7 @@ dependencies = [
  "roc_module",
  "roc_mono",
  "roc_std",
+ "roc_target",
  "target-lexicon",
 ]
 
@@ -3621,6 +3623,7 @@ dependencies = [
  "roc_region",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "static_assertions",
