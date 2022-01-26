@@ -21,7 +21,7 @@ roc_builtins = { path = "../builtins" }
 roc_problem = { path = "../problem" }
 roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }
-roc_target = { path = "../target" }
+roc_target = { path = "../roc_target" }
 pretty_assertions = "1.0.0"
 indoc = "1.0.3"
 tempfile = "3.2.0"

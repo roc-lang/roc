@@ -12,7 +12,7 @@ roc_module = { path = "../module" }
 roc_builtins = { path = "../builtins" }
 roc_error_macros = { path = "../../error_macros" }
 roc_mono = { path = "../mono" }
-roc_target = { path = "../target" }
+roc_target = { path = "../roc_target" }
 roc_std = { path = "../../roc_std" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
