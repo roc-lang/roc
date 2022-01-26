@@ -410,8 +410,8 @@ fn start_phase<'a>(
                     .status
                     .insert(Job::Step(module_id, Phase::LoadHeader), Status::Pending);
             }
-            _ => unreachable!(
-                "Pair {:?} is not in dependencies.status, that should never happen!",
+            _ => internal_error!(
+                "unreachable: Pair {:?} is not in dependencies.status, that should never happen!",
                 (module_id, phase)
             ),
         },
@@ -494,9 +494,10 @@ fn start_phase<'a>(
 
                 for imported in parsed.imported_modules.keys() {
                     match state.module_cache.aliases.get(imported) {
-                        None => unreachable!(
-                            r"imported module {:?} did not register its aliases, so {:?} cannot use them",
-                            imported, parsed.module_id,
+                        None => internal_error!(
+                            r"unreachable: imported module {:?} did not register its aliases, so {:?} cannot use them",
+                            imported,
+                            parsed.module_id,
                         ),
                         Some(new) => {
                             // TODO filter to only add imported aliases

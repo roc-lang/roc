@@ -618,9 +618,10 @@ pub fn sort_can_defs(
 
                     for symbol in &cycle {
                         match refs_by_symbol.get(symbol) {
-                            None => unreachable!(
-                                r#"Symbol `{:?}` not found in refs_by_symbol! refs_by_symbol was: {:?}"#,
-                                symbol, refs_by_symbol
+                            None => internal_error!(
+                                r#"unreachable: Symbol `{:?}` not found in refs_by_symbol! refs_by_symbol was: {:?}"#,
+                                symbol,
+                                refs_by_symbol
                             ),
                             Some((region, _)) => {
                                 let expr_region =

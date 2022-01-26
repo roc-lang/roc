@@ -1539,8 +1539,8 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                         internal_error!("unreachable: Tried to inline a non-function");
                     }
                     None => {
-                        unreachable!(
-                            "Tried to inline a builtin that wasn't registered: {:?}",
+                        internal_error!(
+                            "unreachable: Tried to inline a builtin that wasn't registered: {:?}",
                             symbol
                         );
                     }

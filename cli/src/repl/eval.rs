@@ -383,8 +383,8 @@ fn jit_to_ast_help<'a>(
                     Ok(OPAQUE_FUNCTION)
                 }
                 other => {
-                    unreachable!(
-                        "Something had a Struct layout, but instead of a Record or TagUnion type, it had: {:?}",
+                    internal_error!(
+                        "unreachable: Something had a Struct layout, but instead of a Record or TagUnion type, it had: {:?}",
                         other
                     );
                 }
@@ -539,8 +539,8 @@ fn ptr_to_ast<'a>(
                 struct_to_ast(env, ptr, &[], RecordFields::empty())
             }
             other => {
-                unreachable!(
-                    "Something had a Struct layout, but instead of a Record type, it had: {:?}",
+                internal_error!(
+                    "unreachable: Something had a Struct layout, but instead of a Record type, it had: {:?}",
                     other
                 );
             }
@@ -745,8 +745,8 @@ fn list_to_ast<'a>(
             env.subs.get_content_without_compacting(elem_var)
         }
         other => {
-            unreachable!(
-                "Something had a Struct layout, but instead of a Record type, it had: {:?}",
+            internal_error!(
+                "unreachable: Something had a Struct layout, but instead of a Record type, it had: {:?}",
                 other
             );
         }
