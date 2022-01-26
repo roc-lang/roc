@@ -17,10 +17,11 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 use std::cmp::{max_by_key, min_by_key};
 
-struct Env<'a, 'env> {
+struct Env<'a, 'env, M> {
     arena: &'a Bump,
     subs: &'env Subs,
     ptr_bytes: u32,
+    app_memory: M,
     interns: &'env Interns,
     home: ModuleId,
 }
@@ -38,7 +39,7 @@ pub enum ToAstProblem {
 /// we get to a struct or tag, we know what the labels are and can turn them
 /// back into the appropriate user-facing literals.
 #[allow(clippy::too_many_arguments)]
-pub unsafe fn jit_to_ast<'a>(
+pub unsafe fn jit_to_ast<'a, M>(
     arena: &'a Bump,
     lib: Library,
     main_fn_name: &str,
@@ -48,11 +49,13 @@ pub unsafe fn jit_to_ast<'a>(
     home: ModuleId,
     subs: &'a Subs,
     ptr_bytes: u32,
+    app_memory: M,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let env = Env {
         arena,
         subs,
         ptr_bytes,
+        app_memory,
         interns,
         home,
     };
@@ -83,8 +86,8 @@ enum NewtypeKind<'a> {
 ///
 /// The returned list of newtype containers is ordered by increasing depth. As an example,
 /// `A ({b : C 123})` will have the unrolled list `[Tag(A), RecordField(b), Tag(C)]`.
-fn unroll_newtypes<'a>(
-    env: &Env<'a, 'a>,
+fn unroll_newtypes<'a, M>(
+    env: &Env<'a, 'a, M>,
     mut content: &'a Content,
 ) -> (Vec<'a, NewtypeKind<'a>>, &'a Content) {
     let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
@@ -117,8 +120,8 @@ fn unroll_newtypes<'a>(
     }
 }
 
-fn apply_newtypes<'a>(
-    env: &Env<'a, '_>,
+fn apply_newtypes<'a, M>(
+    env: &Env<'a, '_, M>,
     newtype_containers: Vec<'a, NewtypeKind<'a>>,
     mut expr: Expr<'a>,
 ) -> Expr<'a> {
@@ -145,22 +148,22 @@ fn apply_newtypes<'a>(
     expr
 }
 
-fn unroll_aliases<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
+fn unroll_aliases<'a, M>(env: &Env<'a, 'a, M>, mut content: &'a Content) -> &'a Content {
     while let Content::Alias(_, _, real) = content {
         content = env.subs.get_content_without_compacting(*real);
     }
     content
 }
 
-fn unroll_recursion_var<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
+fn unroll_recursion_var<'a, M>(env: &Env<'a, 'a, M>, mut content: &'a Content) -> &'a Content {
     while let Content::RecursionVar { structure, .. } = content {
         content = env.subs.get_content_without_compacting(*structure);
     }
     content
 }
 
-fn get_tags_vars_and_variant<'a>(
-    env: &Env<'a, '_>,
+fn get_tags_vars_and_variant<'a, M>(
+    env: &Env<'a, '_, M>,
     tags: &UnionTags,
     opt_rec_var: Option<Variable>,
 ) -> (MutMap<TagName, std::vec::Vec<Variable>>, UnionVariant<'a>) {
@@ -177,8 +180,8 @@ fn get_tags_vars_and_variant<'a>(
     (vars_of_tag, union_variant)
 }
 
-fn expr_of_tag<'a>(
-    env: &Env<'a, 'a>,
+fn expr_of_tag<'a, M>(
+    env: &Env<'a, 'a, M>,
     ptr_to_data: *const u8,
     tag_name: &TagName,
     arg_layouts: &'a [Layout<'a>],
@@ -259,8 +262,8 @@ const OPAQUE_FUNCTION: Expr = Expr::Var {
     ident: "<function>",
 };
 
-fn jit_to_ast_help<'a>(
-    env: &Env<'a, 'a>,
+fn jit_to_ast_help<'a, M>(
+    env: &Env<'a, 'a, M>,
     lib: Library,
     main_fn_name: &str,
     layout: &Layout<'a>,
@@ -430,7 +433,7 @@ fn jit_to_ast_help<'a>(
     result.map(|e| apply_newtypes(env, newtype_containers, e))
 }
 
-fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
+fn tag_name_to_expr<'a, M>(env: &Env<'a, '_, M>, tag_name: &TagName) -> Expr<'a> {
     match tag_name {
         TagName::Global(_) => Expr::GlobalTag(
             env.arena
@@ -452,8 +455,8 @@ enum WhenRecursive<'a> {
     Loop(Layout<'a>),
 }
 
-fn ptr_to_ast<'a>(
-    env: &Env<'a, 'a>,
+fn ptr_to_ast<'a, M>(
+    env: &Env<'a, 'a, M>,
     ptr: *const u8,
     layout: &Layout<'a>,
     when_recursive: WhenRecursive<'a>,
@@ -723,8 +726,8 @@ fn ptr_to_ast<'a>(
     apply_newtypes(env, newtype_containers, expr)
 }
 
-fn list_to_ast<'a>(
-    env: &Env<'a, 'a>,
+fn list_to_ast<'a, M>(
+    env: &Env<'a, 'a, M>,
     ptr: *const u8,
     len: usize,
     elem_layout: &Layout<'a>,
@@ -772,8 +775,8 @@ fn list_to_ast<'a>(
     Expr::List(Collection::with_items(output))
 }
 
-fn single_tag_union_to_ast<'a>(
-    env: &Env<'a, 'a>,
+fn single_tag_union_to_ast<'a, M>(
+    env: &Env<'a, 'a, M>,
     ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
     tag_name: &TagName,
@@ -798,8 +801,8 @@ fn single_tag_union_to_ast<'a>(
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
 }
 
-fn sequence_of_expr<'a, I>(
-    env: &Env<'a, 'a>,
+fn sequence_of_expr<'a, I, M>(
+    env: &Env<'a, 'a, M>,
     ptr: *const u8,
     sequence: I,
     when_recursive: WhenRecursive<'a>,
@@ -829,8 +832,8 @@ where
     output
 }
 
-fn struct_to_ast<'a>(
-    env: &Env<'a, 'a>,
+fn struct_to_ast<'a, M>(
+    env: &Env<'a, 'a, M>,
     ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
     record_fields: RecordFields,
@@ -947,7 +950,7 @@ fn unpack_two_element_tag_union(
     (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }
 
-fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a> {
+fn bool_to_ast<'a, M>(env: &Env<'a, '_, M>, value: bool, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1025,7 +1028,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
     }
 }
 
-fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> {
+fn byte_to_ast<'a, M>(env: &Env<'a, '_, M>, value: u8, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1112,7 +1115,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
     }
 }
 
-fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> Expr<'a> {
+fn num_to_ast<'a, M>(env: &Env<'a, '_, M>, num_expr: Expr<'a>, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;

@@ -1,4 +1,5 @@
 use crate::repl::eval;
+use crate::repl::from_memory::AppMemoryInternal;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -238,6 +239,7 @@ pub fn gen_and_eval<'a>(
                 home,
                 &subs,
                 ptr_bytes,
+                AppMemoryInternal,
             )
         };
         let mut expr = roc_fmt::Buf::new_in(&arena);
