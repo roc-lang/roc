@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod test_peg_grammar {
+    use std::fs;
+
 
   #[repr(u8)]
   #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -941,60 +943,49 @@ fn test_order_of_ops() {
   assert_eq!(tokenparser::full_expr(&[T::UppercaseIdent, T::OpOr, T::UppercaseIdent, T::OpAnd, T::UppercaseIdent, T::OpOr, T::UppercaseIdent]), Ok(()));
 }
 
-// TODO read test programs from example/snapshots files
+fn file_to_string(file_path: &str) -> String {
+  // it's ok to panic in a test
+  fs::read_to_string(file_path).unwrap()
+}
+
+fn example_path(sub_path: &str) -> String {
+  let examples_dir = "../../examples/".to_string();
+
+  let file_path = examples_dir + sub_path;
+
+  file_to_string(
+    &file_path
+  )
+}
+
 #[test]
 fn test_hello() {
-  let tokens = test_tokenize( r#"
-app "test-app"
-    packages { pf: "platform" }
-    imports []
-    provides [ main ] to pf
-
-main = "Hello world!"
-"#);
-  dbg!(&tokens);
+  let tokens = test_tokenize(&example_path("hello-world/Hello.roc"));
+  
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
-// TODO read test programs from example/snapshots files
 #[test]
 fn test_fibo() {
-  let tokens = test_tokenize( r#"app "fib"
-    packages { pf: "platform" }
-    imports []
-    provides [ main ] to pf
+  let tokens = test_tokenize(&example_path("fib/Fib.roc"));
 
-main = \n -> fib n 0 1
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}
 
-# the clever implementation requires join points
-fib = \n, a, b ->
-    if n == 0 then
-        a
-    else
-        fib (n - 1) b (a + b)"#);
+#[test]
+fn test_cons_list() {
+  let tokens = test_tokenize(&example_path("effect/ConsList.roc"));
   dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
-/*#[test]
-fn astar_init_model() {
-  let lex = Token::lexer( 
-  r#"
-initialModel = \start ->
-    {
-        evaluated: Set.empty,
-        openSet: Set.single start,
-        costs: Dict.single start 0,
-        cameFrom: Dict.empty,
-    }
-"#);
-
-  let tokens: Vec<Token> = lex.collect();
+#[test]
+fn test_annotation() {
+  // TODO fix this
+  let tokens = test_tokenize( r#"ConsList a : [ Cons a (ConsList a), Nil ]"#);
   dbg!(&tokens);
-  dbg!(tokens.len());
-
   assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
-*/
+
 
 }
