@@ -22,6 +22,7 @@ members = [
     "compiler/build",
     "compiler/arena_pool",
     "compiler/test_gen",
+    "compiler/target",
     "vendor/ena",
     "vendor/inkwell",
     "vendor/pathfinding",

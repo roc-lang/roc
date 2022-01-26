@@ -3718,6 +3718,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_target"
+version = "0.1.0"
+dependencies = [
+ "target-lexicon",
+]
+
+[[package]]
 name = "roc_test_utils"
 version = "0.1.0"
 dependencies = [
