@@ -87,7 +87,7 @@ pub fn layout_width<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     env.ptr_int()
-        .const_int(layout.stack_size(env.ptr_bytes) as u64, false)
+        .const_int(layout.stack_size(env.target_info) as u64, false)
         .into()
 }
 
@@ -1254,17 +1254,17 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     let ctx = env.context;
 
     let len_type = env.ptr_int();
-    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+    let elem_bytes = elem_layout.stack_size(env.target_info) as u64;
     let bytes_per_element = len_type.const_int(elem_bytes, false);
     let number_of_data_bytes =
         builder.build_int_mul(bytes_per_element, number_of_elements, "data_length");
 
     // the refcount of a new list is initially 1
     // we assume that the list is indeed used (dead variables are eliminated)
-    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
+    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.target_info);
 
     let basic_type = basic_type_from_layout(env, elem_layout);
-    let alignment_bytes = elem_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_bytes = elem_layout.alignment_bytes(env.target_info);
     allocate_with_refcount_help(env, basic_type, alignment_bytes, number_of_data_bytes, rc1)
 }
 

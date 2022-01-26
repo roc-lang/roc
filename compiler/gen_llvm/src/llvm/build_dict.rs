@@ -105,15 +105,15 @@ pub fn dict_insert<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
     let result_ptr = builder.build_alloca(zig_dict_type(env), "result_ptr");
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -162,15 +162,15 @@ pub fn dict_remove<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
     let result_ptr = builder.build_alloca(zig_dict_type(env), "result_ptr");
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -218,13 +218,13 @@ pub fn dict_contains<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -264,13 +264,13 @@ pub fn dict_get<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -366,13 +366,13 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
 ) {
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let (key_fn, value_fn) = match rc_operation {
@@ -412,13 +412,13 @@ pub fn dict_keys<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let inc_key_fn = build_inc_wrapper(env, layout_ids, key_layout);
@@ -454,7 +454,7 @@ fn pass_dict_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     dict: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    match env.ptr_bytes {
+    match env.target_info {
         4 => {
             let target_type = env.context.custom_width_int_type(96).into();
 
@@ -483,13 +483,13 @@ pub fn dict_union<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -576,13 +576,13 @@ fn dict_intersect_or_difference<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -631,7 +631,7 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     let accum_ptr = builder.build_alloca(accum_bt, "accum_ptr");
     env.builder.build_store(accum_ptr, accum);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let output_ptr = builder.build_alloca(accum_bt, "output_ptr");
@@ -671,13 +671,13 @@ pub fn dict_values<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
@@ -729,14 +729,14 @@ pub fn set_from_list<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env.ptr_int().const_zero();
 
     let result_alloca = builder.build_alloca(zig_dict_type(env), "result_alloca");
 
     let alignment =
-        Alignment::from_key_value_layout(key_layout, &Layout::Struct(&[]), env.ptr_bytes);
+        Alignment::from_key_value_layout(key_layout, &Layout::Struct(&[]), env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);

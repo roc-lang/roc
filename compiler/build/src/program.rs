@@ -286,7 +286,7 @@ pub fn gen_from_mono_module_llvm(
         context: &context,
         interns: loaded.interns,
         module,
-        ptr_bytes,
+        target_info: ptr_bytes,
         // in gen_tests, the compiler provides roc_panic
         // and sets up the setjump/longjump exception handling
         is_gen_test: false,
