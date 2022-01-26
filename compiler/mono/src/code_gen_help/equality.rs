@@ -590,7 +590,9 @@ fn eq_list<'a>(
 
     // let size = literal int
     let size = root.create_symbol(ident_ids, "size");
-    let size_expr = Expr::Literal(Literal::Int(elem_layout.stack_size(root.ptr_size) as i128));
+    let size_expr = Expr::Literal(Literal::Int(
+        elem_layout.stack_size(root.target_info) as i128
+    ));
     let size_stmt = |next| Stmt::Let(size, size_expr, layout_isize, next);
 
     // let list_size = len_1 * size

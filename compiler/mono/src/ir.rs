@@ -16,6 +16,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
+use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -1071,7 +1072,7 @@ pub struct Env<'a, 'i> {
     pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
-    pub target_info: u32,
+    pub target_info: TargetInfo,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
 }
@@ -8259,7 +8260,7 @@ pub enum IntOrFloat {
 /// Given the `a` in `Num a`, determines whether it's an int or a float
 pub fn num_argument_to_int_or_float(
     subs: &Subs,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
     var: Variable,
     known_to_be_float: bool,
 ) -> IntOrFloat {
@@ -8274,7 +8275,7 @@ pub fn num_argument_to_int_or_float(
 
             // Recurse on the second argument
             let var = subs[args.variables().into_iter().next().unwrap()];
-            num_argument_to_int_or_float(subs, ptr_bytes, var, false)
+            num_argument_to_int_or_float(subs, target_info, var, false)
         }
 
         other @ Content::Alias(symbol, args, _) => {
@@ -8292,16 +8293,15 @@ pub fn num_argument_to_int_or_float(
 
                     // Recurse on the second argument
                     let var = subs[args.variables().into_iter().next().unwrap()];
-                    num_argument_to_int_or_float(subs, ptr_bytes, var, true)
+                    num_argument_to_int_or_float(subs, target_info, var, true)
                 }
 
                 Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => IntOrFloat::DecimalFloatType,
 
                 Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
-                    let int_width = match ptr_bytes {
-                        4 => IntWidth::U32,
-                        8 => IntWidth::U64,
-                        _ => panic!("unsupported word size"),
+                    let int_width = match target_info.ptr_width() {
+                        roc_target::PtrWidth::Bytes4 => IntWidth::U32,
+                        roc_target::PtrWidth::Bytes8 => IntWidth::U64,
                     };
 
                     IntOrFloat::Int(int_width)
