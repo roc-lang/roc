@@ -3824,7 +3824,7 @@ fn make_specializations<'a>(
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
-        ptr_bytes,
+        target_info: ptr_bytes,
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
@@ -3920,7 +3920,7 @@ fn build_pending_specializations<'a>(
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
-        ptr_bytes,
+        target_info: ptr_bytes,
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,

@@ -213,7 +213,7 @@ fn create_llvm_module<'a>(
         context,
         interns,
         module,
-        ptr_bytes,
+        target_info: ptr_bytes,
         is_gen_test,
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),

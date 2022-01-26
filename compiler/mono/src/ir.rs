@@ -1071,7 +1071,7 @@ pub struct Env<'a, 'i> {
     pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
-    pub ptr_bytes: u32,
+    pub target_info: u32,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
 }
@@ -2471,7 +2471,7 @@ fn specialize_external<'a>(
                                 env.arena,
                             );
 
-                            let ptr_bytes = env.ptr_bytes;
+                            let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
                                 let size1 = layout1.alignment_bytes(ptr_bytes);
@@ -2504,7 +2504,7 @@ fn specialize_external<'a>(
                                 env.arena,
                             );
 
-                            let ptr_bytes = env.ptr_bytes;
+                            let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
                                 let size1 = layout1.alignment_bytes(ptr_bytes);
@@ -3009,14 +3009,14 @@ fn try_make_literal<'a>(
 
     match can_expr {
         Int(_, precision, _, int) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *precision, false) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *precision, false) {
                 IntOrFloat::Int(_) => Some(Literal::Int(*int)),
                 _ => unreachable!("unexpected float precision for integer"),
             }
         }
 
         Float(_, precision, float_str, float) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *precision, true) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *precision, true) {
                 IntOrFloat::Float(_) => Some(Literal::Float(*float)),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(float_str) {
@@ -3037,7 +3037,7 @@ fn try_make_literal<'a>(
         // Str(string) => Some(Literal::Str(env.arena.alloc(string))),
         Num(var, num_str, num) => {
             // first figure out what kind of number this is
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
                 IntOrFloat::Int(_) => Some(Literal::Int((*num).into())),
                 IntOrFloat::Float(_) => Some(Literal::Float(*num as f64)),
                 IntOrFloat::DecimalFloatType => {
@@ -3072,7 +3072,7 @@ pub fn with_hole<'a>(
 
     match can_expr {
         Int(_, precision, _, int) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, false) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, precision, false) {
                 IntOrFloat::Int(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(int)),
@@ -3084,7 +3084,7 @@ pub fn with_hole<'a>(
         }
 
         Float(_, precision, float_str, float) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, true) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, precision, true) {
                 IntOrFloat::Float(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Float(float)),
@@ -3116,7 +3116,7 @@ pub fn with_hole<'a>(
 
         Num(var, num_str, num) => {
             // first figure out what kind of number this is
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, var, false) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, var, false) {
                 IntOrFloat::Int(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(num.into())),
@@ -3393,7 +3393,7 @@ pub fn with_hole<'a>(
                 env.arena,
                 record_var,
                 env.subs,
-                env.ptr_bytes,
+                env.target_info,
             ) {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't create record with improper layout"),
@@ -3754,7 +3754,7 @@ pub fn with_hole<'a>(
                 env.arena,
                 record_var,
                 env.subs,
-                env.ptr_bytes,
+                env.target_info,
             ) {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't access record with improper layout"),
@@ -3911,7 +3911,7 @@ pub fn with_hole<'a>(
                 env.arena,
                 record_var,
                 env.subs,
-                env.ptr_bytes,
+                env.target_info,
             ) {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't update record with improper layout"),
@@ -4586,7 +4586,7 @@ fn construct_closure_data<'a>(
                 env.arena,
             );
 
-            let ptr_bytes = env.ptr_bytes;
+            let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
                 let size1 = layout1.alignment_bytes(ptr_bytes);
@@ -4617,7 +4617,7 @@ fn construct_closure_data<'a>(
                 env.arena,
             );
 
-            let ptr_bytes = env.ptr_bytes;
+            let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
                 let size1 = layout1.alignment_bytes(ptr_bytes);
@@ -4692,7 +4692,7 @@ fn convert_tag_union<'a>(
 ) -> Stmt<'a> {
     use crate::layout::UnionVariant::*;
     let res_variant =
-        crate::layout::union_sorted_tags(env.arena, variant_var, env.subs, env.ptr_bytes);
+        crate::layout::union_sorted_tags(env.arena, variant_var, env.subs, env.target_info);
     let variant = match res_variant {
         Ok(cached) => cached,
         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
@@ -5035,7 +5035,7 @@ fn sorted_field_symbols<'a>(
             }
         };
 
-        let alignment = layout.alignment_bytes(env.ptr_bytes);
+        let alignment = layout.alignment_bytes(env.target_info);
 
         let symbol = possible_reuse_symbol(env, procs, &arg.value);
         field_symbols_temp.push((alignment, symbol, ((var, arg), &*env.arena.alloc(symbol))));
@@ -5120,7 +5120,7 @@ fn register_capturing_closure<'a>(
 
         let captured_symbols = match *env.subs.get_content_without_compacting(function_type) {
             Content::Structure(FlatType::Func(_, closure_var, _)) => {
-                match LambdaSet::from_var(env.arena, env.subs, closure_var, env.ptr_bytes) {
+                match LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info) {
                     Ok(lambda_set) => {
                         if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
                             CapturedSymbols::None
@@ -7621,7 +7621,7 @@ fn from_can_pattern_help<'a>(
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
         IntLiteral(var, _, int) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
                 IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*int as i128, precision)),
                 other => {
                     panic!(
@@ -7633,7 +7633,7 @@ fn from_can_pattern_help<'a>(
         }
         FloatLiteral(var, float_str, float) => {
             // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, true) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *var, true) {
                 IntOrFloat::Int(_) => {
                     panic!("Invalid precision for float pattern {:?}", var)
                 }
@@ -7663,7 +7663,7 @@ fn from_can_pattern_help<'a>(
             Err(RuntimeError::UnsupportedPattern(*region))
         }
         NumLiteral(var, num_str, num) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
                 IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*num as i128, precision)),
                 IntOrFloat::Float(precision) => Ok(Pattern::FloatLiteral(*num as u64, precision)),
                 IntOrFloat::DecimalFloatType => {
@@ -7686,7 +7686,7 @@ fn from_can_pattern_help<'a>(
             use crate::layout::UnionVariant::*;
 
             let res_variant =
-                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.ptr_bytes)
+                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.target_info)
                     .map_err(Into::into);
 
             let variant = match res_variant {
@@ -7768,12 +7768,12 @@ fn from_can_pattern_help<'a>(
                     arguments.sort_by(|arg1, arg2| {
                         let size1 = layout_cache
                             .from_var(env.arena, arg1.0, env.subs)
-                            .map(|x| x.alignment_bytes(env.ptr_bytes))
+                            .map(|x| x.alignment_bytes(env.target_info))
                             .unwrap_or(0);
 
                         let size2 = layout_cache
                             .from_var(env.arena, arg2.0, env.subs)
-                            .map(|x| x.alignment_bytes(env.ptr_bytes))
+                            .map(|x| x.alignment_bytes(env.target_info))
                             .unwrap_or(0);
 
                         size2.cmp(&size1)
@@ -7806,8 +7806,8 @@ fn from_can_pattern_help<'a>(
                             let layout2 =
                                 layout_cache.from_var(env.arena, arg2.0, env.subs).unwrap();
 
-                            let size1 = layout1.alignment_bytes(env.ptr_bytes);
-                            let size2 = layout2.alignment_bytes(env.ptr_bytes);
+                            let size1 = layout1.alignment_bytes(env.target_info);
+                            let size2 = layout2.alignment_bytes(env.target_info);
 
                             size2.cmp(&size1)
                         });
@@ -8107,7 +8107,7 @@ fn from_can_pattern_help<'a>(
         } => {
             // sorted fields based on the type
             let sorted_fields =
-                crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.ptr_bytes)
+                crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.target_info)
                     .map_err(RuntimeError::from)?;
 
             // sorted fields based on the destruct

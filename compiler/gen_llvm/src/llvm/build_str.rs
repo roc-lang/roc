@@ -79,7 +79,7 @@ fn str_symbol_to_c_abi<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     let string = load_symbol(scope, &symbol);
 
-    let target_type = match env.ptr_bytes {
+    let target_type = match env.target_info {
         8 => env.context.i128_type().into(),
         4 => env.context.i64_type().into(),
         _ => unreachable!(),
@@ -96,7 +96,7 @@ pub fn str_to_c_abi<'a, 'ctx, 'env>(
 
     env.builder.build_store(cell, value);
 
-    let target_type = match env.ptr_bytes {
+    let target_type = match env.target_info {
         8 => env.context.i128_type(),
         4 => env.context.i64_type(),
         _ => unreachable!(),
@@ -310,7 +310,7 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let fields = match env.ptr_bytes {
+    let fields = match env.target_info {
         8 | 4 => [
             env.ptr_int().into(),
             super::convert::zig_str_type(env).into(),
@@ -322,7 +322,7 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
 
     let record_type = env.context.struct_type(&fields, false);
 
-    match env.ptr_bytes {
+    match env.target_info {
         8 | 4 => {
             let result_ptr_cast = env
                 .builder

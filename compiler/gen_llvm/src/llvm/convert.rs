@@ -36,7 +36,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
 
             match union_layout {
                 NonRecursive(tags) => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+                    let data = block_of_memory_slices(env.context, tags, env.target_info);
 
                     env.context.struct_type(&[data, tag_id_type], false).into()
                 }
@@ -44,9 +44,9 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
                 | NullableWrapped {
                     other_tags: tags, ..
                 } => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+                    let data = block_of_memory_slices(env.context, tags, env.target_info);
 
-                    if union_layout.stores_tag_id_as_data(env.ptr_bytes) {
+                    if union_layout.stores_tag_id_as_data(env.target_info) {
                         env.context
                             .struct_type(&[data, tag_id_type], false)
                             .ptr_type(AddressSpace::Generic)
@@ -56,11 +56,12 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
                     }
                 }
                 NullableUnwrapped { other_fields, .. } => {
-                    let block = block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
+                    let block =
+                        block_of_memory_slices(env.context, &[other_fields], env.target_info);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
                 NonNullableUnwrapped(fields) => {
-                    let block = block_of_memory_slices(env.context, &[fields], env.ptr_bytes);
+                    let block = block_of_memory_slices(env.context, &[fields], env.target_info);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
             }
@@ -95,7 +96,7 @@ pub fn basic_type_from_layout_1<'a, 'ctx, 'env>(
 
             match union_layout {
                 NonRecursive(tags) => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+                    let data = block_of_memory_slices(env.context, tags, env.target_info);
                     let struct_type = env.context.struct_type(&[data, tag_id_type], false);
 
                     struct_type.ptr_type(AddressSpace::Generic).into()
@@ -104,9 +105,9 @@ pub fn basic_type_from_layout_1<'a, 'ctx, 'env>(
                 | NullableWrapped {
                     other_tags: tags, ..
                 } => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+                    let data = block_of_memory_slices(env.context, tags, env.target_info);
 
-                    if union_layout.stores_tag_id_as_data(env.ptr_bytes) {
+                    if union_layout.stores_tag_id_as_data(env.target_info) {
                         env.context
                             .struct_type(&[data, tag_id_type], false)
                             .ptr_type(AddressSpace::Generic)
@@ -116,11 +117,12 @@ pub fn basic_type_from_layout_1<'a, 'ctx, 'env>(
                     }
                 }
                 NullableUnwrapped { other_fields, .. } => {
-                    let block = block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
+                    let block =
+                        block_of_memory_slices(env.context, &[other_fields], env.target_info);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
                 NonNullableUnwrapped(fields) => {
-                    let block = block_of_memory_slices(env.context, &[fields], env.ptr_bytes);
+                    let block = block_of_memory_slices(env.context, &[fields], env.target_info);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
             }

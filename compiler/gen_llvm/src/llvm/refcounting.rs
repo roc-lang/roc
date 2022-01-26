@@ -98,7 +98,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     pub fn is_1<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         let current = self.get_refcount(env);
-        let one = refcount_1(env.context, env.ptr_bytes);
+        let one = refcount_1(env.context, env.target_info);
 
         env.builder
             .build_int_compare(IntPredicate::EQ, current, one, "is_one")
@@ -163,8 +163,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     pub fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
         let alignment = layout
-            .allocation_alignment_bytes(env.ptr_bytes)
-            .max(env.ptr_bytes);
+            .allocation_alignment_bytes(env.target_info)
+            .max(env.target_info);
 
         let context = env.context;
         let block = env.builder.get_insert_block().expect("to be in a function");
@@ -1192,7 +1192,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     debug_assert!(arg_val.is_pointer_value());
     let current_tag_id = get_tag_id(env, fn_val, &union_layout, arg_val);
-    let value_ptr = if union_layout.stores_tag_id_in_pointer(env.ptr_bytes) {
+    let value_ptr = if union_layout.stores_tag_id_in_pointer(env.target_info) {
         tag_pointer_clear_tag_id(env, arg_val.into_pointer_value())
     } else {
         arg_val.into_pointer_value()
