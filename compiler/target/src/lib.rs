@@ -4,7 +4,7 @@
 
 #[derive(Debug, Clone, Copy)]
 pub struct TargetInfo {
-    architecture: Architecture,
+    pub architecture: Architecture,
 }
 
 impl TargetInfo {

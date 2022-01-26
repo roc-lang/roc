@@ -48,13 +48,20 @@ impl FloatWidth {
     }
 
     pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+        use roc_target::Architecture;
         use std::mem::align_of;
         use FloatWidth::*;
 
         // TODO actually alignment is architecture-specific
         match self {
             F32 => align_of::<f32>() as u32,
-            F64 => align_of::<f64>() as u32,
+            F64 => match target_info.architecture {
+                Architecture::X86_64
+                | Architecture::Aarch64
+                | Architecture::Arm
+                | Architecture::Wasm32 => 8,
+                Architecture::X86_32 => 4,
+            },
             F128 => align_of::<i128>() as u32,
         }
     }
@@ -108,6 +115,7 @@ impl IntWidth {
     }
 
     pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+        use roc_target::Architecture;
         use std::mem::align_of;
         use IntWidth::*;
 
@@ -115,7 +123,13 @@ impl IntWidth {
             U8 | I8 => align_of::<i8>() as u32,
             U16 | I16 => align_of::<i16>() as u32,
             U32 | I32 => align_of::<i32>() as u32,
-            U64 | I64 => align_of::<i64>() as u32,
+            U64 | I64 => match target_info.architecture {
+                Architecture::X86_64
+                | Architecture::Aarch64
+                | Architecture::Arm
+                | Architecture::Wasm32 => 8,
+                Architecture::X86_32 => 4,
+            },
             U128 | I128 => align_of::<i128>() as u32,
         }
     }
