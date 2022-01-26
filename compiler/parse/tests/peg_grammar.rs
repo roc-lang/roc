@@ -504,7 +504,7 @@ peg::parser!{
           / [T::OpenCurly] record_field_types_i() [T::CloseCurly]
 
         rule record_field_types() =
-          (record_field_type() [T::Comma])* record_field_type() [T::Comma]?
+          (record_field_type() [T::Comma] __)* record_field_type() [T::Comma]?
 
         rule record_field_type() =
           ident() [T::Colon] type_annotation()
@@ -598,7 +598,7 @@ peg::parser!{
         pub rule typed_ident() =
           [T::LowercaseIdent] [T::Colon] type_annotation()
 
-        rule effects() =
+        pub rule effects() =
           __ [T::KeywordEffects] effect_name() record_type_i()
 
         rule effect_name() =
@@ -614,7 +614,7 @@ peg::parser!{
 
 
         // content of type_annotation without Colon(:)
-        rule type_annotation() =
+        pub rule type_annotation() =
           function_type()
           / type_annotation_no_fun()
 
@@ -776,7 +776,7 @@ peg::parser!{
          ![_]
 
         rule record_type_i() = 
-          [T::OpenIndent] record_type() [T::CloseIndent]
+          [T::OpenIndent] record_type() [T::CloseIndent]?
           / record_type()
 
         rule record_field_types_i() =
@@ -855,7 +855,7 @@ fn test_platform_header_1() {
 fn test_platform_header_2() {
 
     let tokens = test_tokenize( r#"platform "examples/cli"
-    requires {}{ main : Task {} [] }
+    requires {}{ main : Task {} [] } # TODO FIXME
     exposes []
     packages {}
     imports [ Task.{ Task } ]
@@ -867,7 +867,6 @@ fn test_platform_header_2() {
             twoArguments : Int, Int -> Effect {}
         }"#);
     
-    dbg!(&tokens);
     assert_eq!(tokenparser::header(&tokens), Ok(()));
 }
 
