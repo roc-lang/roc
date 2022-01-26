@@ -421,18 +421,21 @@ mod test_peg_grammar {
 
 type T = Token;
 // Inspired by https://ziglang.org/documentation/0.7.1/#Grammar
-// license information can be found in the LEGAL_DETAILS
-// file in the root directory of this distribution.
+// license information can be found in the LEGAL_DETAILS file in
+// the root directory of this distribution.
 // Thank you zig contributors!
 peg::parser!{
     grammar tokenparser() for [T] {
 
       pub rule module() =
-        header() module_defs()
+        header() module_defs() __ // __ for optional indent
 
       pub rule full_expr() = [T::OpenIndent]? bool_or_expr() [T::CloseIndent]?
+
+      // necessary to prevent `f x y` from being parsed as `Apply(f, Apply(x, y))` instead of `Apply(f, (x y))`
+      rule no_apply_full_expr() = [T::OpenIndent]? no_apply_bool_or_expr() [T::CloseIndent]?
       
-      pub rule expr() =
+      rule common_expr() =
           closure()
           / expect()
           / if_expr()
@@ -449,15 +452,21 @@ peg::parser!{
           / tag()
           / accessor_function()
           / defs()
+      pub rule expr() =
+          common_expr()
           / apply()
           / var()
           // / access() // TODO prevent infinite loop
+
+      rule no_apply_expr() =
+          common_expr()
+          / var()
 
         rule closure() =
           [T::LambdaStart] args() [T::Arrow] full_expr()
 
         rule args() =
-          (ident() [T::Comma])* ident()?
+          (ident() [T::Comma])* ident()
 
 
         rule tag() =
@@ -686,6 +695,24 @@ peg::parser!{
         rule bool_or_expr() =
           bool_and_expr() ([T::OpOr] bool_and_expr())*
 
+        rule no_apply_bool_or_expr() =
+          no_apply_bool_and_expr() ([T::OpOr] no_apply_bool_and_expr())*
+
+        rule no_apply_bool_and_expr() =
+          no_apply_compare_expr() ([T::OpAnd] no_apply_compare_expr())*
+
+        rule no_apply_compare_expr() =
+          no_apply_add_level_expr() (compare_op() no_apply_add_level_expr())?
+
+        rule no_apply_add_level_expr() =
+          no_apply_mul_level_expr() (add_level_op() no_apply_mul_level_expr())*
+
+        rule no_apply_mul_level_expr() =
+          no_apply_unary_expr() (mul_level_op() no_apply_unary_expr())*
+
+        rule no_apply_unary_expr() =
+          unary_op()* no_apply_expr()
+
         rule defs() =
           def()+ full_expr()
 
@@ -699,8 +726,8 @@ peg::parser!{
               / expect()
             )
 
-        rule module_defs() =
-          def() def()*
+        pub rule module_defs() =
+          def() def()* __
 
         rule annotation() =
           ident() [T::Colon] type_annotation()
@@ -725,7 +752,7 @@ peg::parser!{
           / module_name() [T::Dot] ident()
 
         rule apply() =
-          apply_expr() full_expr()+ end()
+          apply_expr() no_apply_full_expr()+ end()
 
         rule apply_expr() =
           var()
@@ -915,6 +942,7 @@ fn test_order_of_ops() {
   assert_eq!(tokenparser::full_expr(&[T::UppercaseIdent, T::OpOr, T::UppercaseIdent, T::OpAnd, T::UppercaseIdent, T::OpOr, T::UppercaseIdent]), Ok(()));
 }
 
+// TODO read test programs from example/snapshots files
 #[test]
 fn test_hello() {
   let tokens = test_tokenize( r#"
@@ -923,29 +951,28 @@ app "test-app"
     imports []
     provides [ main ] to pf
 
-main = "Hello, world!"
+main = "Hello world!"
 "#);
   dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
+// TODO read test programs from example/snapshots files
 #[test]
 fn test_fibo() {
-  let tokens = test_tokenize( r#"
-app "fib"
-  packages { pf: "platform" }
-  imports []
-  provides [ main ] to pf
+  let tokens = test_tokenize( r#"app "fib"
+    packages { pf: "platform" }
+    imports []
+    provides [ main ] to pf
 
 main = \n -> fib n 0 1
 
 # the clever implementation requires join points
 fib = \n, a, b ->
-  if n == 0 then
-      a
-  else
-      fib (n - 1) b (a + b)
-"#);
+    if n == 0 then
+        a
+    else
+        fib (n - 1) b (a + b)"#);
   dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
