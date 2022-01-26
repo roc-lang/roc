@@ -1237,6 +1237,13 @@ impl<'a> Layout<'a> {
         }
     }
 
+    pub fn isize(target_info: TargetInfo) -> Layout<'a> {
+        match target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => Self::i32(),
+            roc_target::PtrWidth::Bytes8 => Self::i64(),
+        }
+    }
+
     pub fn bool() -> Layout<'a> {
         Layout::Builtin(Builtin::Bool)
     }
