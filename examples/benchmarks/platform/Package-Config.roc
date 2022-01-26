@@ -1,5 +1,5 @@
 platform "folkertdev/foo"
-    requires { Model, Msg } { main : Effect {} }
+    requires {  } { main : Effect {} }
     exposes []
     packages {}
     imports [ Task.{ Task } ]
