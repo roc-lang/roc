@@ -5,7 +5,7 @@ app "echo"
 
 main : Task.Task {} []
 main =
-    _ <- Task.await (Stdout.line "Shout into this cave and hear the echo!")
+    _ <- Task.await (Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂")
     Task.loop {} (\_ -> Task.map tick Step)
 
 tick : Task.Task {} []
