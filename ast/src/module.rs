@@ -2,7 +2,7 @@ use std::path::Path;
 
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
-use roc_error_macros::internal_error;
+use roc_error_macros::user_error;
 use roc_load::file::LoadedModule;
 use roc_target::TargetInfo;
 
@@ -15,7 +15,7 @@ pub fn load_module(src_file: &Path) -> LoadedModule {
         src_file.to_path_buf(),
         arena.alloc(roc_builtins::std::standard_stdlib()),
         src_file.parent().unwrap_or_else(|| {
-            internal_error!(
+            user_error!(
                 "src_file {:?} did not have a parent directory but I need to have one.",
                 src_file
             )
@@ -28,13 +28,13 @@ pub fn load_module(src_file: &Path) -> LoadedModule {
     match loaded {
         Ok(x) => x,
         Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
-            internal_error!(
+            user_error!(
                 "Failed to load module from src_file {:?}. Report: {:?}",
                 src_file,
                 report
             );
         }
-        Err(e) => internal_error!(
+        Err(e) => user_error!(
             "Failed to load module from src_file {:?}: {:?}",
             src_file,
             e

@@ -25,7 +25,7 @@ use pipelines::RectResources;
 use roc_ast::lang::env::Env;
 use roc_ast::mem_pool::pool::Pool;
 use roc_ast::module::load_module;
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, user_error};
 use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
 use std::collections::HashSet;
@@ -514,11 +514,11 @@ fn init_new_roc_project(project_dir_path_str: &str) -> (PathStr, String) {
 fn create_roc_file_if_not_exists(project_dir_path: &Path, roc_file_path: &Path) -> String {
     if !roc_file_path.exists() {
         let mut roc_file = File::create(roc_file_path).unwrap_or_else(|err| {
-            internal_error!("No roc file path was passed to the editor, so I wanted to create a new roc project with the file {:?}, but it failed: {}", roc_file_path, err)
+            user_error!("No roc file path was passed to the editor, so I wanted to create a new roc project with the file {:?}, but it failed: {}", roc_file_path, err)
         });
 
         write!(roc_file, "{}", HELLO_WORLD).unwrap_or_else(|err| {
-            internal_error!(
+            user_error!(
                 r#"No roc file path was passed to the editor, so I created a new roc project with the file {:?}
                 I wanted to write roc hello world to that file, but it failed: {:?}"#,
                 roc_file_path,
@@ -529,7 +529,7 @@ fn create_roc_file_if_not_exists(project_dir_path: &Path, roc_file_path: &Path) 
         HELLO_WORLD.to_string()
     } else {
         std::fs::read_to_string(roc_file_path).unwrap_or_else(|err| {
-            internal_error!(
+            user_error!(
                 "I detected an existing {:?} inside {:?}, but I failed to read from it: {}",
                 roc_file_path,
                 project_dir_path,
@@ -545,14 +545,14 @@ fn copy_roc_platform_if_not_exists(
     project_dir_path: &Path,
 ) {
     if !orig_platform_path.exists() && !project_platform_path.exists() {
-        internal_error!(
+        user_error!(
             r#"No roc file path was passed to the editor, I wanted to create a new roc project but I could not find the platform at {:?}.
             Are you at the root of the roc repository?"#,
             orig_platform_path
         );
     } else if !project_platform_path.exists() {
         copy(orig_platform_path, project_dir_path, &CopyOptions::new()).unwrap_or_else(|err|{
-            internal_error!(r#"No roc file path was passed to the editor, so I wanted to create a new roc project and roc projects require a platform,
+            user_error!(r#"No roc file path was passed to the editor, so I wanted to create a new roc project and roc projects require a platform,
             I tried to copy the platform at {:?} to {:?} but it failed: {}"#,
             orig_platform_path,
             project_platform_path,

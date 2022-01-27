@@ -1,5 +1,5 @@
 use roc_collections::all::{MutSet, SendMap};
-use roc_error_macros::internal_error;
+use roc_error_macros::user_error;
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -196,7 +196,7 @@ impl Scope {
             }
 
             if !hidden.is_empty() {
-                internal_error!(
+                user_error!(
                     "Found unbound type variables {:?} \n in type alias {:?} {:?} : {:?}",
                     hidden,
                     name,
