@@ -9,4 +9,4 @@ main =
     firstName <- await Stdin.line
     _ <- await (Stdout.line "What's your last name?")
     lastName <- await Stdin.line
-    Stdout.line "Hi, \(firstName) \(lastName)!"
+    Stdout.line "Hi, \(firstName) \(lastName)! 👋"
