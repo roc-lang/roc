@@ -133,7 +133,7 @@ pub extern "C" fn roc_fx_getChar() -> u8 {
         if ioerr.kind() == io::ErrorKind::UnexpectedEof {
             u8::MAX
         } else {
-            internal_error!("Got an unexpected error while reading char from stdin");
+            panic!("Got an unexpected error while reading char from stdin");
         }
     } else {
         buffer[0]

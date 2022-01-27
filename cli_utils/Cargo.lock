@@ -368,6 +368,7 @@ dependencies = [
  "rlimit",
  "roc_cli",
  "roc_collections",
+ "roc_error_macros",
  "roc_load",
  "roc_module",
  "serde",
@@ -2475,12 +2476,13 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_load",
  "roc_module",
  "roc_parse",
  "roc_problem",
  "roc_region",
- "roc_reporting",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "snafu",
@@ -2498,6 +2500,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_error_macros",
  "roc_gen_dev",
  "roc_gen_llvm",
  "roc_gen_wasm",
@@ -2510,6 +2513,7 @@ dependencies = [
  "roc_reporting",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "serde_json",
@@ -2524,6 +2528,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_region",
+ "roc_target",
  "roc_types",
 ]
 
@@ -2534,6 +2539,7 @@ dependencies = [
  "bumpalo",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_parse",
  "roc_problem",
@@ -2559,6 +2565,7 @@ dependencies = [
  "roc_constrain",
  "roc_docs",
  "roc_editor",
+ "roc_error_macros",
  "roc_fmt",
  "roc_gen_llvm",
  "roc_linker",
@@ -2570,6 +2577,7 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "rustyline",
@@ -2627,10 +2635,12 @@ dependencies = [
  "roc_can",
  "roc_code_markup",
  "roc_collections",
+ "roc_error_macros",
  "roc_load",
  "roc_module",
  "roc_parse",
  "roc_region",
+ "roc_target",
  "roc_types",
  "snafu",
 ]
@@ -2662,6 +2672,7 @@ dependencies = [
  "roc_can",
  "roc_code_markup",
  "roc_collections",
+ "roc_error_macros",
  "roc_load",
  "roc_module",
  "roc_parse",
@@ -2681,11 +2692,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_error_macros"
+version = "0.1.0"
+
+[[package]]
 name = "roc_fmt"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_parse",
  "roc_region",
@@ -2700,12 +2716,13 @@ dependencies = [
  "packed_struct",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
  "roc_problem",
  "roc_region",
- "roc_reporting",
  "roc_solve",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "target-lexicon",
@@ -2720,10 +2737,11 @@ dependencies = [
  "morphic_lib",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
- "roc_reporting",
  "roc_std",
+ "roc_target",
  "target-lexicon",
 ]
 
@@ -2734,10 +2752,11 @@ dependencies = [
  "bumpalo",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
- "roc_reporting",
  "roc_std",
+ "roc_target",
 ]
 
 [[package]]
@@ -2756,6 +2775,7 @@ dependencies = [
  "object 0.26.2",
  "roc_build",
  "roc_collections",
+ "roc_error_macros",
  "roc_mono",
  "serde",
  "target-lexicon",
@@ -2775,6 +2795,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -2782,6 +2803,7 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "ven_pretty",
@@ -2794,6 +2816,7 @@ dependencies = [
  "bumpalo",
  "lazy_static",
  "roc_collections",
+ "roc_error_macros",
  "roc_ident",
  "roc_region",
  "snafu",
@@ -2815,6 +2838,7 @@ dependencies = [
  "roc_region",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "static_assertions",
@@ -2829,6 +2853,7 @@ dependencies = [
  "bumpalo",
  "encode_unicode",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_region",
 ]
@@ -2858,6 +2883,7 @@ dependencies = [
  "distance",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -2885,6 +2911,16 @@ dependencies = [
 [[package]]
 name = "roc_std"
 version = "0.1.0"
+dependencies = [
+ "roc_error_macros",
+]
+
+[[package]]
+name = "roc_target"
+version = "0.1.0"
+dependencies = [
+ "target-lexicon",
+]
 
 [[package]]
 name = "roc_types"
