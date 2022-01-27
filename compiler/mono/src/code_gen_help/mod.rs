@@ -1,9 +1,9 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_builtins::bitcode::IntWidth;
 use roc_module::ident::Ident;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_target::TargetInfo;
 
 use crate::ir::{
     Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
@@ -74,19 +74,19 @@ pub struct Context<'a> {
 pub struct CodeGenHelp<'a> {
     arena: &'a Bump,
     home: ModuleId,
-    ptr_size: u32,
+    target_info: TargetInfo,
     layout_isize: Layout<'a>,
     specializations: Vec<'a, Specialization<'a>>,
     debug_recursion_depth: usize,
 }
 
 impl<'a> CodeGenHelp<'a> {
-    pub fn new(arena: &'a Bump, intwidth_isize: IntWidth, home: ModuleId) -> Self {
+    pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
         CodeGenHelp {
             arena,
             home,
-            ptr_size: intwidth_isize.stack_size(),
-            layout_isize: Layout::Builtin(Builtin::Int(intwidth_isize)),
+            target_info,
+            layout_isize: Layout::usize(target_info),
             specializations: Vec::with_capacity_in(16, arena),
             debug_recursion_depth: 0,
         }

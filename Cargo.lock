@@ -3254,6 +3254,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "snafu",
@@ -3283,6 +3284,7 @@ dependencies = [
  "roc_reporting",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "serde_json",
@@ -3297,6 +3299,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_region",
+ "roc_target",
  "roc_types",
 ]
 
@@ -3350,6 +3353,7 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_target",
  "roc_test_utils",
  "roc_types",
  "roc_unify",
@@ -3416,6 +3420,7 @@ dependencies = [
  "roc_module",
  "roc_parse",
  "roc_region",
+ "roc_target",
  "roc_types",
  "snafu",
  "tempfile",
@@ -3508,6 +3513,7 @@ dependencies = [
  "roc_region",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "target-lexicon",
@@ -3526,6 +3532,7 @@ dependencies = [
  "roc_module",
  "roc_mono",
  "roc_std",
+ "roc_target",
  "target-lexicon",
 ]
 
@@ -3540,6 +3547,7 @@ dependencies = [
  "roc_module",
  "roc_mono",
  "roc_std",
+ "roc_target",
 ]
 
 [[package]]
@@ -3587,6 +3595,7 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "tempfile",
@@ -3621,6 +3630,7 @@ dependencies = [
  "roc_region",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "static_assertions",
@@ -3680,6 +3690,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_target",
  "roc_test_utils",
  "roc_types",
  "ven_pretty",
@@ -3702,6 +3713,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "tempfile",
@@ -3715,6 +3727,13 @@ dependencies = [
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
+]
+
+[[package]]
+name = "roc_target"
+version = "0.1.0"
+dependencies = [
+ "target-lexicon",
 ]
 
 [[package]]
@@ -4263,6 +4282,7 @@ dependencies = [
  "roc_reporting",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "target-lexicon",
@@ -4284,6 +4304,7 @@ dependencies = [
  "roc_load",
  "roc_module",
  "roc_mono",
+ "roc_target",
  "test_mono_macros",
 ]
 

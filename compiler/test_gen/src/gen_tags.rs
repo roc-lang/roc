@@ -23,9 +23,9 @@ fn width_and_alignment_u8_u8() {
 
     let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
 
-    let ptr_width = 8;
-    assert_eq!(layout.alignment_bytes(ptr_width), 1);
-    assert_eq!(layout.stack_size(ptr_width), 2);
+    let target_info = roc_target::TargetInfo::default_x86_64();
+    assert_eq!(layout.alignment_bytes(target_info), 1);
+    assert_eq!(layout.stack_size(target_info), 2);
 }
 
 #[test]

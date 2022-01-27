@@ -207,7 +207,7 @@ pub fn rc_ptr_from_data_ptr<'a>(
 
     // Mask for lower bits (for tag union id)
     let mask_sym = root.create_symbol(ident_ids, "mask");
-    let mask_expr = Expr::Literal(Literal::Int(-(root.ptr_size as i128)));
+    let mask_expr = Expr::Literal(Literal::Int(-(root.target_info.ptr_width() as i128)));
     let mask_stmt = |next| Stmt::Let(mask_sym, mask_expr, root.layout_isize, next);
 
     let masked_sym = root.create_symbol(ident_ids, "masked");
@@ -222,7 +222,7 @@ pub fn rc_ptr_from_data_ptr<'a>(
 
     // Pointer size constant
     let ptr_size_sym = root.create_symbol(ident_ids, "ptr_size");
-    let ptr_size_expr = Expr::Literal(Literal::Int(root.ptr_size as i128));
+    let ptr_size_expr = Expr::Literal(Literal::Int(root.target_info.ptr_width() as i128));
     let ptr_size_stmt = |next| Stmt::Let(ptr_size_sym, ptr_size_expr, root.layout_isize, next);
 
     // Refcount address
@@ -382,7 +382,7 @@ fn refcount_str<'a>(
 
     // A pointer to the refcount value itself
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let alignment = root.ptr_size;
+    let alignment = root.target_info.ptr_width() as u32;
 
     let ret_unit_stmt = rc_return_stmt(root, ident_ids, ctx);
     let mod_rc_stmt = modify_refcount(
@@ -487,7 +487,7 @@ fn refcount_list<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let alignment = layout.alignment_bytes(root.ptr_size);
+    let alignment = layout.alignment_bytes(root.target_info);
 
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_list = modify_refcount(
@@ -584,7 +584,9 @@ fn refcount_list_elems<'a>(
 
     // let size = literal int
     let elem_size = root.create_symbol(ident_ids, "elem_size");
-    let elem_size_expr = Expr::Literal(Literal::Int(elem_layout.stack_size(root.ptr_size) as i128));
+    let elem_size_expr = Expr::Literal(Literal::Int(
+        elem_layout.stack_size(root.target_info) as i128
+    ));
     let elem_size_stmt = |next| Stmt::Let(elem_size, elem_size_expr, layout_isize, next);
 
     // let list_size = len * size
@@ -972,7 +974,7 @@ fn refcount_union_rec<'a>(
     let rc_structure_stmt = {
         let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
 
-        let alignment = Layout::Union(union_layout).alignment_bytes(root.ptr_size);
+        let alignment = Layout::Union(union_layout).alignment_bytes(root.target_info);
         let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
         let modify_structure_stmt = modify_refcount(
             root,
@@ -988,7 +990,7 @@ fn refcount_union_rec<'a>(
             ident_ids,
             structure,
             rc_ptr,
-            union_layout.stores_tag_id_in_pointer(root.ptr_size),
+            union_layout.stores_tag_id_in_pointer(root.target_info),
             root.arena.alloc(modify_structure_stmt),
         )
     };
@@ -1080,7 +1082,7 @@ fn refcount_union_tailrec<'a>(
             )
         };
 
-        let alignment = layout.alignment_bytes(root.ptr_size);
+        let alignment = layout.alignment_bytes(root.target_info);
         let modify_structure_stmt = modify_refcount(
             root,
             ident_ids,
@@ -1095,7 +1097,7 @@ fn refcount_union_tailrec<'a>(
             ident_ids,
             current,
             rc_ptr,
-            union_layout.stores_tag_id_in_pointer(root.ptr_size),
+            union_layout.stores_tag_id_in_pointer(root.target_info),
             root.arena.alloc(modify_structure_stmt),
         )
     };

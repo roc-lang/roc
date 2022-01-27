@@ -428,7 +428,7 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>, std_lib: StdLib) -> Vec<L
             &std_lib,
             src_dir.as_path(),
             MutMap::default(),
-            std::mem::size_of::<usize>() as u32, // This is just type-checking for docs, so "target" doesn't matter
+            roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
             builtin_defs_map,
         ) {
             Ok(loaded) => modules.push(loaded),

@@ -124,7 +124,11 @@ where
             // This is a type alias
 
             // the symbol should already be added to the scope when this module is canonicalized
-            debug_assert!(scope.contains_alias(symbol));
+            debug_assert!(
+                scope.contains_alias(symbol),
+                "apparently, {:?} is not actually a type alias",
+                symbol
+            );
 
             // but now we know this symbol by a different identifier, so we still need to add it to
             // the scope
