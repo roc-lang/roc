@@ -1,9 +1,9 @@
+use crate::repl::from_memory::FromMemory;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use libloading::Library;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_gen_llvm::llvm::build::tag_pointer_tag_id_bits_and_mask;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
@@ -182,7 +182,7 @@ fn get_tags_vars_and_variant<'a, M>(
 
 fn expr_of_tag<'a, M>(
     env: &Env<'a, 'a, M>,
-    ptr_to_data: *const u8,
+    data_addr: usize,
     tag_name: &TagName,
     arg_layouts: &'a [Layout<'a>],
     arg_vars: &[Variable],
@@ -195,7 +195,7 @@ fn expr_of_tag<'a, M>(
 
     // NOTE assumes the data bytes are the first bytes
     let it = arg_vars.iter().copied().zip(arg_layouts.iter());
-    let output = sequence_of_expr(env, ptr_to_data, it, when_recursive);
+    let output = sequence_of_expr(env, data_addr, it, when_recursive);
     let output = output.into_bump_slice();
 
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
@@ -203,57 +203,56 @@ fn expr_of_tag<'a, M>(
 
 /// Gets the tag ID of a union variant, assuming that the tag ID is stored alongside (after) the
 /// tag data. The caller is expected to check that the tag ID is indeed stored this way.
-fn tag_id_from_data(union_layout: UnionLayout, data_ptr: *const u8, ptr_bytes: u32) -> i64 {
-    let offset = union_layout.data_size_without_tag_id(ptr_bytes).unwrap();
+fn tag_id_from_data<'a, M>(
+    env: &Env<'a, 'a, M>,
+    union_layout: UnionLayout,
+    data_addr: usize,
+) -> i64 {
+    let offset = union_layout
+        .data_size_without_tag_id(env.ptr_bytes)
+        .unwrap();
 
-    unsafe {
-        match union_layout.tag_id_builtin() {
-            Builtin::Bool => *(data_ptr.add(offset as usize) as *const i8) as i64,
-            Builtin::Int(IntWidth::U8) => *(data_ptr.add(offset as usize) as *const i8) as i64,
-            Builtin::Int(IntWidth::U16) => *(data_ptr.add(offset as usize) as *const i16) as i64,
-            Builtin::Int(IntWidth::U64) => {
-                // used by non-recursive unions at the
-                // moment, remove if that is no longer the case
-                *(data_ptr.add(offset as usize) as *const i64) as i64
-            }
-            _ => unreachable!("invalid tag id layout"),
+    let tag_id_addr = data_addr + offset as usize;
+
+    match union_layout.tag_id_builtin() {
+        Builtin::Bool => u8::from_memory(&env.app_memory, tag_id_addr) as i64,
+        Builtin::Int(IntWidth::U8) => u8::from_memory(&env.app_memory, tag_id_addr) as i64,
+        Builtin::Int(IntWidth::U16) => u16::from_memory(&env.app_memory, tag_id_addr) as i64,
+        Builtin::Int(IntWidth::U64) => {
+            // used by non-recursive unions at the
+            // moment, remove if that is no longer the case
+            i64::from_memory(&env.app_memory, tag_id_addr)
         }
+        _ => unreachable!("invalid tag id layout"),
     }
 }
 
-fn deref_ptr_of_ptr(ptr_of_ptr: *const u8, ptr_bytes: u32) -> *const u8 {
-    unsafe {
-        match ptr_bytes {
-            // Our LLVM codegen represents pointers as i32/i64s.
-            4 => *(ptr_of_ptr as *const i32) as *const u8,
-            8 => *(ptr_of_ptr as *const i64) as *const u8,
-            _ => unreachable!(),
-        }
-    }
+fn deref_addr_of_addr<'a, M>(env: &Env<'a, 'a, M>, addr_of_addr: usize) -> usize {
+    usize::from_memory(&env.app_memory, addr_of_addr)
 }
 
 /// Gets the tag ID of a union variant from its recursive pointer (that is, the pointer to the
 /// pointer to the data of the union variant). Returns
 ///   - the tag ID
 ///   - the pointer to the data of the union variant, unmasked if the pointer held the tag ID
-fn tag_id_from_recursive_ptr(
+fn tag_id_from_recursive_ptr<'a, M>(
+    env: &Env<'a, 'a, M>,
     union_layout: UnionLayout,
-    rec_ptr: *const u8,
-    ptr_bytes: u32,
-) -> (i64, *const u8) {
-    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(ptr_bytes);
+    rec_addr: usize,
+) -> (i64, usize) {
+    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.ptr_bytes);
     if tag_in_ptr {
-        let masked_ptr_to_data = deref_ptr_of_ptr(rec_ptr, ptr_bytes) as i64;
-        let (tag_id_bits, tag_id_mask) = tag_pointer_tag_id_bits_and_mask(ptr_bytes);
-        let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
+        let masked_data_addr = deref_addr_of_addr(env, rec_addr);
+        let (tag_id_bits, tag_id_mask) = UnionLayout::tag_id_pointer_bits_and_mask(env.ptr_bytes);
+        let tag_id = masked_data_addr & tag_id_mask;
 
         // Clear the tag ID data from the pointer
-        let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits) << tag_id_bits) as *const u8;
-        (tag_id as i64, ptr_to_data)
+        let data_addr = (masked_data_addr >> tag_id_bits) << tag_id_bits;
+        (tag_id as i64, data_addr)
     } else {
-        let ptr_to_data = deref_ptr_of_ptr(rec_ptr, ptr_bytes);
-        let tag_id = tag_id_from_data(union_layout, ptr_to_data, ptr_bytes);
-        (tag_id, ptr_to_data)
+        let data_addr = deref_addr_of_addr(env, rec_addr);
+        let tag_id = tag_id_from_data(env, union_layout, data_addr);
+        (tag_id, data_addr)
     }
 }
 
@@ -335,8 +334,8 @@ fn jit_to_ast_help<'a, M>(
         Layout::Builtin(Builtin::List(elem_layout)) => Ok(run_jit_function!(
             lib,
             main_fn_name,
-            (*const u8, usize),
-            |(ptr, len): (*const u8, usize)| { list_to_ast(env, ptr, len, elem_layout, content) }
+            (usize, usize),
+            |(addr, len): (usize, usize)| { list_to_ast(env, addr, len, elem_layout, content) }
         )),
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
@@ -407,7 +406,7 @@ fn jit_to_ast_help<'a, M>(
                 main_fn_name,
                 size as usize,
                 |ptr: *const u8| {
-                    ptr_to_ast(env, ptr, layout, WhenRecursive::Unreachable, content)
+                    addr_to_ast(env, ptr, layout, WhenRecursive::Unreachable, content)
                 }
             ))
         }
@@ -421,7 +420,7 @@ fn jit_to_ast_help<'a, M>(
                 main_fn_name,
                 size as usize,
                 |ptr: *const u8| {
-                    ptr_to_ast(env, ptr, layout, WhenRecursive::Loop(*layout), content)
+                    addr_to_ast(env, ptr, layout, WhenRecursive::Loop(*layout), content)
                 }
             ))
         }
@@ -455,16 +454,16 @@ enum WhenRecursive<'a> {
     Loop(Layout<'a>),
 }
 
-fn ptr_to_ast<'a, M>(
+fn addr_to_ast<'a, M>(
     env: &Env<'a, 'a, M>,
-    ptr: *const u8,
+    addr: usize,
     layout: &Layout<'a>,
     when_recursive: WhenRecursive<'a>,
     content: &'a Content,
 ) -> Expr<'a> {
     macro_rules! helper {
         ($ty:ty) => {{
-            let num = unsafe { *(ptr as *const $ty) };
+            let num = <$ty>::from_memory(&env.app_memory, addr);
 
             num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }};
@@ -478,7 +477,7 @@ fn ptr_to_ast<'a, M>(
         (_, Layout::Builtin(Builtin::Bool)) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
-            let num = unsafe { *(ptr as *const bool) };
+            let num = bool::from_memory(&env.app_memory, addr);
 
             bool_to_ast(env, num, content)
         }
@@ -508,33 +507,32 @@ fn ptr_to_ast<'a, M>(
             }
         }
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {
-            // Turn the (ptr, len) wrapper struct into actual ptr and len values.
-            let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
-            let ptr = unsafe { *(ptr as *const *const u8) };
+            let elem_addr = usize::from_memory(&env.app_memory, addr);
+            let len = usize::from_memory(&env.app_memory, addr + env.ptr_bytes as usize);
 
-            list_to_ast(env, ptr, len, elem_layout, content)
+            list_to_ast(env, elem_addr, len, elem_layout, content)
         }
         (_, Layout::Builtin(Builtin::Str)) => {
-            let arena_str = unsafe { *(ptr as *const &'static str) };
+            let arena_str = <&'a str>::from_memory(&env.app_memory, addr);
 
             str_to_ast(env.arena, arena_str)
         }
         (_, Layout::Struct(field_layouts)) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
-                struct_to_ast(env, ptr, field_layouts, *fields)
+                struct_to_ast(env, addr, field_layouts, *fields)
             }
             Content::Structure(FlatType::TagUnion(tags, _)) => {
                 debug_assert_eq!(tags.len(), 1);
 
                 let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
-                single_tag_union_to_ast(env, ptr, field_layouts, tag_name, payload_vars)
+                single_tag_union_to_ast(env, addr, field_layouts, tag_name, payload_vars)
             }
             Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
                 let tag_name = &env.subs[*tag_name];
-                single_tag_union_to_ast(env, ptr, field_layouts, tag_name, &[])
+                single_tag_union_to_ast(env, addr, field_layouts, tag_name, &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
-                struct_to_ast(env, ptr, &[], RecordFields::empty())
+                struct_to_ast(env, addr, &[], RecordFields::empty())
             }
             other => {
                 unreachable!(
@@ -550,7 +548,7 @@ fn ptr_to_ast<'a, M>(
                     opt_name: _,
                 }, WhenRecursive::Loop(union_layout)) => {
                     let content = env.subs.get_content_without_compacting(*structure);
-                    ptr_to_ast(env, ptr, &union_layout, when_recursive, content)
+                    addr_to_ast(env, addr, &union_layout, when_recursive, content)
                 }
                 other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
             }
@@ -575,8 +573,7 @@ fn ptr_to_ast<'a, M>(
             };
 
             // Because this is a `NonRecursive`, the tag ID is definitely after the data.
-            let tag_id =
-                tag_id_from_data(union_layout, ptr, env.ptr_bytes);
+            let tag_id = tag_id_from_data(env, union_layout, addr);
 
             // use the tag ID as an index, to get its name and layout of any arguments
             let (tag_name, arg_layouts) =
@@ -584,7 +581,7 @@ fn ptr_to_ast<'a, M>(
 
             expr_of_tag(
                 env,
-                ptr,
+                addr,
                 tag_name,
                 arg_layouts,
                 &vars_of_tag[tag_name],
@@ -608,7 +605,7 @@ fn ptr_to_ast<'a, M>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.ptr_bytes);
+            let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(env, *union_layout, addr);
 
             let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
             expr_of_tag(
@@ -636,7 +633,7 @@ fn ptr_to_ast<'a, M>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
+            let ptr_to_data = deref_addr_of_addr(addr, env.ptr_bytes);
 
             expr_of_tag(
                 env,
@@ -666,7 +663,7 @@ fn ptr_to_ast<'a, M>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
+            let ptr_to_data = deref_addr_of_addr(addr, env.ptr_bytes);
             if ptr_to_data.is_null() {
                 tag_name_to_expr(env, &nullable_name)
             } else {
@@ -697,11 +694,11 @@ fn ptr_to_ast<'a, M>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_ptr_of_ptr(ptr, env.ptr_bytes);
+            let ptr_to_data = deref_addr_of_addr(addr, env.ptr_bytes);
             if ptr_to_data.is_null() {
                 tag_name_to_expr(env, &nullable_name)
             } else {
-                let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.ptr_bytes);
+                let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(env, *union_layout, addr);
 
                 let tag_id = if tag_id > nullable_id.into() { tag_id - 1 } else { tag_id };
 
@@ -728,7 +725,7 @@ fn ptr_to_ast<'a, M>(
 
 fn list_to_ast<'a, M>(
     env: &Env<'a, 'a, M>,
-    ptr: *const u8,
+    addr: usize,
     len: usize,
     elem_layout: &Layout<'a>,
     content: &Content,
@@ -756,11 +753,11 @@ fn list_to_ast<'a, M>(
 
     for index in 0..len {
         let offset_bytes = index * elem_size;
-        let elem_ptr = unsafe { ptr.add(offset_bytes) };
+        let elem_addr = addr + offset_bytes;
         let (newtype_containers, elem_content) = unroll_newtypes(env, elem_content);
-        let expr = ptr_to_ast(
+        let expr = addr_to_ast(
             env,
-            elem_ptr,
+            elem_addr,
             elem_layout,
             WhenRecursive::Unreachable,
             elem_content,
@@ -777,7 +774,7 @@ fn list_to_ast<'a, M>(
 
 fn single_tag_union_to_ast<'a, M>(
     env: &Env<'a, 'a, M>,
-    ptr: *const u8,
+    addr: usize,
     field_layouts: &'a [Layout<'a>],
     tag_name: &TagName,
     payload_vars: &[Variable],
@@ -789,11 +786,11 @@ fn single_tag_union_to_ast<'a, M>(
 
     let output = if field_layouts.len() == payload_vars.len() {
         let it = payload_vars.iter().copied().zip(field_layouts);
-        sequence_of_expr(env, ptr, it, WhenRecursive::Unreachable).into_bump_slice()
+        sequence_of_expr(env, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else if field_layouts.is_empty() && !payload_vars.is_empty() {
         // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
         let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
-        sequence_of_expr(env, ptr, it, WhenRecursive::Unreachable).into_bump_slice()
+        sequence_of_expr(env, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else {
         unreachable!()
     };
@@ -803,7 +800,7 @@ fn single_tag_union_to_ast<'a, M>(
 
 fn sequence_of_expr<'a, I, M>(
     env: &Env<'a, 'a, M>,
-    ptr: *const u8,
+    addr: usize,
     sequence: I,
     when_recursive: WhenRecursive<'a>,
 ) -> Vec<'a, &'a Loc<Expr<'a>>>
@@ -816,17 +813,17 @@ where
     let mut output = Vec::with_capacity_in(sequence.len(), arena);
 
     // We'll advance this as we iterate through the fields
-    let mut field_ptr = ptr;
+    let mut field_addr = addr;
 
     for (var, layout) in sequence {
         let content = subs.get_content_without_compacting(var);
-        let expr = ptr_to_ast(env, field_ptr, layout, when_recursive, content);
+        let expr = addr_to_ast(env, field_addr, layout, when_recursive, content);
         let loc_expr = Loc::at_zero(expr);
 
         output.push(&*arena.alloc(loc_expr));
 
         // Advance the field pointer to the next field.
-        field_ptr = unsafe { field_ptr.offset(layout.stack_size(env.ptr_bytes) as isize) };
+        field_addr += layout.stack_size(env.ptr_bytes) as usize;
     }
 
     output
@@ -834,7 +831,7 @@ where
 
 fn struct_to_ast<'a, M>(
     env: &Env<'a, 'a, M>,
-    ptr: *const u8,
+    addr: usize,
     field_layouts: &'a [Layout<'a>],
     record_fields: RecordFields,
 ) -> Expr<'a> {
@@ -854,9 +851,9 @@ fn struct_to_ast<'a, M>(
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
 
         let loc_expr = &*arena.alloc(Loc {
-            value: ptr_to_ast(
+            value: addr_to_ast(
                 env,
-                ptr,
+                addr,
                 &Layout::Struct(field_layouts),
                 WhenRecursive::Unreachable,
                 inner_content,
@@ -880,7 +877,7 @@ fn struct_to_ast<'a, M>(
         debug_assert_eq!(sorted_fields.len(), field_layouts.len());
 
         // We'll advance this as we iterate through the fields
-        let mut field_ptr = ptr;
+        let mut field_addr = addr;
 
         for ((label, field), field_layout) in sorted_fields.into_iter().zip(field_layouts.iter()) {
             let var = field.into_inner();
@@ -888,9 +885,9 @@ fn struct_to_ast<'a, M>(
             let content = subs.get_content_without_compacting(var);
 
             let loc_expr = &*arena.alloc(Loc {
-                value: ptr_to_ast(
+                value: addr_to_ast(
                     env,
-                    field_ptr,
+                    field_addr,
                     field_layout,
                     WhenRecursive::Unreachable,
                     content,
@@ -910,8 +907,7 @@ fn struct_to_ast<'a, M>(
             output.push(loc_field);
 
             // Advance the field pointer to the next field.
-            field_ptr =
-                unsafe { field_ptr.offset(field_layout.stack_size(env.ptr_bytes) as isize) };
+            field_addr += field_layout.stack_size(env.ptr_bytes) as usize;
         }
 
         let output = output.into_bump_slice();

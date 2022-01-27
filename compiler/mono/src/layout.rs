@@ -364,6 +364,14 @@ impl<'a> UnionLayout<'a> {
         tags.len() < ptr_bytes as usize
     }
 
+    pub fn tag_id_pointer_bits_and_mask(ptr_bytes: u32) -> (usize, usize) {
+        match ptr_bytes {
+            8 => (3, 0b0000_0111),
+            4 => (2, 0b0000_0011),
+            _ => unreachable!(),
+        }
+    }
+
     // i.e. it is not implicit and not stored in the pointer bits
     pub fn stores_tag_id_as_data(&self, ptr_bytes: u32) -> bool {
         match self {
