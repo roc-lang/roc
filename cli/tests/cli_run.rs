@@ -380,7 +380,7 @@ mod cli_run {
             executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
             input_file: None,
-            expected_ending: "Hi, Giovanni Giorgio!\n",
+            expected_ending: "Hi, Giovanni Giorgio! 👋\n",
             use_valgrind: true,
         },
         tui:"tui" => Example {
