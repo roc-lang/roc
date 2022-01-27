@@ -17,13 +17,17 @@ echo : Str -> Str
 echo = \shout ->
     silence = \length ->
         spaceInUtf8 = 32
+
         List.repeat length spaceInUtf8
+
     shout
-    |> Str.toUtf8
-    |> List.mapWithIndex (\i, _ ->
-        length = (List.len (Str.toUtf8 shout) - i)
-        phrase = (List.split (Str.toUtf8 shout) length).before
-        List.concat (silence (if i == 0 then 2 * length else length)) phrase)
-    |> List.join
-    |> Str.fromUtf8
-    |> Result.withDefault ""
+        |> Str.toUtf8
+        |> List.mapWithIndex
+        (\i, _ ->
+                length = (List.len (Str.toUtf8 shout) - i)
+                phrase = (List.split (Str.toUtf8 shout) length).before
+
+                List.concat (silence (if i == 0 then 2 * length else length)) phrase)
+        |> List.join
+        |> Str.fromUtf8
+        |> Result.withDefault ""
