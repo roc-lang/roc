@@ -376,11 +376,11 @@ mod cli_run {
         //     use_valgrind: true,
         // },
         cli:"cli" => Example {
-            filename: "Echo.roc",
-            executable_filename: "echo",
+            filename: "form.roc",
+            executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
             input_file: None,
-            expected_ending: "Hi, Giovanni Giorgio!\n",
+            expected_ending: "Hi, Giovanni Giorgio! 👋\n",
             use_valgrind: true,
         },
         tui:"tui" => Example {

@@ -3547,6 +3547,93 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     c_function
 }
 
+fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function: FunctionValue<'ctx>,
+    arguments: &[Layout<'a>],
+    return_layout: Layout<'a>,
+    c_function_name: &str,
+) -> FunctionValue<'ctx> {
+    let it = arguments.iter().map(|l| basic_type_from_layout(env, l));
+    let argument_types = Vec::from_iter_in(it, env.arena);
+    let return_type = basic_type_from_layout(env, &return_layout);
+
+    let cc_return = to_cc_return(env, &return_layout);
+    let roc_return = RocReturn::from_layout(env, &return_layout);
+
+    let c_function_type = cc_return.to_signature(env, return_type, argument_types.as_slice());
+
+    let c_function = add_func(
+        env.module,
+        c_function_name,
+        c_function_type,
+        Linkage::External,
+        C_CALL_CONV,
+    );
+
+    let subprogram = env.new_subprogram(c_function_name);
+    c_function.set_subprogram(subprogram);
+
+    // STEP 2: build the exposed function's body
+    let builder = env.builder;
+    let context = env.context;
+
+    let entry = context.append_basic_block(c_function, "entry");
+    builder.position_at_end(entry);
+
+    let params = c_function.get_params();
+
+    let param_types = Vec::from_iter_in(roc_function.get_type().get_param_types(), env.arena);
+
+    // drop the "return pointer" if it exists on the roc function
+    // and the c function does not return via pointer
+    let param_types = match (&roc_return, &cc_return) {
+        (RocReturn::ByPointer, CCReturn::Return) => &param_types[1..],
+        _ => &param_types,
+    };
+
+    debug_assert_eq!(params.len(), param_types.len());
+
+    let it = params.iter().zip(param_types).map(|(arg, fastcc_type)| {
+        let arg_type = arg.get_type();
+        if arg_type == *fastcc_type {
+            // the C and Fast calling conventions agree
+            *arg
+        } else {
+            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type")
+        }
+    });
+
+    let arguments = Vec::from_iter_in(it, env.arena);
+
+    let value = call_roc_function(env, roc_function, &return_layout, arguments.as_slice());
+
+    match cc_return {
+        CCReturn::Return => match roc_return {
+            RocReturn::Return => {
+                env.builder.build_return(Some(&value));
+            }
+            RocReturn::ByPointer => {
+                let loaded = env
+                    .builder
+                    .build_load(value.into_pointer_value(), "load_result");
+                env.builder.build_return(Some(&loaded));
+            }
+        },
+        CCReturn::ByPointer => {
+            let out_ptr = c_function.get_nth_param(0).unwrap().into_pointer_value();
+
+            env.builder.build_store(out_ptr, value);
+            env.builder.build_return(None);
+        }
+        CCReturn::Void => {
+            env.builder.build_return(None);
+        }
+    }
+
+    c_function
+}
+
 fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     ident_string: &str,
@@ -3575,121 +3662,13 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
         &format!("{}_generic", c_function_name),
     );
 
-    let wrapper_return_type = if env.is_gen_test {
-        roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
-    } else {
-        // roc_function.get_type().get_return_type().unwrap()
-        basic_type_from_layout(env, &return_layout)
-    };
-
-    let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
-    for layout in arguments {
-        cc_argument_types.push(to_cc_type(env, layout));
-    }
-
-    // STEP 1: turn `f : a,b,c -> d` into `f : a,b,c, &d -> {}` if the C abi demands it
-    let mut argument_types = cc_argument_types;
-    let return_type = wrapper_return_type;
-
-    let cc_return = to_cc_return(env, &return_layout);
-
-    let c_function_type = match cc_return {
-        CCReturn::Void => env
-            .context
-            .void_type()
-            .fn_type(&function_arguments(env, &argument_types), false),
-        CCReturn::Return => return_type.fn_type(&function_arguments(env, &argument_types), false),
-        CCReturn::ByPointer => {
-            let output_type = return_type.ptr_type(AddressSpace::Generic);
-            argument_types.push(output_type.into());
-            env.context
-                .void_type()
-                .fn_type(&function_arguments(env, &argument_types), false)
-        }
-    };
-
-    let c_function = add_func(
-        env.module,
+    let c_function = expose_function_to_host_help_c_abi_v2(
+        env,
+        roc_function,
+        arguments,
+        return_layout,
         c_function_name,
-        c_function_type,
-        Linkage::External,
-        C_CALL_CONV,
     );
-
-    let subprogram = env.new_subprogram(c_function_name);
-    c_function.set_subprogram(subprogram);
-
-    // STEP 2: build the exposed function's body
-    let builder = env.builder;
-    let context = env.context;
-
-    let entry = context.append_basic_block(c_function, "entry");
-
-    builder.position_at_end(entry);
-
-    debug_info_init!(env, c_function);
-
-    // drop the final argument, which is the pointer we write the result into
-    let args_vector = c_function.get_params();
-    let mut args = args_vector.as_slice();
-    let args_length = args.len();
-
-    match cc_return {
-        CCReturn::Return => {
-            debug_assert_eq!(args.len(), roc_function.get_params().len());
-        }
-        CCReturn::Void => {
-            debug_assert_eq!(args.len(), roc_function.get_params().len());
-        }
-        CCReturn::ByPointer => match RocReturn::from_layout(env, &return_layout) {
-            RocReturn::ByPointer => {
-                debug_assert_eq!(args.len(), roc_function.get_params().len());
-            }
-            RocReturn::Return => {
-                args = &args[..args.len() - 1];
-                debug_assert_eq!(args.len(), roc_function.get_params().len());
-            }
-        },
-    }
-
-    let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
-
-    let it = args.iter().zip(roc_function.get_type().get_param_types());
-    for (arg, fastcc_type) in it {
-        let arg_type = arg.get_type();
-        if arg_type == fastcc_type {
-            // the C and Fast calling conventions agree
-            arguments_for_call.push(*arg);
-        } else {
-            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
-            arguments_for_call.push(cast);
-        }
-    }
-
-    let arguments_for_call = arguments_for_call.into_bump_slice();
-
-    let call_result = call_roc_function(env, roc_function, &return_layout, arguments_for_call);
-
-    match cc_return {
-        CCReturn::Void => {
-            // TODO return empty struct here?
-            builder.build_return(None);
-        }
-        CCReturn::Return => {
-            builder.build_return(Some(&call_result));
-        }
-        CCReturn::ByPointer => {
-            let output_arg_index = args_length - 1;
-
-            let output_arg = c_function
-                .get_nth_param(output_arg_index as u32)
-                .unwrap()
-                .into_pointer_value();
-
-            builder.build_store(output_arg, call_result);
-            builder.build_return(None);
-        }
-    }
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
     let size_function_type = env.context.i64_type().fn_type(&[], false);
@@ -3706,14 +3685,21 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     let subprogram = env.new_subprogram(&size_function_name);
     size_function.set_subprogram(subprogram);
 
-    let entry = context.append_basic_block(size_function, "entry");
+    let entry = env.context.append_basic_block(size_function, "entry");
 
-    builder.position_at_end(entry);
+    env.builder.position_at_end(entry);
 
     debug_info_init!(env, size_function);
 
+    let return_type = if env.is_gen_test {
+        roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
+    } else {
+        // roc_function.get_type().get_return_type().unwrap()
+        basic_type_from_layout(env, &return_layout)
+    };
+
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
-    builder.build_return(Some(&size));
+    env.builder.build_return(Some(&size));
 
     c_function
 }
@@ -6180,6 +6166,7 @@ impl RocReturn {
     }
 }
 
+#[derive(Debug)]
 enum CCReturn {
     /// Return as normal
     Return,
@@ -6189,6 +6176,36 @@ enum CCReturn {
     ByPointer,
     /// The return type is zero-sized
     Void,
+}
+
+impl CCReturn {
+    fn to_signature<'a, 'ctx, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        return_type: BasicTypeEnum<'ctx>,
+        argument_types: &[BasicTypeEnum<'ctx>],
+    ) -> FunctionType<'ctx> {
+        match self {
+            CCReturn::ByPointer => {
+                // turn the output type into a pointer type. Make it the first argument to the function
+                let output_type = return_type.ptr_type(AddressSpace::Generic);
+                let mut arguments: Vec<'_, BasicTypeEnum> =
+                    bumpalo::vec![in env.arena; output_type.into()];
+                arguments.extend(argument_types);
+
+                let arguments = function_arguments(env, &arguments);
+                env.context.void_type().fn_type(&arguments, false)
+            }
+            CCReturn::Return => {
+                let arguments = function_arguments(env, argument_types);
+                return_type.fn_type(&arguments, false)
+            }
+            CCReturn::Void => {
+                let arguments = function_arguments(env, argument_types);
+                env.context.void_type().fn_type(&arguments, false)
+            }
+        }
+    }
 }
 
 /// According to the C ABI, how should we return a value with the given layout?
@@ -6267,22 +6284,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                 arguments.push(value);
             }
 
-            let cc_type = match cc_return {
-                CCReturn::Void => env
-                    .context
-                    .void_type()
-                    .fn_type(&function_arguments(env, &cc_argument_types), false),
-                CCReturn::ByPointer => {
-                    cc_argument_types.insert(0, return_type.ptr_type(AddressSpace::Generic).into());
-                    env.context
-                        .void_type()
-                        .fn_type(&function_arguments(env, &cc_argument_types), false)
-                }
-                CCReturn::Return => {
-                    return_type.fn_type(&function_arguments(env, &cc_argument_types), false)
-                }
-            };
-
+            let cc_type = cc_return.to_signature(env, return_type, cc_argument_types.as_slice());
             let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
 
             let fastcc_type = match roc_return {
@@ -6322,7 +6324,6 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
 
                 if let CCReturn::ByPointer = cc_return {
                     cc_arguments.push(return_pointer.into());
-                    cc_argument_types.remove(0);
                 }
 
                 let it = fastcc_parameters.into_iter().zip(cc_argument_types.iter());
