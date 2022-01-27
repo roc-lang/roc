@@ -32,6 +32,7 @@ use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
+use roc_target::TargetInfo;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::{Alias, Type};
@@ -878,7 +879,7 @@ struct State<'a> {
     pub exposed_types: SubsByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
-    pub ptr_bytes: u32,
+    pub target_info: TargetInfo,
 
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
@@ -1083,7 +1084,7 @@ pub fn load_and_typecheck<'a, F>(
     stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
     look_up_builtin: F,
 ) -> Result<LoadedModule, LoadingProblem<'a>>
 where
@@ -1100,7 +1101,7 @@ where
         src_dir,
         exposed_types,
         Phase::SolveTypes,
-        ptr_bytes,
+        target_info,
         look_up_builtin,
     )? {
         Monomorphized(_) => unreachable!(""),
@@ -1115,7 +1116,7 @@ pub fn load_and_monomorphize<'a, F>(
     stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
     look_up_builtin: F,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>>
 where
@@ -1132,7 +1133,7 @@ where
         src_dir,
         exposed_types,
         Phase::MakeSpecializations,
-        ptr_bytes,
+        target_info,
         look_up_builtin,
     )? {
         Monomorphized(module) => Ok(module),
@@ -1148,7 +1149,7 @@ pub fn load_and_monomorphize_from_str<'a, F>(
     stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
     look_up_builtin: F,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>>
 where
@@ -1165,7 +1166,7 @@ where
         src_dir,
         exposed_types,
         Phase::MakeSpecializations,
-        ptr_bytes,
+        target_info,
         look_up_builtin,
     )? {
         Monomorphized(module) => Ok(module),
@@ -1317,7 +1318,7 @@ fn load<'a, F>(
     src_dir: &Path,
     exposed_types: SubsByModule,
     goal_phase: Phase,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
     look_up_builtins: F,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>>
 where
@@ -1433,7 +1434,7 @@ where
                                             worker_arena,
                                             src_dir,
                                             msg_tx.clone(),
-                                            ptr_bytes,
+                                            target_info,
                                             look_up_builtins,
                                         );
 
@@ -1474,7 +1475,7 @@ where
 
             let mut state = State {
                 root_id,
-                ptr_bytes,
+                target_info,
                 platform_data: None,
                 goal_phase,
                 stdlib,
@@ -1999,7 +2000,7 @@ fn update<'a>(
                     let layout_cache = state
                         .layout_caches
                         .pop()
-                        .unwrap_or_else(|| LayoutCache::new(state.ptr_bytes));
+                        .unwrap_or_else(|| LayoutCache::new(state.target_info));
 
                     let typechecked = TypeCheckedModule {
                         module_id,
@@ -3812,7 +3813,7 @@ fn make_specializations<'a>(
     mut layout_cache: LayoutCache<'a>,
     specializations_we_must_make: Vec<ExternalSpecializations>,
     mut module_timing: ModuleTiming,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut mono_problems = Vec::new();
@@ -3824,7 +3825,7 @@ fn make_specializations<'a>(
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
-        ptr_bytes,
+        target_info,
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
@@ -3895,7 +3896,7 @@ fn build_pending_specializations<'a>(
     decls: Vec<Declaration>,
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
     // TODO remove
     exposed_to_host: ExposedToHost,
 ) -> Msg<'a> {
@@ -3920,7 +3921,7 @@ fn build_pending_specializations<'a>(
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
-        ptr_bytes,
+        target_info,
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
@@ -4128,7 +4129,7 @@ fn run_task<'a, F>(
     arena: &'a Bump,
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
     look_up_builtins: F,
 ) -> Result<(), LoadingProblem<'a>>
 where
@@ -4206,7 +4207,7 @@ where
             decls,
             module_timing,
             layout_cache,
-            ptr_bytes,
+            target_info,
             exposed_to_host,
         )),
         MakeSpecializations {
@@ -4226,7 +4227,7 @@ where
             layout_cache,
             specializations_we_must_make,
             module_timing,
-            ptr_bytes,
+            target_info,
         )),
     }?;
 

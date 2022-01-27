@@ -235,7 +235,7 @@ pub fn gen_from_mono_module_llvm(
     let code_gen_start = SystemTime::now();
 
     // Generate the binary
-    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+    let target_info = roc_target::TargetInfo::from(target);
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(target, &context, "app"));
 
@@ -286,7 +286,7 @@ pub fn gen_from_mono_module_llvm(
         context: &context,
         interns: loaded.interns,
         module,
-        ptr_bytes,
+        target_info,
         // in gen_tests, the compiler provides roc_panic
         // and sets up the setjump/longjump exception handling
         is_gen_test: false,

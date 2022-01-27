@@ -120,7 +120,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
     builtin: &Builtin<'a>,
     when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
-    let ptr_bytes = env.ptr_bytes;
+    let ptr_bytes = env.target_info;
 
     match builtin {
         Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
@@ -246,7 +246,7 @@ fn hash_struct<'a, 'ctx, 'env>(
     when_recursive: WhenRecursive<'a>,
     field_layouts: &[Layout<'a>],
 ) -> IntValue<'ctx> {
-    let ptr_bytes = env.ptr_bytes;
+    let ptr_bytes = env.target_info;
 
     let layout = Layout::Struct(field_layouts);
 
@@ -423,7 +423,7 @@ fn hash_tag<'a, 'ctx, 'env>(
                     env,
                     seed,
                     hash_bytes,
-                    tag_id_layout.stack_size(env.ptr_bytes),
+                    tag_id_layout.stack_size(env.target_info),
                 );
 
                 // hash the tag data
@@ -474,7 +474,7 @@ fn hash_tag<'a, 'ctx, 'env>(
                     env,
                     seed,
                     hash_bytes,
-                    tag_id_layout.stack_size(env.ptr_bytes),
+                    tag_id_layout.stack_size(env.target_info),
                 );
 
                 // hash the tag data
@@ -574,7 +574,7 @@ fn hash_tag<'a, 'ctx, 'env>(
                         env,
                         seed,
                         hash_bytes,
-                        tag_id_layout.stack_size(env.ptr_bytes),
+                        tag_id_layout.stack_size(env.target_info),
                     );
 
                     // hash tag data

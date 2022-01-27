@@ -13,6 +13,7 @@ use roc_load::file::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use roc_parse::parser::SyntaxError;
 use roc_region::all::LineInfo;
+use roc_target::TargetInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
@@ -43,7 +44,7 @@ pub fn gen_and_eval<'a>(
 
     let module_src = promote_expr_to_module(src_str);
 
-    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+    let target_info = TargetInfo::from(&target);
 
     let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
@@ -53,7 +54,7 @@ pub fn gen_and_eval<'a>(
         &stdlib,
         src_dir,
         exposed_types,
-        ptr_bytes,
+        target_info,
         builtin_defs_map,
     );
 
@@ -133,7 +134,6 @@ pub fn gen_and_eval<'a>(
     } else {
         let context = Context::create();
         let builder = context.create_builder();
-        let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
         let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
             &target, &context, "",
         ));
@@ -181,7 +181,7 @@ pub fn gen_and_eval<'a>(
             context: &context,
             interns,
             module,
-            ptr_bytes,
+            target_info,
             is_gen_test: true, // so roc_panic is generated
             // important! we don't want any procedures to get the C calling convention
             exposed_to_host: MutSet::default(),
@@ -237,7 +237,7 @@ pub fn gen_and_eval<'a>(
                 &env.interns,
                 home,
                 &subs,
-                ptr_bytes,
+                target_info,
             )
         };
         let mut expr = roc_fmt::Buf::new_in(&arena);

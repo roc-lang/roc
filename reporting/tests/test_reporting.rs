@@ -96,8 +96,8 @@ mod test_reporting {
             let mut update_mode_ids = UpdateModeIds::new();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let ptr_bytes = 8;
-            let mut layout_cache = LayoutCache::new(ptr_bytes);
+            let target_info = roc_target::TargetInfo::default_x86_64();
+            let mut layout_cache = LayoutCache::new(target_info);
             let mut mono_env = roc_mono::ir::Env {
                 arena: &arena,
                 subs: &mut subs,
@@ -105,7 +105,7 @@ mod test_reporting {
                 home,
                 ident_ids: &mut ident_ids,
                 update_mode_ids: &mut update_mode_ids,
-                ptr_bytes,
+                target_info,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,
             };
