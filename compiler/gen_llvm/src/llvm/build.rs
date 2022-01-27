@@ -6324,7 +6324,6 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
 
                 if let CCReturn::ByPointer = cc_return {
                     cc_arguments.push(return_pointer.into());
-                    cc_argument_types.remove(0);
                 }
 
                 let it = fastcc_parameters.into_iter().zip(cc_argument_types.iter());
