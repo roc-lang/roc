@@ -3547,7 +3547,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     c_function
 }
 
-fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
+fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
     arguments: &[Layout<'a>],
@@ -3662,7 +3662,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
         &format!("{}_generic", c_function_name),
     );
 
-    let c_function = expose_function_to_host_help_c_abi(
+    let c_function = expose_function_to_host_help_c_abi_v2(
         env,
         roc_function,
         arguments,
