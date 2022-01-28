@@ -3,4 +3,4 @@ app "hello-gui"
     imports []
     provides [ render ] to pf
 
-render = { content: "Hello, World!", title: "Roc GUI" }
+render = \{} -> { content: "Hello, World!", title: "Roc GUI" }
