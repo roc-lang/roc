@@ -1,5 +1,5 @@
 use crate::repl::eval;
-use crate::repl::from_memory::AppMemoryInternal;
+use crate::repl::app_memory::AppMemoryInternal;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;

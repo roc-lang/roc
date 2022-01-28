@@ -17,7 +17,7 @@ use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 use std::cmp::{max_by_key, min_by_key};
 
-use super::from_memory::AppMemory;
+use super::app_memory::AppMemory;
 
 struct Env<'a, 'env, M> {
     arena: &'a Bump,
