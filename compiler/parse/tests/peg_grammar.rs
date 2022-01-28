@@ -473,7 +473,7 @@ peg::parser!{
 
         rule tag() =
           private_tag()
-          / [T::UppercaseIdent] // = Global Tag
+          / [T::UppercaseIdent]
 
         rule private_tag() = [T::PrivateTag] {}
 
@@ -635,7 +635,7 @@ peg::parser!{
 
         rule tag_union() =
           empty_list()
-          / [T::OpenSquare] (tag() [T::Comma])* tag() [T::CloseSquare] type_variable()?
+          / [T::OpenSquare] (apply_type() [T::Comma])* apply_type() [T::CloseSquare] type_variable()?
         
         rule type_variable() =
           [T::Underscore]
@@ -732,7 +732,12 @@ peg::parser!{
           def() def()* __
 
         rule annotation() =
-          ident() [T::Colon] type_annotation()
+        annotation_pre_colon() [T::Colon] type_annotation()
+
+        rule annotation_pre_colon() =
+          apply()
+          / tag()
+          / ident()
 
         rule body() =
           ident() [T::OpAssignment] full_expr()
@@ -754,11 +759,11 @@ peg::parser!{
           / module_name() [T::Dot] ident()
 
         rule apply() =
-          apply_expr() no_apply_full_expr()+ end()
+          apply_expr() no_apply_full_expr()+ end()?
 
         rule apply_expr() =
-          var()
-          / tag()
+          tag()
+          / var()
 
         rule end() =
           [T::CloseIndent]
