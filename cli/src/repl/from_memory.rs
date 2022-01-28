@@ -1,16 +1,8 @@
 use std::mem::size_of;
 
-pub trait FromMemory<M: AppMemory> {
-    fn from_memory(memory: &M, address: usize) -> Self;
+pub trait AppMemory<T> {
+    fn from_memory(&self, addr: usize) -> T;
 }
-
-// TODO: check if AppMemory trait is really needed!
-// I wrote it to try to help with Rust type inference but it didn't really help
-// Rust is complaining in eval.rs that it can't find instances like `u8: FromMemory<M>`
-// I thought that the AppMemory trait might give it some more hints, but it's still not working.
-pub trait AppMemory {}
-impl AppMemory for AppMemoryInternal {}
-impl<'a> AppMemory for AppMemoryExternal<'a> {}
 
 /// A block of app memory in the same address space as the compiler
 pub struct AppMemoryInternal;
@@ -23,41 +15,25 @@ pub struct AppMemoryExternal<'a> {
 
 macro_rules! impl_number_type {
     ($t: ty) => {
-        impl FromMemory<AppMemoryInternal> for $t {
-            fn from_memory(_: &AppMemoryInternal, address: usize) -> Self {
-                let ptr = address as *const _;
+        impl AppMemory<$t> for AppMemoryInternal {
+            fn from_memory(&self, addr: usize) -> $t {
+                let ptr = addr as *const _;
                 unsafe { *ptr }
             }
         }
 
-        impl FromMemory<AppMemoryExternal<'_>> for $t {
-            fn from_memory(memory: &AppMemoryExternal, address: usize) -> Self {
+        impl AppMemory<$t> for AppMemoryExternal<'_> {
+            fn from_memory(&self, address: usize) -> $t {
                 const N: usize = size_of::<$t>();
                 let mut array = [0; N];
-                array.copy_from_slice(&memory.bytes[address..][..N]);
-                Self::from_le_bytes(array)
+                array.copy_from_slice(&self.bytes[address..][..N]);
+                <$t>::from_le_bytes(array)
             }
         }
     };
 }
 
-impl FromMemory<AppMemoryInternal> for u8 {
-    fn from_memory(_: &AppMemoryInternal, address: usize) -> Self {
-        let ptr = address as *const _;
-        unsafe { *ptr }
-    }
-}
-
-impl FromMemory<AppMemoryExternal<'_>> for u8 {
-    fn from_memory(memory: &AppMemoryExternal, address: usize) -> Self {
-        const N: usize = size_of::<u8>();
-        let mut array = [0; N];
-        array.copy_from_slice(&memory.bytes[address..][..N]);
-        Self::from_le_bytes(array)
-    }
-}
-
-// impl_number_type!(u8);
+impl_number_type!(u8);
 impl_number_type!(u16);
 impl_number_type!(u32);
 impl_number_type!(u64);
@@ -74,16 +50,16 @@ impl_number_type!(isize);
 impl_number_type!(f32);
 impl_number_type!(f64);
 
-impl FromMemory<AppMemoryInternal> for bool {
-    fn from_memory(_: &AppMemoryInternal, address: usize) -> Self {
-        let ptr = address as *const _;
+impl AppMemory<bool> for AppMemoryInternal {
+    fn from_memory(&self, addr: usize) -> bool {
+        let ptr = addr as *const _;
         unsafe { *ptr }
     }
 }
 
-impl FromMemory<AppMemoryExternal<'_>> for bool {
-    fn from_memory(memory: &AppMemoryExternal, address: usize) -> Self {
-        memory.bytes[address] != 0
+impl AppMemory<bool> for AppMemoryExternal<'_> {
+    fn from_memory(&self, address: usize) -> bool {
+        self.bytes[address] != 0
     }
 }
 
@@ -97,7 +73,7 @@ mod tests {
         let ptr = &value as *const u8;
         let addr = ptr as usize;
         let memory = AppMemoryInternal;
-        let recovered: u8 = u8::from_memory(&memory, addr);
+        let recovered: u8 = memory.from_memory(addr);
         assert_eq!(value, recovered);
     }
 
@@ -108,7 +84,7 @@ mod tests {
             bytes: &[0, 0, value, 0, 0],
         };
         let addr = 2;
-        let recovered: u8 = u8::from_memory(&memory, addr);
+        let recovered: u8 = memory.from_memory(addr);
         assert_eq!(value, recovered);
     }
 
@@ -118,7 +94,7 @@ mod tests {
         let ptr = &value as *const i64;
         let addr = ptr as usize;
         let memory = AppMemoryInternal;
-        let recovered: i64 = i64::from_memory(&memory, addr);
+        let recovered: i64 = memory.from_memory(addr);
         assert_eq!(value, recovered);
     }
 
@@ -133,7 +109,7 @@ mod tests {
             ],
         };
         let addr = 2;
-        let recovered: i64 = i64::from_memory(&memory, addr);
+        let recovered: i64 = memory.from_memory(addr);
         assert_eq!(value, recovered);
     }
 }

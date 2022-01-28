@@ -16,9 +16,9 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 use std::cmp::{max_by_key, min_by_key};
 
-use super::from_memory::{AppMemory, FromMemory};
+use super::from_memory::AppMemory;
 
-struct Env<'a, 'env, M: AppMemory> {
+struct Env<'a, 'env, M> {
     arena: &'a Bump,
     subs: &'env Subs,
     ptr_bytes: u32,
@@ -40,7 +40,7 @@ pub enum ToAstProblem {
 /// we get to a struct or tag, we know what the labels are and can turn them
 /// back into the appropriate user-facing literals.
 #[allow(clippy::too_many_arguments)]
-pub unsafe fn jit_to_ast<'a, M: AppMemory>(
+pub unsafe fn jit_to_ast<'a, M>(
     arena: &'a Bump,
     lib: Library,
     main_fn_name: &str,
@@ -87,7 +87,7 @@ enum NewtypeKind<'a> {
 ///
 /// The returned list of newtype containers is ordered by increasing depth. As an example,
 /// `A ({b : C 123})` will have the unrolled list `[Tag(A), RecordField(b), Tag(C)]`.
-fn unroll_newtypes<'a, M: AppMemory>(
+fn unroll_newtypes<'a, M>(
     env: &Env<'a, 'a, M>,
     mut content: &'a Content,
 ) -> (Vec<'a, NewtypeKind<'a>>, &'a Content) {
@@ -121,7 +121,7 @@ fn unroll_newtypes<'a, M: AppMemory>(
     }
 }
 
-fn apply_newtypes<'a, M: AppMemory>(
+fn apply_newtypes<'a, M>(
     env: &Env<'a, '_, M>,
     newtype_containers: Vec<'a, NewtypeKind<'a>>,
     mut expr: Expr<'a>,
@@ -149,14 +149,14 @@ fn apply_newtypes<'a, M: AppMemory>(
     expr
 }
 
-fn unroll_aliases<'a, M: AppMemory>(env: &Env<'a, 'a, M>, mut content: &'a Content) -> &'a Content {
+fn unroll_aliases<'a, M>(env: &Env<'a, 'a, M>, mut content: &'a Content) -> &'a Content {
     while let Content::Alias(_, _, real) = content {
         content = env.subs.get_content_without_compacting(*real);
     }
     content
 }
 
-fn unroll_recursion_var<'a, M: AppMemory>(
+fn unroll_recursion_var<'a, M>(
     env: &Env<'a, 'a, M>,
     mut content: &'a Content,
 ) -> &'a Content {
@@ -166,7 +166,7 @@ fn unroll_recursion_var<'a, M: AppMemory>(
     content
 }
 
-fn get_tags_vars_and_variant<'a, M: AppMemory>(
+fn get_tags_vars_and_variant<'a, M>(
     env: &Env<'a, '_, M>,
     tags: &UnionTags,
     opt_rec_var: Option<Variable>,
@@ -184,7 +184,7 @@ fn get_tags_vars_and_variant<'a, M: AppMemory>(
     (vars_of_tag, union_variant)
 }
 
-fn expr_of_tag<'a, M: AppMemory>(
+fn expr_of_tag<'a, M>(
     env: &Env<'a, 'a, M>,
     data_addr: usize,
     tag_name: &TagName,
@@ -207,7 +207,7 @@ fn expr_of_tag<'a, M: AppMemory>(
 
 /// Gets the tag ID of a union variant, assuming that the tag ID is stored alongside (after) the
 /// tag data. The caller is expected to check that the tag ID is indeed stored this way.
-fn tag_id_from_data<'a, M: AppMemory>(
+fn tag_id_from_data<'a, M>(
     env: &Env<'a, 'a, M>,
     union_layout: UnionLayout,
     data_addr: usize,
@@ -218,27 +218,37 @@ fn tag_id_from_data<'a, M: AppMemory>(
     let tag_id_addr = data_addr + offset as usize;
 
     match union_layout.tag_id_builtin() {
-        Builtin::Bool => u8::from_memory(&env.app_memory, tag_id_addr) as i64,
-        Builtin::Int(IntWidth::U8) => u8::from_memory(&env.app_memory, tag_id_addr) as i64,
-        Builtin::Int(IntWidth::U16) => u16::from_memory(&env.app_memory, tag_id_addr) as i64,
+        Builtin::Bool => {
+            let value: u8 = env.app_memory.from_memory(tag_id_addr);
+            value as i64
+        }
+        Builtin::Int(IntWidth::U8) => {
+            let value: u8 = env.app_memory.from_memory(tag_id_addr);
+            value as i64
+        }
+        Builtin::Int(IntWidth::U16) => {
+            let value: u16 = env.app_memory.from_memory(tag_id_addr);
+            value as i64
+        }
         Builtin::Int(IntWidth::U64) => {
             // used by non-recursive unions at the
             // moment, remove if that is no longer the case
-            i64::from_memory(&env.app_memory, tag_id_addr)
+            env.app_memory.from_memory(tag_id_addr)
         }
         _ => unreachable!("invalid tag id layout"),
     }
 }
 
-fn deref_addr_of_addr<'a, M: AppMemory>(env: &Env<'a, 'a, M>, addr_of_addr: usize) -> usize {
-    usize::from_memory(&env.app_memory, addr_of_addr)
+// TODO: inline this at call sites
+fn deref_addr_of_addr<'a, M>(env: &Env<'a, 'a, M>, addr_of_addr: usize) -> usize {
+    env.app_memory.from_memory(addr_of_addr)
 }
 
 /// Gets the tag ID of a union variant from its recursive pointer (that is, the pointer to the
 /// pointer to the data of the union variant). Returns
 ///   - the tag ID
 ///   - the address of the data of the union variant, unmasked if the pointer held the tag ID
-fn tag_id_from_recursive_ptr<'a, M: AppMemory>(
+fn tag_id_from_recursive_ptr<'a, M>(
     env: &Env<'a, 'a, M>,
     union_layout: UnionLayout,
     rec_addr: usize,
@@ -264,7 +274,7 @@ const OPAQUE_FUNCTION: Expr = Expr::Var {
     ident: "<function>",
 };
 
-fn jit_to_ast_help<'a, M: AppMemory>(
+fn jit_to_ast_help<'a, M>(
     env: &Env<'a, 'a, M>,
     lib: Library,
     main_fn_name: &str,
@@ -440,7 +450,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
     result.map(|e| apply_newtypes(env, newtype_containers, e))
 }
 
-fn tag_name_to_expr<'a, M: AppMemory>(env: &Env<'a, '_, M>, tag_name: &TagName) -> Expr<'a> {
+fn tag_name_to_expr<'a, M>(env: &Env<'a, '_, M>, tag_name: &TagName) -> Expr<'a> {
     match tag_name {
         TagName::Global(_) => Expr::GlobalTag(
             env.arena
@@ -462,7 +472,7 @@ enum WhenRecursive<'a> {
     Loop(Layout<'a>),
 }
 
-fn addr_to_ast<'a, M: AppMemory>(
+fn addr_to_ast<'a, M>(
     env: &Env<'a, 'a, M>,
     addr: usize,
     layout: &Layout<'a>,
@@ -471,7 +481,7 @@ fn addr_to_ast<'a, M: AppMemory>(
 ) -> Expr<'a> {
     macro_rules! helper {
         ($ty:ty) => {{
-            let num = <$ty>::from_memory(&env.app_memory, addr);
+            let num: $ty = env.app_memory.from_memory(addr);
 
             num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }};
@@ -485,7 +495,7 @@ fn addr_to_ast<'a, M: AppMemory>(
         (_, Layout::Builtin(Builtin::Bool)) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
-            let num = bool::from_memory(&env.app_memory, addr);
+            let num: bool = env.app_memory.from_memory(addr);
 
             bool_to_ast(env, num, content)
         }
@@ -515,8 +525,8 @@ fn addr_to_ast<'a, M: AppMemory>(
             }
         }
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {
-            let elem_addr = usize::from_memory(&env.app_memory, addr);
-            let len = usize::from_memory(&env.app_memory, addr + env.ptr_bytes as usize);
+            let elem_addr: usize = env.app_memory.from_memory(addr);
+            let len: usize = env.app_memory.from_memory(addr + env.ptr_bytes as usize);
 
             list_to_ast(env, elem_addr, len, elem_layout, content)
         }
@@ -732,7 +742,7 @@ fn addr_to_ast<'a, M: AppMemory>(
     apply_newtypes(env, newtype_containers, expr)
 }
 
-fn list_to_ast<'a, M: AppMemory>(
+fn list_to_ast<'a, M>(
     env: &Env<'a, 'a, M>,
     addr: usize,
     len: usize,
@@ -781,7 +791,7 @@ fn list_to_ast<'a, M: AppMemory>(
     Expr::List(Collection::with_items(output))
 }
 
-fn single_tag_union_to_ast<'a, M: AppMemory>(
+fn single_tag_union_to_ast<'a, M>(
     env: &Env<'a, 'a, M>,
     addr: usize,
     field_layouts: &'a [Layout<'a>],
@@ -807,7 +817,7 @@ fn single_tag_union_to_ast<'a, M: AppMemory>(
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
 }
 
-fn sequence_of_expr<'a, I, M: AppMemory>(
+fn sequence_of_expr<'a, I, M>(
     env: &Env<'a, 'a, M>,
     addr: usize,
     sequence: I,
@@ -838,7 +848,7 @@ where
     output
 }
 
-fn struct_to_ast<'a, M: AppMemory>(
+fn struct_to_ast<'a, M>(
     env: &Env<'a, 'a, M>,
     addr: usize,
     field_layouts: &'a [Layout<'a>],
@@ -955,7 +965,7 @@ fn unpack_two_element_tag_union(
     (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }
 
-fn bool_to_ast<'a, M: AppMemory>(env: &Env<'a, '_, M>, value: bool, content: &Content) -> Expr<'a> {
+fn bool_to_ast<'a, M>(env: &Env<'a, '_, M>, value: bool, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1033,7 +1043,7 @@ fn bool_to_ast<'a, M: AppMemory>(env: &Env<'a, '_, M>, value: bool, content: &Co
     }
 }
 
-fn byte_to_ast<'a, M: AppMemory>(env: &Env<'a, '_, M>, value: u8, content: &Content) -> Expr<'a> {
+fn byte_to_ast<'a, M>(env: &Env<'a, '_, M>, value: u8, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1120,7 +1130,7 @@ fn byte_to_ast<'a, M: AppMemory>(env: &Env<'a, '_, M>, value: u8, content: &Cont
     }
 }
 
-fn num_to_ast<'a, M: AppMemory>(
+fn num_to_ast<'a, M>(
     env: &Env<'a, '_, M>,
     num_expr: Expr<'a>,
     content: &Content,
