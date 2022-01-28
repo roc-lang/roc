@@ -31,7 +31,6 @@ Earthly may temporarily use a lot of disk space, up to 90 GB. This disk space is
    git config --global commit.gpgsign true
    ```
 
-- If you have a Yubikey, check this 
 - You find good first issues [here](https://github.com/rtfeldman/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
 
 ## Can we do better?
