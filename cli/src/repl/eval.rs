@@ -157,7 +157,10 @@ fn unroll_aliases<'a, M: AppMemory>(env: &Env<'a, 'a, M>, mut content: &'a Conte
     content
 }
 
-fn unroll_recursion_var<'a, M: AppMemory>(env: &Env<'a, 'a, M>, mut content: &'a Content) -> &'a Content {
+fn unroll_recursion_var<'a, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
+    mut content: &'a Content,
+) -> &'a Content {
     while let Content::RecursionVar { structure, .. } = content {
         content = env.subs.get_content_without_compacting(*structure);
     }
@@ -216,15 +219,9 @@ fn tag_id_from_data<'a, M: AppMemory>(
     let tag_id_addr = data_addr + offset as usize;
 
     match union_layout.tag_id_builtin() {
-        Builtin::Bool => {
-            env.app_memory.deref_bool(tag_id_addr) as i64
-        }
-        Builtin::Int(IntWidth::U8) => {
-            env.app_memory.deref_u8(tag_id_addr) as i64
-        }
-        Builtin::Int(IntWidth::U16) => {
-            env.app_memory.deref_u16(tag_id_addr) as i64
-        }
+        Builtin::Bool => env.app_memory.deref_bool(tag_id_addr) as i64,
+        Builtin::Int(IntWidth::U8) => env.app_memory.deref_u8(tag_id_addr) as i64,
+        Builtin::Int(IntWidth::U16) => env.app_memory.deref_u16(tag_id_addr) as i64,
         Builtin::Int(IntWidth::U64) => {
             // used by non-recursive unions at the
             // moment, remove if that is no longer the case
@@ -1129,7 +1126,11 @@ fn byte_to_ast<'a, M: AppMemory>(env: &Env<'a, '_, M>, value: u8, content: &Cont
     }
 }
 
-fn num_to_ast<'a, M: AppMemory>(env: &Env<'a, '_, M>, num_expr: Expr<'a>, content: &Content) -> Expr<'a> {
+fn num_to_ast<'a, M: AppMemory>(
+    env: &Env<'a, '_, M>,
+    num_expr: Expr<'a>,
+    content: &Content,
+) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
