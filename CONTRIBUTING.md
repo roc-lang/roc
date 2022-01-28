@@ -23,10 +23,10 @@ Earthly may temporarily use a lot of disk space, up to 90 GB. This disk space is
 - It's a good idea to open a work-in-progress pull request as you begin working on something. This way, others can see that you're working on it, which avoids duplicate effort, and others can give feedback sooner rather than later if they notice a problem in the direction things are going. Be sure to include "WIP" in the title of the PR as long as it's not ready for review!
 - Make sure to create a branch on the roc repository for your changes. We do not allow CI to be run on forks for security.
 - All your commits need to be signed to prevent impersonation:
-  0. If you have a Yubikey, follow [guide 1](https://dev.to/paulmicheli/using-your-yubikey-to-get-started-with-gpg-3h4k), [guide 2](https://dev.to/paulmicheli/using-your-yubikey-for-signed-git-commits-4l73) and skip the steps below.
-  1. [Make a key to sign your commits.](https://docs.github.com/en/authentication/managing-commit-signature-verification/generating-a-new-gpg-key).
-  2. [Configure git to use your key.](https://docs.github.com/en/authentication/managing-commit-signature-verification/telling-git-about-your-signing-key)
-  3. Make git sign your commits automatically:
+  1. If you have a Yubikey, follow [guide 1](https://dev.to/paulmicheli/using-your-yubikey-to-get-started-with-gpg-3h4k), [guide 2](https://dev.to/paulmicheli/using-your-yubikey-for-signed-git-commits-4l73) and skip the steps below.
+  2. [Make a key to sign your commits.](https://docs.github.com/en/authentication/managing-commit-signature-verification/generating-a-new-gpg-key).
+  3. [Configure git to use your key.](https://docs.github.com/en/authentication/managing-commit-signature-verification/telling-git-about-your-signing-key)
+  4. Make git sign your commits automatically:
    ```
    git config --global commit.gpgsign true
    ```
