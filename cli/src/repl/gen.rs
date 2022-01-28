@@ -239,7 +239,7 @@ pub fn gen_and_eval<'a>(
                 home,
                 &subs,
                 target_info,
-                AppMemoryInternal,
+                &AppMemoryInternal,
             )
         };
         let mut expr = roc_fmt::Buf::new_in(&arena);

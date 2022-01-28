@@ -22,7 +22,7 @@ use super::from_memory::AppMemory;
 struct Env<'a, 'env, M> {
     arena: &'a Bump,
     subs: &'env Subs,
-    app_memory: M,
+    app_memory: &'a M,
     target_info: TargetInfo,
     interns: &'env Interns,
     home: ModuleId,
@@ -51,7 +51,7 @@ pub unsafe fn jit_to_ast<'a, M: AppMemory>(
     home: ModuleId,
     subs: &'a Subs,
     target_info: TargetInfo,
-    app_memory: M,
+    app_memory: &'a M,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let env = Env {
         arena,
