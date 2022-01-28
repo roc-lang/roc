@@ -344,13 +344,13 @@ fn jit_to_ast_help<'a, M: AppMemory>(
             todo!("add support for rendering builtin {:?} to the REPL", other)
         }
         Layout::Struct(field_layouts) => {
-            let ptr_to_ast = |ptr: *const u8| match content {
+            let struct_addr_to_ast = |addr: usize| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
-                    Ok(struct_to_ast(env, ptr, field_layouts, *fields))
+                    Ok(struct_to_ast(env, addr, field_layouts, *fields))
                 }
                 Content::Structure(FlatType::EmptyRecord) => Ok(struct_to_ast(
                     env,
-                    ptr,
+                    addr,
                     field_layouts,
                     RecordFields::empty(),
                 )),
@@ -361,7 +361,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
 
                     Ok(single_tag_union_to_ast(
                         env,
-                        ptr,
+                        addr,
                         field_layouts,
                         tag_name,
                         payload_vars,
@@ -372,7 +372,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
 
                     Ok(single_tag_union_to_ast(
                         env,
-                        ptr,
+                        addr,
                         field_layouts,
                         tag_name,
                         &[],
@@ -399,7 +399,8 @@ fn jit_to_ast_help<'a, M: AppMemory>(
                 lib,
                 main_fn_name,
                 result_stack_size as usize,
-                |bytes: *const u8| { ptr_to_ast(bytes) }
+                // TODO: convert LLVM macro to use address
+                |bytes: *const u8| { struct_addr_to_ast(bytes as usize) }
             )
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
@@ -409,7 +410,9 @@ fn jit_to_ast_help<'a, M: AppMemory>(
                 main_fn_name,
                 size as usize,
                 |ptr: *const u8| {
-                    addr_to_ast(env, ptr, layout, WhenRecursive::Unreachable, content)
+                    // TODO: convert LLVM macro to use address
+                    let addr = ptr as usize;
+                    addr_to_ast(env, addr, layout, WhenRecursive::Unreachable, content)
                 }
             ))
         }
@@ -423,7 +426,9 @@ fn jit_to_ast_help<'a, M: AppMemory>(
                 main_fn_name,
                 size as usize,
                 |ptr: *const u8| {
-                    addr_to_ast(env, ptr, layout, WhenRecursive::Loop(*layout), content)
+                    // TODO: convert LLVM macro to use address
+                    let addr = ptr as usize;
+                    addr_to_ast(env, addr, layout, WhenRecursive::Loop(*layout), content)
                 }
             ))
         }
@@ -516,7 +521,8 @@ fn addr_to_ast<'a, M: AppMemory>(
             list_to_ast(env, elem_addr, len, elem_layout, content)
         }
         (_, Layout::Builtin(Builtin::Str)) => {
-            let arena_str = <&'a str>::from_memory(&env.app_memory, addr);
+            // TODO: implement FromMemory! It's tricky!
+            let arena_str = unsafe { *(addr as *const &'static str) };
 
             str_to_ast(env.arena, arena_str)
         }
@@ -636,7 +642,7 @@ fn addr_to_ast<'a, M: AppMemory>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_addr_of_addr(addr, env.ptr_bytes);
+            let ptr_to_data = deref_addr_of_addr(env, addr);
 
             expr_of_tag(
                 env,
@@ -666,13 +672,13 @@ fn addr_to_ast<'a, M: AppMemory>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_addr_of_addr(addr, env.ptr_bytes);
-            if ptr_to_data.is_null() {
+            let data_addr = deref_addr_of_addr(env, addr);
+            if data_addr == 0 {
                 tag_name_to_expr(env, &nullable_name)
             } else {
                 expr_of_tag(
                     env,
-                    ptr_to_data,
+                    data_addr,
                     &other_name,
                     other_arg_layouts,
                     &vars_of_tag[&other_name],
@@ -697,8 +703,8 @@ fn addr_to_ast<'a, M: AppMemory>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_addr_of_addr(addr, env.ptr_bytes);
-            if ptr_to_data.is_null() {
+            let ptr_to_data = deref_addr_of_addr(env, addr);
+            if ptr_to_data == 0 {
                 tag_name_to_expr(env, &nullable_name)
             } else {
                 let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(env, *union_layout, addr);

@@ -4,6 +4,10 @@ pub trait FromMemory<M: AppMemory> {
     fn from_memory(memory: &M, address: usize) -> Self;
 }
 
+// TODO: check if AppMemory trait is really needed!
+// I wrote it to try to help with Rust type inference but it didn't really help
+// Rust is complaining in eval.rs that it can't find instances like `u8: FromMemory<M>`
+// I thought that the AppMemory trait might give it some more hints, but it's still not working.
 pub trait AppMemory {}
 impl AppMemory for AppMemoryInternal {}
 impl<'a> AppMemory for AppMemoryExternal<'a> {}
@@ -83,18 +87,53 @@ impl FromMemory<AppMemoryExternal<'_>> for bool {
     }
 }
 
-impl FromMemory<AppMemoryInternal> for &str {
-    fn from_memory(_: &AppMemoryInternal, address: usize) -> Self {
-        let ptr = address as *const _;
-        unsafe { *ptr }
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl<'a> FromMemory<AppMemoryExternal<'a>> for &'a str {
-    fn from_memory(memory: &AppMemoryExternal<'a>, address: usize) -> Self {
-        let len = usize::from_memory(memory, address + std::mem::size_of::<usize>());
-        let content_addr = usize::from_memory(memory, address);
-        let content_bytes: &'a [u8] = &memory.bytes[content_addr..][..len];
-        std::str::from_utf8(content_bytes).unwrap()
+    #[test]
+    fn internal_u8() {
+        let value: u8 = 123;
+        let ptr = &value as *const u8;
+        let addr = ptr as usize;
+        let memory = AppMemoryInternal;
+        let recovered: u8 = u8::from_memory(&memory, addr);
+        assert_eq!(value, recovered);
+    }
+
+    #[test]
+    fn external_u8() {
+        let value: u8 = 123;
+        let memory = AppMemoryExternal {
+            bytes: &[0, 0, value, 0, 0],
+        };
+        let addr = 2;
+        let recovered: u8 = u8::from_memory(&memory, addr);
+        assert_eq!(value, recovered);
+    }
+
+    #[test]
+    fn internal_i64() {
+        let value: i64 = -123 << 33;
+        let ptr = &value as *const i64;
+        let addr = ptr as usize;
+        let memory = AppMemoryInternal;
+        let recovered: i64 = i64::from_memory(&memory, addr);
+        assert_eq!(value, recovered);
+    }
+
+    #[test]
+    fn external_i64() {
+        let value: i64 = -1 << 33;
+        let memory = AppMemoryExternal {
+            bytes: &[
+                0, 0, //
+                0, 0, 0, 0, 0xfe, 0xff, 0xff, 0xff, //
+                0, 0,
+            ],
+        };
+        let addr = 2;
+        let recovered: i64 = i64::from_memory(&memory, addr);
+        assert_eq!(value, recovered);
     }
 }
