@@ -99,8 +99,11 @@ impl<'a> AppMemory for AppMemoryExternal<'a> {
     external_number_type!(deref_f32, f32);
     external_number_type!(deref_f64, f64);
 
-    fn deref_str(&self, _addr: usize) -> &str {
-        todo!("deref_str")
+    fn deref_str(&self, addr: usize) -> &str {
+        let elems_addr = self.deref_usize(addr);
+        let len = self.deref_usize(addr + size_of::<usize>());
+        let bytes = &self.bytes[elems_addr..][..len];
+        std::str::from_utf8(bytes).unwrap()
     }
 }
 
