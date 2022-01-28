@@ -8,6 +8,7 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_load::file::LoadingProblem;
 use roc_mono::ir::OptLevel;
+use roc_target::TargetInfo;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
@@ -58,7 +59,7 @@ pub fn build_file<'a>(
     target_valgrind: bool,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = SystemTime::now();
-    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+    let target_info = TargetInfo::from(target);
 
     // Step 1: compile the app and generate the .o file
     let subs_by_module = MutMap::default();
@@ -72,7 +73,7 @@ pub fn build_file<'a>(
         stdlib,
         src_dir.as_path(),
         subs_by_module,
-        ptr_bytes,
+        target_info,
         builtin_defs_map,
     )?;
 
@@ -356,7 +357,7 @@ pub fn check_file(
 
     // only used for generating errors. We don't do code generation, so hardcoding should be fine
     // we need monomorphization for when exhaustiveness checking
-    let ptr_bytes = 8;
+    let target_info = TargetInfo::default_x86_64();
 
     // Step 1: compile the app and generate the .o file
     let subs_by_module = MutMap::default();
@@ -370,7 +371,7 @@ pub fn check_file(
         stdlib,
         src_dir.as_path(),
         subs_by_module,
-        ptr_bytes,
+        target_info,
         builtin_defs_map,
     )?;
 

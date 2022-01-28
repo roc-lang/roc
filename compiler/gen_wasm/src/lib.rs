@@ -6,20 +6,29 @@ pub mod wasm_module;
 
 use bumpalo::{self, collections::Vec, Bump};
 
-use roc_builtins::bitcode::IntWidth;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevelWrapperType;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
+use roc_target::TargetInfo;
 
 use crate::backend::WasmBackend;
 use crate::wasm_module::{
     Align, CodeBuilder, Export, ExportType, LocalId, SymInfo, ValueType, WasmModule,
 };
 
-const PTR_SIZE: u32 = 4;
+const TARGET_INFO: TargetInfo = TargetInfo::default_wasm32();
+const PTR_SIZE: u32 = {
+    let value = TARGET_INFO.ptr_width() as u32;
+
+    // const assert that our pointer width is actually 4
+    // the code relies on the pointer width being exactly 4
+    assert!(value == 4);
+
+    value
+};
 const PTR_TYPE: ValueType = ValueType::I32;
 
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
@@ -111,7 +120,7 @@ pub fn build_module_without_test_wrapper<'a>(
         proc_symbols,
         initial_module,
         fn_index_offset,
-        CodeGenHelp::new(env.arena, IntWidth::I32, env.module_id),
+        CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
     );
 
     if DEBUG_LOG_SETTINGS.user_procs_ir {

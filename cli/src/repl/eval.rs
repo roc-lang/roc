@@ -13,6 +13,7 @@ use roc_mono::layout::{
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
+use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 use std::cmp::{max_by_key, min_by_key};
 
@@ -21,8 +22,8 @@ use super::from_memory::AppMemory;
 struct Env<'a, 'env, M> {
     arena: &'a Bump,
     subs: &'env Subs,
-    ptr_bytes: u32,
     app_memory: M,
+    target_info: TargetInfo,
     interns: &'env Interns,
     home: ModuleId,
 }
@@ -49,14 +50,14 @@ pub unsafe fn jit_to_ast<'a, M: AppMemory>(
     interns: &'a Interns,
     home: ModuleId,
     subs: &'a Subs,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
     app_memory: M,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let env = Env {
         arena,
         subs,
-        ptr_bytes,
         app_memory,
+        target_info,
         interns,
         home,
     };
@@ -176,7 +177,7 @@ fn get_tags_vars_and_variant<'a, M: AppMemory>(
     let vars_of_tag: MutMap<_, _> = tags_vec.iter().cloned().collect();
 
     let union_variant =
-        union_sorted_tags_help(env.arena, tags_vec, opt_rec_var, env.subs, env.ptr_bytes);
+        union_sorted_tags_help(env.arena, tags_vec, opt_rec_var, env.subs, env.target_info);
 
     (vars_of_tag, union_variant)
 }
@@ -210,7 +211,7 @@ fn tag_id_from_data<'a, M: AppMemory>(
     data_addr: usize,
 ) -> i64 {
     let offset = union_layout
-        .data_size_without_tag_id(env.ptr_bytes)
+        .data_size_without_tag_id(env.target_info)
         .unwrap();
     let tag_id_addr = data_addr + offset as usize;
 
@@ -247,10 +248,10 @@ fn tag_id_from_recursive_ptr<'a, M: AppMemory>(
     union_layout: UnionLayout,
     rec_addr: usize,
 ) -> (i64, usize) {
-    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.ptr_bytes);
+    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.target_info);
     if tag_in_ptr {
         let masked_data_addr = deref_addr_of_addr(env, rec_addr);
-        let (tag_id_bits, tag_id_mask) = UnionLayout::tag_id_pointer_bits_and_mask(env.ptr_bytes);
+        let (tag_id_bits, tag_id_mask) = UnionLayout::tag_id_pointer_bits_and_mask(env.target_info);
         let tag_id = masked_data_addr & tag_id_mask;
 
         // Clear the tag ID data from the pointer
@@ -397,7 +398,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
             let fields = [Layout::u64(), *layout];
             let layout = Layout::Struct(&fields);
 
-            let result_stack_size = layout.stack_size(env.ptr_bytes);
+            let result_stack_size = layout.stack_size(env.target_info);
 
             run_jit_function_dynamic_type!(
                 lib,
@@ -408,7 +409,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
             )
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
-            let size = layout.stack_size(env.ptr_bytes);
+            let size = layout.stack_size(env.target_info);
             Ok(run_jit_function_dynamic_type!(
                 lib,
                 main_fn_name,
@@ -424,7 +425,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
         | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
-            let size = layout.stack_size(env.ptr_bytes);
+            let size = layout.stack_size(env.target_info);
             Ok(run_jit_function_dynamic_type!(
                 lib,
                 main_fn_name,
@@ -520,7 +521,7 @@ fn addr_to_ast<'a, M: AppMemory>(
         }
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {
             let elem_addr = env.app_memory.deref_usize(addr);
-            let len = env.app_memory.deref_usize(addr + env.ptr_bytes as usize);
+            let len = env.app_memory.deref_usize(addr + env.target_info.ptr_width() as usize);
 
             list_to_ast(env, elem_addr, len, elem_layout, content)
         }
@@ -761,7 +762,7 @@ fn list_to_ast<'a, M: AppMemory>(
 
     let arena = env.arena;
     let mut output = Vec::with_capacity_in(len, arena);
-    let elem_size = elem_layout.stack_size(env.ptr_bytes) as usize;
+    let elem_size = elem_layout.stack_size(env.target_info) as usize;
 
     for index in 0..len {
         let offset_bytes = index * elem_size;
@@ -835,7 +836,7 @@ where
         output.push(&*arena.alloc(loc_expr));
 
         // Advance the field pointer to the next field.
-        field_addr += layout.stack_size(env.ptr_bytes) as usize;
+        field_addr += layout.stack_size(env.target_info) as usize;
     }
 
     output
@@ -919,7 +920,7 @@ fn struct_to_ast<'a, M: AppMemory>(
             output.push(loc_field);
 
             // Advance the field pointer to the next field.
-            field_addr += field_layout.stack_size(env.ptr_bytes) as usize;
+            field_addr += field_layout.stack_size(env.target_info) as usize;
         }
 
         let output = output.into_bump_slice();
@@ -1094,8 +1095,13 @@ fn byte_to_ast<'a, M: AppMemory>(env: &Env<'a, '_, M>, value: u8, content: &Cont
                         .map(|(a, b)| (a.clone(), b.to_vec()))
                         .collect();
 
-                    let union_variant =
-                        union_sorted_tags_help(env.arena, tags_vec, None, env.subs, env.ptr_bytes);
+                    let union_variant = union_sorted_tags_help(
+                        env.arena,
+                        tags_vec,
+                        None,
+                        env.subs,
+                        env.target_info,
+                    );
 
                     match union_variant {
                         UnionVariant::ByteUnion(tagnames) => {

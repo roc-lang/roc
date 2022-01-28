@@ -376,11 +376,11 @@ mod cli_run {
         //     use_valgrind: true,
         // },
         cli:"cli" => Example {
-            filename: "Echo.roc",
-            executable_filename: "echo",
+            filename: "form.roc",
+            executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
             input_file: None,
-            expected_ending: "Hi, Giovanni Giorgio!\n",
+            expected_ending: "Hi, Giovanni Giorgio! 👋\n",
             use_valgrind: true,
         },
         tui:"tui" => Example {
@@ -421,9 +421,11 @@ mod cli_run {
 
     macro_rules! benchmarks {
         ($($test_name:ident => $benchmark:expr,)+) => {
+
             $(
                 #[test]
                 #[cfg_attr(not(debug_assertions), serial(benchmark))]
+                #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
                 fn $test_name() {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);

@@ -63,6 +63,7 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
+use roc_target::TargetInfo;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -166,7 +167,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub compile_unit: &'env DICompileUnit<'ctx>,
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
-    pub ptr_bytes: u32,
+    pub target_info: TargetInfo,
     pub is_gen_test: bool,
     pub exposed_to_host: MutSet<Symbol>,
 }
@@ -195,15 +196,9 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     pub fn ptr_int(&self) -> IntType<'ctx> {
         let ctx = self.context;
 
-        match self.ptr_bytes {
-            1 => ctx.i8_type(),
-            2 => ctx.i16_type(),
-            4 => ctx.i32_type(),
-            8 => ctx.i64_type(),
-            _ => panic!(
-                "Invalid target: Roc does't support compiling to {}-bit systems.",
-                self.ptr_bytes * 8
-            ),
+        match self.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => ctx.i32_type(),
+            roc_target::PtrWidth::Bytes8 => ctx.i64_type(),
         }
     }
 
@@ -212,11 +207,11 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     /// on 64-bit systems, this is i128
     /// on 32-bit systems, this is i64
     pub fn str_list_c_abi(&self) -> IntType<'ctx> {
-        crate::llvm::convert::str_list_int(self.context, self.ptr_bytes)
+        crate::llvm::convert::str_list_int(self.context, self.target_info)
     }
 
     pub fn small_str_bytes(&self) -> u32 {
-        self.ptr_bytes * 2
+        self.target_info.ptr_width() as u32 * 2
     }
 
     pub fn build_intrinsic_call(
@@ -269,7 +264,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 
     pub fn alignment_intvalue(&self, element_layout: &Layout<'a>) -> BasicValueEnum<'ctx> {
-        let alignment = element_layout.alignment_bytes(self.ptr_bytes);
+        let alignment = element_layout.alignment_bytes(self.target_info);
         let alignment_iv = self.alignment_const(alignment);
 
         alignment_iv.into()
@@ -317,12 +312,9 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     ) -> CallSiteValue<'ctx> {
         let false_val = self.context.bool_type().const_int(0, false);
 
-        let intrinsic_name = match self.ptr_bytes {
-            8 => LLVM_MEMSET_I64,
-            4 => LLVM_MEMSET_I32,
-            other => {
-                unreachable!("Unsupported number of ptr_bytes {:?}", other);
-            }
+        let intrinsic_name = match self.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes8 => LLVM_MEMSET_I64,
+            roc_target::PtrWidth::Bytes4 => LLVM_MEMSET_I32,
         };
 
         self.build_intrinsic_call(
@@ -1438,7 +1430,7 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
     let raw_data_ptr = allocate_tag(env, parent, reuse_allocation, union_layout, tags);
     let struct_type = env.context.struct_type(&field_types, false);
 
-    if union_layout.stores_tag_id_as_data(env.ptr_bytes) {
+    if union_layout.stores_tag_id_as_data(env.target_info) {
         let tag_id_ptr = builder
             .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
             .unwrap();
@@ -1524,7 +1516,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
         UnionLayout::NonRecursive(tags) => {
             debug_assert!(union_size > 1);
 
-            let internal_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+            let internal_type = block_of_memory_slices(env.context, tags, env.target_info);
 
             let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
             let wrapper_type = env
@@ -1711,7 +1703,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
             other_fields,
         } => {
             let tag_struct_type =
-                block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
+                block_of_memory_slices(env.context, &[other_fields], env.target_info);
 
             if tag_id == *nullable_id as _ {
                 let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
@@ -1788,7 +1780,7 @@ fn tag_pointer_set_tag_id<'a, 'ctx, 'env>(
     pointer: PointerValue<'ctx>,
 ) -> PointerValue<'ctx> {
     // we only have 3 bits, so can encode only 0..7 (or on 32-bit targets, 2 bits to encode 0..3)
-    debug_assert!((tag_id as u32) < env.ptr_bytes);
+    debug_assert!((tag_id as u32) < env.target_info.ptr_width() as u32);
 
     let ptr_int = env.ptr_int();
 
@@ -1801,11 +1793,10 @@ fn tag_pointer_set_tag_id<'a, 'ctx, 'env>(
         .build_int_to_ptr(combined, pointer.get_type(), "to_ptr")
 }
 
-pub fn tag_pointer_tag_id_bits_and_mask(ptr_bytes: u32) -> (u64, u64) {
-    match ptr_bytes {
-        8 => (3, 0b0000_0111),
-        4 => (2, 0b0000_0011),
-        _ => unreachable!(),
+pub fn tag_pointer_tag_id_bits_and_mask(target_info: TargetInfo) -> (u64, u64) {
+    match target_info.ptr_width() {
+        roc_target::PtrWidth::Bytes8 => (3, 0b0000_0111),
+        roc_target::PtrWidth::Bytes4 => (2, 0b0000_0011),
     }
 }
 
@@ -1813,7 +1804,7 @@ pub fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let (_, mask) = tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
+    let (_, mask) = tag_pointer_tag_id_bits_and_mask(env.target_info);
     let ptr_int = env.ptr_int();
 
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
@@ -1831,7 +1822,7 @@ pub fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let ptr_int = env.ptr_int();
 
-    let (tag_id_bits_mask, _) = tag_pointer_tag_id_bits_and_mask(env.ptr_bytes);
+    let (tag_id_bits_mask, _) = tag_pointer_tag_id_bits_and_mask(env.target_info);
 
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
 
@@ -1918,7 +1909,7 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
         UnionLayout::Recursive(_) => {
             let argument_ptr = argument.into_pointer_value();
 
-            if union_layout.stores_tag_id_as_data(env.ptr_bytes) {
+            if union_layout.stores_tag_id_as_data(env.target_info) {
                 get_tag_id_wrapped(env, argument_ptr)
             } else {
                 tag_pointer_read_tag_id(env, argument_ptr)
@@ -1949,7 +1940,7 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
             {
                 env.builder.position_at_end(else_block);
 
-                let tag_id = if union_layout.stores_tag_id_as_data(env.ptr_bytes) {
+                let tag_id = if union_layout.stores_tag_id_as_data(env.target_info) {
                     get_tag_id_wrapped(env, argument_ptr)
                 } else {
                     tag_pointer_read_tag_id(env, argument_ptr)
@@ -2057,12 +2048,12 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     let result = if field_layout.is_passed_by_reference() {
         let field_type = basic_type_from_layout(env, &field_layout);
 
-        let align_bytes = field_layout.alignment_bytes(env.ptr_bytes);
+        let align_bytes = field_layout.alignment_bytes(env.target_info);
         let alloca = tag_alloca(env, field_type, "copied_tag");
         if align_bytes > 0 {
             let size = env
                 .ptr_int()
-                .const_int(field_layout.stack_size(env.ptr_bytes) as u64, false);
+                .const_int(field_layout.stack_size(env.target_info) as u64, false);
 
             env.builder
                 .build_memcpy(alloca, align_bytes, elem_ptr, align_bytes, size)
@@ -2095,8 +2086,8 @@ pub fn reserve_with_refcount<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> PointerValue<'ctx> {
-    let stack_size = layout.stack_size(env.ptr_bytes);
-    let alignment_bytes = layout.alignment_bytes(env.ptr_bytes);
+    let stack_size = layout.stack_size(env.target_info);
+    let alignment_bytes = layout.alignment_bytes(env.target_info);
 
     let basic_type = basic_type_from_layout(env, layout);
 
@@ -2108,9 +2099,9 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
     union_layout: UnionLayout<'a>,
     fields: &[&[Layout<'a>]],
 ) -> PointerValue<'ctx> {
-    let ptr_bytes = env.ptr_bytes;
+    let ptr_bytes = env.target_info;
 
-    let block_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
+    let block_type = block_of_memory_slices(env.context, fields, env.target_info);
 
     let basic_type = if union_layout.stores_tag_id_as_data(ptr_bytes) {
         let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
@@ -2124,17 +2115,17 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
 
     let mut stack_size = fields
         .iter()
-        .map(|tag| tag.iter().map(|l| l.stack_size(env.ptr_bytes)).sum())
+        .map(|tag| tag.iter().map(|l| l.stack_size(env.target_info)).sum())
         .max()
         .unwrap_or_default();
 
     if union_layout.stores_tag_id_as_data(ptr_bytes) {
-        stack_size += union_layout.tag_id_layout().stack_size(env.ptr_bytes);
+        stack_size += union_layout.tag_id_layout().stack_size(env.target_info);
     }
 
     let alignment_bytes = fields
         .iter()
-        .map(|tag| tag.iter().map(|l| l.alignment_bytes(env.ptr_bytes)))
+        .map(|tag| tag.iter().map(|l| l.alignment_bytes(env.target_info)))
         .flatten()
         .max()
         .unwrap_or(0);
@@ -2154,7 +2145,7 @@ fn reserve_with_refcount_help<'a, 'ctx, 'env>(
 
     let value_bytes_intvalue = len_type.const_int(stack_size as u64, false);
 
-    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
+    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.target_info);
 
     allocate_with_refcount_help(env, basic_type, alignment_bytes, value_bytes_intvalue, rc1)
 }
@@ -2182,8 +2173,9 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let len_type = env.ptr_int();
+    let ptr_width_u32 = env.target_info.ptr_width() as u32;
 
-    let extra_bytes = alignment_bytes.max(env.ptr_bytes);
+    let extra_bytes = alignment_bytes.max(ptr_width_u32);
 
     let ptr = {
         // number of bytes we will allocated
@@ -2208,8 +2200,8 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
             .into_pointer_value();
 
         let index = match extra_bytes {
-            n if n == env.ptr_bytes => 1,
-            n if n == 2 * env.ptr_bytes => 2,
+            n if n == ptr_width_u32 => 1,
+            n if n == 2 * ptr_width_u32 => 2,
             _ => unreachable!("invalid extra_bytes, {}", extra_bytes),
         };
 
@@ -2228,11 +2220,11 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     };
 
     let refcount_ptr = match extra_bytes {
-        n if n == env.ptr_bytes => {
+        n if n == ptr_width_u32 => {
             // the allocated pointer is the same as the refcounted pointer
             unsafe { PointerToRefcount::from_ptr(env, ptr) }
         }
-        n if n == 2 * env.ptr_bytes => {
+        n if n == 2 * ptr_width_u32 => {
             // the refcount is stored just before the start of the actual data
             // but in this case (because of alignment) not at the start of the allocated buffer
             PointerToRefcount::from_ptr_to_data(env, data_ptr)
@@ -2283,14 +2275,15 @@ fn list_literal<'a, 'ctx, 'env>(
     // if element_type.is_int_type() {
     if false {
         let element_type = element_type.into_int_type();
-        let element_width = element_layout.stack_size(env.ptr_bytes);
+        let element_width = element_layout.stack_size(env.target_info);
         let size = list_length * element_width as usize;
         let alignment = element_layout
-            .alignment_bytes(env.ptr_bytes)
-            .max(env.ptr_bytes);
+            .alignment_bytes(env.target_info)
+            .max(env.target_info.ptr_width() as u32);
 
         let mut is_all_constant = true;
-        let zero_elements = (env.ptr_bytes as f64 / element_width as f64).ceil() as usize;
+        let zero_elements =
+            (env.target_info.ptr_width() as u8 as f64 / element_width as f64).ceil() as usize;
 
         // runtime-evaluated elements
         let mut runtime_evaluated_elements = Vec::with_capacity_in(list_length, env.arena);
@@ -2471,12 +2464,12 @@ pub fn store_roc_value<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
 ) {
     if layout.is_passed_by_reference() {
-        let align_bytes = layout.alignment_bytes(env.ptr_bytes);
+        let align_bytes = layout.alignment_bytes(env.target_info);
 
         if align_bytes > 0 {
             let size = env
                 .ptr_int()
-                .const_int(layout.stack_size(env.ptr_bytes) as u64, false);
+                .const_int(layout.stack_size(env.target_info) as u64, false);
 
             env.builder
                 .build_memcpy(
@@ -2572,7 +2565,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                     let destination = out_parameter.into_pointer_value();
                     if layout.is_passed_by_reference() {
-                        let align_bytes = layout.alignment_bytes(env.ptr_bytes);
+                        let align_bytes = layout.alignment_bytes(env.target_info);
 
                         if align_bytes > 0 {
                             let value_ptr = value.into_pointer_value();
@@ -2585,7 +2578,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             } else {
                                 let size = env
                                     .ptr_int()
-                                    .const_int(layout.stack_size(env.ptr_bytes) as u64, false);
+                                    .const_int(layout.stack_size(env.target_info) as u64, false);
 
                                 env.builder
                                     .build_memcpy(
@@ -2776,21 +2769,21 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     match layout {
                         Layout::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
-                            let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+                            let alignment = element_layout.alignment_bytes(env.target_info);
 
                             build_list::decref(env, value.into_struct_value(), alignment);
                         }
                         Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                             debug_assert!(value.is_struct_value());
                             let alignment = key_layout
-                                .alignment_bytes(env.ptr_bytes)
-                                .max(value_layout.alignment_bytes(env.ptr_bytes));
+                                .alignment_bytes(env.target_info)
+                                .max(value_layout.alignment_bytes(env.target_info));
 
                             build_dict::decref(env, value.into_struct_value(), alignment);
                         }
                         Layout::Builtin(Builtin::Set(key_layout)) => {
                             debug_assert!(value.is_struct_value());
-                            let alignment = key_layout.alignment_bytes(env.ptr_bytes);
+                            let alignment = key_layout.alignment_bytes(env.target_info);
 
                             build_dict::decref(env, value.into_struct_value(), alignment);
                         }
@@ -3408,7 +3401,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
             builder.position_at_end(entry);
 
-            let wrapped_layout = roc_result_layout(env.arena, return_layout, env.ptr_bytes);
+            let wrapped_layout = roc_result_layout(env.arena, return_layout, env.target_info);
             call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
         } else {
             call_roc_function(env, roc_function, &return_layout, arguments_for_call)
@@ -3554,6 +3547,93 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     c_function
 }
 
+fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function: FunctionValue<'ctx>,
+    arguments: &[Layout<'a>],
+    return_layout: Layout<'a>,
+    c_function_name: &str,
+) -> FunctionValue<'ctx> {
+    let it = arguments.iter().map(|l| basic_type_from_layout(env, l));
+    let argument_types = Vec::from_iter_in(it, env.arena);
+    let return_type = basic_type_from_layout(env, &return_layout);
+
+    let cc_return = to_cc_return(env, &return_layout);
+    let roc_return = RocReturn::from_layout(env, &return_layout);
+
+    let c_function_type = cc_return.to_signature(env, return_type, argument_types.as_slice());
+
+    let c_function = add_func(
+        env.module,
+        c_function_name,
+        c_function_type,
+        Linkage::External,
+        C_CALL_CONV,
+    );
+
+    let subprogram = env.new_subprogram(c_function_name);
+    c_function.set_subprogram(subprogram);
+
+    // STEP 2: build the exposed function's body
+    let builder = env.builder;
+    let context = env.context;
+
+    let entry = context.append_basic_block(c_function, "entry");
+    builder.position_at_end(entry);
+
+    let params = c_function.get_params();
+
+    let param_types = Vec::from_iter_in(roc_function.get_type().get_param_types(), env.arena);
+
+    // drop the "return pointer" if it exists on the roc function
+    // and the c function does not return via pointer
+    let param_types = match (&roc_return, &cc_return) {
+        (RocReturn::ByPointer, CCReturn::Return) => &param_types[1..],
+        _ => &param_types,
+    };
+
+    debug_assert_eq!(params.len(), param_types.len());
+
+    let it = params.iter().zip(param_types).map(|(arg, fastcc_type)| {
+        let arg_type = arg.get_type();
+        if arg_type == *fastcc_type {
+            // the C and Fast calling conventions agree
+            *arg
+        } else {
+            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type")
+        }
+    });
+
+    let arguments = Vec::from_iter_in(it, env.arena);
+
+    let value = call_roc_function(env, roc_function, &return_layout, arguments.as_slice());
+
+    match cc_return {
+        CCReturn::Return => match roc_return {
+            RocReturn::Return => {
+                env.builder.build_return(Some(&value));
+            }
+            RocReturn::ByPointer => {
+                let loaded = env
+                    .builder
+                    .build_load(value.into_pointer_value(), "load_result");
+                env.builder.build_return(Some(&loaded));
+            }
+        },
+        CCReturn::ByPointer => {
+            let out_ptr = c_function.get_nth_param(0).unwrap().into_pointer_value();
+
+            env.builder.build_store(out_ptr, value);
+            env.builder.build_return(None);
+        }
+        CCReturn::Void => {
+            env.builder.build_return(None);
+        }
+    }
+
+    c_function
+}
+
 fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     ident_string: &str,
@@ -3582,121 +3662,13 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
         &format!("{}_generic", c_function_name),
     );
 
-    let wrapper_return_type = if env.is_gen_test {
-        roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
-    } else {
-        // roc_function.get_type().get_return_type().unwrap()
-        basic_type_from_layout(env, &return_layout)
-    };
-
-    let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
-    for layout in arguments {
-        cc_argument_types.push(to_cc_type(env, layout));
-    }
-
-    // STEP 1: turn `f : a,b,c -> d` into `f : a,b,c, &d -> {}` if the C abi demands it
-    let mut argument_types = cc_argument_types;
-    let return_type = wrapper_return_type;
-
-    let cc_return = to_cc_return(env, &return_layout);
-
-    let c_function_type = match cc_return {
-        CCReturn::Void => env
-            .context
-            .void_type()
-            .fn_type(&function_arguments(env, &argument_types), false),
-        CCReturn::Return => return_type.fn_type(&function_arguments(env, &argument_types), false),
-        CCReturn::ByPointer => {
-            let output_type = return_type.ptr_type(AddressSpace::Generic);
-            argument_types.push(output_type.into());
-            env.context
-                .void_type()
-                .fn_type(&function_arguments(env, &argument_types), false)
-        }
-    };
-
-    let c_function = add_func(
-        env.module,
+    let c_function = expose_function_to_host_help_c_abi_v2(
+        env,
+        roc_function,
+        arguments,
+        return_layout,
         c_function_name,
-        c_function_type,
-        Linkage::External,
-        C_CALL_CONV,
     );
-
-    let subprogram = env.new_subprogram(c_function_name);
-    c_function.set_subprogram(subprogram);
-
-    // STEP 2: build the exposed function's body
-    let builder = env.builder;
-    let context = env.context;
-
-    let entry = context.append_basic_block(c_function, "entry");
-
-    builder.position_at_end(entry);
-
-    debug_info_init!(env, c_function);
-
-    // drop the final argument, which is the pointer we write the result into
-    let args_vector = c_function.get_params();
-    let mut args = args_vector.as_slice();
-    let args_length = args.len();
-
-    match cc_return {
-        CCReturn::Return => {
-            debug_assert_eq!(args.len(), roc_function.get_params().len());
-        }
-        CCReturn::Void => {
-            debug_assert_eq!(args.len(), roc_function.get_params().len());
-        }
-        CCReturn::ByPointer => match RocReturn::from_layout(env, &return_layout) {
-            RocReturn::ByPointer => {
-                debug_assert_eq!(args.len(), roc_function.get_params().len());
-            }
-            RocReturn::Return => {
-                args = &args[..args.len() - 1];
-                debug_assert_eq!(args.len(), roc_function.get_params().len());
-            }
-        },
-    }
-
-    let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
-
-    let it = args.iter().zip(roc_function.get_type().get_param_types());
-    for (arg, fastcc_type) in it {
-        let arg_type = arg.get_type();
-        if arg_type == fastcc_type {
-            // the C and Fast calling conventions agree
-            arguments_for_call.push(*arg);
-        } else {
-            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
-            arguments_for_call.push(cast);
-        }
-    }
-
-    let arguments_for_call = arguments_for_call.into_bump_slice();
-
-    let call_result = call_roc_function(env, roc_function, &return_layout, arguments_for_call);
-
-    match cc_return {
-        CCReturn::Void => {
-            // TODO return empty struct here?
-            builder.build_return(None);
-        }
-        CCReturn::Return => {
-            builder.build_return(Some(&call_result));
-        }
-        CCReturn::ByPointer => {
-            let output_arg_index = args_length - 1;
-
-            let output_arg = c_function
-                .get_nth_param(output_arg_index as u32)
-                .unwrap()
-                .into_pointer_value();
-
-            builder.build_store(output_arg, call_result);
-            builder.build_return(None);
-        }
-    }
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
     let size_function_type = env.context.i64_type().fn_type(&[], false);
@@ -3713,20 +3685,30 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     let subprogram = env.new_subprogram(&size_function_name);
     size_function.set_subprogram(subprogram);
 
-    let entry = context.append_basic_block(size_function, "entry");
+    let entry = env.context.append_basic_block(size_function, "entry");
 
-    builder.position_at_end(entry);
+    env.builder.position_at_end(entry);
 
     debug_info_init!(env, size_function);
 
+    let return_type = if env.is_gen_test {
+        roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
+    } else {
+        // roc_function.get_type().get_return_type().unwrap()
+        basic_type_from_layout(env, &return_layout)
+    };
+
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
-    builder.build_return(Some(&size));
+    env.builder.build_return(Some(&size));
 
     c_function
 }
 
 pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
-    let type_ = env.context.i8_type().array_type(5 * env.ptr_bytes);
+    let type_ = env
+        .context
+        .i8_type()
+        .array_type(5 * env.target_info.ptr_width() as u32);
 
     let global = match env.module.get_global("roc_sjlj_buffer") {
         Some(global) => global,
@@ -3894,8 +3876,12 @@ fn make_exception_catcher<'a, 'ctx, 'env>(
     function_value
 }
 
-fn roc_result_layout<'a>(arena: &'a Bump, return_layout: Layout<'a>, ptr_bytes: u32) -> Layout<'a> {
-    let elements = [Layout::u64(), Layout::usize(ptr_bytes), return_layout];
+fn roc_result_layout<'a>(
+    arena: &'a Bump,
+    return_layout: Layout<'a>,
+    target_info: TargetInfo,
+) -> Layout<'a> {
+    let elements = [Layout::u64(), Layout::usize(target_info), return_layout];
 
     Layout::Struct(arena.alloc(elements))
 }
@@ -4329,12 +4315,12 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         let call_result = call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
 
         if return_layout.is_passed_by_reference() {
-            let align_bytes = return_layout.alignment_bytes(env.ptr_bytes);
+            let align_bytes = return_layout.alignment_bytes(env.target_info);
 
             if align_bytes > 0 {
                 let size = env
                     .ptr_int()
-                    .const_int(return_layout.stack_size(env.ptr_bytes) as u64, false);
+                    .const_int(return_layout.stack_size(env.target_info) as u64, false);
 
                 env.builder
                     .build_memcpy(
@@ -5020,7 +5006,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let argument_layouts = &[Layout::usize(env.ptr_bytes), **element_layout];
+                    let argument_layouts = &[Layout::usize(env.target_info), **element_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
@@ -6075,8 +6061,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             {
                 bd.position_at_end(throw_block);
 
-                match env.ptr_bytes {
-                    8 => {
+                match env.target_info.ptr_width() {
+                    roc_target::PtrWidth::Bytes8 => {
                         let fn_ptr_type = context
                             .void_type()
                             .fn_type(&[], false)
@@ -6095,11 +6081,10 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                         bd.build_unconditional_branch(then_block);
                     }
-                    4 => {
+                    roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
                         throw_exception(env, "An expectation failed!");
                     }
-                    _ => unreachable!(),
                 }
             }
 
@@ -6181,6 +6166,7 @@ impl RocReturn {
     }
 }
 
+#[derive(Debug)]
 enum CCReturn {
     /// Return as normal
     Return,
@@ -6192,10 +6178,40 @@ enum CCReturn {
     Void,
 }
 
+impl CCReturn {
+    fn to_signature<'a, 'ctx, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        return_type: BasicTypeEnum<'ctx>,
+        argument_types: &[BasicTypeEnum<'ctx>],
+    ) -> FunctionType<'ctx> {
+        match self {
+            CCReturn::ByPointer => {
+                // turn the output type into a pointer type. Make it the first argument to the function
+                let output_type = return_type.ptr_type(AddressSpace::Generic);
+                let mut arguments: Vec<'_, BasicTypeEnum> =
+                    bumpalo::vec![in env.arena; output_type.into()];
+                arguments.extend(argument_types);
+
+                let arguments = function_arguments(env, &arguments);
+                env.context.void_type().fn_type(&arguments, false)
+            }
+            CCReturn::Return => {
+                let arguments = function_arguments(env, argument_types);
+                return_type.fn_type(&arguments, false)
+            }
+            CCReturn::Void => {
+                let arguments = function_arguments(env, argument_types);
+                env.context.void_type().fn_type(&arguments, false)
+            }
+        }
+    }
+}
+
 /// According to the C ABI, how should we return a value with the given layout?
 fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> CCReturn {
-    let return_size = layout.stack_size(env.ptr_bytes);
-    let pass_result_by_pointer = return_size > 2 * env.ptr_bytes;
+    let return_size = layout.stack_size(env.target_info);
+    let pass_result_by_pointer = return_size > 2 * env.target_info.ptr_width() as u32;
 
     if return_size == 0 {
         CCReturn::Void
@@ -6268,22 +6284,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                 arguments.push(value);
             }
 
-            let cc_type = match cc_return {
-                CCReturn::Void => env
-                    .context
-                    .void_type()
-                    .fn_type(&function_arguments(env, &cc_argument_types), false),
-                CCReturn::ByPointer => {
-                    cc_argument_types.insert(0, return_type.ptr_type(AddressSpace::Generic).into());
-                    env.context
-                        .void_type()
-                        .fn_type(&function_arguments(env, &cc_argument_types), false)
-                }
-                CCReturn::Return => {
-                    return_type.fn_type(&function_arguments(env, &cc_argument_types), false)
-                }
-            };
-
+            let cc_type = cc_return.to_signature(env, return_type, cc_argument_types.as_slice());
             let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
 
             let fastcc_type = match roc_return {
@@ -6323,7 +6324,6 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
 
                 if let CCReturn::ByPointer = cc_return {
                     cc_arguments.push(return_pointer.into());
-                    cc_argument_types.remove(0);
                 }
 
                 let it = fastcc_parameters.into_iter().zip(cc_argument_types.iter());
@@ -7129,7 +7129,9 @@ fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
     let ptr = unsafe {
         env.builder.build_in_bounds_gep(
             ptr,
-            &[env.ptr_int().const_int(env.ptr_bytes as u64, false)],
+            &[env
+                .ptr_int()
+                .const_int(env.target_info.ptr_width() as u64, false)],
             "get_rc_ptr",
         )
     };
@@ -7159,11 +7161,11 @@ fn define_global_str_literal<'a, 'ctx, 'env>(
         Some(current) => current,
 
         None => {
-            let size = message.bytes().len() + env.ptr_bytes as usize;
+            let size = message.bytes().len() + env.target_info.ptr_width() as usize;
             let mut bytes = Vec::with_capacity_in(size, env.arena);
 
             // insert NULL bytes for the refcount
-            for _ in 0..env.ptr_bytes {
+            for _ in 0..env.target_info.ptr_width() as usize {
                 bytes.push(env.context.i8_type().const_zero());
             }
 
@@ -7182,7 +7184,7 @@ fn define_global_str_literal<'a, 'ctx, 'env>(
             // strings are NULL-terminated, which means we can't store the refcount (which is 8
             // NULL bytes)
             global.set_constant(true);
-            global.set_alignment(env.ptr_bytes);
+            global.set_alignment(env.target_info.ptr_width() as u32);
             global.set_unnamed_addr(true);
             global.set_linkage(inkwell::module::Linkage::Private);
 
