@@ -3607,7 +3607,12 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         _ => &param_types,
     };
 
-    debug_assert_eq!(params.len(), param_types.len());
+    debug_assert!(
+        params.len() == param_types.len(),
+        "when exposing a function to the host, params.len() was {}, but param_types.len() was {}",
+        params.len(),
+        param_types.len()
+    );
 
     let it = params.iter().zip(param_types).map(|(arg, fastcc_type)| {
         let arg_type = arg.get_type();
