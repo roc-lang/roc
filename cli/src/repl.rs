@@ -27,6 +27,7 @@ pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
+mod app_memory;
 #[cfg(feature = "llvm")]
 mod eval;
 #[cfg(feature = "llvm")]

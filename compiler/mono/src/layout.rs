@@ -6,7 +6,7 @@ use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
-use roc_target::TargetInfo;
+use roc_target::{PtrWidth, TargetInfo};
 use roc_types::subs::{
     Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
 };
@@ -363,6 +363,13 @@ impl<'a> UnionLayout<'a> {
 
     fn stores_tag_id_in_pointer_bits(tags: &[&[Layout<'a>]], target_info: TargetInfo) -> bool {
         tags.len() < target_info.ptr_width() as usize
+    }
+
+    pub fn tag_id_pointer_bits_and_mask(target_info: TargetInfo) -> (usize, usize) {
+        match target_info.ptr_width() {
+            PtrWidth::Bytes8 => (3, 0b0000_0111),
+            PtrWidth::Bytes4 => (2, 0b0000_0011),
+        }
     }
 
     // i.e. it is not implicit and not stored in the pointer bits

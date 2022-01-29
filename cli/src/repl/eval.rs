@@ -3,7 +3,6 @@ use bumpalo::Bump;
 use libloading::Library;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_gen_llvm::llvm::build::tag_pointer_tag_id_bits_and_mask;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
@@ -18,9 +17,12 @@ use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 use std::cmp::{max_by_key, min_by_key};
 
-struct Env<'a, 'env> {
+use super::app_memory::AppMemory;
+
+struct Env<'a, 'env, M> {
     arena: &'a Bump,
     subs: &'env Subs,
+    app_memory: &'a M,
     target_info: TargetInfo,
     interns: &'env Interns,
     home: ModuleId,
@@ -39,7 +41,7 @@ pub enum ToAstProblem {
 /// we get to a struct or tag, we know what the labels are and can turn them
 /// back into the appropriate user-facing literals.
 #[allow(clippy::too_many_arguments)]
-pub unsafe fn jit_to_ast<'a>(
+pub unsafe fn jit_to_ast<'a, M: AppMemory>(
     arena: &'a Bump,
     lib: Library,
     main_fn_name: &str,
@@ -49,10 +51,12 @@ pub unsafe fn jit_to_ast<'a>(
     home: ModuleId,
     subs: &'a Subs,
     target_info: TargetInfo,
+    app_memory: &'a M,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let env = Env {
         arena,
         subs,
+        app_memory,
         target_info,
         interns,
         home,
@@ -84,8 +88,8 @@ enum NewtypeKind<'a> {
 ///
 /// The returned list of newtype containers is ordered by increasing depth. As an example,
 /// `A ({b : C 123})` will have the unrolled list `[Tag(A), RecordField(b), Tag(C)]`.
-fn unroll_newtypes<'a>(
-    env: &Env<'a, 'a>,
+fn unroll_newtypes<'a, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
     mut content: &'a Content,
 ) -> (Vec<'a, NewtypeKind<'a>>, &'a Content) {
     let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
@@ -118,8 +122,8 @@ fn unroll_newtypes<'a>(
     }
 }
 
-fn apply_newtypes<'a>(
-    env: &Env<'a, '_>,
+fn apply_newtypes<'a, M: AppMemory>(
+    env: &Env<'a, '_, M>,
     newtype_containers: Vec<'a, NewtypeKind<'a>>,
     mut expr: Expr<'a>,
 ) -> Expr<'a> {
@@ -146,22 +150,25 @@ fn apply_newtypes<'a>(
     expr
 }
 
-fn unroll_aliases<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
+fn unroll_aliases<'a, M: AppMemory>(env: &Env<'a, 'a, M>, mut content: &'a Content) -> &'a Content {
     while let Content::Alias(_, _, real) = content {
         content = env.subs.get_content_without_compacting(*real);
     }
     content
 }
 
-fn unroll_recursion_var<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
+fn unroll_recursion_var<'a, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
+    mut content: &'a Content,
+) -> &'a Content {
     while let Content::RecursionVar { structure, .. } = content {
         content = env.subs.get_content_without_compacting(*structure);
     }
     content
 }
 
-fn get_tags_vars_and_variant<'a>(
-    env: &Env<'a, '_>,
+fn get_tags_vars_and_variant<'a, M: AppMemory>(
+    env: &Env<'a, '_, M>,
     tags: &UnionTags,
     opt_rec_var: Option<Variable>,
 ) -> (MutMap<TagName, std::vec::Vec<Variable>>, UnionVariant<'a>) {
@@ -178,9 +185,9 @@ fn get_tags_vars_and_variant<'a>(
     (vars_of_tag, union_variant)
 }
 
-fn expr_of_tag<'a>(
-    env: &Env<'a, 'a>,
-    ptr_to_data: *const u8,
+fn expr_of_tag<'a, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
+    data_addr: usize,
     tag_name: &TagName,
     arg_layouts: &'a [Layout<'a>],
     arg_vars: &[Variable],
@@ -193,7 +200,7 @@ fn expr_of_tag<'a>(
 
     // NOTE assumes the data bytes are the first bytes
     let it = arg_vars.iter().copied().zip(arg_layouts.iter());
-    let output = sequence_of_expr(env, ptr_to_data, it, when_recursive);
+    let output = sequence_of_expr(env, data_addr, it, when_recursive);
     let output = output.into_bump_slice();
 
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
@@ -201,60 +208,49 @@ fn expr_of_tag<'a>(
 
 /// Gets the tag ID of a union variant, assuming that the tag ID is stored alongside (after) the
 /// tag data. The caller is expected to check that the tag ID is indeed stored this way.
-fn tag_id_from_data(
+fn tag_id_from_data<'a, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
     union_layout: UnionLayout,
-    data_ptr: *const u8,
-    target_info: TargetInfo,
+    data_addr: usize,
 ) -> i64 {
-    let offset = union_layout.data_size_without_tag_id(target_info).unwrap();
+    let offset = union_layout
+        .data_size_without_tag_id(env.target_info)
+        .unwrap();
+    let tag_id_addr = data_addr + offset as usize;
 
-    unsafe {
-        match union_layout.tag_id_builtin() {
-            Builtin::Bool => *(data_ptr.add(offset as usize) as *const i8) as i64,
-            Builtin::Int(IntWidth::U8) => *(data_ptr.add(offset as usize) as *const i8) as i64,
-            Builtin::Int(IntWidth::U16) => *(data_ptr.add(offset as usize) as *const i16) as i64,
-            Builtin::Int(IntWidth::U64) => {
-                // used by non-recursive unions at the
-                // moment, remove if that is no longer the case
-                *(data_ptr.add(offset as usize) as *const i64) as i64
-            }
-            _ => unreachable!("invalid tag id layout"),
+    match union_layout.tag_id_builtin() {
+        Builtin::Bool => env.app_memory.deref_bool(tag_id_addr) as i64,
+        Builtin::Int(IntWidth::U8) => env.app_memory.deref_u8(tag_id_addr) as i64,
+        Builtin::Int(IntWidth::U16) => env.app_memory.deref_u16(tag_id_addr) as i64,
+        Builtin::Int(IntWidth::U64) => {
+            // used by non-recursive unions at the
+            // moment, remove if that is no longer the case
+            env.app_memory.deref_i64(tag_id_addr)
         }
-    }
-}
-
-fn deref_ptr_of_ptr(ptr_of_ptr: *const u8, target_info: TargetInfo) -> *const u8 {
-    unsafe {
-        match target_info.ptr_width() {
-            // Our LLVM codegen represents pointers as i32/i64s.
-            roc_target::PtrWidth::Bytes4 => *(ptr_of_ptr as *const i32) as *const u8,
-            roc_target::PtrWidth::Bytes8 => *(ptr_of_ptr as *const i64) as *const u8,
-        }
+        _ => unreachable!("invalid tag id layout"),
     }
 }
 
 /// Gets the tag ID of a union variant from its recursive pointer (that is, the pointer to the
 /// pointer to the data of the union variant). Returns
 ///   - the tag ID
-///   - the pointer to the data of the union variant, unmasked if the pointer held the tag ID
-fn tag_id_from_recursive_ptr(
+///   - the address of the data of the union variant, unmasked if the pointer held the tag ID
+fn tag_id_from_recursive_ptr<'a, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
     union_layout: UnionLayout,
-    rec_ptr: *const u8,
-    target_info: TargetInfo,
-) -> (i64, *const u8) {
-    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(target_info);
+    rec_addr: usize,
+) -> (i64, usize) {
+    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.target_info);
     if tag_in_ptr {
-        let masked_ptr_to_data = deref_ptr_of_ptr(rec_ptr, target_info) as i64;
-        let (tag_id_bits, tag_id_mask) = tag_pointer_tag_id_bits_and_mask(target_info);
-        let tag_id = masked_ptr_to_data & (tag_id_mask as i64);
-
-        // Clear the tag ID data from the pointer
-        let ptr_to_data = ((masked_ptr_to_data >> tag_id_bits) << tag_id_bits) as *const u8;
-        (tag_id as i64, ptr_to_data)
+        let addr_with_id = env.app_memory.deref_usize(rec_addr);
+        let (_, tag_id_mask) = UnionLayout::tag_id_pointer_bits_and_mask(env.target_info);
+        let tag_id = addr_with_id & tag_id_mask;
+        let data_addr = addr_with_id & !tag_id_mask;
+        (tag_id as i64, data_addr)
     } else {
-        let ptr_to_data = deref_ptr_of_ptr(rec_ptr, target_info);
-        let tag_id = tag_id_from_data(union_layout, ptr_to_data, target_info);
-        (tag_id, ptr_to_data)
+        let data_addr = env.app_memory.deref_usize(rec_addr);
+        let tag_id = tag_id_from_data(env, union_layout, data_addr);
+        (tag_id, data_addr)
     }
 }
 
@@ -263,8 +259,8 @@ const OPAQUE_FUNCTION: Expr = Expr::Var {
     ident: "<function>",
 };
 
-fn jit_to_ast_help<'a>(
-    env: &Env<'a, 'a>,
+fn jit_to_ast_help<'a, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
     lib: Library,
     main_fn_name: &str,
     layout: &Layout<'a>,
@@ -336,20 +332,20 @@ fn jit_to_ast_help<'a>(
         Layout::Builtin(Builtin::List(elem_layout)) => Ok(run_jit_function!(
             lib,
             main_fn_name,
-            (*const u8, usize),
-            |(ptr, len): (*const u8, usize)| { list_to_ast(env, ptr, len, elem_layout, content) }
+            (usize, usize),
+            |(addr, len): (usize, usize)| { list_to_ast(env, addr, len, elem_layout, content) }
         )),
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
         }
         Layout::Struct(field_layouts) => {
-            let ptr_to_ast = |ptr: *const u8| match content {
+            let struct_addr_to_ast = |addr: usize| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
-                    Ok(struct_to_ast(env, ptr, field_layouts, *fields))
+                    Ok(struct_to_ast(env, addr, field_layouts, *fields))
                 }
                 Content::Structure(FlatType::EmptyRecord) => Ok(struct_to_ast(
                     env,
-                    ptr,
+                    addr,
                     field_layouts,
                     RecordFields::empty(),
                 )),
@@ -360,7 +356,7 @@ fn jit_to_ast_help<'a>(
 
                     Ok(single_tag_union_to_ast(
                         env,
-                        ptr,
+                        addr,
                         field_layouts,
                         tag_name,
                         payload_vars,
@@ -371,7 +367,7 @@ fn jit_to_ast_help<'a>(
 
                     Ok(single_tag_union_to_ast(
                         env,
-                        ptr,
+                        addr,
                         field_layouts,
                         tag_name,
                         &[],
@@ -398,7 +394,7 @@ fn jit_to_ast_help<'a>(
                 lib,
                 main_fn_name,
                 result_stack_size as usize,
-                |bytes: *const u8| { ptr_to_ast(bytes as *const u8) }
+                |bytes_addr: usize| { struct_addr_to_ast(bytes_addr as usize) }
             )
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
@@ -407,8 +403,8 @@ fn jit_to_ast_help<'a>(
                 lib,
                 main_fn_name,
                 size as usize,
-                |ptr: *const u8| {
-                    ptr_to_ast(env, ptr, layout, WhenRecursive::Unreachable, content)
+                |addr: usize| {
+                    addr_to_ast(env, addr, layout, WhenRecursive::Unreachable, content)
                 }
             ))
         }
@@ -421,8 +417,8 @@ fn jit_to_ast_help<'a>(
                 lib,
                 main_fn_name,
                 size as usize,
-                |ptr: *const u8| {
-                    ptr_to_ast(env, ptr, layout, WhenRecursive::Loop(*layout), content)
+                |addr: usize| {
+                    addr_to_ast(env, addr, layout, WhenRecursive::Loop(*layout), content)
                 }
             ))
         }
@@ -434,7 +430,7 @@ fn jit_to_ast_help<'a>(
     result.map(|e| apply_newtypes(env, newtype_containers, e))
 }
 
-fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
+fn tag_name_to_expr<'a, M: AppMemory>(env: &Env<'a, '_, M>, tag_name: &TagName) -> Expr<'a> {
     match tag_name {
         TagName::Global(_) => Expr::GlobalTag(
             env.arena
@@ -456,16 +452,16 @@ enum WhenRecursive<'a> {
     Loop(Layout<'a>),
 }
 
-fn ptr_to_ast<'a>(
-    env: &Env<'a, 'a>,
-    ptr: *const u8,
+fn addr_to_ast<'a, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
+    addr: usize,
     layout: &Layout<'a>,
     when_recursive: WhenRecursive<'a>,
     content: &'a Content,
 ) -> Expr<'a> {
     macro_rules! helper {
-        ($ty:ty) => {{
-            let num = unsafe { *(ptr as *const $ty) };
+        ($method: ident, $ty: ty) => {{
+            let num: $ty = env.app_memory.$method(addr);
 
             num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }};
@@ -479,7 +475,7 @@ fn ptr_to_ast<'a>(
         (_, Layout::Builtin(Builtin::Bool)) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
-            let num = unsafe { *(ptr as *const bool) };
+            let num: bool = env.app_memory.deref_bool(addr);
 
             bool_to_ast(env, num, content)
         }
@@ -487,55 +483,54 @@ fn ptr_to_ast<'a>(
             use IntWidth::*;
 
             match int_width {
-                U8 => helper!(u8),
-                U16 => helper!(u16),
-                U32 => helper!(u32),
-                U64 => helper!(u64),
-                U128 => helper!(u128),
-                I8 => helper!(i8),
-                I16 => helper!(i16),
-                I32 => helper!(i32),
-                I64 => helper!(i64),
-                I128 => helper!(i128),
+                U8 => helper!(deref_u8, u8),
+                U16 => helper!(deref_u16, u16),
+                U32 => helper!(deref_u32, u32),
+                U64 => helper!(deref_u64, u64),
+                U128 => helper!(deref_u128, u128),
+                I8 => helper!(deref_i8, i8),
+                I16 => helper!(deref_i16, i16),
+                I32 => helper!(deref_i32, i32),
+                I64 => helper!(deref_i64, i64),
+                I128 => helper!(deref_i128, i128),
             }
         }
         (_, Layout::Builtin(Builtin::Float(float_width))) => {
             use FloatWidth::*;
 
             match float_width {
-                F32 => helper!(f32),
-                F64 => helper!(f64),
+                F32 => helper!(deref_f32, f32),
+                F64 => helper!(deref_f64, f64),
                 F128 => todo!("F128 not implemented"),
             }
         }
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {
-            // Turn the (ptr, len) wrapper struct into actual ptr and len values.
-            let len = unsafe { *(ptr.offset(env.target_info.ptr_width() as isize) as *const usize) };
-            let ptr = unsafe { *(ptr as *const *const u8) };
+            let elem_addr = env.app_memory.deref_usize(addr);
+            let len = env.app_memory.deref_usize(addr + env.target_info.ptr_width() as usize);
 
-            list_to_ast(env, ptr, len, elem_layout, content)
+            list_to_ast(env, elem_addr, len, elem_layout, content)
         }
         (_, Layout::Builtin(Builtin::Str)) => {
-            let arena_str = unsafe { *(ptr as *const &'static str) };
+            let arena_str = env.app_memory.deref_str(addr);
 
             str_to_ast(env.arena, arena_str)
         }
         (_, Layout::Struct(field_layouts)) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
-                struct_to_ast(env, ptr, field_layouts, *fields)
+                struct_to_ast(env, addr, field_layouts, *fields)
             }
             Content::Structure(FlatType::TagUnion(tags, _)) => {
                 debug_assert_eq!(tags.len(), 1);
 
                 let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
-                single_tag_union_to_ast(env, ptr, field_layouts, tag_name, payload_vars)
+                single_tag_union_to_ast(env, addr, field_layouts, tag_name, payload_vars)
             }
             Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
                 let tag_name = &env.subs[*tag_name];
-                single_tag_union_to_ast(env, ptr, field_layouts, tag_name, &[])
+                single_tag_union_to_ast(env, addr, field_layouts, tag_name, &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
-                struct_to_ast(env, ptr, &[], RecordFields::empty())
+                struct_to_ast(env, addr, &[], RecordFields::empty())
             }
             other => {
                 unreachable!(
@@ -551,7 +546,7 @@ fn ptr_to_ast<'a>(
                     opt_name: _,
                 }, WhenRecursive::Loop(union_layout)) => {
                     let content = env.subs.get_content_without_compacting(*structure);
-                    ptr_to_ast(env, ptr, &union_layout, when_recursive, content)
+                    addr_to_ast(env, addr, &union_layout, when_recursive, content)
                 }
                 other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
             }
@@ -576,8 +571,7 @@ fn ptr_to_ast<'a>(
             };
 
             // Because this is a `NonRecursive`, the tag ID is definitely after the data.
-            let tag_id =
-                tag_id_from_data(union_layout, ptr, env.target_info);
+            let tag_id = tag_id_from_data(env, union_layout, addr);
 
             // use the tag ID as an index, to get its name and layout of any arguments
             let (tag_name, arg_layouts) =
@@ -585,7 +579,7 @@ fn ptr_to_ast<'a>(
 
             expr_of_tag(
                 env,
-                ptr,
+                addr,
                 tag_name,
                 arg_layouts,
                 &vars_of_tag[tag_name],
@@ -609,7 +603,7 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.target_info);
+            let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(env, *union_layout, addr);
 
             let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
             expr_of_tag(
@@ -637,11 +631,11 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_ptr_of_ptr(ptr, env.target_info);
+            let data_addr = env.app_memory.deref_usize(addr);
 
             expr_of_tag(
                 env,
-                ptr_to_data,
+                data_addr,
                 &tag_name,
                 arg_layouts,
                 &vars_of_tag[&tag_name],
@@ -667,13 +661,13 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_ptr_of_ptr(ptr, env.target_info);
-            if ptr_to_data.is_null() {
+            let data_addr = env.app_memory.deref_usize(addr);
+            if data_addr == 0 {
                 tag_name_to_expr(env, &nullable_name)
             } else {
                 expr_of_tag(
                     env,
-                    ptr_to_data,
+                    data_addr,
                     &other_name,
                     other_arg_layouts,
                     &vars_of_tag[&other_name],
@@ -698,18 +692,18 @@ fn ptr_to_ast<'a>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_ptr_of_ptr(ptr, env.target_info);
-            if ptr_to_data.is_null() {
+            let data_addr = env.app_memory.deref_usize(addr);
+            if data_addr == 0 {
                 tag_name_to_expr(env, &nullable_name)
             } else {
-                let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(*union_layout, ptr, env.target_info);
+                let (tag_id, data_addr) = tag_id_from_recursive_ptr(env, *union_layout, addr);
 
                 let tag_id = if tag_id > nullable_id.into() { tag_id - 1 } else { tag_id };
 
                 let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
                 expr_of_tag(
                     env,
-                    ptr_to_data,
+                    data_addr,
                     tag_name,
                     arg_layouts,
                     &vars_of_tag[tag_name],
@@ -727,9 +721,9 @@ fn ptr_to_ast<'a>(
     apply_newtypes(env, newtype_containers, expr)
 }
 
-fn list_to_ast<'a>(
-    env: &Env<'a, 'a>,
-    ptr: *const u8,
+fn list_to_ast<'a, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
+    addr: usize,
     len: usize,
     elem_layout: &Layout<'a>,
     content: &Content,
@@ -757,11 +751,11 @@ fn list_to_ast<'a>(
 
     for index in 0..len {
         let offset_bytes = index * elem_size;
-        let elem_ptr = unsafe { ptr.add(offset_bytes) };
+        let elem_addr = addr + offset_bytes;
         let (newtype_containers, elem_content) = unroll_newtypes(env, elem_content);
-        let expr = ptr_to_ast(
+        let expr = addr_to_ast(
             env,
-            elem_ptr,
+            elem_addr,
             elem_layout,
             WhenRecursive::Unreachable,
             elem_content,
@@ -776,9 +770,9 @@ fn list_to_ast<'a>(
     Expr::List(Collection::with_items(output))
 }
 
-fn single_tag_union_to_ast<'a>(
-    env: &Env<'a, 'a>,
-    ptr: *const u8,
+fn single_tag_union_to_ast<'a, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
+    addr: usize,
     field_layouts: &'a [Layout<'a>],
     tag_name: &TagName,
     payload_vars: &[Variable],
@@ -790,11 +784,11 @@ fn single_tag_union_to_ast<'a>(
 
     let output = if field_layouts.len() == payload_vars.len() {
         let it = payload_vars.iter().copied().zip(field_layouts);
-        sequence_of_expr(env, ptr as *const u8, it, WhenRecursive::Unreachable).into_bump_slice()
+        sequence_of_expr(env, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else if field_layouts.is_empty() && !payload_vars.is_empty() {
         // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
         let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
-        sequence_of_expr(env, ptr as *const u8, it, WhenRecursive::Unreachable).into_bump_slice()
+        sequence_of_expr(env, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else {
         unreachable!()
     };
@@ -802,9 +796,9 @@ fn single_tag_union_to_ast<'a>(
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
 }
 
-fn sequence_of_expr<'a, I>(
-    env: &Env<'a, 'a>,
-    ptr: *const u8,
+fn sequence_of_expr<'a, I, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
+    addr: usize,
     sequence: I,
     when_recursive: WhenRecursive<'a>,
 ) -> Vec<'a, &'a Loc<Expr<'a>>>
@@ -817,25 +811,25 @@ where
     let mut output = Vec::with_capacity_in(sequence.len(), arena);
 
     // We'll advance this as we iterate through the fields
-    let mut field_ptr = ptr as *const u8;
+    let mut field_addr = addr;
 
     for (var, layout) in sequence {
         let content = subs.get_content_without_compacting(var);
-        let expr = ptr_to_ast(env, field_ptr, layout, when_recursive, content);
+        let expr = addr_to_ast(env, field_addr, layout, when_recursive, content);
         let loc_expr = Loc::at_zero(expr);
 
         output.push(&*arena.alloc(loc_expr));
 
         // Advance the field pointer to the next field.
-        field_ptr = unsafe { field_ptr.offset(layout.stack_size(env.target_info) as isize) };
+        field_addr += layout.stack_size(env.target_info) as usize;
     }
 
     output
 }
 
-fn struct_to_ast<'a>(
-    env: &Env<'a, 'a>,
-    ptr: *const u8,
+fn struct_to_ast<'a, M: AppMemory>(
+    env: &Env<'a, 'a, M>,
+    addr: usize,
     field_layouts: &'a [Layout<'a>],
     record_fields: RecordFields,
 ) -> Expr<'a> {
@@ -855,9 +849,9 @@ fn struct_to_ast<'a>(
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
 
         let loc_expr = &*arena.alloc(Loc {
-            value: ptr_to_ast(
+            value: addr_to_ast(
                 env,
-                ptr,
+                addr,
                 &Layout::Struct(field_layouts),
                 WhenRecursive::Unreachable,
                 inner_content,
@@ -881,7 +875,7 @@ fn struct_to_ast<'a>(
         debug_assert_eq!(sorted_fields.len(), field_layouts.len());
 
         // We'll advance this as we iterate through the fields
-        let mut field_ptr = ptr;
+        let mut field_addr = addr;
 
         for ((label, field), field_layout) in sorted_fields.into_iter().zip(field_layouts.iter()) {
             let var = field.into_inner();
@@ -889,9 +883,9 @@ fn struct_to_ast<'a>(
             let content = subs.get_content_without_compacting(var);
 
             let loc_expr = &*arena.alloc(Loc {
-                value: ptr_to_ast(
+                value: addr_to_ast(
                     env,
-                    field_ptr,
+                    field_addr,
                     field_layout,
                     WhenRecursive::Unreachable,
                     content,
@@ -911,8 +905,7 @@ fn struct_to_ast<'a>(
             output.push(loc_field);
 
             // Advance the field pointer to the next field.
-            field_ptr =
-                unsafe { field_ptr.offset(field_layout.stack_size(env.target_info) as isize) };
+            field_addr += field_layout.stack_size(env.target_info) as usize;
         }
 
         let output = output.into_bump_slice();
@@ -951,7 +944,7 @@ fn unpack_two_element_tag_union(
     (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }
 
-fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a> {
+fn bool_to_ast<'a, M: AppMemory>(env: &Env<'a, '_, M>, value: bool, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1029,7 +1022,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
     }
 }
 
-fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> {
+fn byte_to_ast<'a, M: AppMemory>(env: &Env<'a, '_, M>, value: u8, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1121,7 +1114,11 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
     }
 }
 
-fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> Expr<'a> {
+fn num_to_ast<'a, M: AppMemory>(
+    env: &Env<'a, '_, M>,
+    num_expr: Expr<'a>,
+    content: &Content,
+) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
