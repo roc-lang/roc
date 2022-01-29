@@ -95,7 +95,7 @@ macro_rules! run_jit_function_dynamic_type {
             let flag = *result;
 
             if flag == 0 {
-                $transform(result.add(std::mem::size_of::<RocCallResult<()>>()) as *const u8)
+                $transform(result.add(std::mem::size_of::<RocCallResult<()>>()) as usize)
             } else {
                 use std::ffi::CString;
                 use std::os::raw::c_char;

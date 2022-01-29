@@ -243,7 +243,7 @@ fn tag_id_from_recursive_ptr<'a, M: AppMemory>(
     let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.target_info);
     if tag_in_ptr {
         let addr_with_id = env.app_memory.deref_usize(rec_addr);
-        let (tag_id_bits, tag_id_mask) = UnionLayout::tag_id_pointer_bits_and_mask(env.target_info);
+        let (_, tag_id_mask) = UnionLayout::tag_id_pointer_bits_and_mask(env.target_info);
         let tag_id = addr_with_id & tag_id_mask;
         let data_addr = addr_with_id & !tag_id_mask;
         (tag_id as i64, data_addr)
@@ -394,8 +394,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
                 lib,
                 main_fn_name,
                 result_stack_size as usize,
-                // TODO: convert LLVM macro to use address
-                |bytes: *const u8| { struct_addr_to_ast(bytes as usize) }
+                |bytes_addr: usize| { struct_addr_to_ast(bytes_addr as usize) }
             )
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
@@ -404,9 +403,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
                 lib,
                 main_fn_name,
                 size as usize,
-                |ptr: *const u8| {
-                    // TODO: convert LLVM macro to use address
-                    let addr = ptr as usize;
+                |addr: usize| {
                     addr_to_ast(env, addr, layout, WhenRecursive::Unreachable, content)
                 }
             ))
@@ -420,9 +417,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
                 lib,
                 main_fn_name,
                 size as usize,
-                |ptr: *const u8| {
-                    // TODO: convert LLVM macro to use address
-                    let addr = ptr as usize;
+                |addr: usize| {
                     addr_to_ast(env, addr, layout, WhenRecursive::Loop(*layout), content)
                 }
             ))
