@@ -20,4 +20,8 @@ path = "src/main.rs"
 roc_std = { path = "../../../roc_std" }
 libc = "0.2"
 
+[dependencies.rusqlite]
+version = "0.26.3"
+features = ["bundled"]
+
 [workspace]

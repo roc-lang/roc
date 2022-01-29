@@ -8,6 +8,8 @@ use roc_std::RocStr;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
+use rusqlite;
+
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
     fn roc_main(output: *mut u8) -> ();
@@ -127,6 +129,7 @@ pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_rawQuery(query: ManuallyDrop<RocStr>) -> RocStr {
+    let conn = rusqlite::Connection::open_in_memory();
     let bytes = query.as_slice();
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
     println!("Running this query: {}", string);
