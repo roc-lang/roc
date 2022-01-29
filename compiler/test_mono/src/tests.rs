@@ -1238,6 +1238,19 @@ fn monomorphized_applied_tag() {
     )
 }
 
+#[mono_test]
+fn aliased_polymorphic_closure() {
+    indoc!(
+        r#"
+        n : U8
+        n = 1
+        f = \{} -> (\a -> n)
+        g = f {}
+        g {}
+        "#
+    )
+}
+
 // #[ignore]
 // #[mono_test]
 // fn static_str_closure() {

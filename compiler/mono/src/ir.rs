@@ -4179,9 +4179,6 @@ pub fn with_hole<'a>(
                         LocalFunction(_) => {
                             unreachable!("if this was known to be a function, we would not be here")
                         }
-                        UnspecializedExpr(_) => {
-                            unreachable!("if this was known to be an unspecialized expression, we would not be here")
-                        }
                         Imported(thunk_name) => {
                             debug_assert!(procs.is_imported_module_thunk(thunk_name));
 
@@ -4235,6 +4232,49 @@ pub fn with_hole<'a>(
                                     assigned,
                                     hole,
                                 );
+                            }
+                            RawFunctionLayout::ZeroArgumentThunk(_) => {
+                                unreachable!("calling a non-closure layout")
+                            }
+                        },
+                        UnspecializedExpr(symbol) => match full_layout {
+                            RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
+                                let closure_data_symbol = env.unique_symbol();
+
+                                result = match_on_lambda_set(
+                                    env,
+                                    lambda_set,
+                                    closure_data_symbol,
+                                    arg_symbols,
+                                    arg_layouts,
+                                    ret_layout,
+                                    assigned,
+                                    hole,
+                                );
+
+                                let (lambda_expr, lambda_expr_var) =
+                                    procs.partial_exprs.get(symbol).unwrap();
+
+                                let snapshot = env.subs.snapshot();
+                                let cache_snapshot = layout_cache.snapshot();
+                                let _unified = roc_unify::unify::unify(
+                                    env.subs,
+                                    fn_var,
+                                    lambda_expr_var,
+                                    roc_unify::unify::Mode::Eq,
+                                );
+
+                                result = with_hole(
+                                    env,
+                                    lambda_expr.clone(),
+                                    fn_var,
+                                    procs,
+                                    layout_cache,
+                                    closure_data_symbol,
+                                    env.arena.alloc(result),
+                                );
+                                env.subs.rollback_to(snapshot);
+                                layout_cache.rollback_to(cache_snapshot);
                             }
                             RawFunctionLayout::ZeroArgumentThunk(_) => {
                                 unreachable!("calling a non-closure layout")
@@ -5184,6 +5224,7 @@ fn is_literal_like(expr: &roc_can::expr::Expr) -> bool {
             | ZeroArgumentTag { .. }
             | Tag { .. }
             | Record { .. }
+            | Call(..)
     )
 }
 
