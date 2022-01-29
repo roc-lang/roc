@@ -268,8 +268,8 @@ mod test_peg_grammar {
           skip += indent + 1;
 
           let spaces = 
-          if bytes.len() > 1 && bytes[1] == b' ' {
-            skip_whitespace(&bytes[1..])
+          if bytes.len() > skip && bytes[skip] == b' ' {
+            skip_whitespace(&bytes[skip..])
           } else {
             0
           };
@@ -523,12 +523,16 @@ peg::parser!{
         rule expect() = [T::KeywordExpect] expr()
 
         rule backpass() =
-          ident_or_underscore() [T::OpBackpassing] expr()
+          pattern() [T::OpBackpassing] expr()
 
-        rule ident_or_underscore() =
+        rule pattern() =
           [T::LowercaseIdent]
           / [T::Underscore]
+          / record_destructure()
 
+        rule record_destructure() =
+          empty_record()
+          / [T::OpenCurly] (ident() [T::Comma])* ident() [T::Comma]? [T::CloseCurly]
 
         rule access() =
           expr() [T::Dot] ident()
@@ -743,7 +747,7 @@ peg::parser!{
           / ident()
 
         rule body() =
-          ident() [T::OpAssignment] full_expr()
+          ident() [T::OpAssignment] full_expr()+
 
         rule annotated_body() =
           annotation() body()
@@ -758,7 +762,7 @@ peg::parser!{
           __ matchable() ([T::Pipe] full_expr())* ([T::KeywordIf] full_expr())? [T::Arrow] __ full_expr() 
 
         rule matchable() =
-          type_annotation()
+          type_annotation_no_fun()
           / expr()
 
         rule var() =
@@ -1018,13 +1022,34 @@ fn test_when_2() {
 
   Nil ->
       Nil"#);
-  dbg!(&tokens);
+
   assert_eq!(tokenparser::when(&tokens), Ok(()));
 }
 
 #[test]
 fn test_cons_list() {
   let tokens = test_tokenize(&example_path("effect/ConsList.roc"));
+
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}
+
+#[test]
+fn test_base64() {
+  let tokens = test_tokenize(&example_path("benchmarks/Base64.roc"));
+
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}
+
+#[test]
+fn test_astar() {
+  let tokens = test_tokenize(&example_path("benchmarks/TestAStar.roc"));
+
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}
+
+#[test]
+fn test_cli_echo() {
+  let tokens = test_tokenize(&example_path("cli/Echo.roc"));
   dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
