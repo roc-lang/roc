@@ -435,7 +435,10 @@ peg::parser!{
       pub rule full_expr() = [T::OpenIndent]? bool_or_expr() [T::CloseIndent]?
 
       // necessary to prevent `f x y` from being parsed as `Apply(f, Apply(x, y))` instead of `Apply(f, (x y))`
-      rule no_apply_full_expr() = [T::OpenIndent]? no_apply_bool_or_expr() [T::CloseIndent]?
+      rule no_apply_full_expr() = 
+        [T::OpenIndent] no_apply_bool_or_expr() [T::CloseIndent]
+        / [T::OpenIndent]? no_apply_bool_or_expr()
+
       
       rule common_expr() =
           closure()
@@ -455,8 +458,8 @@ peg::parser!{
           / accessor_function()
           / defs()
       pub rule expr() =
-          common_expr()
-          / apply()
+          apply()
+          / common_expr()
           / var()
           // / access() // TODO prevent infinite loop
 
@@ -465,7 +468,7 @@ peg::parser!{
           / var()
 
         rule closure() =
-          [T::LambdaStart] args() [T::Arrow] full_expr()
+          [T::LambdaStart] args() [T::Arrow] __ full_expr()
 
         rule args() =
           (ident() [T::Comma])* ident()
@@ -748,17 +751,21 @@ peg::parser!{
         rule alias() =
           apply_type() [T::Colon] type_annotation()
           
-        rule when() =
+        pub rule when() =
           [T::KeywordWhen] expr() [T::KeywordIs] when_branch()+
 
-        rule when_branch() =
-          expr() ([T::Pipe] full_expr())* ([T::KeywordIf] full_expr())? [T::Arrow] full_expr() 
+        pub rule when_branch() =
+          __ matchable() ([T::Pipe] full_expr())* ([T::KeywordIf] full_expr())? [T::Arrow] __ full_expr() 
+
+        rule matchable() =
+          type_annotation()
+          / expr()
 
         rule var() =
           ident()
           / module_name() [T::Dot] ident()
 
-        rule apply() =
+        pub rule apply() =
           apply_expr() no_apply_full_expr()+ end()?
 
         rule apply_expr() =
@@ -978,18 +985,48 @@ fn test_fibo() {
 }
 
 #[test]
+fn test_annotation() {
+  let tokens = test_tokenize( r#"ConsList a : [ Cons a (ConsList a), Nil ]"#);
+  
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn test_apply_expect_fail() {
+  assert!(tokenparser::apply(&[
+    T::LowercaseIdent, T::LowercaseIdent,T::CloseIndent, T::UppercaseIdent
+  ]).is_err());
+}
+
+#[test]
+fn test_when_1() {
+  let tokens = test_tokenize( r#"when list is
+  Cons _ rest ->
+      1 + len rest
+
+  Nil ->
+      0"#);
+  
+  assert_eq!(tokenparser::when(&tokens), Ok(()));
+}
+
+#[test]
+fn test_when_2() {
+  let tokens = test_tokenize( r#"when list is
+  Nil ->
+      Cons a
+
+  Nil ->
+      Nil"#);
+  dbg!(&tokens);
+  assert_eq!(tokenparser::when(&tokens), Ok(()));
+}
+
+#[test]
 fn test_cons_list() {
   let tokens = test_tokenize(&example_path("effect/ConsList.roc"));
   dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
-}
-
-#[test]
-fn test_annotation() {
-  // TODO fix this
-  let tokens = test_tokenize( r#"ConsList a : [ Cons a (ConsList a), Nil ]"#);
-  dbg!(&tokens);
-  assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
 
 
