@@ -1,10 +1,10 @@
 platform "examples/hello-world"
-    requires {} { main : Str }
+    requires {} { main : { content : Str, other : Str } }
     exposes []
     packages {}
     imports []
     provides [ mainForHost ]
     effects fx.Effect {}
 
-mainForHost : Str
+mainForHost : { content : Str, other : Str }
 mainForHost = main

@@ -3,4 +3,4 @@ app "hello-world"
     imports []
     provides [ main ] to pf
 
-main = "Hello, World!\n"
+main = { content: "Hello, World!\n", other: "" }

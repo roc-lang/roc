@@ -25,7 +25,7 @@ const PTR_SIZE: u32 = {
 
     // const assert that our pointer width is actually 4
     // the code relies on the pointer width being exactly 4
-    assert!(value == 4);
+    // assert!(value == 4);
 
     value
 };
