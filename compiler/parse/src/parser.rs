@@ -23,6 +23,7 @@ impl Progress {
     pub fn from_lengths(before: usize, after: usize) -> Self {
         Self::from_consumed(before - after)
     }
+
     pub fn from_consumed(chars_consumed: usize) -> Self {
         Self::progress_when(chars_consumed != 0)
     }
