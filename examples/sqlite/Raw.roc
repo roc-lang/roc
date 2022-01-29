@@ -4,7 +4,7 @@ app "echo"
     provides [ main ] to pf
 
 query1 = "CREATE TABLE IF NOT EXISTS foo (bar INTEGER);"
-query2 = "INSERT INTO foo (bar) VALUES 1;"
+query2 = "INSERT INTO foo (bar) VALUES (1);"
 query3 = "SELECT * FROM foo;"
 
 main : Task.Task {} []

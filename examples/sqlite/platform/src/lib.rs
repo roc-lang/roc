@@ -129,9 +129,21 @@ pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_rawQuery(query: ManuallyDrop<RocStr>) -> RocStr {
-    let conn = rusqlite::Connection::open_in_memory();
+    // Unpack Roc String
     let bytes = query.as_slice();
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
     println!("Running this query: {}", string);
+
+    // Query database
+    match rusqlite::Connection::open("database.db") {
+        Ok(conn) => {
+            match conn.execute(string, []) {
+                Ok(updated) => println!("{} rows were updated", updated),
+                Err(err) => println!("update failed: {}", err),
+            }
+        }
+        Err(err) => println!("connection failed: {}", err),
+    }
+
     RocStr::default()
 }
