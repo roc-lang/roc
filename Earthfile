@@ -10,9 +10,15 @@ install-other-libs:
     RUN apt -y install libxcb-shape0-dev libxcb-xfixes0-dev # for editor clipboard
     RUN apt -y install libasound2-dev # for editor sounds
     RUN apt -y install libunwind-dev pkg-config libx11-dev zlib1g-dev
+    RUN apt -y install pkg-config libssl-dev # for fast cargo
 
 install-zig-llvm-valgrind-clippy-rustfmt:
     FROM +install-other-libs
+    # fast cargo
+    RUN git clone https://github.com/gilescope/cargo
+    RUN cd cargo && git checkout parallel-test-crates && cargo build --release
+    RUN ln -s $(pwd)/cargo/target/release/cargo /usr/bin/cargo
+    RUN which cargo
     # zig
     RUN wget -c https://ziglang.org/download/0.8.0/zig-linux-x86_64-0.8.0.tar.xz --no-check-certificate
     RUN tar -xf zig-linux-x86_64-0.8.0.tar.xz
@@ -44,6 +50,8 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     ENV RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     ENV SCCACHE_DIR=/earthbuild/sccache_dir
     ENV CARGO_INCREMENTAL=0 # no need to recompile package when using new function
+    ENV PATH=/usr/bin:$PATH
+    RUN which cargo
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -79,17 +87,17 @@ test-rust:
     # not pre-compiling the host can cause race conditions
     RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --features with_sound --workspace && sccache --show-stats
+        cargo test --locked --release --test-jobs 5 --features with_sound --workspace && sccache --show-stats
     # test the dev and wasm backend: they require an explicit feature flag.
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
+        cargo test --locked --release --test-jobs 5 --package test_gen --no-default-features --features gen-dev && sccache --show-stats
     # gen-wasm has some multithreading problems to do with the wasmer runtime. Run it single-threaded as a separate job
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
+        cargo test --locked --release --test-jobs 5 --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
     # run i386 (32-bit linux) cli tests
     RUN echo "4" | cargo run --locked --release --features="target-x86" -- --backend=x86_32 examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
+        cargo test --locked --release --test-jobs 5 --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
 
 verify-no-git-changes:
     FROM +test-rust
