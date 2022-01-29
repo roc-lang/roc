@@ -1,0 +1,17 @@
+procedure Test.2 (Test.6, #Attr.12):
+    let Test.1 : Builtin(Int(U8)) = StructAtIndex 0 #Attr.12;
+    let Test.11 : LambdaSet(LambdaSet { set: [( Test.4, [Builtin(Int(U8))])], representation: Struct([Builtin(Int(U8))]) }) = Struct {Test.1};
+    ret Test.11;
+
+procedure Test.4 (Test.5, #Attr.12):
+    let Test.1 : Builtin(Int(U8)) = StructAtIndex 0 #Attr.12;
+    ret Test.1;
+
+procedure Test.0 ():
+    let Test.1 : Builtin(Int(U8)) = 1i64;
+    let Test.8 : Struct([]) = Struct {};
+    let Test.10 : Struct([]) = Struct {};
+    let Test.14 : LambdaSet(LambdaSet { set: [( Test.2, [Builtin(Int(U8))])], representation: Struct([Builtin(Int(U8))]) }) = Struct {Test.1};
+    let Test.9 : LambdaSet(LambdaSet { set: [( Test.4, [Builtin(Int(U8))])], representation: Struct([Builtin(Int(U8))]) }) = CallByName Test.2 Test.10 Test.14;
+    let Test.7 : Builtin(Int(U8)) = CallByName Test.4 Test.8 Test.9;
+    ret Test.7;

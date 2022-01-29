@@ -3207,3 +3207,20 @@ fn polymophic_expression_captured_inside_closure() {
         u8
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2322() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            double = \x -> x * 2
+            doubleBind = \x -> (\_ -> double x)
+            doubleThree = doubleBind 3
+            doubleThree {}
+            "#
+        ),
+        6,
+        u8
+    )
+}
