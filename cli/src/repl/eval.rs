@@ -231,11 +231,6 @@ fn tag_id_from_data<'a, M: AppMemory>(
     }
 }
 
-// TODO: inline this at call sites
-fn deref_addr_of_addr<'a, M: AppMemory>(env: &Env<'a, 'a, M>, addr_of_addr: usize) -> usize {
-    env.app_memory.deref_usize(addr_of_addr)
-}
-
 /// Gets the tag ID of a union variant from its recursive pointer (that is, the pointer to the
 /// pointer to the data of the union variant). Returns
 ///   - the tag ID
@@ -247,15 +242,13 @@ fn tag_id_from_recursive_ptr<'a, M: AppMemory>(
 ) -> (i64, usize) {
     let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.target_info);
     if tag_in_ptr {
-        let masked_data_addr = deref_addr_of_addr(env, rec_addr);
+        let addr_with_id = env.app_memory.deref_usize(rec_addr);
         let (tag_id_bits, tag_id_mask) = UnionLayout::tag_id_pointer_bits_and_mask(env.target_info);
-        let tag_id = masked_data_addr & tag_id_mask;
-
-        // Clear the tag ID data from the pointer
-        let data_addr = (masked_data_addr >> tag_id_bits) << tag_id_bits;
+        let tag_id = addr_with_id & tag_id_mask;
+        let data_addr = addr_with_id & !tag_id_mask;
         (tag_id as i64, data_addr)
     } else {
-        let data_addr = deref_addr_of_addr(env, rec_addr);
+        let data_addr = env.app_memory.deref_usize(rec_addr);
         let tag_id = tag_id_from_data(env, union_layout, data_addr);
         (tag_id, data_addr)
     }
@@ -643,11 +636,11 @@ fn addr_to_ast<'a, M: AppMemory>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_addr_of_addr(env, addr);
+            let data_addr = env.app_memory.deref_usize(addr);
 
             expr_of_tag(
                 env,
-                ptr_to_data,
+                data_addr,
                 &tag_name,
                 arg_layouts,
                 &vars_of_tag[&tag_name],
@@ -673,7 +666,7 @@ fn addr_to_ast<'a, M: AppMemory>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let data_addr = deref_addr_of_addr(env, addr);
+            let data_addr = env.app_memory.deref_usize(addr);
             if data_addr == 0 {
                 tag_name_to_expr(env, &nullable_name)
             } else {
@@ -704,18 +697,18 @@ fn addr_to_ast<'a, M: AppMemory>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let ptr_to_data = deref_addr_of_addr(env, addr);
-            if ptr_to_data == 0 {
+            let data_addr = env.app_memory.deref_usize(addr);
+            if data_addr == 0 {
                 tag_name_to_expr(env, &nullable_name)
             } else {
-                let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(env, *union_layout, addr);
+                let (tag_id, data_addr) = tag_id_from_recursive_ptr(env, *union_layout, addr);
 
                 let tag_id = if tag_id > nullable_id.into() { tag_id - 1 } else { tag_id };
 
                 let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
                 expr_of_tag(
                     env,
-                    ptr_to_data,
+                    data_addr,
                     tag_name,
                     arg_layouts,
                     &vars_of_tag[tag_name],
