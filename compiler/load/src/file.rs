@@ -2644,7 +2644,7 @@ fn parse_header<'a>(
                         } else {
                             Err(LoadingProblem::FileProblem {
                                 filename: pkg_config_roc,
-                                error: io::ErrorKind::NotFound.into(),
+                                error: io::ErrorKind::NotFound,
                             })
                         }
                     } else {
