@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::header::{AppHeader, InterfaceHeader, PlatformHeader};
+use crate::header::{AppHeader, InterfaceHeader, PlatformHeader, HostedHeader};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
@@ -70,6 +70,7 @@ pub enum Module<'a> {
     Interface { header: InterfaceHeader<'a> },
     App { header: AppHeader<'a> },
     Platform { header: PlatformHeader<'a> },
+    Hosted { header: HostedHeader<'a> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

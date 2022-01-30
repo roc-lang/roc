@@ -72,6 +72,8 @@ pub enum EHeader<'a> {
     Requires(ERequires<'a>, Position),
     Packages(EPackages<'a>, Position),
     Effects(EEffects<'a>, Position),
+    Generates(EGenerates, Position),
+    GeneratesWith(EGeneratesWith, Position),
 
     Space(BadInputError, Position),
     Start(Position),
@@ -186,6 +188,38 @@ pub enum EImports {
     Open(Position),
     Imports(Position),
     IndentImports(Position),
+    IndentListStart(Position),
+    IndentListEnd(Position),
+    ListStart(Position),
+    ListEnd(Position),
+    Identifier(Position),
+    ExposingDot(Position),
+    ShorthandDot(Position),
+    Shorthand(Position),
+    ModuleName(Position),
+    Space(BadInputError, Position),
+    IndentSetStart(Position),
+    IndentSetEnd(Position),
+    SetStart(Position),
+    SetEnd(Position),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EGenerates {
+    Open(Position),
+    Generates(Position),
+    IndentGenerates(Position),
+    Identifier(Position),
+    Space(BadInputError, Position),
+    IndentTypeStart(Position),
+    IndentTypeEnd(Position),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EGeneratesWith {
+    Open(Position),
+    With(Position),
+    IndentWith(Position),
     IndentListStart(Position),
     IndentListEnd(Position),
     ListStart(Position),
