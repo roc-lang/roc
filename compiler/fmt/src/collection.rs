@@ -17,10 +17,8 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
     <T as ExtractSpaces<'a>>::Item: Formattable,
 {
     buf.indent(indent);
-    let is_multiline =
-        items.iter().any(|item| item.is_multiline()) || !items.final_comments().is_empty();
 
-    if is_multiline {
+    if items.is_multiline() {
         let braces_indent = indent;
         let item_indent = braces_indent + INDENT;
         if newline == Newlines::Yes {
