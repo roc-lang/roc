@@ -11,6 +11,7 @@ pub mod spaces;
 
 use bumpalo::{collections::String, Bump};
 
+#[derive(Debug)]
 pub struct Buf<'a> {
     text: String<'a>,
     spaces_to_flush: usize,
