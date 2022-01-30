@@ -52,41 +52,43 @@ pub fn parse_header<'a>(
 fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
     use crate::parser::keyword_e;
 
-    one_of![
-        map!(
-            and!(
-                space0_e(0, EHeader::Space, EHeader::IndentStart),
-                skip_first!(keyword_e("app", EHeader::Start), app_header())
-            ),
-            |(spaces, mut header): (&'a [CommentOrNewline], AppHeader<'a>)| {
-                header.before_header = spaces;
+    type Clos<'b> = Box<(dyn FnOnce(&'b [CommentOrNewline]) -> Module<'b> + 'b)>;
 
-                Module::App { header }
-            }
+    map!(
+        and!(
+            space0_e(0, EHeader::Space, EHeader::IndentStart),
+            one_of![
+                map!(
+                    skip_first!(keyword_e("app", EHeader::Start), app_header()),
+                    |mut header: AppHeader<'a>| -> Clos<'a> {
+                        Box::new(|spaces| {
+                            header.before_header = spaces;
+                            Module::App { header }
+                        })
+                    }
+                ),
+                map!(
+                    skip_first!(keyword_e("platform", EHeader::Start), platform_header()),
+                    |mut header: PlatformHeader<'a>| -> Clos<'a> {
+                        Box::new(|spaces| {
+                            header.before_header = spaces;
+                            Module::Platform { header }
+                        })
+                    }
+                ),
+                map!(
+                    skip_first!(keyword_e("interface", EHeader::Start), interface_header()),
+                    |mut header: InterfaceHeader<'a>| -> Clos<'a> {
+                        Box::new(|spaces| {
+                            header.before_header = spaces;
+                            Module::Interface { header }
+                        })
+                    }
+                )
+            ]
         ),
-        map!(
-            and!(
-                space0_e(0, EHeader::Space, EHeader::IndentStart),
-                skip_first!(keyword_e("platform", EHeader::Start), platform_header())
-            ),
-            |(spaces, mut header): (&'a [CommentOrNewline], PlatformHeader<'a>)| {
-                header.before_header = spaces;
-
-                Module::Platform { header }
-            }
-        ),
-        map!(
-            and!(
-                space0_e(0, EHeader::Space, EHeader::IndentStart),
-                skip_first!(keyword_e("interface", EHeader::Start), interface_header())
-            ),
-            |(spaces, mut header): (&'a [CommentOrNewline], InterfaceHeader<'a>)| {
-                header.before_header = spaces;
-
-                Module::Interface { header }
-            }
-        )
-    ]
+        |(spaces, make_header): (&'a [CommentOrNewline], Clos<'a>)| { make_header(spaces) }
+    )
 }
 
 #[inline(always)]
