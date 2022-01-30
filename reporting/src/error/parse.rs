@@ -3182,7 +3182,7 @@ fn to_exposes_report<'a>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             let doc = alloc.stack(vec![
-                alloc.reflow(r"I am partway through parsing a exposes list, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing an `exposes` list, but I got stuck here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat(vec![alloc.reflow(
                     "I was expecting a type name, value name or function name next, like",
@@ -3227,7 +3227,7 @@ fn to_exposes_report<'a>(
 
         EExposes::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
-        _ => todo!("unhandled parse error {:?}", parse_problem),
+        _ => todo!("unhandled `exposes` parsing error {:?}", parse_problem),
     }
 }
 
