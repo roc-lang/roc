@@ -3679,11 +3679,14 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "const_format",
+ "indoc",
  "roc_mono",
  "roc_parse",
  "roc_repl_eval",
+ "roc_test_utils",
  "rustyline",
  "rustyline-derive",
+ "strip-ansi-escapes",
  "target-lexicon",
 ]
 
