@@ -37,8 +37,8 @@ pub enum Parens {
 /// newlines are taken into account.
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Newlines {
-    Yes,
     No,
+    Yes,
 }
 
 pub trait Formattable {
