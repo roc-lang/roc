@@ -7163,4 +7163,42 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn issue_2167_record_field_optional_and_required_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Job : [ @Job { inputs : List Str } ]
+                job : { inputs ? List Str } -> Job
+                job = \{ inputs } ->
+                    @Job { inputs }
+
+                job { inputs: [ "build", "test" ] }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `job` is weird:
+
+                3│  job = \{ inputs } ->
+                           ^^^^^^^^^^
+
+                The argument is a pattern that matches record values of type:
+
+                    { inputs : List Str }
+
+                But the annotation on `job` says the 1st argument should be:
+
+                    { inputs ? List Str }
+
+                Tip: To extract the `.inputs` field it must be non-optional, but the
+                type says this field is optional. Learn more about optional fields at
+                TODO.
+                "#
+            ),
+        )
+    }
 }
