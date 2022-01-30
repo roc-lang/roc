@@ -225,15 +225,7 @@ pub enum EGeneratesWith {
     ListStart(Position),
     ListEnd(Position),
     Identifier(Position),
-    ExposingDot(Position),
-    ShorthandDot(Position),
-    Shorthand(Position),
-    ModuleName(Position),
     Space(BadInputError, Position),
-    IndentSetStart(Position),
-    IndentSetEnd(Position),
-    SetStart(Position),
-    SetEnd(Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
