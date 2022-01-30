@@ -52,13 +52,15 @@ pub fn parse_header<'a>(
 fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
     use crate::parser::keyword_e;
 
+    type Clos<'b> = Box<(dyn FnOnce(&'b [CommentOrNewline]) -> Module<'b> + 'b)>;
+
     map!(
         and!(
             space0_e(0, EHeader::Space, EHeader::IndentStart),
             one_of![
                 map!(
                     skip_first!(keyword_e("app", EHeader::Start), app_header()),
-                    |mut header: AppHeader<'a>| -> Box<dyn FnOnce(&'a [CommentOrNewline]) -> Module<'a>> {
+                    |mut header: AppHeader<'a>| -> Clos<'a> {
                         Box::new(|spaces| {
                             header.before_header = spaces;
                             Module::App { header }
@@ -67,7 +69,7 @@ fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
                 ),
                 map!(
                     skip_first!(keyword_e("platform", EHeader::Start), platform_header()),
-                    |mut header: PlatformHeader<'a>| -> Box<dyn FnOnce(&'a [CommentOrNewline]) -> Module<'a>> {
+                    |mut header: PlatformHeader<'a>| -> Clos<'a> {
                         Box::new(|spaces| {
                             header.before_header = spaces;
                             Module::Platform { header }
@@ -76,7 +78,7 @@ fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
                 ),
                 map!(
                     skip_first!(keyword_e("interface", EHeader::Start), interface_header()),
-                    |mut header: InterfaceHeader<'a>| -> Box<dyn FnOnce(&'a [CommentOrNewline]) -> Module<'a>> {
+                    |mut header: InterfaceHeader<'a>| -> Clos<'a> {
                         Box::new(|spaces| {
                             header.before_header = spaces;
                             Module::Interface { header }
@@ -85,10 +87,7 @@ fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
                 )
             ]
         ),
-        |(spaces, make_header): (
-            &'a [CommentOrNewline],
-            Box<dyn FnOnce(&'a [CommentOrNewline]) -> Module<'a>>
-        )| { make_header(spaces) }
+        |(spaces, make_header): (&'a [CommentOrNewline], Clos<'a>)| { make_header(spaces) }
     )
 }
 
