@@ -3,4 +3,4 @@ interface Db
     imports [ fx.Effect, Task.{ Task } ]
 
 raw : Str -> Task Str *
-raw = \str -> Effect.map (Effect.rawQuery str) (\_ -> Ok "Hi!")
+raw = \str -> Effect.map (Effect.rawQuery str) (\result -> Ok result)

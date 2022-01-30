@@ -12,5 +12,5 @@ main =
     _ <- await (Db.raw (query1))
     _ <- await (Db.raw (query2))
     answer <- await (Db.raw (query3))
-    Stdout.line "The answer is \(answer)!"
+    Stdout.line "The answer is:\n \(answer)"
 

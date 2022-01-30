@@ -8,7 +8,7 @@ use roc_std::RocStr;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-use rusqlite;
+use sqlite;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
@@ -134,16 +134,23 @@ pub extern "C" fn roc_fx_rawQuery(query: ManuallyDrop<RocStr>) -> RocStr {
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
     println!("Running this query: {}", string);
 
-    // Query database
-    match rusqlite::Connection::open("database.db") {
-        Ok(conn) => {
-            match conn.execute(string, []) {
-                Ok(updated) => println!("{} rows were updated", updated),
-                Err(err) => println!("update failed: {}", err),
-            }
+    // Query Database
+    let mut result_string = String::from("");
+    match sqlite::Connection::open("database.db") {
+        Ok(connection) => {
+            connection
+                .iterate(string, |pairs| {
+                    for &(column, value) in pairs.iter() {
+                        result_string.push_str(&format!("\n{} = {}", column, value.unwrap()));
+                    }
+                    true
+                })
+                .unwrap();
         }
-        Err(err) => println!("connection failed: {}", err),
+        Err(err) => {
+            println!("connection failed: {}", err);
+        }
     }
 
-    RocStr::default()
+    RocStr::from_slice(result_string.as_bytes())
 }
