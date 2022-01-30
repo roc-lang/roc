@@ -47,7 +47,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros utils test_utils reporting roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
+    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros utils test_utils reporting repl_cli repl_eval roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
