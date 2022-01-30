@@ -148,6 +148,7 @@ mod test_parse {
         pass/highest_int.expr,
         pass/if_def.expr,
         pass/int_with_underscore.expr,
+        pass/interface_with_newline.header,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
         pass/malformed_ident_due_to_underscore.expr,
