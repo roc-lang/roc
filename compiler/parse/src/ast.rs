@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::header::{AppHeader, InterfaceHeader, PlatformHeader, HostedHeader};
+use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PlatformHeader};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
