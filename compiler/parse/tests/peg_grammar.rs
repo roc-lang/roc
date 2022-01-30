@@ -471,7 +471,8 @@ peg::parser!{
           [T::LambdaStart] args() [T::Arrow] __ full_expr()
 
         rule args() =
-          (ident() [T::Comma])* ident()
+          [T::Underscore]
+          / (ident() [T::Comma])* ident()
 
 
         rule tag() =
@@ -523,7 +524,7 @@ peg::parser!{
         rule expect() = [T::KeywordExpect] expr()
 
         rule backpass() =
-          pattern() [T::OpBackpassing] expr()
+          __ pattern() [T::OpBackpassing] expr()
 
         rule pattern() =
           [T::LowercaseIdent]
@@ -1041,7 +1042,14 @@ fn test_base64() {
 }
 
 #[test]
-fn test_astar() {
+fn test_base64_test() {
+  let tokens = test_tokenize(&example_path("benchmarks/TestBase64.roc"));
+  dbg!(&tokens);
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}
+
+#[test]
+fn test_astar_test() {
   let tokens = test_tokenize(&example_path("benchmarks/TestAStar.roc"));
 
   assert_eq!(tokenparser::module(&tokens), Ok(()));
@@ -1050,7 +1058,7 @@ fn test_astar() {
 #[test]
 fn test_cli_echo() {
   let tokens = test_tokenize(&example_path("cli/Echo.roc"));
-  dbg!(&tokens);
+  
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
