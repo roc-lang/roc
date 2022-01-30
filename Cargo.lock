@@ -3351,6 +3351,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_repl_cli",
  "roc_reporting",
  "roc_solve",
  "roc_target",
@@ -3670,6 +3671,44 @@ name = "roc_region"
 version = "0.1.0"
 dependencies = [
  "static_assertions",
+]
+
+[[package]]
+name = "roc_repl_cli"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "const_format",
+ "roc_mono",
+ "roc_parse",
+ "roc_repl_eval",
+ "rustyline",
+ "rustyline-derive",
+ "target-lexicon",
+]
+
+[[package]]
+name = "roc_repl_eval"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "inkwell 0.1.0",
+ "libloading 0.7.1",
+ "roc_build",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_fmt",
+ "roc_gen_llvm",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_region",
+ "roc_reporting",
+ "roc_target",
+ "roc_types",
+ "target-lexicon",
 ]
 
 [[package]]

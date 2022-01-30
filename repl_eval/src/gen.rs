@@ -1,10 +1,9 @@
-use crate::repl::app_memory::AppMemoryInternal;
-use crate::repl::eval;
+use crate::app_memory::AppMemoryInternal;
+use crate::eval;
 use bumpalo::Bump;
-use inkwell::context::Context;
-use inkwell::module::Linkage;
-use roc_build::link::module_to_dylib;
-use roc_build::program::FunctionIterator;
+use inkwell::context::Context; // TODO
+use inkwell::module::Linkage; // TODO
+use roc_build::{link::module_to_dylib, program::FunctionIterator};
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
@@ -167,6 +166,10 @@ pub fn gen_and_eval<'a>(
             }
         };
 
+        /*--------------------------------------------------------------------
+                            START OF LLVM-SPECIFIC STUFF
+        --------------------------------------------------------------------*/
+
         let module = arena.alloc(module);
         let (module_pass, function_pass) =
             roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
@@ -228,6 +231,11 @@ pub fn gen_and_eval<'a>(
 
         let lib = module_to_dylib(env.module, &target, opt_level)
             .expect("Error loading compiled dylib for test");
+
+        /*--------------------------------------------------------------------
+                            END OF LLVM-SPECIFIC STUFF
+        --------------------------------------------------------------------*/
+
         let res_answer = unsafe {
             eval::jit_to_ast(
                 &arena,

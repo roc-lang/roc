@@ -1,12 +1,12 @@
 use const_format::concatcp;
-#[cfg(feature = "llvm")]
-use gen::{gen_and_eval, ReplOutput};
-use roc_parse::parser::{EExpr, ELambda, SyntaxError};
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
 use std::io;
+
+use roc_parse::parser::{EExpr, ELambda, SyntaxError};
+use roc_repl_eval::gen::{gen_and_eval, ReplOutput};
 
 const BLUE: &str = "\u{001b}[36m";
 const PINK: &str = "\u{001b}[35m";
@@ -27,11 +27,11 @@ pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
-mod app_memory;
-#[cfg(feature = "llvm")]
-mod eval;
-#[cfg(feature = "llvm")]
-mod gen;
+// mod app_memory;
+// #[cfg(feature = "llvm")]
+// mod eval;
+// #[cfg(feature = "llvm")]
+// mod gen;
 
 #[derive(Completer, Helper, Hinter)]
 struct ReplHelper {
@@ -108,12 +108,6 @@ impl Validator for InputValidator {
     }
 }
 
-#[cfg(not(feature = "llvm"))]
-pub fn main() -> io::Result<()> {
-    panic!("The REPL currently requires being built with LLVM.");
-}
-
-#[cfg(feature = "llvm")]
 pub fn main() -> io::Result<()> {
     use rustyline::error::ReadlineError;
     use rustyline::Editor;
@@ -236,7 +230,6 @@ fn report_parse_error(fail: SyntaxError) {
     println!("TODO Gracefully report parse error in repl: {:?}", fail);
 }
 
-#[cfg(feature = "llvm")]
 fn eval_and_format<'a>(src: &str) -> Result<String, SyntaxError<'a>> {
     use roc_mono::ir::OptLevel;
     use target_lexicon::Triple;

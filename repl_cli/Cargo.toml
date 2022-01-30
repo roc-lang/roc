@@ -1,0 +1,21 @@
+[package]
+edition = "2021"
+name = "roc_repl_cli"
+version = "0.1.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bumpalo = {version = "3.8.0", features = ["collections"]}
+const_format = "0.2.22"
+rustyline = {git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1"}
+rustyline-derive = {git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1"}
+target-lexicon = "0.12.2"
+
+roc_mono = {path = "../compiler/mono"}
+roc_parse = {path = "../compiler/parse"}
+roc_repl_eval = {path = "../repl_eval"}
+
+[lib]
+name = "roc_repl_cli"
+path = "src/lib.rs"
