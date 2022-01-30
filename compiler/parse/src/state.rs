@@ -45,7 +45,6 @@ impl<'a> State<'a> {
     #[must_use]
     pub(crate) fn advance(&self, offset: usize) -> State<'a> {
         let mut state = self.clone();
-        debug_assert!(!state.bytes()[..offset].iter().any(|b| *b == b'\n'));
         state.offset += offset;
         state
     }
