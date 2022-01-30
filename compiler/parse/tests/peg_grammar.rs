@@ -173,11 +173,18 @@ mod test_peg_grammar {
                     } else {
                       i += curr_line_indent;
 
-                      if prev_indent > curr_line_indent {
-                        state.indents.pop();
-                        consumer.token(Token::CloseIndent, i, 0);
-                      } else if prev_indent == curr_line_indent || curr_line_indent == 0 {
+                      if curr_line_indent == 0 {
+
+                      }
+
+                      if prev_indent == curr_line_indent {
                         consumer.token(Token::SameIndent, i, 0);
+                      } else if curr_line_indent < prev_indent {
+                        // safe unwrap because we check first
+                        while state.indents.last().is_some() && curr_line_indent < *state.indents.last().unwrap() {
+                          state.indents.pop();
+                          consumer.token(Token::CloseIndent, i, 0);
+                        }
                       }
 
                       continue;
@@ -422,6 +429,41 @@ mod test_peg_grammar {
   }
 
 type T = Token;
+
+#[test]
+fn test_indent_tokenization_1() {
+  let tokens = test_tokenize(r#"showBool = \b ->
+    when b is
+        True ->
+            "True""#);
+  
+  assert_eq!(
+    tokens,
+    [T::LowercaseIdent, T::OpAssignment, T::LambdaStart, T::LowercaseIdent, T::Arrow,
+    T::OpenIndent, T::KeywordWhen, T::LowercaseIdent, T::KeywordIs,
+    T::OpenIndent, T::UppercaseIdent, T::Arrow,
+    T::OpenIndent, T::String]
+  );
+}
+
+#[test]
+fn test_indent_tokenization_2() {
+  let tokens = test_tokenize(r#"showBool = \b ->
+    when b is
+        True ->
+            "True"
+"#);
+  
+  assert_eq!(
+    tokens,
+    [T::LowercaseIdent, T::OpAssignment, T::LambdaStart, T::LowercaseIdent, T::Arrow,
+    T::OpenIndent, T::KeywordWhen, T::LowercaseIdent, T::KeywordIs,
+    T::OpenIndent, T::UppercaseIdent, T::Arrow,
+    T::OpenIndent, T::String,
+    T::CloseIndent, T::CloseIndent, T::CloseIndent]
+  );
+}
+
 // Inspired by https://ziglang.org/documentation/0.7.1/#Grammar
 // license information can be found in the LEGAL_DETAILS file in
 // the root directory of this distribution.
@@ -542,7 +584,7 @@ peg::parser!{
           [T::Dot] ident()
 
         pub rule header() =
-          __ almost_header()
+          __ almost_header() [T::CloseIndent]*
 
         pub rule almost_header() =
           app_header()
@@ -748,10 +790,11 @@ peg::parser!{
           / ident()
 
         rule body() =
-          ident() [T::OpAssignment] full_expr()+
+        ident() [T::OpAssignment] [T::OpenIndent] full_expr()+ ([T::CloseIndent] / end_of_file())
+        /  ident() [T::OpAssignment] full_expr()
 
         rule annotated_body() =
-          annotation() body()
+          annotation() [T::SameIndent] body()
 
         rule alias() =
           apply_type() [T::Colon] type_annotation()
@@ -890,6 +933,15 @@ fn test_platform_header_2() {
 }
 
 #[test]
+fn test_annotated_def() {
+  let tokens = test_tokenize( r#"test1 : Bool
+test1 =
+    example1 == [ 2, 4 ]"#);
+
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
 fn test_record_def_1() {
 
     let tokens = test_tokenize( r#"x = { content: 4 }"#);
@@ -903,7 +955,7 @@ fn test_record_def_2() {
   let tokens = test_tokenize( r#"
 x =
    { content: 4 }"#);
-  dbg!(&tokens);
+
   assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
 
@@ -916,7 +968,7 @@ x =
      a: 4,
      b: 5
     }"#);
-  dbg!(&tokens);
+
   assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
 
@@ -930,7 +982,7 @@ x =
        b: 5,
      c: 6,
        }"#);
-  dbg!(&tokens);
+  
   assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
 
@@ -985,7 +1037,7 @@ fn test_hello() {
 #[test]
 fn test_fibo() {
   let tokens = test_tokenize(&example_path("fib/Fib.roc"));
-
+  
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
@@ -1044,14 +1096,14 @@ fn test_base64() {
 #[test]
 fn test_base64_test() {
   let tokens = test_tokenize(&example_path("benchmarks/TestBase64.roc"));
-  dbg!(&tokens);
+  
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
 #[test]
 fn test_astar_test() {
-  let tokens = test_tokenize(&example_path("benchmarks/TestAStar.roc"));
-
+  let tokens = test_tokenize(&file_to_string("/home/anton/gitrepos/2roc/roc/examples/benchmarks/TestAStar.roc"));
+  
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
