@@ -12,8 +12,8 @@ use roc_parse::ast::{
     TypeAnnotation, WhenBranch,
 };
 use roc_parse::header::{
-    AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
+    AppHeader, Effects, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
+    PackageEntry, PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
 use roc_parse::{
     ast::{Def, Module},
@@ -219,6 +219,25 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     after_imports: &[],
                     before_provides: &[],
                     after_provides: &[],
+                },
+            },
+            Module::Hosted { header } => Module::Hosted {
+                header: HostedHeader {
+                    name: header.name.remove_spaces(arena),
+                    exposes: header.exposes.remove_spaces(arena),
+                    imports: header.imports.remove_spaces(arena),
+                    generates: header.generates.remove_spaces(arena),
+                    generates_with: header.generates_with.remove_spaces(arena),
+                    before_header: &[],
+                    after_hosted_keyword: &[],
+                    before_exposes: &[],
+                    after_exposes: &[],
+                    before_imports: &[],
+                    after_imports: &[],
+                    before_generates: &[],
+                    after_generates: &[],
+                    before_with: &[],
+                    after_with: &[],
                 },
             },
         }
