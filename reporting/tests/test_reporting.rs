@@ -7201,4 +7201,41 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn unify_recursive_with_nonrecursive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Job : [ @Job { inputs : List Job } ]
+
+                job : { inputs : List Str } -> Job
+                job = \{ inputs } ->
+                    @Job { inputs }
+
+                job { inputs: [ "build", "test" ] }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `job` definition:
+
+                3│  job : { inputs : List Str } -> Job
+                4│  job = \{ inputs } ->
+                5│      @Job { inputs }
+                        ^^^^^^^^^^^^^^^
+
+                This `@Job` private tag application has the type:
+
+                    [ @Job { inputs : List Str } ]
+
+                But the type annotation on `job` says it should be:
+
+                    [ @Job { inputs : List a } ] as a
+                "#
+            ),
+        )
+    }
 }
