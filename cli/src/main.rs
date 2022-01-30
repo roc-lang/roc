@@ -4,7 +4,6 @@ use roc_cli::{
     CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
 };
 use roc_load::file::LoadingProblem;
-use roc_repl_cli;
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
