@@ -2020,7 +2020,7 @@ fn pattern_to_when<'a>(
             (symbol, Loc::at_zero(wrapped_body))
         }
 
-        IntLiteral(_, _, _) | NumLiteral(_, _, _) | FloatLiteral(_, _, _) | StrLiteral(_) => {
+        IntLiteral(..) | NumLiteral(..) | FloatLiteral(..) | StrLiteral(_) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -3009,14 +3009,14 @@ fn try_make_literal<'a>(
     use roc_can::expr::Expr::*;
 
     match can_expr {
-        Int(_, precision, _, int) => {
+        Int(_, precision, _, int, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *precision, false) {
                 IntOrFloat::Int(_) => Some(Literal::Int(*int)),
                 _ => unreachable!("unexpected float precision for integer"),
             }
         }
 
-        Float(_, precision, float_str, float) => {
+        Float(_, precision, float_str, float, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *precision, true) {
                 IntOrFloat::Float(_) => Some(Literal::Float(*float)),
                 IntOrFloat::DecimalFloatType => {
@@ -3036,7 +3036,7 @@ fn try_make_literal<'a>(
 
         // TODO investigate lifetime trouble
         // Str(string) => Some(Literal::Str(env.arena.alloc(string))),
-        Num(var, num_str, num) => {
+        Num(var, num_str, num, _bound) => {
             // first figure out what kind of number this is
             match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
                 IntOrFloat::Int(_) => Some(Literal::Int((*num).into())),
@@ -3072,7 +3072,7 @@ pub fn with_hole<'a>(
     let arena = env.arena;
 
     match can_expr {
-        Int(_, precision, _, int) => {
+        Int(_, precision, _, int, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, precision, false) {
                 IntOrFloat::Int(precision) => Stmt::Let(
                     assigned,
@@ -3084,7 +3084,7 @@ pub fn with_hole<'a>(
             }
         }
 
-        Float(_, precision, float_str, float) => {
+        Float(_, precision, float_str, float, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, precision, true) {
                 IntOrFloat::Float(precision) => Stmt::Let(
                     assigned,
@@ -3115,7 +3115,7 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Num(var, num_str, num) => {
+        Num(var, num_str, num, _bound) => {
             // first figure out what kind of number this is
             match num_argument_to_int_or_float(env.subs, env.target_info, var, false) {
                 IntOrFloat::Int(precision) => Stmt::Let(
@@ -7662,7 +7662,7 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        IntLiteral(var, _, int) => {
+        IntLiteral(var, _, int, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
                 IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*int as i128, precision)),
                 other => {
@@ -7673,7 +7673,7 @@ fn from_can_pattern_help<'a>(
                 }
             }
         }
-        FloatLiteral(var, float_str, float) => {
+        FloatLiteral(var, float_str, float, _bound) => {
             // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
             match num_argument_to_int_or_float(env.subs, env.target_info, *var, true) {
                 IntOrFloat::Int(_) => {
@@ -7704,7 +7704,7 @@ fn from_can_pattern_help<'a>(
             // TODO preserve malformed problem information here?
             Err(RuntimeError::UnsupportedPattern(*region))
         }
-        NumLiteral(var, num_str, num) => {
+        NumLiteral(var, num_str, num, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
                 IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*num as i128, precision)),
                 IntOrFloat::Float(precision) => Ok(Pattern::FloatLiteral(*num as u64, precision)),

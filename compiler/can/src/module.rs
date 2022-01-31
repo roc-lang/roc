@@ -397,9 +397,9 @@ fn fix_values_captured_in_closure_pattern(
             }
         }
         Identifier(_)
-        | NumLiteral(_, _, _)
-        | IntLiteral(_, _, _)
-        | FloatLiteral(_, _, _)
+        | NumLiteral(..)
+        | IntLiteral(..)
+        | FloatLiteral(..)
         | StrLiteral(_)
         | Underscore
         | Shadowed(..)
@@ -453,9 +453,9 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_expr(&mut loc_body.value, no_capture_symbols);
         }
 
-        Num(_, _, _)
-        | Int(_, _, _, _)
-        | Float(_, _, _, _)
+        Num(..)
+        | Int(..)
+        | Float(..)
         | Str(_)
         | Var(_)
         | EmptyRecord

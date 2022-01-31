@@ -9,6 +9,7 @@ RecordUpdate {
             [],
             @19-20 Num(
                 "5",
+                None,
             ),
         ),
         @22-26 RequiredValue(
@@ -16,6 +17,7 @@ RecordUpdate {
             [],
             @25-26 Num(
                 "0",
+                None,
             ),
         ),
     ],

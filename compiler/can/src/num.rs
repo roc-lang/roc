@@ -1,6 +1,9 @@
 use crate::env::Env;
 use crate::expr::Expr;
 use roc_parse::ast::Base;
+use roc_parse::ast::FloatWidth;
+use roc_parse::ast::NumWidth;
+use roc_parse::ast::NumericBound;
 use roc_problem::can::Problem;
 use roc_problem::can::RuntimeError::*;
 use roc_problem::can::{FloatErrorKind, IntErrorKind};
@@ -18,10 +21,11 @@ pub fn num_expr_from_result(
     var_store: &mut VarStore,
     result: Result<(&str, i64), (&str, IntErrorKind)>,
     region: Region,
+    bound: NumericBound<NumWidth>,
     env: &mut Env,
 ) -> Expr {
     match result {
-        Ok((str, num)) => Expr::Num(var_store.fresh(), (*str).into(), num),
+        Ok((str, num)) => Expr::Num(var_store.fresh(), (*str).into(), num, bound),
         Err((raw, error)) => {
             // (Num *) compiles to Int if it doesn't
             // get specialized to something else first,
@@ -41,11 +45,18 @@ pub fn int_expr_from_result(
     result: Result<(&str, i128), (&str, IntErrorKind)>,
     region: Region,
     base: Base,
+    bound: NumericBound<NumWidth>,
     env: &mut Env,
 ) -> Expr {
     // Int stores a variable to generate better error messages
     match result {
-        Ok((str, int)) => Expr::Int(var_store.fresh(), var_store.fresh(), (*str).into(), int),
+        Ok((str, int)) => Expr::Int(
+            var_store.fresh(),
+            var_store.fresh(),
+            (*str).into(),
+            int,
+            bound,
+        ),
         Err((raw, error)) => {
             let runtime_error = InvalidInt(error, base, region, raw.into());
 
@@ -61,11 +72,18 @@ pub fn float_expr_from_result(
     var_store: &mut VarStore,
     result: Result<(&str, f64), (&str, FloatErrorKind)>,
     region: Region,
+    bound: NumericBound<FloatWidth>,
     env: &mut Env,
 ) -> Expr {
     // Float stores a variable to generate better error messages
     match result {
-        Ok((str, float)) => Expr::Float(var_store.fresh(), var_store.fresh(), (*str).into(), float),
+        Ok((str, float)) => Expr::Float(
+            var_store.fresh(),
+            var_store.fresh(),
+            (*str).into(),
+            float,
+            bound,
+        ),
         Err((raw, error)) => {
             let runtime_error = InvalidFloat(error, region, raw.into());
 

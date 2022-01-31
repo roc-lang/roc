@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 
 use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PlatformHeader};
 use crate::ident::Ident;
@@ -126,6 +126,70 @@ pub enum StrLiteral<'a> {
     Block(&'a [&'a [StrSegment<'a>]]),
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum NumWidth {
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Nat,
+    Dec,
+}
+
+impl Display for NumWidth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use NumWidth::*;
+        f.write_str(match self {
+            U8 => "u8",
+            U16 => "u16",
+            U32 => "u32",
+            U64 => "u64",
+            U128 => "u128",
+            I8 => "i8",
+            I16 => "i16",
+            I32 => "i32",
+            I64 => "i64",
+            I128 => "i128",
+            Nat => "nat",
+            Dec => "dec",
+        })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum FloatWidth {
+    F32,
+    F64,
+}
+
+impl Display for FloatWidth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use FloatWidth::*;
+        f.write_str(match self {
+            F32 => "f32",
+            F64 => "f64",
+        })
+    }
+}
+
+/// Describes a bound on the width of a numeric literal.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum NumericBound<W>
+where
+    W: Copy,
+{
+    /// There is no bound on the width.
+    None,
+    /// Must have exactly the width `W`.
+    Exact(W),
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -138,12 +202,13 @@ pub enum StrLiteral<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Expr<'a> {
     // Number Literals
-    Float(&'a str),
-    Num(&'a str),
+    Float(&'a str, NumericBound<FloatWidth>),
+    Num(&'a str, NumericBound<NumWidth>),
     NonBase10Int {
         string: &'a str,
         base: Base,
         is_negative: bool,
+        bound: NumericBound<NumWidth>,
     },
 
     // String Literals
@@ -431,13 +496,14 @@ pub enum Pattern<'a> {
     OptionalField(&'a str, &'a Loc<Expr<'a>>),
 
     // Literal
-    NumLiteral(&'a str),
+    NumLiteral(&'a str, NumericBound<NumWidth>),
     NonBase10Literal {
         string: &'a str,
         base: Base,
         is_negative: bool,
+        bound: NumericBound<NumWidth>,
     },
-    FloatLiteral(&'a str),
+    FloatLiteral(&'a str, NumericBound<FloatWidth>),
     StrLiteral(StrLiteral<'a>),
     Underscore(&'a str),
 
@@ -540,20 +606,27 @@ impl<'a> Pattern<'a> {
                 x == y
             }
             // Literal
-            (NumLiteral(x), NumLiteral(y)) => x == y,
+            (NumLiteral(x, bound_x), NumLiteral(y, bound_y)) => x == y && bound_x == bound_y,
             (
                 NonBase10Literal {
                     string: string_x,
                     base: base_x,
                     is_negative: is_negative_x,
+                    bound: bound_x,
                 },
                 NonBase10Literal {
                     string: string_y,
                     base: base_y,
                     is_negative: is_negative_y,
+                    bound: bound_y,
                 },
-            ) => string_x == string_y && base_x == base_y && is_negative_x == is_negative_y,
-            (FloatLiteral(x), FloatLiteral(y)) => x == y,
+            ) => {
+                string_x == string_y
+                    && base_x == base_y
+                    && is_negative_x == is_negative_y
+                    && bound_x == bound_y
+            }
+            (FloatLiteral(x, bound_x), FloatLiteral(y, bound_y)) => x == y && bound_x == bound_y,
             (StrLiteral(x), StrLiteral(y)) => x == y,
             (Underscore(x), Underscore(y)) => x == y,
 

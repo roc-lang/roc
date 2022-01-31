@@ -177,7 +177,7 @@ pub fn to_pattern2<'a>(
             TopLevelDef | DefExpr => underscore_in_def(env, region),
         },
 
-        FloatLiteral(ref string) => match pattern_type {
+        FloatLiteral(ref string, _bound) => match pattern_type {
             WhenBranch => match finish_parsing_float(string) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedFloat;
@@ -188,7 +188,7 @@ pub fn to_pattern2<'a>(
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        NumLiteral(string) => match pattern_type {
+        NumLiteral(string, _bound) => match pattern_type {
             WhenBranch => match finish_parsing_int(string) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedInt;
@@ -203,6 +203,7 @@ pub fn to_pattern2<'a>(
             string,
             base,
             is_negative,
+            bound: _,
         } => match pattern_type {
             WhenBranch => match finish_parsing_base(string, *base, *is_negative) {
                 Err(_error) => {

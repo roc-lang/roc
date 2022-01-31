@@ -21,6 +21,7 @@ When(
             ],
             value: @20-21 Num(
                 "2",
+                None,
             ),
             guard: None,
         },
@@ -44,6 +45,7 @@ When(
             ],
             value: @35-36 Num(
                 "4",
+                None,
             ),
             guard: None,
         },

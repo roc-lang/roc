@@ -14,7 +14,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, EscapedChar, StrLiteral};
+use roc_parse::ast::{self, EscapedChar, FloatWidth, NumWidth, NumericBound, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -52,11 +52,11 @@ pub enum Expr {
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, Box<str>, i64),
+    Num(Variable, Box<str>, i64, NumericBound<NumWidth>),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, Variable, Box<str>, i128),
-    Float(Variable, Variable, Box<str>, f64),
+    Int(Variable, Variable, Box<str>, i128, NumericBound<NumWidth>),
+    Float(Variable, Variable, Box<str>, f64, NumericBound<FloatWidth>),
     Str(Box<str>),
     List {
         elem_var: Variable,
@@ -208,21 +208,23 @@ pub fn canonicalize_expr<'a>(
     use Expr::*;
 
     let (expr, output) = match expr {
-        ast::Expr::Num(str) => {
+        &ast::Expr::Num(str, bound) => {
             let answer = num_expr_from_result(
                 var_store,
-                finish_parsing_int(*str).map(|int| (*str, int)),
+                finish_parsing_int(str).map(|int| (str, int)),
                 region,
+                bound,
                 env,
             );
 
             (answer, Output::default())
         }
-        ast::Expr::Float(str) => {
+        &ast::Expr::Float(str, bound) => {
             let answer = float_expr_from_result(
                 var_store,
-                finish_parsing_float(str).map(|f| (*str, f)),
+                finish_parsing_float(str).map(|f| (str, f)),
                 region,
+                bound,
                 env,
             );
 
@@ -790,21 +792,29 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::NonBase10Int {
+        &ast::Expr::NonBase10Int {
             string,
             base,
             is_negative,
+            bound,
         } => {
             // the minus sign is added before parsing, to get correct overflow/underflow behavior
-            let answer = match finish_parsing_base(string, *base, *is_negative) {
+            let answer = match finish_parsing_base(string, base, is_negative) {
                 Ok(int) => {
                     // Done in this kinda round about way with intermediate variables
                     // to keep borrowed values around and make this compile
                     let int_string = int.to_string();
                     let int_str = int_string.as_str();
-                    int_expr_from_result(var_store, Ok((int_str, int as i128)), region, *base, env)
+                    int_expr_from_result(
+                        var_store,
+                        Ok((int_str, int as i128)),
+                        region,
+                        base,
+                        bound,
+                        env,
+                    )
                 }
-                Err(e) => int_expr_from_result(var_store, Err(e), region, *base, env),
+                Err(e) => int_expr_from_result(var_store, Err(e), region, base, bound, env),
             };
 
             (answer, Output::default())
@@ -1226,9 +1236,9 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
     match expr {
         // Num stores the `a` variable in `Num a`. Not the same as the variable
         // stored in Int and Float below, which is strictly for better error messages
-        other @ Num(_, _, _)
-        | other @ Int(_, _, _, _)
-        | other @ Float(_, _, _, _)
+        other @ Num(..)
+        | other @ Int(..)
+        | other @ Float(..)
         | other @ Str { .. }
         | other @ RuntimeError(_)
         | other @ EmptyRecord

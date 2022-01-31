@@ -6,6 +6,7 @@ Apply(
     [
         @5-6 Num(
             "1",
+            None,
         ),
     ],
     Space,

@@ -16,6 +16,7 @@ mod test_parse {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
     use roc_parse::ast::Expr::{self, *};
+    use roc_parse::ast::NumericBound;
     use roc_parse::ast::StrLiteral::*;
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{self, EscapedChar};
@@ -182,6 +183,7 @@ mod test_parse {
         pass/newline_singleton_list.expr,
         pass/nonempty_platform_header.header,
         pass/not_docs.expr,
+        pass/number_literal_suffixes.expr,
         pass/one_backpassing.expr,
         pass/one_char_string.expr,
         pass/one_def.expr,
@@ -494,20 +496,23 @@ mod test_parse {
 
     #[quickcheck]
     fn all_i64_values_parse(num: i64) {
-        assert_parses_to(num.to_string().as_str(), Num(num.to_string().as_str()));
+        assert_parses_to(
+            num.to_string().as_str(),
+            Num(num.to_string().as_str(), NumericBound::None),
+        );
     }
 
     #[quickcheck]
     fn all_f64_values_parse(num: f64) {
         let string = num.to_string();
         if string.contains('.') {
-            assert_parses_to(&string, Float(&string));
+            assert_parses_to(&string, Float(&string, NumericBound::None));
         } else if num.is_nan() {
             assert_parses_to(&string, Expr::GlobalTag(&string));
         } else if num.is_finite() {
             // These are whole numbers. Add the `.0` back to make float.
             let float_string = format!("{}.0", string);
-            assert_parses_to(&float_string, Float(&float_string));
+            assert_parses_to(&float_string, Float(&float_string, NumericBound::None));
         }
     }
 

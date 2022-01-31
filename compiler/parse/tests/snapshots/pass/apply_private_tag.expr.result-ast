@@ -5,9 +5,11 @@ Apply(
     [
         @6-8 Num(
             "12",
+            None,
         ),
         @9-11 Num(
             "34",
+            None,
         ),
     ],
     Space,

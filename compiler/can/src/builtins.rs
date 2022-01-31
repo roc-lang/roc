@@ -7,6 +7,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
+use roc_parse::ast::NumericBound;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 
@@ -4990,15 +4991,32 @@ where
     I128: Into<i128>,
 {
     let ii = i.into();
-    Int(num_var, precision_var, ii.to_string().into_boxed_str(), ii)
+    Int(
+        num_var,
+        precision_var,
+        ii.to_string().into_boxed_str(),
+        ii,
+        NumericBound::None,
+    )
 }
 
 #[inline(always)]
 fn float(num_var: Variable, precision_var: Variable, f: f64) -> Expr {
-    Float(num_var, precision_var, f.to_string().into_boxed_str(), f)
+    Float(
+        num_var,
+        precision_var,
+        f.to_string().into_boxed_str(),
+        f,
+        NumericBound::None,
+    )
 }
 
 #[inline(always)]
 fn num(num_var: Variable, i: i64) -> Expr {
-    Num(num_var, i.to_string().into_boxed_str(), i)
+    Num(
+        num_var,
+        i.to_string().into_boxed_str(),
+        i,
+        NumericBound::None,
+    )
 }

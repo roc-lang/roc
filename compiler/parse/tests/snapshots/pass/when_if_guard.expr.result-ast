@@ -18,6 +18,7 @@ When(
             value: @27-28 SpaceBefore(
                 Num(
                     "1",
+                    None,
                 ),
                 [
                     Newline,
@@ -40,6 +41,7 @@ When(
             value: @47-48 SpaceBefore(
                 Num(
                     "2",
+                    None,
                 ),
                 [
                     Newline,
@@ -62,6 +64,7 @@ When(
             value: @68-69 SpaceBefore(
                 Num(
                     "3",
+                    None,
                 ),
                 [
                     Newline,

@@ -9,6 +9,7 @@ If(
                 SpaceAfter(
                     Num(
                         "1",
+                        None,
                     ),
                     [
                         Newline,
@@ -28,6 +29,7 @@ If(
                 SpaceAfter(
                     Num(
                         "2",
+                        None,
                     ),
                     [
                         Newline,
@@ -42,6 +44,7 @@ If(
     @42-43 SpaceBefore(
         Num(
             "3",
+            None,
         ),
         [
             Newline,

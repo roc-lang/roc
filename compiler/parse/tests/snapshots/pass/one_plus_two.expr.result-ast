@@ -3,11 +3,13 @@ BinOps(
         (
             @0-1 Num(
                 "1",
+                None,
             ),
             @1-2 Plus,
         ),
     ],
     @2-3 Num(
         "2",
+        None,
     ),
 )

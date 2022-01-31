@@ -8,6 +8,7 @@ UnaryOp(
             [
                 @8-10 Num(
                     "12",
+                    None,
                 ),
                 @11-14 Var {
                     module_name: "",

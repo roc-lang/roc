@@ -9,6 +9,7 @@ When(
                 @11-12 SpaceBefore(
                     NumLiteral(
                         "1",
+                        None,
                     ),
                     [
                         Newline,
@@ -17,6 +18,7 @@ When(
             ],
             value: @16-17 Num(
                 "2",
+                None,
             ),
             guard: None,
         },
@@ -25,6 +27,7 @@ When(
                 @19-21 SpaceBefore(
                     NumLiteral(
                         "-3",
+                        None,
                     ),
                     [
                         Newline,
@@ -33,6 +36,7 @@ When(
             ],
             value: @25-26 Num(
                 "4",
+                None,
             ),
             guard: None,
         },

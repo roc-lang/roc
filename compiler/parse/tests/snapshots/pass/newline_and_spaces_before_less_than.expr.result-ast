@@ -10,6 +10,7 @@ Defs(
                         @4-5 SpaceAfter(
                             Num(
                                 "1",
+                                None,
                             ),
                             [
                                 Newline,
@@ -20,6 +21,7 @@ Defs(
                 ],
                 @12-13 Num(
                     "2",
+                    None,
                 ),
             ),
         ),
@@ -27,6 +29,7 @@ Defs(
     @15-17 SpaceBefore(
         Num(
             "42",
+            None,
         ),
         [
             Newline,

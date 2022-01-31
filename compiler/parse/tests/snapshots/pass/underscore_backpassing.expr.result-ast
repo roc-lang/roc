@@ -21,6 +21,7 @@ SpaceBefore(
         @34-35 SpaceBefore(
             Num(
                 "4",
+                None,
             ),
             [
                 Newline,

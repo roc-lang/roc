@@ -6,11 +6,13 @@ Apply(
         @6-8 ParensAround(
             Num(
                 "12",
+                None,
             ),
         ),
         @11-13 ParensAround(
             Num(
                 "34",
+                None,
             ),
         ),
     ],

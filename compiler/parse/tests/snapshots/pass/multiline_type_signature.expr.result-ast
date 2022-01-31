@@ -18,6 +18,7 @@ Defs(
     @12-14 SpaceBefore(
         Num(
             "42",
+            None,
         ),
         [
             Newline,

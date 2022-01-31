@@ -4,6 +4,7 @@ List(
             SpaceAfter(
                 Num(
                     "1",
+                    None,
                 ),
                 [
                     Newline,

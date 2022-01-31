@@ -484,16 +484,18 @@ impl<'a> RemoveSpaces<'a> for StrSegment<'a> {
 impl<'a> RemoveSpaces<'a> for Expr<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            Expr::Float(a) => Expr::Float(a),
-            Expr::Num(a) => Expr::Num(a),
+            Expr::Float(a, bound) => Expr::Float(a, bound),
+            Expr::Num(a, bound) => Expr::Num(a, bound),
             Expr::NonBase10Int {
                 string,
                 base,
                 is_negative,
+                bound,
             } => Expr::NonBase10Int {
                 string,
                 base,
                 is_negative,
+                bound,
             },
             Expr::Str(a) => Expr::Str(a.remove_spaces(arena)),
             Expr::Access(a, b) => Expr::Access(arena.alloc(a.remove_spaces(arena)), b),
@@ -569,17 +571,19 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::OptionalField(a, b) => {
                 Pattern::OptionalField(a, arena.alloc(b.remove_spaces(arena)))
             }
-            Pattern::NumLiteral(a) => Pattern::NumLiteral(a),
+            Pattern::NumLiteral(a, bound) => Pattern::NumLiteral(a, bound),
             Pattern::NonBase10Literal {
                 string,
                 base,
                 is_negative,
+                bound,
             } => Pattern::NonBase10Literal {
                 string,
                 base,
                 is_negative,
+                bound,
             },
-            Pattern::FloatLiteral(a) => Pattern::FloatLiteral(a),
+            Pattern::FloatLiteral(a, bound) => Pattern::FloatLiteral(a, bound),
             Pattern::StrLiteral(a) => Pattern::StrLiteral(a),
             Pattern::Underscore(a) => Pattern::Underscore(a),
             Pattern::Malformed(a) => Pattern::Malformed(a),

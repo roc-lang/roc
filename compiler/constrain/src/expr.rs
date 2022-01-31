@@ -96,8 +96,10 @@ pub fn constrain_expr(
     expected: Expected<Type>,
 ) -> Constraint {
     match expr {
-        Int(var, precision, _, _) => int_literal(*var, *precision, expected, region),
-        Num(var, _, _) => exists(
+        // TODO constrain with bound
+        Int(var, precision, _, _, _bound) => int_literal(*var, *precision, expected, region),
+        // TODO constrain with bound
+        Num(var, _, _, _bound) => exists(
             vec![*var],
             Eq(
                 crate::builtins::num_num(Type::Variable(*var)),
@@ -106,7 +108,8 @@ pub fn constrain_expr(
                 region,
             ),
         ),
-        Float(var, precision, _, _) => float_literal(*var, *precision, expected, region),
+        // TODO constrain with bound
+        Float(var, precision, _, _, _bound) => float_literal(*var, *precision, expected, region),
         EmptyRecord => constrain_empty_record(region, expected),
         Expr::Record { record_var, fields } => {
             if fields.is_empty() {

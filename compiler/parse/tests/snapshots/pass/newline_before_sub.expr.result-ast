@@ -4,6 +4,7 @@ BinOps(
             @0-1 SpaceAfter(
                 Num(
                     "3",
+                    None,
                 ),
                 [
                     Newline,
@@ -14,5 +15,6 @@ BinOps(
     ],
     @4-5 Num(
         "4",
+        None,
     ),
 )

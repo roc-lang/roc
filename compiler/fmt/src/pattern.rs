@@ -1,7 +1,7 @@
 use crate::annotation::{Formattable, Newlines, Parens};
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt};
 use crate::Buf;
-use roc_parse::ast::{Base, Pattern};
+use roc_parse::ast::{Base, NumericBound, Pattern};
 
 pub fn fmt_pattern<'a, 'buf>(
     buf: &mut Buf<'buf>,
@@ -31,9 +31,9 @@ impl<'a> Formattable for Pattern<'a> {
             | Pattern::GlobalTag(_)
             | Pattern::PrivateTag(_)
             | Pattern::Apply(_, _)
-            | Pattern::NumLiteral(_)
+            | Pattern::NumLiteral(..)
             | Pattern::NonBase10Literal { .. }
-            | Pattern::FloatLiteral(_)
+            | Pattern::FloatLiteral(..)
             | Pattern::StrLiteral(_)
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
@@ -116,14 +116,18 @@ impl<'a> Formattable for Pattern<'a> {
                 loc_pattern.format(buf, indent);
             }
 
-            NumLiteral(string) => {
+            NumLiteral(string, bound) => {
                 buf.indent(indent);
                 buf.push_str(string);
+                if let &NumericBound::Exact(width) = bound {
+                    buf.push_str(&width.to_string());
+                }
             }
             NonBase10Literal {
                 base,
                 string,
                 is_negative,
+                bound,
             } => {
                 buf.indent(indent);
                 if *is_negative {
@@ -138,10 +142,17 @@ impl<'a> Formattable for Pattern<'a> {
                 }
 
                 buf.push_str(string);
+
+                if let &NumericBound::Exact(width) = bound {
+                    buf.push_str(&width.to_string());
+                }
             }
-            FloatLiteral(string) => {
+            FloatLiteral(string, bound) => {
                 buf.indent(indent);
                 buf.push_str(string);
+                if let &NumericBound::Exact(width) = bound {
+                    buf.push_str(&width.to_string());
+                }
             }
             StrLiteral(literal) => {
                 todo!("Format string literal: {:?}", literal);

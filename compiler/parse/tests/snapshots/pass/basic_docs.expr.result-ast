@@ -7,12 +7,14 @@ SpaceBefore(
                 ),
                 @111-112 Num(
                     "5",
+                    None,
                 ),
             ),
         ],
         @114-116 SpaceBefore(
             Num(
                 "42",
+                None,
             ),
             [
                 Newline,

@@ -50,7 +50,7 @@ pub fn expr_to_expr2<'a>(
     use roc_parse::ast::Expr::*;
 
     match parse_expr {
-        Float(string) => {
+        Float(string, _bound) => {
             match finish_parsing_float(string) {
                 Ok(float) => {
                     let expr = Expr2::Float {
@@ -72,7 +72,7 @@ pub fn expr_to_expr2<'a>(
                 }
             }
         }
-        Num(string) => {
+        Num(string, _bound) => {
             match finish_parsing_int(string) {
                 Ok(int) => {
                     let expr = Expr2::SmallInt {
@@ -105,6 +105,7 @@ pub fn expr_to_expr2<'a>(
             string,
             base,
             is_negative,
+            bound: _,
         } => {
             match finish_parsing_base(string, *base, *is_negative) {
                 Ok(int) => {
