@@ -7238,4 +7238,70 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn nested_datatype() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Nested a : [ Chain a (Nested (List a)), Term ]
+
+                s : Nested Str
+
+                s
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NESTED DATATYPE ─────────────────────────────────────────────────────────────
+
+                `Nested` is a nested datatype. Here is one recursive usage of it:
+
+                1│  Nested a : [ Chain a (Nested (List a)), Term ]
+                                          ^^^^^^^^^^^^^^^
+
+                But recursive usages of `Nested` must match its definition:
+
+                1│  Nested a : [ Chain a (Nested (List a)), Term ]
+                    ^^^^^^^^
+
+                Nested datatypes are not supported in Roc.
+
+                Hint: Consider rewriting the definition of `Nested` to use the recursive type with the same arguments.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn nested_datatype_inline() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : {} -> [ Chain a (Nested (List a)), Term ] as Nested a
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NESTED DATATYPE ─────────────────────────────────────────────────────────────
+
+                `Nested` is a nested datatype. Here is one recursive usage of it:
+
+                1│  f : {} -> [ Chain a (Nested (List a)), Term ] as Nested a
+                                         ^^^^^^^^^^^^^^^
+
+                But recursive usages of `Nested` must match its definition:
+
+                1│  f : {} -> [ Chain a (Nested (List a)), Term ] as Nested a
+                                                                     ^^^^^^^^
+
+                Nested datatypes are not supported in Roc.
+
+                Hint: Consider rewriting the definition of `Nested` to use the recursive type with the same arguments.
+                "#
+            ),
+        )
+    }
 }

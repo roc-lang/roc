@@ -24,6 +24,7 @@ const CIRCULAR_DEF: &str = "CIRCULAR DEFINITION";
 const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const VALUE_NOT_EXPOSED: &str = "NOT EXPOSED";
 const MODULE_NOT_IMPORTED: &str = "MODULE NOT IMPORTED";
+const NESTED_DATATYPE: &str = "NESTED DATATYPE";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -435,6 +436,34 @@ pub fn can_problem<'b>(
 
             doc = answer.0;
             title = answer.1.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::NestedDatatype {
+            alias,
+            def_region,
+            differing_recursion_region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" is a nested datatype. Here is one recursive usage of it:"),
+                ]),
+                alloc.region(lines.convert_region(differing_recursion_region)),
+                alloc.concat(vec![
+                    alloc.reflow("But recursive usages of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" must match its definition:"),
+                ]),
+                alloc.region(lines.convert_region(def_region)),
+                alloc.reflow("Nested datatypes are not supported in Roc."),
+                alloc.concat(vec![
+                    alloc.hint("Consider rewriting the definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.text(" to use the recursive type with the same arguments."),
+                ]),
+            ]);
+
+            title = NESTED_DATATYPE.to_string();
             severity = Severity::RuntimeError;
         }
     };

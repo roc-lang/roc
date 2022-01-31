@@ -71,7 +71,7 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
 
 #[inline(always)]
 pub fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
-    Type::Apply(symbol, args)
+    Type::Apply(symbol, args, Region::zero())
 }
 
 #[inline(always)]
