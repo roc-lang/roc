@@ -192,7 +192,11 @@ fn create_llvm_module<'a>(
     for function in FunctionIterator::from_module(module) {
         let name = function.get_name().to_str().unwrap();
         if name.starts_with("roc_builtins") {
-            function.set_linkage(Linkage::Internal);
+            if name.starts_with("roc_builtins.utils") {
+                function.set_linkage(Linkage::External);
+            } else {
+                function.set_linkage(Linkage::Internal);
+            }
         }
 
         if name.starts_with("roc_builtins.dict") {
@@ -613,19 +617,14 @@ macro_rules! assert_expect_failed {
         let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
         let is_gen_test = true;
-        let (main_fn_name, errors, lib) = $crate::helpers::llvm::helper(
-            &arena,
-            $src,
-            stdlib,
-            is_gen_test,
-            false,
-            &context,
-        );
+        let (main_fn_name, errors, lib) =
+            $crate::helpers::llvm::helper(&arena, $src, stdlib, is_gen_test, false, &context);
 
         let transform = |success| {
             let expected = $expected;
             assert_eq!(&success, &expected, "LLVM test failed");
         };
+
         run_jit_function!(lib, main_fn_name, $ty, transform, errors)
     };
 
@@ -643,7 +642,6 @@ macro_rules! assert_expect_failed {
         $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
     };
 }
-
 
 #[allow(dead_code)]
 pub fn identity<T>(value: T) -> T {
@@ -674,11 +672,10 @@ macro_rules! assert_non_opt_evals_to {
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
 #[allow(unused_imports)]
+pub(crate) use assert_expect_failed;
+#[allow(unused_imports)]
 pub(crate) use assert_llvm_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_non_opt_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
-#[allow(unused_imports)]
-pub(crate) use assert_expect_failed;
-

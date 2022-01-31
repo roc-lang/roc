@@ -45,22 +45,45 @@ macro_rules! run_jit_function {
         use roc_gen_llvm::run_roc::RocCallResult;
         use std::mem::MaybeUninit;
 
+        #[derive(Debug, Copy, Clone)]
+        struct Failure {
+            start_line: u32,
+            end_line: u32,
+            start_col: u16,
+            end_col: u16,
+        }
+
         unsafe {
             let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<$ty>) -> ()> =
                 $lib.get($main_fn_name.as_bytes())
                     .ok()
                     .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                     .expect("errored");
-            let get_expect_failures: libloading::Symbol<unsafe extern "C" fn() -> (usize, usize)> =
-            $lib.get("roc_builtins.utils.get_expect_failures".as_bytes())
+            let get_expect_failures: libloading::Symbol<
+                unsafe extern "C" fn() -> (*const Failure, usize),
+            > = $lib
+                .get("roc_builtins.utils.get_expect_failures".as_bytes())
                 .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", "roc_builtins.utils.get_expect_failures"))
+                .ok_or(format!(
+                    "Unable to JIT compile `{}`",
+                    "roc_builtins.utils.get_expect_failures"
+                ))
                 .expect("errored");
-            let mut result = MaybeUninit::uninit();
+            let mut main_result = MaybeUninit::uninit();
 
-            main(result.as_mut_ptr());
+            main(main_result.as_mut_ptr());
+            let (failures_ptr, num_failures) = get_expect_failures();
+            let mut failures = std::vec::Vec::new();
 
-            match result.assume_init().into() {
+            for index in 0..num_failures {
+                failures.push(*failures_ptr.add(index));
+            }
+
+            if (num_failures > 0) {
+                panic!("Failed with {} failures. Failures: ", num_failures);
+            }
+
+            match main_result.assume_init().into() {
                 Ok(success) => {
                     // only if there are no exceptions thrown, check for errors
                     assert!($errors.is_empty(), "Encountered errors:\n{}", $errors);

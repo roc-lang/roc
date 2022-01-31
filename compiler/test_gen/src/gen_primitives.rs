@@ -2513,6 +2513,7 @@ fn call_invalid_layout() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+#[should_panic(expected = "Failed with 1 failures. Failures: ")]
 fn expect_fail() {
     assert_expect_failed!(
         indoc!(

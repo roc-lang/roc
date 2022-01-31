@@ -23,12 +23,13 @@ extern fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 
 comptime {
     const builtin = @import("builtin");
-    // During tetsts, use the testing allocators to satisfy these functions.
+    // During tests, use the testing allocators to satisfy these functions.
     if (builtin.is_test) {
         @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
         @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
         @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
+        @export(testing_roc_memcpy, .{ .name = "roc_memcpy", .linkage = .Strong });
     }
 }
 
@@ -54,6 +55,14 @@ fn testing_roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     _ = tag_id;
 
     @panic("Roc panicked");
+}
+
+fn testing_roc_memcpy(dest: *c_void, src: *c_void, bytes: usize) callconv(.C) ?*c_void {
+    const zig_dest = @ptrCast([*]u8, dest);
+    const zig_src = @ptrCast([*]u8, src);
+
+    @memcpy(zig_dest, zig_src, bytes);
+    return dest;
 }
 
 pub fn alloc(size: usize, alignment: u32) [*]u8 {

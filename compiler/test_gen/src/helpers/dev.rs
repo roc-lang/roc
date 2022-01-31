@@ -272,9 +272,8 @@ macro_rules! assert_expect_failed {
         };
         run_jit_function_raw!(lib, main_fn_name, $ty, transform, errors);
         todo!("Actually look up the failures and check them")
-    };
+    }};
 }
-
 
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;

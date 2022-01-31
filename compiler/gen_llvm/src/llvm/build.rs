@@ -6030,7 +6030,10 @@ fn run_low_level<'a, 'ctx, 'env>(
             {
                 bd.position_at_end(throw_block);
 
-                let func = env.module.get_function("roc_builtins.utils.expect_failed").unwrap();
+                let func = env
+                    .module
+                    .get_function("roc_builtins.utils.expect_failed")
+                    .unwrap();
                 let callable = CallableValue::try_from(func).unwrap();
                 let start_line = context.i32_type().const_int(0, false);
                 let end_line = context.i32_type().const_int(0, false);
@@ -6039,7 +6042,12 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                 bd.build_call(
                     callable,
-                    &[start_line.into(), end_line.into(), start_col.into(), end_col.into()],
+                    &[
+                        start_line.into(),
+                        end_line.into(),
+                        start_col.into(),
+                        end_col.into(),
+                    ],
                     "call_expect_failed",
                 );
 
