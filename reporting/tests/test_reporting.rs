@@ -6173,7 +6173,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── WEIRD EXPOSES ───────────────────────────────────────────────────────────────
 
-                I am partway through parsing a exposes list, but I got stuck here:
+                I am partway through parsing an `exposes` list, but I got stuck here:
 
                 1│  interface Foobar
                 2│      exposes [ main, @Foo ]
