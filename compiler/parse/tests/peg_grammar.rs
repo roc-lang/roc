@@ -487,12 +487,12 @@ peg::parser!{
       pub rule module() =
         header() module_defs() __ // __ for optional indent
 
-      pub rule full_expr() = [T::OpenIndent]? bool_or_expr() [T::CloseIndent]?
+      pub rule full_expr() = [T::OpenIndent]? op_expr() [T::CloseIndent]?
 
       // necessary to prevent `f x y` from being parsed as `Apply(f, Apply(x, y))` instead of `Apply(f, (x y))`
       rule no_apply_full_expr() = 
-        [T::OpenIndent] no_apply_bool_or_expr() [T::CloseIndent]
-        / [T::OpenIndent]? no_apply_bool_or_expr()
+        [T::OpenIndent] no_apply_op_expr() [T::CloseIndent]
+        / [T::OpenIndent]? no_apply_op_expr()
 
       
       rule common_expr() =
@@ -526,8 +526,11 @@ peg::parser!{
           [T::LambdaStart] args() [T::Arrow] __ full_expr()
 
         rule args() =
+          (arg() [T::Comma])* arg()
+
+        rule arg() =
           [T::Underscore]
-          / (ident() [T::Comma])* ident()
+          / ident()
 
 
         rule tag() =
@@ -725,30 +728,33 @@ peg::parser!{
         rule apply_args() =
           type_annotation() type_annotation()*
 
+        rule _() =
+          ([T::SameIndent] / [T::OpenIndent])?
+
         // TODO write tests for precedence
         rule op_expr() = precedence!{ // lowest precedence
-            x:(@) [T::OpPizza] y:@ {}// |>
+            x:(@) _ [T::OpPizza] _ y:@ {}// |>
             --
-            x:(@) [T::OpAnd] y:@ {}
-            x:(@) [T::OpOr] y:@ {}
+            x:(@) _ [T::OpAnd] _ y:@ {}
+            x:(@) _ [T::OpOr] _ y:@ {}
             --
-            x:(@) [T::OpEquals] y:@ {}
-            x:(@) [T::OpNotEquals] y:@ {}
-            x:(@) [T::OpLessThan] y:@ {}
-            x:(@) [T::OpGreaterThan] y:@ {}
-            x:(@) [T::OpLessThanOrEq] y:@ {}
-            x:(@) [T::OpGreaterThanOrEq] y:@ {}
+            x:(@) _ [T::OpEquals] _ y:@ {}
+            x:(@) _ [T::OpNotEquals] _ y:@ {}
+            x:(@) _ [T::OpLessThan] _ y:@ {}
+            x:(@) _ [T::OpGreaterThan] _ y:@ {}
+            x:(@) _ [T::OpLessThanOrEq] _ y:@ {}
+            x:(@) _ [T::OpGreaterThanOrEq] _ y:@ {}
             --
-            x:(@) [T::OpPlus] y:@ {}
-            x:(@) [T::OpMinus] y:@ {}
+            x:(@) _ [T::OpPlus] _ y:@ {}
+            x:(@) _ [T::OpMinus] _ y:@ {}
             --
-            x:(@) [T::Asterisk] y:@ {}
-            x:(@) [T::OpSlash] y:@ {}
-            x:(@) [T::OpDoubleSlash] y:@ {}
-            x:(@) [T::OpPercent] y:@ {}
-            x:(@) [T::OpDoublePercent] y:@ {}
+            x:(@) _ [T::Asterisk] _ y:@ {}
+            x:(@) _ [T::OpSlash] _ y:@ {}
+            x:(@) _ [T::OpDoubleSlash] _ y:@ {}
+            x:(@) _ [T::OpPercent] _ y:@ {}
+            x:(@) _ [T::OpDoublePercent] _ y:@ {}
             --
-            x:@ [T::OpCaret] y:(@) {} // ^
+            x:@ _ [T::OpCaret] _ y:(@) {} // ^
             --
             [T::OpMinus] x:@ {}
             [T::Bang] x:@ {} // !
@@ -756,57 +762,36 @@ peg::parser!{
             expr() {}
         }  // highest precedence
 
-        rule unary_op() =
-          [T::OpMinus]
-          / [T::Bang]
-        rule unary_expr() =
-          unary_op()* expr()
-
-        rule mul_level_op() =
-          [T::Asterisk]
-          / [T::OpSlash] 
-        rule mul_level_expr() =
-          unary_expr() (mul_level_op() unary_expr())*
-
-        rule add_level_op() =
-          [T::OpPlus]
-          / [T::OpMinus]
-        rule add_level_expr() =
-          mul_level_expr() (add_level_op() mul_level_expr())*
-        
-        rule compare_op() =
-          [T::OpEquals] // ==
-          / [T::OpNotEquals]
-          / [T::OpLessThan]
-          / [T::OpGreaterThan]
-          / [T::OpLessThanOrEq]
-          / [T::OpGreaterThanOrEq]
-        rule compare_expr() =
-          add_level_expr() (compare_op() add_level_expr())?
-
-        rule bool_and_expr() =
-          compare_expr() ([T::OpAnd] compare_expr())*
-
-        rule bool_or_expr() =
-          bool_and_expr() ([T::OpOr] bool_and_expr())*
-
-        rule no_apply_bool_or_expr() =
-          no_apply_bool_and_expr() ([T::OpOr] no_apply_bool_and_expr())*
-
-        rule no_apply_bool_and_expr() =
-          no_apply_compare_expr() ([T::OpAnd] no_apply_compare_expr())*
-
-        rule no_apply_compare_expr() =
-          no_apply_add_level_expr() (compare_op() no_apply_add_level_expr())?
-
-        rule no_apply_add_level_expr() =
-          no_apply_mul_level_expr() (add_level_op() no_apply_mul_level_expr())*
-
-        rule no_apply_mul_level_expr() =
-          no_apply_unary_expr() (mul_level_op() no_apply_unary_expr())*
-
-        rule no_apply_unary_expr() =
-          unary_op()* no_apply_expr()
+        // TODO DRY?
+        rule no_apply_op_expr() = precedence!{ // lowest precedence
+          x:(@) _ [T::OpPizza] _ y:@ {}// |>
+          --
+          x:(@) _ [T::OpAnd] _ y:@ {}
+          x:(@) _ [T::OpOr] _ y:@ {}
+          --
+          x:(@) _ [T::OpEquals] _ y:@ {}
+          x:(@) _ [T::OpNotEquals] _ y:@ {}
+          x:(@) _ [T::OpLessThan] _ y:@ {}
+          x:(@) _ [T::OpGreaterThan] _ y:@ {}
+          x:(@) _ [T::OpLessThanOrEq] _ y:@ {}
+          x:(@) _ [T::OpGreaterThanOrEq] _ y:@ {}
+          --
+          x:(@) _ [T::OpPlus] _ y:@ {}
+          x:(@) _ [T::OpMinus] _ y:@ {}
+          --
+          x:(@) _ [T::Asterisk] _ y:@ {}
+          x:(@) _ [T::OpSlash] _ y:@ {}
+          x:(@) _ [T::OpDoubleSlash] _ y:@ {}
+          x:(@) _ [T::OpPercent] _ y:@ {}
+          x:(@) _ [T::OpDoublePercent] _ y:@ {}
+          --
+          x:@ _ [T::OpCaret] _ y:(@) {} // ^
+          --
+          [T::OpMinus] x:@ {}
+          [T::Bang] x:@ {} // !
+          --
+          no_apply_expr() {}
+      }  // highest precedence
 
         rule defs() =
           def()+ full_expr()
@@ -1145,8 +1130,8 @@ fn test_base64_test() {
 
 #[test]
 fn test_astar_test() {
-  let tokens = test_tokenize(&file_to_string("/home/anton/gitrepos/2roc/roc/examples/benchmarks/TestAStar.roc"));
-  
+  let tokens = test_tokenize(&example_path("benchmarks/TestAStar.roc"));
+  dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
@@ -1162,7 +1147,7 @@ fn test_pizza() {
   let tokens = test_tokenize(r#"closure = \_ ->
   Task.succeed {}
       |> Task.map (\_ -> x)"#);
-  dbg!(&tokens);
+  
   assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
 
