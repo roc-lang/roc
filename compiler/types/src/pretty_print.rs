@@ -318,8 +318,8 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
             match *symbol {
                 Symbol::NUM_NUM => {
                     let content = get_single_arg(subs, args);
-                    match content {
-                        &Alias(nested, args, _actual) => match nested {
+                    match *content {
+                        Alias(nested, args, _actual) => match nested {
                             Symbol::NUM_INTEGER => {
                                 write_integer(
                                     env,
@@ -361,9 +361,9 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                     let arg_var = subs[arg_var_index];
                     let content = subs.get_content_without_compacting(arg_var);
 
-                    match content {
-                        &Alias(Symbol::NUM_BINARY32, _, _) => buf.push_str("F32"),
-                        &Alias(Symbol::NUM_BINARY64, _, _) => buf.push_str("F64"),
+                    match *content {
+                        Alias(Symbol::NUM_BINARY32, _, _) => buf.push_str("F32"),
+                        Alias(Symbol::NUM_BINARY64, _, _) => buf.push_str("F64"),
                         _ => write_parens!(write_parens, buf, {
                             buf.push_str("Float ");
                             write_content(env, content, subs, buf, parens);

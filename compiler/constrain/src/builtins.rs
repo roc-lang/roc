@@ -338,10 +338,10 @@ impl TypedNumericBound for NumericBound<FloatWidth> {
 
 impl TypedNumericBound for NumericBound<NumWidth> {
     fn num_type(&self) -> Type {
-        match self {
-            &NumericBound::None { width_variable } => num_num(Type::Variable(width_variable)),
-            &NumericBound::Exact(NumWidth::Int(iw)) => NumericBound::Exact(iw).num_type(),
-            &NumericBound::Exact(NumWidth::Float(fw)) => NumericBound::Exact(fw).num_type(),
+        match *self {
+            NumericBound::None { width_variable } => num_num(Type::Variable(width_variable)),
+            NumericBound::Exact(NumWidth::Int(iw)) => NumericBound::Exact(iw).num_type(),
+            NumericBound::Exact(NumWidth::Float(fw)) => NumericBound::Exact(fw).num_type(),
         }
     }
 

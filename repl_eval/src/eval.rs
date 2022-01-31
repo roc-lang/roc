@@ -1043,7 +1043,7 @@ fn byte_to_ast<'a, M: AppMemory>(env: &Env<'a, '_, M>, value: u8, content: &Cont
                     if let TagName::Private(Symbol::NUM_AT_NUM) = &tag_name {
                         return Expr::Num(
                             env.arena.alloc_str(&value.to_string()),
-                            NumericBound::None,
+                            NumericBound::None { width_variable: () },
                         );
                     }
 
@@ -1198,7 +1198,10 @@ fn num_to_ast<'a, M: AppMemory>(
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
 fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_> {
-    Expr::Num(arena.alloc(format!("{}", num)), NumericBound::None)
+    Expr::Num(
+        arena.alloc(format!("{}", num)),
+        NumericBound::None { width_variable: () },
+    )
 }
 
 #[cfg(target_endian = "little")]

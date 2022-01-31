@@ -188,6 +188,17 @@ pub fn to_pattern2<'a>(
             ptype => unsupported_pattern(env, ptype, region),
         },
 
+        IntLiteral(string, _bound) => match pattern_type {
+            WhenBranch => match finish_parsing_int(string) {
+                Err(_error) => {
+                    let problem = MalformedPatternProblem::MalformedInt;
+                    malformed_pattern(env, problem, region)
+                }
+                Ok(int) => Pattern2::NumLiteral(env.var_store.fresh(), int),
+            },
+            ptype => unsupported_pattern(env, ptype, region),
+        },
+
         NumLiteral(string, _bound) => match pattern_type {
             WhenBranch => match finish_parsing_int(string) {
                 Err(_error) => {

@@ -515,20 +515,20 @@ fn numeric_negate_expression<'a, T>(
     let start = state.pos();
     let region = Region::new(start, expr.region.end());
 
-    let new_expr = match &expr.value {
-        &Expr::Num(string, bound) => {
+    let new_expr = match expr.value {
+        Expr::Num(string, bound) => {
             let new_string =
                 unsafe { std::str::from_utf8_unchecked(&state.bytes()[..string.len() + 1]) };
 
             Expr::Num(new_string, bound)
         }
-        &Expr::Float(string, bound) => {
+        Expr::Float(string, bound) => {
             let new_string =
                 unsafe { std::str::from_utf8_unchecked(&state.bytes()[..string.len() + 1]) };
 
             Expr::Float(new_string, bound)
         }
-        &Expr::NonBase10Int {
+        Expr::NonBase10Int {
             string,
             base,
             is_negative,

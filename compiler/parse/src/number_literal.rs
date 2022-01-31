@@ -79,7 +79,7 @@ macro_rules! parse_num_suffix {
     }
 }
 
-fn get_int_suffix<'a>(bytes: &'a [u8]) -> Option<(IntWidth, usize)> {
+fn get_int_suffix(bytes: &[u8]) -> Option<(IntWidth, usize)> {
     parse_num_suffix! {
         bytes,
         b"u8", IntWidth::U8
@@ -97,7 +97,7 @@ fn get_int_suffix<'a>(bytes: &'a [u8]) -> Option<(IntWidth, usize)> {
     None
 }
 
-fn get_float_suffix<'a>(bytes: &'a [u8]) -> Option<(FloatWidth, usize)> {
+fn get_float_suffix(bytes: &[u8]) -> Option<(FloatWidth, usize)> {
     parse_num_suffix! {
         bytes,
         b"dec", FloatWidth::Dec
@@ -107,7 +107,7 @@ fn get_float_suffix<'a>(bytes: &'a [u8]) -> Option<(FloatWidth, usize)> {
     None
 }
 
-fn get_num_suffix<'a>(bytes: &'a [u8]) -> Option<(NumWidth, usize)> {
+fn get_num_suffix(bytes: &[u8]) -> Option<(NumWidth, usize)> {
     (get_int_suffix(bytes).map(|(iw, l)| (NumWidth::Int(iw), l)))
         .or_else(|| get_float_suffix(bytes).map(|(fw, l)| (NumWidth::Float(fw), l)))
 }
@@ -205,6 +205,7 @@ fn chomp_number_dec<'a>(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn chomp_number<'a>(
     mut bytes: &'a [u8],
     state: State<'a>,

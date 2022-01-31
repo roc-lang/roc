@@ -30,6 +30,7 @@ impl<'a> Formattable for Expr<'a> {
             // These expressions never have newlines
             Float(..)
             | Num(..)
+            | Int(..)
             | NonBase10Int { .. }
             | Access(_, _)
             | AccessorFunction(_)
@@ -197,19 +198,27 @@ impl<'a> Formattable for Expr<'a> {
                     buf.push(')');
                 }
             }
-            Num(string, bound) => {
+            &Num(string, bound) => {
                 buf.indent(indent);
                 buf.push_str(string);
 
-                if let &NumericBound::Exact(width) = bound {
+                if let NumericBound::Exact(width) = bound {
                     buf.push_str(&width.to_string());
                 }
             }
-            Float(string, bound) => {
+            &Float(string, bound) => {
                 buf.indent(indent);
                 buf.push_str(string);
 
-                if let &NumericBound::Exact(width) = bound {
+                if let NumericBound::Exact(width) = bound {
+                    buf.push_str(&width.to_string());
+                }
+            }
+            &Int(string, bound) => {
+                buf.indent(indent);
+                buf.push_str(string);
+
+                if let NumericBound::Exact(width) = bound {
                     buf.push_str(&width.to_string());
                 }
             }
@@ -217,14 +226,14 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 buf.push_str(string)
             }
-            NonBase10Int {
+            &NonBase10Int {
                 base,
                 string,
                 is_negative,
                 bound,
             } => {
                 buf.indent(indent);
-                if *is_negative {
+                if is_negative {
                     buf.push('-');
                 }
 
@@ -237,7 +246,7 @@ impl<'a> Formattable for Expr<'a> {
 
                 buf.push_str(string);
 
-                if let &NumericBound::Exact(width) = bound {
+                if let NumericBound::Exact(width) = bound {
                     buf.push_str(&width.to_string());
                 }
             }

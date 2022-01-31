@@ -32,6 +32,7 @@ impl<'a> Formattable for Pattern<'a> {
             | Pattern::PrivateTag(_)
             | Pattern::Apply(_, _)
             | Pattern::NumLiteral(..)
+            | Pattern::IntLiteral(..)
             | Pattern::NonBase10Literal { .. }
             | Pattern::FloatLiteral(..)
             | Pattern::StrLiteral(_)
@@ -116,21 +117,28 @@ impl<'a> Formattable for Pattern<'a> {
                 loc_pattern.format(buf, indent);
             }
 
-            NumLiteral(string, bound) => {
+            &NumLiteral(string, bound) => {
                 buf.indent(indent);
                 buf.push_str(string);
-                if let &NumericBound::Exact(width) = bound {
+                if let NumericBound::Exact(width) = bound {
                     buf.push_str(&width.to_string());
                 }
             }
-            NonBase10Literal {
+            &IntLiteral(string, bound) => {
+                buf.indent(indent);
+                buf.push_str(string);
+                if let NumericBound::Exact(width) = bound {
+                    buf.push_str(&width.to_string());
+                }
+            }
+            &NonBase10Literal {
                 base,
                 string,
                 is_negative,
                 bound,
             } => {
                 buf.indent(indent);
-                if *is_negative {
+                if is_negative {
                     buf.push('-');
                 }
 
@@ -143,14 +151,14 @@ impl<'a> Formattable for Pattern<'a> {
 
                 buf.push_str(string);
 
-                if let &NumericBound::Exact(width) = bound {
+                if let NumericBound::Exact(width) = bound {
                     buf.push_str(&width.to_string());
                 }
             }
-            FloatLiteral(string, bound) => {
+            &FloatLiteral(string, bound) => {
                 buf.indent(indent);
                 buf.push_str(string);
-                if let &NumericBound::Exact(width) = bound {
+                if let NumericBound::Exact(width) = bound {
                     buf.push_str(&width.to_string());
                 }
             }

@@ -486,6 +486,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
         match *self {
             Expr::Float(a, bound) => Expr::Float(a, bound),
             Expr::Num(a, bound) => Expr::Num(a, bound),
+            Expr::Int(a, bound) => Expr::Int(a, bound),
             Expr::NonBase10Int {
                 string,
                 base,
@@ -584,6 +585,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
                 bound,
             },
             Pattern::FloatLiteral(a, bound) => Pattern::FloatLiteral(a, bound),
+            Pattern::IntLiteral(a, bound) => Pattern::IntLiteral(a, bound),
             Pattern::StrLiteral(a) => Pattern::StrLiteral(a),
             Pattern::Underscore(a) => Pattern::Underscore(a),
             Pattern::Malformed(a) => Pattern::Malformed(a),
