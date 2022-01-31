@@ -18,7 +18,9 @@ When(
             value: @27-28 SpaceBefore(
                 Num(
                     "1",
-                    None,
+                    None {
+                        width_variable: (),
+                    },
                 ),
                 [
                     Newline,
@@ -41,7 +43,9 @@ When(
             value: @47-48 SpaceBefore(
                 Num(
                     "2",
-                    None,
+                    None {
+                        width_variable: (),
+                    },
                 ),
                 [
                     Newline,
@@ -64,7 +68,9 @@ When(
             value: @68-69 SpaceBefore(
                 Num(
                     "3",
-                    None,
+                    None {
+                        width_variable: (),
+                    },
                 ),
                 [
                     Newline,

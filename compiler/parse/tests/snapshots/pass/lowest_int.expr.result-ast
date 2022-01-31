@@ -1,4 +1,6 @@
 Num(
     "-9223372036854775808",
-    None,
+    None {
+        width_variable: (),
+    },
 )

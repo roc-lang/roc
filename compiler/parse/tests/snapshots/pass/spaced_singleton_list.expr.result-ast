@@ -2,7 +2,9 @@ List(
     [
         @2-3 Num(
             "1",
-            None,
+            None {
+                width_variable: (),
+            },
         ),
     ],
 )

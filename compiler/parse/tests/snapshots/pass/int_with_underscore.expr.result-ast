@@ -1,4 +1,6 @@
 Num(
     "1__23",
-    None,
+    None {
+        width_variable: (),
+    },
 )

@@ -1,4 +1,6 @@
 Num(
     "-42",
-    None,
+    None {
+        width_variable: (),
+    },
 )

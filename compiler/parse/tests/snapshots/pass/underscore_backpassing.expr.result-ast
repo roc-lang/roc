@@ -21,7 +21,9 @@ SpaceBefore(
         @34-35 SpaceBefore(
             Num(
                 "4",
-                None,
+                None {
+                    width_variable: (),
+                },
             ),
             [
                 Newline,

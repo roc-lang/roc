@@ -1,4 +1,6 @@
 Float(
     "-1_23_456.0_1_23_456",
-    None,
+    None {
+        width_variable: (),
+    },
 )

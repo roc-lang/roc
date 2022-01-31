@@ -14,7 +14,9 @@ SpaceBefore(
                 ),
                 @29-30 Num(
                     "5",
-                    None,
+                    None {
+                        width_variable: (),
+                    },
                 ),
             ),
             @31-36 SpaceBefore(
@@ -24,7 +26,9 @@ SpaceBefore(
                     ),
                     @35-36 Num(
                         "6",
-                        None,
+                        None {
+                            width_variable: (),
+                        },
                     ),
                 ),
                 [
@@ -35,7 +39,9 @@ SpaceBefore(
         @38-40 SpaceBefore(
             Num(
                 "42",
-                None,
+                None {
+                    width_variable: (),
+                },
             ),
             [
                 Newline,

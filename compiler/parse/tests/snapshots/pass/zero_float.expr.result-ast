@@ -1,4 +1,6 @@
 Float(
     "0.0",
-    None,
+    None {
+        width_variable: (),
+    },
 )

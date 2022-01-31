@@ -9,7 +9,9 @@ If(
                 SpaceAfter(
                     Num(
                         "1",
-                        None,
+                        None {
+                            width_variable: (),
+                        },
                     ),
                     [
                         Newline,
@@ -29,7 +31,9 @@ If(
                 SpaceAfter(
                     Num(
                         "2",
-                        None,
+                        None {
+                            width_variable: (),
+                        },
                     ),
                     [
                         Newline,
@@ -44,7 +48,9 @@ If(
     @42-43 SpaceBefore(
         Num(
             "3",
-            None,
+            None {
+                width_variable: (),
+            },
         ),
         [
             Newline,

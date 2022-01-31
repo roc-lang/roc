@@ -43,7 +43,9 @@ Defs(
                         [],
                         @43-47 Float(
                             "3.14",
-                            None,
+                            None {
+                                width_variable: (),
+                            },
                         ),
                     ),
                 ],

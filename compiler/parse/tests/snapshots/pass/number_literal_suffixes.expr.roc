@@ -34,5 +34,4 @@
   i64Bin:  0b101i64,
   i128Bin: 0b101i128,
   natBin:  0b101nat,
-  decBin:  0b101dec,
 }

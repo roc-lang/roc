@@ -7,7 +7,9 @@ Defs(
             @8-9 SpaceBefore(
                 Num(
                     "5",
-                    None,
+                    None {
+                        width_variable: (),
+                    },
                 ),
                 [
                     Newline,
@@ -18,7 +20,9 @@ Defs(
     @11-13 SpaceBefore(
         Num(
             "42",
-            None,
+            None {
+                width_variable: (),
+            },
         ),
         [
             Newline,

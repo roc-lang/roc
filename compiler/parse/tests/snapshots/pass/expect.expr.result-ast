@@ -4,20 +4,26 @@ Expect(
             (
                 @7-8 Num(
                     "1",
-                    None,
+                    None {
+                        width_variable: (),
+                    },
                 ),
                 @9-11 Equals,
             ),
         ],
         @12-13 Num(
             "1",
-            None,
+            None {
+                width_variable: (),
+            },
         ),
     ),
     @15-16 SpaceBefore(
         Num(
             "4",
-            None,
+            None {
+                width_variable: (),
+            },
         ),
         [
             Newline,

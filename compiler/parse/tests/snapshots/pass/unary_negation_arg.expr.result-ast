@@ -6,7 +6,9 @@ Apply(
     [
         @6-8 Num(
             "12",
-            None,
+            None {
+                width_variable: (),
+            },
         ),
         @9-13 UnaryOp(
             @10-13 Var {

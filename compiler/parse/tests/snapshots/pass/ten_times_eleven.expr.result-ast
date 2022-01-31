@@ -3,13 +3,17 @@ BinOps(
         (
             @0-2 Num(
                 "10",
-                None,
+                None {
+                    width_variable: (),
+                },
             ),
             @2-3 Star,
         ),
     ],
     @3-5 Num(
         "11",
-        None,
+        None {
+            width_variable: (),
+        },
     ),
 )

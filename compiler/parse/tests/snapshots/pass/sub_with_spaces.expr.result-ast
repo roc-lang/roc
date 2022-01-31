@@ -3,13 +3,17 @@ BinOps(
         (
             @0-1 Num(
                 "1",
-                None,
+                None {
+                    width_variable: (),
+                },
             ),
             @3-4 Minus,
         ),
     ],
     @7-8 Num(
         "2",
-        None,
+        None {
+            width_variable: (),
+        },
     ),
 )

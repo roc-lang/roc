@@ -6,14 +6,18 @@ Defs(
             ),
             @5-6 Num(
                 "5",
-                None,
+                None {
+                    width_variable: (),
+                },
             ),
         ),
     ],
     @8-10 SpaceBefore(
         Num(
             "42",
-            None,
+            None {
+                width_variable: (),
+            },
         ),
         [
             Newline,
