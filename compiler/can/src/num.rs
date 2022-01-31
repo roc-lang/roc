@@ -1,15 +1,25 @@
 use crate::env::Env;
 use crate::expr::Expr;
+use roc_module::numeric::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use roc_parse::ast::Base;
-use roc_parse::ast::FloatWidth;
-use roc_parse::ast::NumWidth;
-use roc_parse::ast::NumericBound;
 use roc_problem::can::Problem;
 use roc_problem::can::RuntimeError::*;
 use roc_problem::can::{FloatErrorKind, IntErrorKind};
 use roc_region::all::Region;
-use roc_types::subs::VarStore;
+use roc_types::subs::{VarStore, Variable};
 use std::i64;
+
+pub fn reify_numeric_bound<W: Copy>(
+    var_store: &mut VarStore,
+    bound: NumericBound<W, ()>,
+) -> NumericBound<W, Variable> {
+    match bound {
+        NumericBound::None { width_variable: () } => NumericBound::None {
+            width_variable: var_store.fresh(),
+        },
+        NumericBound::Exact(width) => NumericBound::Exact(width),
+    }
+}
 
 // TODO use rust's integer parsing again
 //
@@ -21,11 +31,16 @@ pub fn num_expr_from_result(
     var_store: &mut VarStore,
     result: Result<(&str, i64), (&str, IntErrorKind)>,
     region: Region,
-    bound: NumericBound<NumWidth>,
+    bound: NumericBound<NumWidth, ()>,
     env: &mut Env,
 ) -> Expr {
     match result {
-        Ok((str, num)) => Expr::Num(var_store.fresh(), (*str).into(), num, bound),
+        Ok((str, num)) => Expr::Num(
+            var_store.fresh(),
+            (*str).into(),
+            num,
+            reify_numeric_bound(var_store, bound),
+        ),
         Err((raw, error)) => {
             // (Num *) compiles to Int if it doesn't
             // get specialized to something else first,
@@ -45,7 +60,7 @@ pub fn int_expr_from_result(
     result: Result<(&str, i128), (&str, IntErrorKind)>,
     region: Region,
     base: Base,
-    bound: NumericBound<NumWidth>,
+    bound: NumericBound<IntWidth, ()>,
     env: &mut Env,
 ) -> Expr {
     // Int stores a variable to generate better error messages
@@ -55,7 +70,7 @@ pub fn int_expr_from_result(
             var_store.fresh(),
             (*str).into(),
             int,
-            bound,
+            reify_numeric_bound(var_store, bound),
         ),
         Err((raw, error)) => {
             let runtime_error = InvalidInt(error, base, region, raw.into());
@@ -72,7 +87,7 @@ pub fn float_expr_from_result(
     var_store: &mut VarStore,
     result: Result<(&str, f64), (&str, FloatErrorKind)>,
     region: Region,
-    bound: NumericBound<FloatWidth>,
+    bound: NumericBound<FloatWidth, ()>,
     env: &mut Env,
 ) -> Expr {
     // Float stores a variable to generate better error messages
@@ -82,7 +97,7 @@ pub fn float_expr_from_result(
             var_store.fresh(),
             (*str).into(),
             float,
-            bound,
+            reify_numeric_bound(var_store, bound),
         ),
         Err((raw, error)) => {
             let runtime_error = InvalidFloat(error, region, raw.into());
@@ -99,6 +114,13 @@ pub fn finish_parsing_int(raw: &str) -> Result<i64, (&str, IntErrorKind)> {
     // Ignore underscores.
     let radix = 10;
     from_str_radix::<i64>(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e.kind))
+}
+
+#[inline(always)]
+pub fn finish_parsing_int128(raw: &str) -> Result<i128, (&str, IntErrorKind)> {
+    // Ignore underscores.
+    let radix = 10;
+    from_str_radix::<i128>(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e.kind))
 }
 
 #[inline(always)]
@@ -178,9 +200,9 @@ macro_rules! doit {
         }
     })*)
 }
-// We only need the i64 implementation, but libcore defines
+// We only need the i64 and i128 implementations, but libcore defines
 // doit! { i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize }
-doit! { i64 }
+doit! { i64 i128 }
 
 fn from_str_radix<T: FromStrRadixHelper>(src: &str, radix: u32) -> Result<T, ParseIntError> {
     use self::IntErrorKind::*;

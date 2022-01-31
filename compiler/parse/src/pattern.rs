@@ -140,6 +140,7 @@ fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
             match literal {
                 Num(s, bound) => Pattern::NumLiteral(s, bound),
                 Float(s, bound) => Pattern::FloatLiteral(s, bound),
+                Int(s, bound) => Pattern::IntLiteral(s, bound),
                 NonBase10Int {
                     string,
                     base,

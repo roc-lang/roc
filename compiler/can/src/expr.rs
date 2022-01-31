@@ -3,8 +3,8 @@ use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
-    finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
-    int_expr_from_result, num_expr_from_result,
+    finish_parsing_base, finish_parsing_float, finish_parsing_int, finish_parsing_int128,
+    float_expr_from_result, int_expr_from_result, num_expr_from_result,
 };
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
@@ -13,8 +13,9 @@ use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
+use roc_module::numeric::{FloatWidth, IntWidth, NumWidth};
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, EscapedChar, FloatWidth, NumWidth, NumericBound, StrLiteral};
+use roc_parse::ast::{self, Base, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -46,6 +47,8 @@ impl Output {
     }
 }
 
+pub type NumericBound<NumWidth> = roc_module::numeric::NumericBound<NumWidth, Variable>;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
@@ -55,7 +58,7 @@ pub enum Expr {
     Num(Variable, Box<str>, i64, NumericBound<NumWidth>),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, Variable, Box<str>, i128, NumericBound<NumWidth>),
+    Int(Variable, Variable, Box<str>, i128, NumericBound<IntWidth>),
     Float(Variable, Variable, Box<str>, f64, NumericBound<FloatWidth>),
     Str(Box<str>),
     List {
@@ -816,6 +819,18 @@ pub fn canonicalize_expr<'a>(
                 }
                 Err(e) => int_expr_from_result(var_store, Err(e), region, base, bound, env),
             };
+
+            (answer, Output::default())
+        }
+        &ast::Expr::Int(str, bound) => {
+            let answer = int_expr_from_result(
+                var_store,
+                finish_parsing_int128(str).map(|f| (str, f)),
+                region,
+                Base::Decimal,
+                bound,
+                env,
+            );
 
             (answer, Output::default())
         }

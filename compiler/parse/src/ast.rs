@@ -1,10 +1,11 @@
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 
 use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PlatformHeader};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
+use roc_module::numeric::{FloatWidth, IntWidth, NumWidth};
 use roc_region::all::{Loc, Position, Region};
 
 #[derive(Debug)]
@@ -126,70 +127,6 @@ pub enum StrLiteral<'a> {
     Block(&'a [&'a [StrSegment<'a>]]),
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum NumWidth {
-    U8,
-    U16,
-    U32,
-    U64,
-    U128,
-    I8,
-    I16,
-    I32,
-    I64,
-    I128,
-    Nat,
-    Dec,
-}
-
-impl Display for NumWidth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use NumWidth::*;
-        f.write_str(match self {
-            U8 => "u8",
-            U16 => "u16",
-            U32 => "u32",
-            U64 => "u64",
-            U128 => "u128",
-            I8 => "i8",
-            I16 => "i16",
-            I32 => "i32",
-            I64 => "i64",
-            I128 => "i128",
-            Nat => "nat",
-            Dec => "dec",
-        })
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum FloatWidth {
-    F32,
-    F64,
-}
-
-impl Display for FloatWidth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use FloatWidth::*;
-        f.write_str(match self {
-            F32 => "f32",
-            F64 => "f64",
-        })
-    }
-}
-
-/// Describes a bound on the width of a numeric literal.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum NumericBound<W>
-where
-    W: Copy,
-{
-    /// There is no bound on the width.
-    None,
-    /// Must have exactly the width `W`.
-    Exact(W),
-}
-
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -204,11 +141,12 @@ pub enum Expr<'a> {
     // Number Literals
     Float(&'a str, NumericBound<FloatWidth>),
     Num(&'a str, NumericBound<NumWidth>),
+    Int(&'a str, NumericBound<IntWidth>),
     NonBase10Int {
         string: &'a str,
         base: Base,
         is_negative: bool,
-        bound: NumericBound<NumWidth>,
+        bound: NumericBound<IntWidth>,
     },
 
     // String Literals
@@ -473,6 +411,9 @@ impl<'a> CommentOrNewline<'a> {
     }
 }
 
+/// A `NumericBound` with the unit type as a placeholder width variable.
+pub type NumericBound<W> = roc_module::numeric::NumericBound<W, ()>;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
@@ -501,9 +442,10 @@ pub enum Pattern<'a> {
         string: &'a str,
         base: Base,
         is_negative: bool,
-        bound: NumericBound<NumWidth>,
+        bound: NumericBound<IntWidth>,
     },
     FloatLiteral(&'a str, NumericBound<FloatWidth>),
+    IntLiteral(&'a str, NumericBound<IntWidth>),
     StrLiteral(StrLiteral<'a>),
     Underscore(&'a str),
 

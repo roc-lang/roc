@@ -1,14 +1,18 @@
 use crate::env::Env;
-use crate::expr::{canonicalize_expr, unescape_char, Expr, Output};
-use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use crate::expr::{canonicalize_expr, unescape_char, Expr, NumericBound, Output};
+use crate::num::{
+    finish_parsing_base, finish_parsing_float, finish_parsing_int, reify_numeric_bound,
+};
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::numeric::{FloatWidth, IntWidth, NumWidth};
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, FloatWidth, NumWidth, NumericBound, StrLiteral, StrSegment};
+use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
+
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 #[derive(Clone, Debug, PartialEq)]
@@ -25,7 +29,7 @@ pub enum Pattern {
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
     },
-    IntLiteral(Variable, Box<str>, i64, NumericBound<NumWidth>),
+    IntLiteral(Variable, Box<str>, i64, NumericBound<IntWidth>),
     NumLiteral(Variable, Box<str>, i64, NumericBound<NumWidth>),
     FloatLiteral(Variable, Box<str>, f64, NumericBound<FloatWidth>),
     StrLiteral(Box<str>),
@@ -190,7 +194,12 @@ pub fn canonicalize_pattern<'a>(
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(float) => Pattern::FloatLiteral(var_store.fresh(), (str).into(), float, bound),
+                Ok(float) => Pattern::FloatLiteral(
+                    var_store.fresh(),
+                    (str).into(),
+                    float,
+                    reify_numeric_bound(var_store, bound),
+                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -206,7 +215,12 @@ pub fn canonicalize_pattern<'a>(
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => Pattern::NumLiteral(var_store.fresh(), (str).into(), int, bound),
+                Ok(int) => Pattern::NumLiteral(
+                    var_store.fresh(),
+                    (str).into(),
+                    int,
+                    reify_numeric_bound(var_store, bound),
+                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -226,8 +240,29 @@ pub fn canonicalize_pattern<'a>(
                     let sign_str = if is_negative { "-" } else { "" };
                     let int_str = format!("{}{}", sign_str, int.to_string()).into_boxed_str();
                     let i = if is_negative { -int } else { int };
-                    Pattern::IntLiteral(var_store.fresh(), int_str, i, bound)
+                    Pattern::IntLiteral(
+                        var_store.fresh(),
+                        int_str,
+                        i,
+                        reify_numeric_bound(var_store, bound),
+                    )
                 }
+            },
+            ptype => unsupported_pattern(env, ptype, region),
+        },
+
+        &IntLiteral(str, bound) => match pattern_type {
+            WhenBranch => match finish_parsing_int(str) {
+                Err(_error) => {
+                    let problem = MalformedPatternProblem::MalformedInt;
+                    malformed_pattern(env, problem, region)
+                }
+                Ok(int) => Pattern::IntLiteral(
+                    var_store.fresh(),
+                    str.into(),
+                    int,
+                    reify_numeric_bound(var_store, bound),
+                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },

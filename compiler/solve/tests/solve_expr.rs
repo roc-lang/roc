@@ -5044,4 +5044,52 @@ mod solve_expr {
             "[ Email Str ] -> Bool",
         )
     }
+
+    #[test]
+    fn numeric_literal_suffixes() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                {
+                    u8:   123u8,
+                    u16:  123u16,
+                    u32:  123u32,
+                    u64:  123u64,
+                    u128: 123u128,
+
+                    i8:   123i8,
+                    i16:  123i16,
+                    i32:  123i32,
+                    i64:  123i64,
+                    i128: 123i128,
+
+                    nat:  123nat,
+
+                    bu8:   0b11u8,
+                    bu16:  0b11u16,
+                    bu32:  0b11u32,
+                    bu64:  0b11u64,
+                    bu128: 0b11u128,
+
+                    bi8:   0b11i8,
+                    bi16:  0b11i16,
+                    bi32:  0b11i32,
+                    bi64:  0b11i64,
+                    bi128: 0b11i128,
+
+                    bnat:  0b11nat,
+
+                    dec:  123.0dec,
+                    f32:  123.0f32,
+                    f64:  123.0f64,
+
+                    fdec: 123dec,
+                    ff32: 123f32,
+                    ff64: 123f64,
+                }
+                "#
+            ),
+            r#"{ bi128 : I128, bi16 : I16, bi32 : I32, bi64 : I64, bi8 : I8, bnat : Nat, bu128 : U128, bu16 : U16, bu32 : U32, bu64 : U64, bu8 : U8, dec : Dec, f32 : F32, f64 : F64, fdec : Dec, ff32 : F32, ff64 : F64, i128 : I128, i16 : I16, i32 : I32, i64 : I64, i8 : I8, nat : Nat, u128 : U128, u16 : U16, u32 : U32, u64 : U64, u8 : U8 }"#,
+        )
+    }
 }

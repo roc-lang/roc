@@ -1730,14 +1730,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── INVALID NUMBER LITERAL ──────────────────────────────────────────────────────
 
-                This integer pattern is malformed:
+                This number literal is malformed:
 
                 2│      100A -> 3
-                        ^^^^
-
-                Tip: Learn more about number literals at TODO
+                        ^
                 "#
             ),
         )
@@ -1755,14 +1753,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── INVALID NUMBER LITERAL ──────────────────────────────────────────────────────
 
-                This float pattern is malformed:
+                This number literal is malformed:
 
                 2│      2.X -> 3
-                        ^^^
-
-                Tip: Learn more about number literals at TODO
+                        ^
                 "#
             ),
         )
@@ -1780,14 +1776,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── INVALID NUMBER LITERAL ──────────────────────────────────────────────────────
 
-                This hex integer pattern is malformed:
+                This number literal is malformed:
 
                 2│      0xZ -> 3
-                        ^^^
-
-                Tip: Learn more about number literals at TODO
+                        ^
                 "#
             ),
         )
@@ -3539,50 +3533,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── INVALID NUMBER LITERAL ──────────────────────────────────────────────────────
 
-                This integer literal contains an invalid digit:
+                This number literal is malformed:
 
                 1│  dec = 100A
-                          ^^^^
-
-                Integer literals can only contain the digits 0-9.
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-
-                This hex integer literal contains an invalid digit:
-
-                3│  hex = 0xZZZ
-                          ^^^^^
-
-                Hexadecimal (base-16) integer literals can only contain the digits
-                0-9, a-f and A-F.
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-
-                This octal integer literal contains an invalid digit:
-
-                5│  oct = 0o9
-                          ^^^
-
-                Octal (base-8) integer literals can only contain the digits 0-7.
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-
-                This binary integer literal contains an invalid digit:
-
-                7│  bin = 0b2
-                          ^^^
-
-                Binary (base-2) integer literals can only contain the digits 0 and 1.
-
-                Tip: Learn more about number literals at TODO
+                          ^
                 "#
             ),
         )
@@ -3658,17 +3614,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── INVALID NUMBER LITERAL ──────────────────────────────────────────────────────
 
-                This float literal contains an invalid digit:
+                This number literal is malformed:
 
                 1│  x = 3.0A
-                        ^^^^
-
-                Floating point literals can only contain the digits 0-9, or use
-                scientific notation 10e4
-
-                Tip: Learn more about number literals at TODO
+                        ^
                 "#
             ),
         )
@@ -7303,5 +7254,66 @@ I need all branches in an `if` to have the same type!
                 "#
             ),
         )
+    }
+
+    macro_rules! mismatched_suffix_tests {
+        ($($number:expr, $suffix:expr, $name:ident)*) => {$(
+            #[test]
+            fn $name() {
+                let number = $number.to_string();
+                let mut typ = $suffix.to_string();
+                typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
+                let carets = "^".repeat(number.len() + $suffix.len());
+                let kind = match $suffix {
+                    "dec"|"f32"|"f64" => "a float",
+                    _ => "an integer",
+                };
+
+                report_problem_as(
+                    &format!(indoc!(
+                        r#"
+                        use : {} -> U8
+                        use {}{}
+                        "#
+                    ), bad_type, number, $suffix),
+                    &format!(indoc!(
+                        r#"
+                        ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                        The 1st argument to `use` is not what I expect:
+
+                        2│  use {}{}
+                                {}
+
+                        This argument is {} of type:
+
+                            {}
+
+                        But `use` needs the 1st argument to be:
+
+                            {}
+                        "#
+                    ), number, $suffix, carets, kind, typ, bad_type),
+                )
+            }
+        )*}
+    }
+
+    mismatched_suffix_tests! {
+        1, "u8",   mismatched_suffix_u8
+        1, "u16",  mismatched_suffix_u16
+        1, "u32",  mismatched_suffix_u32
+        1, "u64",  mismatched_suffix_u64
+        1, "u128", mismatched_suffix_u128
+        1, "i8",   mismatched_suffix_i8
+        1, "i16",  mismatched_suffix_i16
+        1, "i32",  mismatched_suffix_i32
+        1, "i64",  mismatched_suffix_i64
+        1, "i128", mismatched_suffix_i128
+        1, "nat",  mismatched_suffix_nat
+        1, "dec",  mismatched_suffix_dec
+        1, "f32",  mismatched_suffix_f32
+        1, "f64",  mismatched_suffix_f64
     }
 }
