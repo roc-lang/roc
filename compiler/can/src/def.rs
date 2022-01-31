@@ -1648,7 +1648,7 @@ fn correct_mutual_recursive_type_alias<'a>(
 
                         let _made_recursive = make_tag_union_recursive(
                             env,
-                            Loc::at(alias.header_region(), (*rec, &alias_args)),
+                            Loc::at(alias.header_region(), (*rec, alias_args)),
                             alias.region,
                             others,
                             &mut alias.typ,
@@ -1726,7 +1726,7 @@ fn make_tag_union_recursive<'a>(
             ..
         } => make_tag_union_recursive(
             env,
-            Loc::at_zero((symbol, &type_arguments)),
+            Loc::at_zero((symbol, type_arguments)),
             region,
             others,
             actual,
