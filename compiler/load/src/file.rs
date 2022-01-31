@@ -1217,6 +1217,10 @@ impl<'a> LoadStart<'a> {
                     let buf = to_parse_problem_report(problem, module_ids, root_exposed_ident_ids);
                     return Err(LoadingProblem::FormattedReport(buf));
                 }
+                Err(LoadingProblem::FileProblem { filename, error }) => {
+                    let buf = to_file_problem_report(&filename, error);
+                    return Err(LoadingProblem::FormattedReport(buf));
+                }
                 Err(e) => return Err(e),
             }
         };
@@ -1367,7 +1371,7 @@ where
 
     // We need to allocate worker *queues* on the main thread and then move them
     // into the worker threads, because those workers' stealers need to be
-    // shared bet,een all threads, and this coordination work is much easier
+    // shared between all threads, and this coordination work is much easier
     // on the main thread.
     let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
     let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
@@ -1745,7 +1749,7 @@ fn update<'a>(
                 state.module_cache.module_names.insert(*id, name.clone());
             }
 
-            // This was a dependency. Write it down and keep processing messaages.
+            // This was a dependency. Write it down and keep processing messages.
             let mut exposed_symbols: MutSet<Symbol> =
                 HashSet::with_capacity_and_hasher(header.exposes.len(), default_hasher());
 
@@ -2645,7 +2649,10 @@ fn parse_header<'a>(
                                 Msg::Many(vec![app_module_header_msg, load_pkg_config_msg]),
                             ))
                         } else {
-                            Ok((module_id, app_module_header_msg))
+                            Err(LoadingProblem::FileProblem {
+                                filename: pkg_config_roc,
+                                error: io::ErrorKind::NotFound,
+                            })
                         }
                     } else {
                         panic!("could not find base")

@@ -206,7 +206,7 @@ impl<'a> EdModule<'a> {
 pub mod test_ed_model {
     use crate::editor::ed_error::EdResult;
     use crate::editor::mvc::ed_model;
-    use crate::editor::resources::strings::HELLO_WORLD;
+    use crate::editor::resources::strings::{HELLO_WORLD, PLATFORM_STR};
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::caret_w_select::CaretPos;
@@ -222,6 +222,7 @@ pub mod test_ed_model {
     use roc_module::symbol::IdentIds;
     use roc_module::symbol::ModuleIds;
     use roc_types::subs::VarStore;
+    use std::fs;
     use std::fs::File;
     use std::io::Write;
     use std::path::Path;
@@ -290,6 +291,15 @@ pub mod test_ed_model {
         *clean_code_str = full_code.join("\n");
 
         let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
+
+        let platform_dir = temp_dir.path().join("platform");
+        fs::create_dir(platform_dir.clone()).expect("Failed to create platform directory");
+        let package_config_path = platform_dir.join("Package-Config.roc");
+        let mut package_config_file =
+            File::create(package_config_path).expect("Failed to create Package-Config.roc");
+        writeln!(package_config_file, "{}", PLATFORM_STR)
+            .expect("Failed to write to Package-Config.roc");
+
         let temp_file_path_buf =
             PathBuf::from([Uuid::new_v4().to_string(), ".roc".to_string()].join(""));
         let temp_file_full_path = temp_dir.path().join(temp_file_path_buf);
