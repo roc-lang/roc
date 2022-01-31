@@ -1,3 +1,7 @@
+use roc_error_macros::internal_error;
+
+use super::serialize::{parse_u32_or_panic, SkipBytes};
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpCode {
@@ -179,4 +183,123 @@ pub enum OpCode {
     I64REINTERPRETF64 = 0xbd,
     F32REINTERPRETI32 = 0xbe,
     F64REINTERPRETI64 = 0xbf,
+}
+
+/// The format of the *immediate* operands of an operator
+/// Immediates appear directly in the byte stream after the opcode,
+/// rather than being popped off the value stack. These are the possible forms.
+enum OpImmediates {
+    NoImmediate,
+    Byte1,
+    Bytes4,
+    Bytes8,
+    Leb32x1,
+    Leb64x1,
+    Leb32x2,
+    BrTable,
+}
+
+impl From<OpCode> for OpImmediates {
+    fn from(op: OpCode) -> Self {
+        use OpCode::*;
+        use OpImmediates::*;
+
+        match op {
+            UNREACHABLE => NoImmediate,
+            NOP => NoImmediate,
+            BLOCK | LOOP | IF => Byte1,
+            ELSE => NoImmediate,
+            END => NoImmediate,
+            BR | BRIF => Leb32x1,
+            BRTABLE => BrTable,
+            RETURN => NoImmediate,
+            CALL => Leb32x1,
+            CALLINDIRECT => Leb32x2,
+            DROP => NoImmediate,
+            SELECT => NoImmediate,
+            GETLOCAL | SETLOCAL | TEELOCAL => Leb32x1,
+            GETGLOBAL | SETGLOBAL => Leb32x1,
+
+            I32LOAD | I64LOAD | F32LOAD | F64LOAD | I32LOAD8S | I32LOAD8U | I32LOAD16S
+            | I32LOAD16U | I64LOAD8S | I64LOAD8U | I64LOAD16S | I64LOAD16U | I64LOAD32S
+            | I64LOAD32U | I32STORE | I64STORE | F32STORE | F64STORE | I32STORE8 | I32STORE16
+            | I64STORE8 | I64STORE16 | I64STORE32 => Leb32x2,
+
+            CURRENTMEMORY | GROWMEMORY => Byte1,
+
+            I32CONST => Leb32x1,
+            I64CONST => Leb64x1,
+            F32CONST => Bytes4,
+            F64CONST => Bytes8,
+
+            I32EQZ | I32EQ | I32NE | I32LTS | I32LTU | I32GTS | I32GTU | I32LES | I32LEU
+            | I32GES | I32GEU | I64EQZ | I64EQ | I64NE | I64LTS | I64LTU | I64GTS | I64GTU
+            | I64LES | I64LEU | I64GES | I64GEU | F32EQ | F32NE | F32LT | F32GT | F32LE | F32GE
+            | F64EQ | F64NE | F64LT | F64GT | F64LE | F64GE | I32CLZ | I32CTZ | I32POPCNT
+            | I32ADD | I32SUB | I32MUL | I32DIVS | I32DIVU | I32REMS | I32REMU | I32AND | I32OR
+            | I32XOR | I32SHL | I32SHRS | I32SHRU | I32ROTL | I32ROTR | I64CLZ | I64CTZ
+            | I64POPCNT | I64ADD | I64SUB | I64MUL | I64DIVS | I64DIVU | I64REMS | I64REMU
+            | I64AND | I64OR | I64XOR | I64SHL | I64SHRS | I64SHRU | I64ROTL | I64ROTR | F32ABS
+            | F32NEG | F32CEIL | F32FLOOR | F32TRUNC | F32NEAREST | F32SQRT | F32ADD | F32SUB
+            | F32MUL | F32DIV | F32MIN | F32MAX | F32COPYSIGN | F64ABS | F64NEG | F64CEIL
+            | F64FLOOR | F64TRUNC | F64NEAREST | F64SQRT | F64ADD | F64SUB | F64MUL | F64DIV
+            | F64MIN | F64MAX | F64COPYSIGN | I32WRAPI64 | I32TRUNCSF32 | I32TRUNCUF32
+            | I32TRUNCSF64 | I32TRUNCUF64 | I64EXTENDSI32 | I64EXTENDUI32 | I64TRUNCSF32
+            | I64TRUNCUF32 | I64TRUNCSF64 | I64TRUNCUF64 | F32CONVERTSI32 | F32CONVERTUI32
+            | F32CONVERTSI64 | F32CONVERTUI64 | F32DEMOTEF64 | F64CONVERTSI32 | F64CONVERTUI32
+            | F64CONVERTSI64 | F64CONVERTUI64 | F64PROMOTEF32 | I32REINTERPRETF32
+            | I64REINTERPRETF64 | F32REINTERPRETI32 | F64REINTERPRETI64 => NoImmediate,
+
+            // Catch-all in case of an invalid cast from u8 to OpCode while parsing binary
+            // (rustc keeps this code, I verified in Compiler Explorer)
+            #[allow(unreachable_patterns)]
+            _ => internal_error!("Unknown Wasm instruction 0x{:02x}", op as u8),
+        }
+    }
+}
+
+impl SkipBytes for OpCode {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        use OpImmediates::*;
+
+        let opcode_byte: u8 = bytes[*cursor];
+
+        let opcode: OpCode = unsafe { std::mem::transmute(opcode_byte) };
+        let immediates = OpImmediates::from(opcode); // will panic if transmute was invalid
+
+        match immediates {
+            NoImmediate => {
+                *cursor += 1;
+            }
+            Byte1 => {
+                *cursor += 1 + 1;
+            }
+            Bytes4 => {
+                *cursor += 1 + 4;
+            }
+            Bytes8 => {
+                *cursor += 1 + 8;
+            }
+            Leb32x1 => {
+                *cursor += 1;
+                u32::skip_bytes(bytes, cursor);
+            }
+            Leb64x1 => {
+                *cursor += 1;
+                u64::skip_bytes(bytes, cursor);
+            }
+            Leb32x2 => {
+                *cursor += 1;
+                u32::skip_bytes(bytes, cursor);
+                u32::skip_bytes(bytes, cursor);
+            }
+            BrTable => {
+                *cursor += 1;
+                let n_labels = 1 + parse_u32_or_panic(bytes, cursor);
+                for _ in 0..n_labels {
+                    u32::skip_bytes(bytes, cursor);
+                }
+            }
+        }
+    }
 }

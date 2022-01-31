@@ -1,9 +1,11 @@
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
+use roc_region::all::LineInfo;
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
 
 pub fn mono_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     problem: roc_mono::ir::MonoProblem,
 ) -> Report<'b> {
@@ -16,7 +18,7 @@ pub fn mono_problem<'b>(
             BadArg => {
                 let doc = alloc.stack(vec![
                     alloc.reflow("This pattern does not cover all the possibilities:"),
-                    alloc.region(region),
+                    alloc.region(lines.convert_region(region)),
                     alloc.reflow("Other possibilities include:"),
                     unhandled_patterns_to_doc_block(alloc, missing),
                     alloc.concat(vec![
@@ -39,7 +41,7 @@ pub fn mono_problem<'b>(
             BadDestruct => {
                 let doc = alloc.stack(vec![
                     alloc.reflow("This pattern does not cover all the possibilities:"),
-                    alloc.region(region),
+                    alloc.region(lines.convert_region(region)),
                     alloc.reflow("Other possibilities include:"),
                     unhandled_patterns_to_doc_block(alloc, missing),
                     alloc.concat(vec![
@@ -67,7 +69,7 @@ pub fn mono_problem<'b>(
                         alloc.keyword("when"),
                         alloc.reflow(" does not cover all the possibilities:"),
                     ]),
-                    alloc.region(region),
+                    alloc.region(lines.convert_region(region)),
                     alloc.reflow("Other possibilities include:"),
                     unhandled_patterns_to_doc_block(alloc, missing),
                     alloc.reflow(
@@ -96,7 +98,10 @@ pub fn mono_problem<'b>(
                     alloc.string(index.ordinal()),
                     alloc.reflow(" pattern is redundant:"),
                 ]),
-                alloc.region_with_subregion(overall_region, branch_region),
+                alloc.region_with_subregion(
+                    lines.convert_region(overall_region),
+                    lines.convert_region(branch_region),
+                ),
                 alloc.reflow(
                     "Any value of this shape will be handled by \
                 a previous pattern, so this one should be removed.",

@@ -12,7 +12,7 @@ use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
 
@@ -43,7 +43,7 @@ pub struct ModuleOutput {
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a, F>(
     arena: &Bump,
-    loc_defs: &'a [Located<ast::Def<'a>>],
+    loc_defs: &'a [Loc<ast::Def<'a>>],
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
@@ -76,7 +76,7 @@ where
         bumpalo::collections::Vec::with_capacity_in(loc_defs.len() + num_deps, arena);
 
     for loc_def in loc_defs.iter() {
-        desugared.push(&*arena.alloc(Located {
+        desugared.push(&*arena.alloc(Loc {
             value: desugar_def(arena, &loc_def.value),
             region: loc_def.region,
         }));
@@ -124,7 +124,11 @@ where
             // This is a type alias
 
             // the symbol should already be added to the scope when this module is canonicalized
-            debug_assert!(scope.contains_alias(symbol));
+            debug_assert!(
+                scope.contains_alias(symbol),
+                "apparently, {:?} is not actually a type alias",
+                symbol
+            );
 
             // but now we know this symbol by a different identifier, so we still need to add it to
             // the scope
@@ -180,6 +184,17 @@ where
     for symbol in env.qualified_lookups.iter() {
         references.insert(*symbol);
     }
+
+    // add any builtins used by other builtins
+    let transitive_builtins: Vec<Symbol> = references
+        .iter()
+        .filter(|s| s.is_builtin())
+        .map(|s| crate::builtins::builtin_dependencies(*s))
+        .flatten()
+        .copied()
+        .collect();
+
+    references.extend(transitive_builtins);
 
     // NOTE previously we inserted builtin defs into the list of defs here
     // this is now done later, in file.rs.
@@ -263,8 +278,8 @@ where
 
                 let runtime_error = RuntimeError::ExposedButNotDefined(symbol);
                 let def = Def {
-                    loc_pattern: Located::new(0, 0, 0, 0, Pattern::Identifier(symbol)),
-                    loc_expr: Located::new(0, 0, 0, 0, Expr::RuntimeError(runtime_error)),
+                    loc_pattern: Loc::at(Region::zero(), Pattern::Identifier(symbol)),
+                    loc_expr: Loc::at(Region::zero(), Expr::RuntimeError(runtime_error)),
                     expr_var: var_store.fresh(),
                     pattern_vars,
                     annotation: None,
@@ -387,7 +402,7 @@ fn fix_values_captured_in_closure_pattern(
         | FloatLiteral(_, _, _)
         | StrLiteral(_)
         | Underscore
-        | Shadowed(_, _)
+        | Shadowed(..)
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => (),
     }

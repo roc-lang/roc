@@ -1,24 +1,24 @@
 SpaceBefore(
     Backpassing(
         [
-            |L 1-1, C 0-1| Identifier(
+            @18-19 Identifier(
                 "x",
             ),
         ],
-        |L 1-1, C 5-14| ParensAround(
+        @23-32 ParensAround(
             Closure(
                 [
-                    |L 1-1, C 7-8| Identifier(
+                    @25-26 Identifier(
                         "y",
                     ),
                 ],
-                |L 1-1, C 12-13| Var {
+                @30-31 Var {
                     module_name: "",
                     ident: "y",
                 },
             ),
         ),
-        |L 3-3, C 0-1| SpaceBefore(
+        @34-35 SpaceBefore(
             Var {
                 module_name: "",
                 ident: "x",

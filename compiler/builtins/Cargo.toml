@@ -10,3 +10,4 @@ roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
+roc_target = { path = "../roc_target" }

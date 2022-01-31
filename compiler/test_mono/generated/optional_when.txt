@@ -1,42 +1,42 @@
-procedure Num.26 (#Attr.2, #Attr.3):
-    let Test.17 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Test.17;
+procedure Num.24 (#Attr.2, #Attr.3):
+    let Test.18 : Builtin(Int(I64)) = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Test.18;
 
 procedure Test.1 (Test.6):
-    let Test.22 = StructAtIndex 1 Test.6;
-    let Test.23 = false;
-    let Test.24 = lowlevel Eq Test.23 Test.22;
-    if Test.24 then
-        let Test.8 = StructAtIndex 0 Test.6;
+    let Test.22 : Builtin(Bool) = false;
+    let Test.23 : Builtin(Bool) = lowlevel Eq Test.22 Test.6;
+    if Test.23 then
+        let Test.8 : Builtin(Int(I64)) = 3i64;
         ret Test.8;
     else
-        let Test.10 = StructAtIndex 0 Test.6;
+        let Test.10 : Builtin(Int(I64)) = 5i64;
         ret Test.10;
 
 procedure Test.1 (Test.6):
-    let Test.33 = false;
-    let Test.34 = lowlevel Eq Test.33 Test.6;
-    if Test.34 then
-        let Test.8 = 3i64;
+    let Test.30 : Builtin(Bool) = StructAtIndex 1 Test.6;
+    let Test.31 : Builtin(Bool) = false;
+    let Test.32 : Builtin(Bool) = lowlevel Eq Test.31 Test.30;
+    if Test.32 then
+        let Test.8 : Builtin(Int(I64)) = StructAtIndex 0 Test.6;
         ret Test.8;
     else
-        let Test.10 = 5i64;
+        let Test.10 : Builtin(Int(I64)) = StructAtIndex 0 Test.6;
         ret Test.10;
 
 procedure Test.0 ():
-    let Test.37 = true;
-    let Test.5 = CallByName Test.1 Test.37;
-    let Test.35 = false;
-    let Test.3 = CallByName Test.1 Test.35;
-    let Test.28 = 11i64;
-    let Test.29 = true;
-    let Test.27 = Struct {Test.28, Test.29};
-    let Test.4 = CallByName Test.1 Test.27;
-    let Test.25 = 7i64;
-    let Test.26 = false;
-    let Test.19 = Struct {Test.25, Test.26};
-    let Test.2 = CallByName Test.1 Test.19;
-    let Test.18 = CallByName Num.26 Test.2 Test.3;
-    let Test.16 = CallByName Num.26 Test.18 Test.4;
-    let Test.15 = CallByName Num.26 Test.16 Test.5;
+    let Test.40 : Builtin(Int(I64)) = 7i64;
+    let Test.41 : Builtin(Bool) = false;
+    let Test.39 : Struct([Builtin(Int(I64)), Builtin(Bool)]) = Struct {Test.40, Test.41};
+    let Test.35 : Builtin(Int(I64)) = CallByName Test.1 Test.39;
+    let Test.38 : Builtin(Bool) = false;
+    let Test.36 : Builtin(Int(I64)) = CallByName Test.1 Test.38;
+    let Test.25 : Builtin(Int(I64)) = CallByName Num.24 Test.35 Test.36;
+    let Test.33 : Builtin(Int(I64)) = 11i64;
+    let Test.34 : Builtin(Bool) = true;
+    let Test.27 : Struct([Builtin(Int(I64)), Builtin(Bool)]) = Struct {Test.33, Test.34};
+    let Test.26 : Builtin(Int(I64)) = CallByName Test.1 Test.27;
+    let Test.16 : Builtin(Int(I64)) = CallByName Num.24 Test.25 Test.26;
+    let Test.24 : Builtin(Bool) = true;
+    let Test.17 : Builtin(Int(I64)) = CallByName Test.1 Test.24;
+    let Test.15 : Builtin(Int(I64)) = CallByName Num.24 Test.16 Test.17;
     ret Test.15;

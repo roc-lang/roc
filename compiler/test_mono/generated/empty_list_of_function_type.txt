@@ -1,43 +1,42 @@
 procedure List.3 (#Attr.2, #Attr.3):
-    let Test.20 = lowlevel ListLen #Attr.2;
-    let Test.17 = lowlevel NumLt #Attr.3 Test.20;
+    let Test.20 : Builtin(Int(U64)) = lowlevel ListLen #Attr.2;
+    let Test.17 : Builtin(Bool) = lowlevel NumLt #Attr.3 Test.20;
     if Test.17 then
-        let Test.19 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-        let Test.18 = Ok Test.19;
+        let Test.19 : LambdaSet(LambdaSet { set: [( Test.2, [])], representation: Struct([]) }) = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+        let Test.18 : Union(NonRecursive([[Struct([])], [LambdaSet(LambdaSet { set: [( Test.2, [])], representation: Struct([]) })]])) = Ok Test.19;
         ret Test.18;
     else
-        let Test.16 = Struct {};
-        let Test.15 = Err Test.16;
+        let Test.16 : Struct([]) = Struct {};
+        let Test.15 : Union(NonRecursive([[Struct([])], [LambdaSet(LambdaSet { set: [( Test.2, [])], representation: Struct([]) })]])) = Err Test.16;
         ret Test.15;
 
 procedure Test.2 (Test.6):
-    let Test.24 = "bar";
+    let Test.24 : Builtin(Str) = "bar";
     ret Test.24;
 
 procedure Test.0 ():
-    let Test.1 = Array [];
     joinpoint Test.22 Test.3:
-        let Test.14 = 0i64;
-        let Test.7 = CallByName List.3 Test.3 Test.14;
+        let Test.14 : Builtin(Int(U64)) = 0i64;
+        let Test.7 : Union(NonRecursive([[Struct([])], [LambdaSet(LambdaSet { set: [( Test.2, [])], representation: Struct([]) })]])) = CallByName List.3 Test.3 Test.14;
         dec Test.3;
-        let Test.11 = 1i64;
-        let Test.12 = GetTagId Test.7;
-        let Test.13 = lowlevel Eq Test.11 Test.12;
+        let Test.11 : Builtin(Int(U8)) = 1i64;
+        let Test.12 : Builtin(Int(U8)) = GetTagId Test.7;
+        let Test.13 : Builtin(Bool) = lowlevel Eq Test.11 Test.12;
         if Test.13 then
-            let Test.5 = UnionAtIndex (Id 1) (Index 0) Test.7;
-            let Test.9 = "foo";
-            let Test.8 = CallByName Test.2 Test.9;
+            let Test.5 : LambdaSet(LambdaSet { set: [( Test.2, [])], representation: Struct([]) }) = UnionAtIndex (Id 1) (Index 0) Test.7;
+            let Test.9 : Builtin(Str) = "foo";
+            let Test.8 : Builtin(Str) = CallByName Test.2 Test.9;
             dec Test.9;
             ret Test.8;
         else
-            let Test.10 = "bad!";
+            let Test.10 : Builtin(Str) = "bad!";
             ret Test.10;
     in
-    let Test.25 = false;
+    let Test.25 : Builtin(Bool) = false;
     if Test.25 then
+        let Test.1 : Builtin(List(LambdaSet(LambdaSet { set: [( Test.2, [])], representation: Struct([]) }))) = Array [];
         jump Test.22 Test.1;
     else
-        dec Test.1;
-        let Test.23 = Struct {};
-        let Test.21 = Array [Test.23];
+        let Test.23 : LambdaSet(LambdaSet { set: [( Test.2, [])], representation: Struct([]) }) = Struct {};
+        let Test.21 : Builtin(List(LambdaSet(LambdaSet { set: [( Test.2, [])], representation: Struct([]) }))) = Array [Test.23];
         jump Test.22 Test.21;

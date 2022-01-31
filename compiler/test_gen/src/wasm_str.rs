@@ -12,7 +12,36 @@ use crate::helpers::wasm::assert_evals_to;
 
 #[allow(unused_imports)]
 use indoc::indoc;
-use roc_std::RocStr;
+use roc_std::{RocList, RocStr};
+
+// #[test]
+// fn str_split_empty_delimiter() {
+//     assert_evals_to!(
+//         indoc!(
+//             r#"
+//                     List.len (Str.split "hello" "")
+//                 "#
+//         ),
+//         1,
+//         i64
+//     );
+
+//     assert_evals_to!(
+//         indoc!(
+//             r#"
+//                     when List.first (Str.split "JJJ" "") is
+//                         Ok str ->
+//                             Str.countGraphemes str
+
+//                         _ ->
+//                             -1
+
+//                 "#
+//         ),
+//         3,
+//         i64
+//     );
+// }
 
 // #[test]
 // fn str_split_bigger_delimiter_small_str() {
@@ -395,24 +424,24 @@ fn str_ends_with() {
     assert_evals_to!(r#"Str.endsWith "" "hello world""#, false, bool);
 }
 
-// #[test]
-// fn str_count_graphemes_small_str() {
-//     assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
-// }
+#[test]
+fn str_count_graphemes_small_str() {
+    assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
+}
 
-// #[test]
-// fn str_count_graphemes_three_js() {
-//     assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
-// }
+#[test]
+fn str_count_graphemes_three_js() {
+    assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
+}
 
-// #[test]
-// fn str_count_graphemes_big_str() {
-//     assert_evals_to!(
-//         r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
-//         45,
-//         usize
-//     );
-// }
+#[test]
+fn str_count_graphemes_big_str() {
+    assert_evals_to!(
+        r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
+        45,
+        usize
+    );
+}
 
 #[test]
 fn str_starts_with_same_big_str() {
@@ -665,17 +694,17 @@ fn str_starts_with_false_small_str() {
 //     );
 // }
 
-// #[test]
-// fn str_equality() {
-//     assert_evals_to!(r#""a" == "a""#, true, bool);
-//     assert_evals_to!(
-//         r#""loremipsumdolarsitamet" == "loremipsumdolarsitamet""#,
-//         true,
-//         bool
-//     );
-//     assert_evals_to!(r#""a" != "b""#, true, bool);
-//     assert_evals_to!(r#""a" == "b""#, false, bool);
-// }
+#[test]
+fn str_equality() {
+    assert_evals_to!(r#""a" == "a""#, true, bool);
+    assert_evals_to!(
+        r#""loremipsumdolarsitamet" == "loremipsumdolarsitamet""#,
+        true,
+        bool
+    );
+    assert_evals_to!(r#""a" != "b""#, true, bool);
+    assert_evals_to!(r#""a" == "b""#, false, bool);
+}
 
 // #[test]
 // fn nested_recursive_literal() {
@@ -707,45 +736,45 @@ fn str_starts_with_false_small_str() {
 //     );
 // }
 
-// #[test]
-// fn str_join_comma_small() {
-//     assert_evals_to!(
-//         r#"Str.joinWith ["1", "2"] ", " "#,
-//         RocStr::from("1, 2"),
-//         RocStr
-//     );
-// }
+#[test]
+fn str_join_comma_small() {
+    assert_evals_to!(
+        r#"Str.joinWith ["1", "2"] ", " "#,
+        RocStr::from("1, 2"),
+        RocStr
+    );
+}
 
-// #[test]
-// fn str_join_comma_big() {
-//     assert_evals_to!(
-//         r#"Str.joinWith ["10000000", "2000000", "30000000"] ", " "#,
-//         RocStr::from("10000000, 2000000, 30000000"),
-//         RocStr
-//     );
-// }
+#[test]
+fn str_join_comma_big() {
+    assert_evals_to!(
+        r#"Str.joinWith ["10000000", "2000000", "30000000"] ", " "#,
+        RocStr::from("10000000, 2000000, 30000000"),
+        RocStr
+    );
+}
 
-// #[test]
-// fn str_join_comma_single() {
-//     assert_evals_to!(r#"Str.joinWith ["1"] ", " "#, RocStr::from("1"), RocStr);
-// }
+#[test]
+fn str_join_comma_single() {
+    assert_evals_to!(r#"Str.joinWith ["1"] ", " "#, RocStr::from("1"), RocStr);
+}
 
-// #[test]
-// fn str_to_utf8() {
-//     assert_evals_to!(
-//         r#"Str.toUtf8 "hello""#,
-//         RocList::from_slice(&[104, 101, 108, 108, 111]),
-//         RocList<u8>
-//     );
-//     assert_evals_to!(
-//         r#"Str.toUtf8 "this is a long string""#,
-//         RocList::from_slice(&[
-//             116, 104, 105, 115, 32, 105, 115, 32, 97, 32, 108, 111, 110, 103, 32, 115, 116, 114,
-//             105, 110, 103
-//         ]),
-//         RocList<u8>
-//     );
-// }
+#[test]
+fn str_to_utf8() {
+    assert_evals_to!(
+        r#"Str.toUtf8 "hello""#,
+        RocList::from_slice(&[104, 101, 108, 108, 111]),
+        RocList<u8>
+    );
+    assert_evals_to!(
+        r#"Str.toUtf8 "this is a long string""#,
+        RocList::from_slice(&[
+            116, 104, 105, 115, 32, 105, 115, 32, 97, 32, 108, 111, 110, 103, 32, 115, 116, 114,
+            105, 110, 103
+        ]),
+        RocList<u8>
+    );
+}
 
 // #[test]
 // fn str_from_utf8_range() {
@@ -1090,5 +1119,217 @@ fn str_trim_right_small_to_small_shared() {
         ),
         (RocStr::from(" hello "), RocStr::from(" hello"),),
         (RocStr, RocStr)
+    );
+}
+
+#[test]
+fn str_to_nat() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toNat "1" is
+                 Ok n -> n
+                 Err _ -> 0
+                "#
+        ),
+        1,
+        usize
+    );
+}
+
+#[test]
+fn str_to_i128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toI128 "1" is
+                 Ok n -> n
+                 Err _ -> 0
+                "#
+        ),
+        1,
+        i128
+    );
+}
+
+#[test]
+fn str_to_u128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toU128 "1" is
+                 Ok n -> n
+                 Err _ -> 0
+                "#
+        ),
+        1,
+        u128
+    );
+}
+
+#[test]
+fn str_to_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toI64 "1" is
+                 Ok n -> n
+                 Err _ -> 0
+                "#
+        ),
+        1,
+        i64
+    );
+}
+
+#[test]
+fn str_to_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toU64 "1" is
+                 Ok n -> n
+                 Err _ -> 0
+                "#
+        ),
+        1,
+        u64
+    );
+}
+
+#[test]
+fn str_to_i32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toI32 "1" is
+                 Ok n -> n
+                 Err _ -> 0
+                "#
+        ),
+        1,
+        i32
+    );
+}
+
+#[test]
+fn str_to_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toU32 "1" is
+                 Ok n -> n
+                 Err _ -> 0
+                "#
+        ),
+        1,
+        u32
+    );
+}
+
+#[test]
+fn str_to_i16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toI16 "1" is
+                 Ok n -> n
+                 Err _ -> 0
+                "#
+        ),
+        1,
+        i16
+    );
+}
+
+#[test]
+fn str_to_u16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toU16 "1" is
+                 Ok n -> n
+                 Err _ -> 0
+                "#
+        ),
+        1,
+        u16
+    );
+}
+
+#[test]
+fn str_to_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toI8 "1" is
+                 Ok n -> n
+                 Err _ -> 0
+                "#
+        ),
+        1,
+        i8
+    );
+}
+
+#[test]
+fn str_to_u8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toU8 "1" is
+                 Ok n -> n
+                 Err _ -> 0
+                "#
+        ),
+        1,
+        u8
+    );
+}
+
+#[test]
+fn str_to_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toF64 "1.0" is
+                 Ok n -> n
+                 Err _ -> 0
+             "#
+        ),
+        1.0,
+        f64
+    );
+}
+
+#[test]
+fn str_to_f32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toF32 "1.0" is
+                 Ok n -> n
+                 Err _ -> 0
+             "#
+        ),
+        1.0,
+        f32
+    );
+}
+
+#[test]
+fn str_to_dec() {
+    use roc_std::RocDec;
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+             when Str.toDec "1.0" is
+                 Ok n -> n
+                 Err _ -> 0
+             "#
+        ),
+        RocDec::from_str("1.0").unwrap(),
+        RocDec
     );
 }

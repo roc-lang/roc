@@ -141,6 +141,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(int_type(flex(TVAR1))),
     );
 
+    // addSaturated : Num a, Num a -> Num a
+    add_top_level_function_type!(
+        Symbol::NUM_ADD_SATURATED,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(int_type(flex(TVAR1))),
+    );
+
     // sub or (-) : Num a, Num a -> Num a
     add_top_level_function_type!(
         Symbol::NUM_SUB,
@@ -160,6 +167,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::NUM_SUB_CHECKED,
         vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
         Box::new(result_type(num_type(flex(TVAR1)), overflow())),
+    );
+
+    // subSaturated : Num a, Num a -> Num a
+    add_top_level_function_type!(
+        Symbol::NUM_SUB_SATURATED,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(int_type(flex(TVAR1))),
     );
 
     // mul or (*) : Num a, Num a -> Num a
@@ -288,12 +302,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(bool_type())
     );
 
-    // maxInt : Int range
-    add_type!(Symbol::NUM_MAX_INT, int_type(flex(TVAR1)));
-
-    // minInt : Int range
-    add_type!(Symbol::NUM_MIN_INT, int_type(flex(TVAR1)));
-
     let div_by_zero = SolvedType::TagUnion(
         vec![(TagName::Global("DivByZero".into()), vec![])],
         Box::new(SolvedType::Wildcard),
@@ -382,6 +390,57 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(bool_type()),
     );
+
+    // minI8 : I8
+    add_type!(Symbol::NUM_MIN_I8, i8_type());
+
+    // maxI8 : I8
+    add_type!(Symbol::NUM_MAX_I8, i8_type());
+
+    // minU8 : U8
+    add_type!(Symbol::NUM_MIN_U8, u8_type());
+
+    // maxU8 : U8
+    add_type!(Symbol::NUM_MAX_U8, u8_type());
+
+    // minI16 : I16
+    add_type!(Symbol::NUM_MIN_I16, i16_type());
+
+    // maxI16 : I16
+    add_type!(Symbol::NUM_MAX_I16, i16_type());
+
+    // minU16 : U16
+    add_type!(Symbol::NUM_MIN_U16, u16_type());
+
+    // maxU16 : U16
+    add_type!(Symbol::NUM_MAX_U16, u16_type());
+
+    // minI32 : I32
+    add_type!(Symbol::NUM_MIN_I32, i32_type());
+
+    // maxI32 : I32
+    add_type!(Symbol::NUM_MAX_I32, i32_type());
+
+    // minU32 : U32
+    add_type!(Symbol::NUM_MIN_U32, u32_type());
+
+    // maxU32 : U32
+    add_type!(Symbol::NUM_MAX_U32, u32_type());
+
+    // minI64 : I64
+    add_type!(Symbol::NUM_MIN_I64, i64_type());
+
+    // maxI64 : I64
+    add_type!(Symbol::NUM_MAX_I64, i64_type());
+
+    // minU64 : U64
+    add_type!(Symbol::NUM_MIN_U64, u64_type());
+
+    // maxU64 : U64
+    add_type!(Symbol::NUM_MAX_U64, u64_type());
+
+    // minI128 : I128
+    add_type!(Symbol::NUM_MIN_I128, i128_type());
 
     // maxI128 : I128
     add_type!(Symbol::NUM_MAX_I128, i128_type());
@@ -1167,6 +1226,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1))),
     );
 
+    // dropIf : List elem, (elem -> Bool) -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_DROP_IF,
+        vec![
+            list_type(flex(TVAR1)),
+            closure(vec![flex(TVAR1)], TVAR2, Box::new(bool_type())),
+        ],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
     // swap : List elem, Nat, Nat -> List elem
     add_top_level_function_type!(
         Symbol::LIST_SWAP,
@@ -1255,6 +1324,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             ),
         ],
         Box::new(list_type(flex(TVAR1))),
+    );
+
+    // sortAsc : List (Num a) -> List (Num a)
+    add_top_level_function_type!(
+        Symbol::LIST_SORT_ASC,
+        vec![list_type(num_type(flex(TVAR1)))],
+        Box::new(list_type(num_type(flex(TVAR1))))
+    );
+
+    // sortDesc : List (Num a) -> List (Num a)
+    add_top_level_function_type!(
+        Symbol::LIST_SORT_DESC,
+        vec![list_type(num_type(flex(TVAR1)))],
+        Box::new(list_type(num_type(flex(TVAR1))))
     );
 
     // find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*

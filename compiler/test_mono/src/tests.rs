@@ -25,6 +25,8 @@ use roc_mono::ir::Proc;
 
 use roc_mono::ir::ProcLayout;
 
+const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
+
 /// Without this, some tests pass in `cargo test --release` but fail without
 /// the --release flag because they run out of stack space. This increases
 /// stack size for debug builds only, while leaving the stack space at the default
@@ -104,7 +106,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         &stdlib,
         src_dir,
         exposed_types,
-        8,
+        TARGET_INFO,
         builtin_defs_map,
     );
 
@@ -136,9 +138,9 @@ fn compiles_to_ir(test_name: &str, src: &str) {
     assert_eq!(type_problems, Vec::new());
     assert_eq!(mono_problems, Vec::new());
 
-    debug_assert_eq!(exposed_to_host.len(), 1);
+    debug_assert_eq!(exposed_to_host.values.len(), 1);
 
-    let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
+    let main_fn_symbol = exposed_to_host.values.keys().copied().next().unwrap();
 
     verify_procedures(test_name, procedures, main_fn_symbol);
 }
@@ -982,17 +984,17 @@ fn closure_in_list() {
     indoc!(
         r#"
         app "test" provides [ main ] to "./platform"
-    
+
         foo = \{} ->
             x = 41
-    
+
             f = \{} -> x
-    
+
             [ f ]
-    
+
         main =
             items = foo {}
-    
+
             List.len items
         "#
     )
@@ -1005,7 +1007,7 @@ fn somehow_drops_definitions() {
         r#"
         app "test" provides [ main ] to "./platform"
 
-        one : I64 
+        one : I64
         one = 1
 
         two : I64
@@ -1037,7 +1039,7 @@ fn specialize_closures() {
         apply = \f, x -> f x
 
         main =
-            one : I64 
+            one : I64
             one = 1
 
             two : I64
@@ -1108,6 +1110,144 @@ fn empty_list_of_function_type() {
                 Ok f -> f "foo"
                 Err _ -> "bad!"
             "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_ints() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            x = 100
+
+            f : U8, U32 -> Nat
+            f = \_, _ -> 18
+
+            f x x
+        "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_floats() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            x = 100.0
+
+            f : F32, F64 -> Nat
+            f = \_, _ -> 18
+
+            f x x
+        "#
+    )
+}
+
+#[mono_test]
+#[ignore = "TODO"]
+fn monomorphized_ints_aliased() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            y = 100
+            w1 = y
+            w2 = y
+
+            f = \_, _ -> 1
+
+            f1 : U8, U32 -> Nat
+            f1 = f
+
+            f2 : U32, U8 -> Nat
+            f2 = f
+
+            f1 w1 w2 + f2 w1 w2
+        "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_tag() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            b = False
+            f : Bool, [True, False, Idk] -> U8
+            f = \_, _ -> 18
+            f b b
+        "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_tag_with_aliased_args() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            b = False
+            c = False
+            a = A b c
+            f : [A Bool Bool] -> Nat
+            f = \_ -> 1
+            f a
+        "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_list() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            l = [1, 2, 3]
+
+            f : List U8, List U16 -> Nat
+            f = \_, _ -> 18
+
+            f l l
+        "#
+    )
+}
+
+#[mono_test]
+fn monomorphized_applied_tag() {
+    indoc!(
+        r#"
+        app "test" provides [ main ] to "./platform"
+
+        main =
+            a = A "A"
+            f = \x ->
+                when x is
+                    A y -> y
+                    B y -> y
+            f a
+        "#
+    )
+}
+
+#[mono_test]
+fn aliased_polymorphic_closure() {
+    indoc!(
+        r#"
+        n : U8
+        n = 1
+        f = \{} -> (\a -> n)
+        g = f {}
+        g {}
+        "#
     )
 }
 

@@ -6,27 +6,35 @@ pub mod wasm_module;
 
 use bumpalo::{self, collections::Vec, Bump};
 
-use roc_builtins::bitcode::IntWidth;
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::low_level::LowLevel;
+use roc_module::low_level::LowLevelWrapperType;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::gen_refcount::RefcountProcGenerator;
+use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
-use roc_reporting::internal_error;
+use roc_target::TargetInfo;
 
 use crate::backend::WasmBackend;
 use crate::wasm_module::{
     Align, CodeBuilder, Export, ExportType, LocalId, SymInfo, ValueType, WasmModule,
 };
 
-const PTR_SIZE: u32 = 4;
+const TARGET_INFO: TargetInfo = TargetInfo::default_wasm32();
+const PTR_SIZE: u32 = {
+    let value = TARGET_INFO.ptr_width() as u32;
+
+    // const assert that our pointer width is actually 4
+    // the code relies on the pointer width being exactly 4
+    assert!(value == 4);
+
+    value
+};
 const PTR_TYPE: ValueType = ValueType::I32;
 
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
 pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
 pub const MEMORY_NAME: &str = "memory";
-pub const BUILTINS_IMPORT_MODULE_NAME: &str = "builtins";
+pub const BUILTINS_IMPORT_MODULE_NAME: &str = "env";
 pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 
 pub struct Env<'a> {
@@ -35,34 +43,45 @@ pub struct Env<'a> {
     pub exposed_to_host: MutSet<Symbol>,
 }
 
+/// Entry point for production
 pub fn build_module<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
+    preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (mut wasm_module, _) = build_module_help(env, interns, procedures)?;
-    let mut buffer = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize_mut(&mut buffer);
+    let (mut wasm_module, called_preload_fns, _) =
+        build_module_without_test_wrapper(env, interns, preload_bytes, procedures);
+
+    wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
+
+    let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
+    wasm_module.serialize(&mut buffer);
     Ok(buffer)
 }
 
-pub fn build_module_help<'a>(
+/// Entry point for integration tests (test_gen)
+pub fn build_module_without_test_wrapper<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
+    preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<(WasmModule<'a>, u32), String> {
+) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut exports = Vec::with_capacity_in(4, env.arena);
-    let mut main_fn_index = None;
+    let mut maybe_main_fn_index = None;
 
     // Collect the symbols & names for the procedures,
     // and filter out procs we're going to inline
     let mut fn_index: u32 = 0;
     for ((sym, layout), proc) in procedures.into_iter() {
-        if LowLevel::from_inlined_wrapper(sym).is_some() {
+        if matches!(
+            LowLevelWrapperType::from_symbol(sym),
+            LowLevelWrapperType::CanBeReplacedBy(_)
+        ) {
             continue;
         }
         procs.push(proc);
@@ -72,9 +91,9 @@ pub fn build_module_help<'a>(
             .to_symbol_string(sym, interns);
 
         if env.exposed_to_host.contains(&sym) {
-            main_fn_index = Some(fn_index);
+            maybe_main_fn_index = Some(fn_index);
             exports.push(Export {
-                name: fn_name.clone(),
+                name: env.arena.alloc_slice_copy(fn_name.as_bytes()),
                 ty: ExportType::Func,
                 index: fn_index,
             });
@@ -87,21 +106,28 @@ pub fn build_module_help<'a>(
         fn_index += 1;
     }
 
+    // Pre-load the WasmModule with data from the platform & builtins object file
+    let initial_module = WasmModule::preload(env.arena, preload_bytes);
+
+    // Adjust Wasm function indices to account for functions from the object file
+    let fn_index_offset: u32 =
+        initial_module.import.function_count + initial_module.code.preloaded_count;
+
     let mut backend = WasmBackend::new(
         env,
         interns,
         layout_ids,
         proc_symbols,
-        linker_symbols,
-        exports,
-        RefcountProcGenerator::new(env.arena, IntWidth::I32, env.module_id),
+        initial_module,
+        fn_index_offset,
+        CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
     );
 
-    if false {
+    if DEBUG_LOG_SETTINGS.user_procs_ir {
         println!("## procs");
         for proc in procs.iter() {
             println!("{}", proc.to_pretty(200));
-            println!("{:#?}", proc);
+            // println!("{:#?}", proc);
         }
     }
 
@@ -110,27 +136,28 @@ pub fn build_module_help<'a>(
         backend.build_proc(proc);
     }
 
-    // Generate IR for refcounting procs
-    let refcount_procs = backend.generate_refcount_procs();
+    // Generate specialized helpers for refcounting & equality
+    let helper_procs = backend.generate_helpers();
 
     backend.register_symbol_debug_names();
 
-    if false {
-        println!("## refcount_procs");
-        for proc in refcount_procs.iter() {
+    if DEBUG_LOG_SETTINGS.helper_procs_ir {
+        println!("## helper_procs");
+        for proc in helper_procs.iter() {
             println!("{}", proc.to_pretty(200));
-            println!("{:#?}", proc);
+            // println!("{:#?}", proc);
         }
     }
 
     // Generate Wasm for refcounting procs
-    for proc in refcount_procs.iter() {
+    for proc in helper_procs.iter() {
         backend.build_proc(proc);
     }
 
-    let module = backend.finalize_module();
+    let (module, called_preload_fns) = backend.finalize();
+    let main_function_index = maybe_main_fn_index.unwrap() + fn_index_offset;
 
-    Ok((module, main_fn_index.unwrap()))
+    (module, called_preload_fns, main_function_index)
 }
 
 pub struct CopyMemoryConfig {
@@ -195,6 +222,20 @@ macro_rules! round_up_to_alignment {
     };
 }
 
-pub fn debug_panic<E: std::fmt::Debug>(error: E) {
-    internal_error!("{:?}", error);
+pub struct WasmDebugLogSettings {
+    proc_start_end: bool,
+    user_procs_ir: bool,
+    helper_procs_ir: bool,
+    let_stmt_ir: bool,
+    instructions: bool,
+    pub keep_test_binary: bool,
 }
+
+pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
+    proc_start_end: false && cfg!(debug_assertions),
+    user_procs_ir: false && cfg!(debug_assertions),
+    helper_procs_ir: false && cfg!(debug_assertions),
+    let_stmt_ir: false && cfg!(debug_assertions),
+    instructions: false && cfg!(debug_assertions),
+    keep_test_binary: false && cfg!(debug_assertions),
+};

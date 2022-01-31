@@ -212,7 +212,9 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
         let buffer = crate::llvm::build::get_sjlj_buffer(env);
 
         // write our error message pointer
-        let index = env.ptr_int().const_int(3 * env.ptr_bytes as u64, false);
+        let index = env
+            .ptr_int()
+            .const_int(3 * env.target_info.ptr_width() as u64, false);
         let message_buffer_raw =
             unsafe { builder.build_gep(buffer, &[index], "raw_msg_buffer_ptr") };
         let message_buffer = builder.build_bitcast(

@@ -2,11 +2,11 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, INDENT};
 use crate::Buf;
-use roc_parse::ast::{Def, Expr, Pattern};
-use roc_region::all::Located;
+use roc_parse::ast::{AliasHeader, Def, Expr, Pattern};
+use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
-impl<'a> Formattable<'a> for Def<'a> {
+impl<'a> Formattable for Def<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::Def::*;
 
@@ -25,9 +25,9 @@ impl<'a> Formattable<'a> for Def<'a> {
         }
     }
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut Buf<'a>,
+        buf: &mut Buf<'buf>,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -55,20 +55,20 @@ impl<'a> Formattable<'a> for Def<'a> {
                     );
                 }
             }
-            Alias { name, vars, ann } => {
+            Alias {
+                header: AliasHeader { name, vars },
+                ann,
+            } => {
                 buf.indent(indent);
                 buf.push_str(name.value);
 
-                if vars.is_empty() {
-                    buf.push(' ');
-                } else {
-                    for var in *vars {
-                        buf.push(' ');
-                        fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
-                    }
+                for var in *vars {
+                    buf.spaces(1);
+                    fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
                 }
 
-                buf.push_str(" : ");
+                buf.push_str(" :");
+                buf.spaces(1);
 
                 ann.format(buf, indent + INDENT)
             }
@@ -84,10 +84,12 @@ impl<'a> Formattable<'a> for Def<'a> {
                 body_expr,
             } => {
                 ann_pattern.format(buf, indent);
-                buf.push_str(" : ");
+                buf.push_str(" :");
+                buf.spaces(1);
                 ann_type.format(buf, indent);
                 if let Some(comment_str) = comment {
-                    buf.push_str(" # ");
+                    buf.push_str(" #");
+                    buf.spaces(1);
                     buf.push_str(comment_str.trim());
                 }
                 buf.newline();
@@ -107,9 +109,9 @@ impl<'a> Formattable<'a> for Def<'a> {
     }
 }
 
-fn fmt_expect<'a>(
-    buf: &mut Buf<'a>,
-    condition: &'a Located<Expr<'a>>,
+fn fmt_expect<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    condition: &'a Loc<Expr<'a>>,
     is_multiline: bool,
     indent: u16,
 ) {
@@ -123,11 +125,16 @@ fn fmt_expect<'a>(
     condition.format(buf, return_indent);
 }
 
-pub fn fmt_def<'a>(buf: &mut Buf<'a>, def: &Def<'a>, indent: u16) {
+pub fn fmt_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &Def<'a>, indent: u16) {
     def.format(buf, indent);
 }
 
-pub fn fmt_body<'a>(buf: &mut Buf<'a>, pattern: &'a Pattern<'a>, body: &'a Expr<'a>, indent: u16) {
+pub fn fmt_body<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    pattern: &'a Pattern<'a>,
+    body: &'a Expr<'a>,
+    indent: u16,
+) {
     pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
     buf.push_str(" =");
     if body.is_multiline() {
@@ -140,12 +147,12 @@ pub fn fmt_body<'a>(buf: &mut Buf<'a>, pattern: &'a Pattern<'a>, body: &'a Expr<
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
             }
             _ => {
-                buf.push(' ');
+                buf.spaces(1);
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
             }
         }
     } else {
-        buf.push(' ');
+        buf.spaces(1);
         body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
     }
 }

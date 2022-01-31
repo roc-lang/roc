@@ -14,7 +14,7 @@ path = "src/main.rs"
 test = false
 bench = false
 
-[features] 
+[features]
 default = ["target-aarch64", "target-x86_64", "target-wasm32", "llvm", "editor"]
 
 wasm32-cli-run = ["target-wasm32", "run-wasm32"]
@@ -61,13 +61,15 @@ roc_load = { path = "../compiler/load" }
 roc_gen_llvm = { path = "../compiler/gen_llvm", optional = true }
 roc_build = { path = "../compiler/build", default-features = false }
 roc_fmt = { path = "../compiler/fmt" }
+roc_target = { path = "../compiler/roc_target" }
 roc_reporting = { path = "../reporting" }
+roc_error_macros = { path = "../error_macros" }
 roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
 clap = { version = "= 3.0.0-beta.5", default-features = false, features = ["std", "color", "suggestions"] }
 const_format = "0.2.22"
-rustyline = { git = "https://github.com/rtfeldman/rustyline", tag = "prompt-fix" }
-rustyline-derive = { git = "https://github.com/rtfeldman/rustyline", tag = "prompt-fix" }
+rustyline = { git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1" }
+rustyline-derive = { git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 libloading = "0.7.1"
 mimalloc = { version = "0.1.26", default-features = false }
@@ -83,6 +85,7 @@ wasmer-wasi = { version = "2.0.0", optional = true }
 wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
 wasmer-wasi = "2.0.0"
 pretty_assertions = "1.0.0"
+roc_test_utils = { path = "../test_utils" }
 indoc = "1.0.3"
 serial_test = "0.5.1"
 tempfile = "3.2.0"

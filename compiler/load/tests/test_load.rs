@@ -28,6 +28,8 @@ mod test_load {
     use roc_types::subs::Subs;
     use std::collections::HashMap;
 
+    const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
+
     // HELPERS
 
     fn multiple_modules(files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
@@ -110,7 +112,7 @@ mod test_load {
                 arena.alloc(stdlib),
                 dir.path(),
                 exposed_types,
-                8,
+                TARGET_INFO,
                 builtin_defs_map,
             )
         };
@@ -134,7 +136,7 @@ mod test_load {
             arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
-            8,
+            TARGET_INFO,
             builtin_defs_map,
         );
         let mut loaded_module = match loaded {
@@ -276,9 +278,9 @@ mod test_load {
                 "Main",
                 indoc!(
                     r#"
-                        app "test-app" 
-                            packages { blah: "./blah" } 
-                            imports [ RBTree ] 
+                        app "test-app"
+                            packages { blah: "./blah" }
+                            imports [ RBTree ]
                             provides [ main ] to blah
 
                         empty : RBTree.RedBlackTree I64 I64
@@ -305,7 +307,7 @@ mod test_load {
             arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
-            8,
+            TARGET_INFO,
             builtin_defs_map,
         );
 
@@ -379,7 +381,7 @@ mod test_load {
                 "floatTest" => "Float *",
                 "divisionFn" => "Float a, Float a -> Result (Float a) [ DivByZero ]*",
                 "divisionTest" => "Result (Float *) [ DivByZero ]*",
-                "intTest" => "Int *",
+                "intTest" => "I64",
                 "x" => "Float *",
                 "constantNum" => "Num *",
                 "divDep1ByDep2" => "Result (Float *) [ DivByZero ]*",
@@ -476,9 +478,9 @@ mod test_load {
                 "blah2" => "Float *",
                 "blah3" => "Str",
                 "str" => "Str",
-                "alwaysThree" => "* -> Str",
+                "alwaysThree" => "* -> Float *",
                 "identity" => "a -> a",
-                "z" => "Str",
+                "z" => "Float *",
                 "w" => "Dep1.Identity {}",
                 "succeed" => "a -> Dep1.Identity a",
                 "yay" => "Res.Res {} err",
@@ -498,9 +500,9 @@ mod test_load {
                 "blah2" => "Float *",
                 "blah3" => "Str",
                 "str" => "Str",
-                "alwaysThree" => "* -> Str",
+                "alwaysThree" => "* -> Float *",
                 "identity" => "a -> a",
-                "z" => "Str",
+                "z" => "Float *",
                 "w" => "Dep1.Identity {}",
                 "succeed" => "a -> Dep1.Identity a",
                 "yay" => "Res.Res {} err",
@@ -541,7 +543,7 @@ mod test_load {
                 indoc!(
                     "
             \u{1b}[36m── UNFINISHED LIST ─────────────────────────────────────────────────────────────\u{1b}[0m
-            
+
             I cannot find the end of this list:
 
             \u{1b}[36m3\u{1b}[0m\u{1b}[36m│\u{1b}[0m  \u{1b}[37mmain = [\u{1b}[0m

@@ -2,17 +2,18 @@ use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::gen_refcount::RefcountProcGenerator;
+use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
 use roc_mono::layout::{Builtin, Layout};
-use roc_reporting::internal_error;
+use roc_target::TargetInfo;
 use std::marker::PhantomData;
 
 pub mod aarch64;
 pub mod x86_64;
 
-const PTR_SIZE: u32 = 8;
+const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
     const BASE_PTR_REG: GeneralReg;
@@ -256,8 +257,8 @@ pub struct Backend64Bit<
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    refcount_proc_gen: RefcountProcGenerator<'a>,
-    refcount_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
+    helper_proc_gen: CodeGenHelp<'a>,
+    helper_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
     buf: Vec<'a, u8>,
     relocs: Vec<'a, Relocation>,
     proc_name: Option<String>,
@@ -308,8 +309,8 @@ pub fn new_backend_64bit<
         phantom_cc: PhantomData,
         env,
         interns,
-        refcount_proc_gen: RefcountProcGenerator::new(env.arena, IntWidth::I64, env.module_id),
-        refcount_proc_symbols: bumpalo::vec![in env.arena],
+        helper_proc_gen: CodeGenHelp::new(env.arena, TARGET_INFO, env.module_id),
+        helper_proc_symbols: bumpalo::vec![in env.arena],
         proc_name: None,
         is_self_recursive: None,
         buf: bumpalo::vec![in env.arena],
@@ -346,19 +347,17 @@ impl<
     fn interns(&self) -> &Interns {
         self.interns
     }
-    fn env_interns_refcount_mut(
-        &mut self,
-    ) -> (&Env<'a>, &mut Interns, &mut RefcountProcGenerator<'a>) {
-        (self.env, self.interns, &mut self.refcount_proc_gen)
+    fn env_interns_helpers_mut(&mut self) -> (&Env<'a>, &mut Interns, &mut CodeGenHelp<'a>) {
+        (self.env, self.interns, &mut self.helper_proc_gen)
     }
-    fn refcount_proc_gen_mut(&mut self) -> &mut RefcountProcGenerator<'a> {
-        &mut self.refcount_proc_gen
+    fn helper_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a> {
+        &mut self.helper_proc_gen
     }
-    fn refcount_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)> {
-        &mut self.refcount_proc_symbols
+    fn helper_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)> {
+        &mut self.helper_proc_symbols
     }
-    fn refcount_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)> {
-        &self.refcount_proc_symbols
+    fn helper_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)> {
+        &self.helper_proc_symbols
     }
 
     fn reset(&mut self, name: String, is_self_recursive: SelfRecursive) {
@@ -383,7 +382,7 @@ impl<
         self.float_used_regs.clear();
         self.float_free_regs
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
-        self.refcount_proc_symbols.clear();
+        self.helper_proc_symbols.clear();
     }
 
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)> {
@@ -966,15 +965,17 @@ impl<
         }
     }
 
-    fn build_refcount_getptr(&mut self, dst: &Symbol, src: &Symbol) {
+    fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
+        // We may not strictly need an instruction here.
+        // What's important is to load the value, and for src and dest to have different Layouts.
+        // This is used for pointer math in refcounting and for pointer equality
         let dst_reg = self.claim_general_reg(dst);
         let src_reg = self.load_to_general_reg(src);
-        // The refcount pointer is the value before the pointer.
-        ASM::sub_reg64_reg64_imm32(&mut self.buf, dst_reg, src_reg, PTR_SIZE as i32);
+        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
-        let struct_size = layout.stack_size(PTR_SIZE);
+        let struct_size = layout.stack_size(TARGET_INFO);
 
         if let Layout::Struct(field_layouts) = layout {
             if struct_size > 0 {
@@ -991,7 +992,7 @@ impl<
                 let mut current_offset = offset;
                 for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
                     self.copy_symbol_to_stack_offset(current_offset, field, field_layout);
-                    let field_size = field_layout.stack_size(PTR_SIZE);
+                    let field_size = field_layout.stack_size(TARGET_INFO);
                     current_offset += field_size as i32;
                 }
             } else {
@@ -1029,14 +1030,14 @@ impl<
         if let Some(SymbolStorage::Base { offset, .. }) = self.symbol_storage_map.get(structure) {
             let mut data_offset = *offset;
             for i in 0..index {
-                let field_size = field_layouts[i as usize].stack_size(PTR_SIZE);
+                let field_size = field_layouts[i as usize].stack_size(TARGET_INFO);
                 data_offset += field_size as i32;
             }
             self.symbol_storage_map.insert(
                 *sym,
                 SymbolStorage::Base {
                     offset: data_offset,
-                    size: field_layouts[index as usize].stack_size(PTR_SIZE),
+                    size: field_layouts[index as usize].stack_size(TARGET_INFO),
                     owned: false,
                 },
             );
@@ -1569,10 +1570,10 @@ impl<
                 {
                     debug_assert_eq!(
                         *size,
-                        layout.stack_size(PTR_SIZE),
+                        layout.stack_size(TARGET_INFO),
                         "expected struct to have same size as data being stored in it"
                     );
-                    for i in 0..layout.stack_size(PTR_SIZE) as i32 {
+                    for i in 0..layout.stack_size(TARGET_INFO) as i32 {
                         ASM::mov_reg64_base32(&mut self.buf, tmp_reg, from_offset + i);
                         ASM::mov_base32_reg64(&mut self.buf, to_offset + i, tmp_reg);
                     }

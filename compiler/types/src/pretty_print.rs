@@ -406,8 +406,8 @@ fn write_sorted_tags2<'a>(
     ext_var: Variable,
 ) -> ExtContent<'a> {
     // Sort the fields so they always end up in the same order.
-    let (it, new_ext_var) = tags.unsorted_iterator_and_ext(subs, ext_var);
-    let mut sorted_fields: Vec<_> = it.collect();
+    let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
+    let mut sorted_fields = tags.tags;
 
     let interns = &env.interns;
     let home = env.home;
@@ -519,7 +519,8 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
             let RecordStructure {
                 fields: sorted_fields,
                 ext,
-            } = gather_fields(subs, *fields, *ext_var);
+            } = gather_fields(subs, *fields, *ext_var)
+                .expect("Something ended up weird in this record type");
             let ext_var = ext;
 
             if fields.is_empty() {

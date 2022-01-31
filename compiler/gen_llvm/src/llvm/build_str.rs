@@ -10,6 +10,7 @@ use morphic_lib::UpdateMode;
 use roc_builtins::bitcode::{self, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
+use roc_target::PtrWidth;
 
 use super::build::load_symbol;
 
@@ -79,10 +80,9 @@ fn str_symbol_to_c_abi<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     let string = load_symbol(scope, &symbol);
 
-    let target_type = match env.ptr_bytes {
-        8 => env.context.i128_type().into(),
-        4 => env.context.i64_type().into(),
-        _ => unreachable!(),
+    let target_type = match env.target_info.ptr_width() {
+        PtrWidth::Bytes8 => env.context.i128_type().into(),
+        PtrWidth::Bytes4 => env.context.i64_type().into(),
     };
 
     complex_bitcast(env.builder, string, target_type, "str_to_c_abi").into_int_value()
@@ -96,10 +96,9 @@ pub fn str_to_c_abi<'a, 'ctx, 'env>(
 
     env.builder.build_store(cell, value);
 
-    let target_type = match env.ptr_bytes {
-        8 => env.context.i128_type(),
-        4 => env.context.i64_type(),
-        _ => unreachable!(),
+    let target_type = match env.target_info.ptr_width() {
+        PtrWidth::Bytes8 => env.context.i128_type(),
+        PtrWidth::Bytes4 => env.context.i64_type(),
     };
 
     let target_type_ptr = env
@@ -310,20 +309,19 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let fields = match env.ptr_bytes {
-        8 | 4 => [
+    let fields = match env.target_info.ptr_width() {
+        PtrWidth::Bytes4 | PtrWidth::Bytes8 => [
             env.ptr_int().into(),
             super::convert::zig_str_type(env).into(),
             env.context.bool_type().into(),
             ctx.i8_type().into(),
         ],
-        _ => unreachable!(),
     };
 
     let record_type = env.context.struct_type(&fields, false);
 
-    match env.ptr_bytes {
-        8 | 4 => {
+    match env.target_info.ptr_width() {
+        PtrWidth::Bytes4 | PtrWidth::Bytes8 => {
             let result_ptr_cast = env
                 .builder
                 .build_bitcast(
@@ -337,7 +335,6 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
                 .build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
                 .into_struct_value()
         }
-        _ => unreachable!(),
     }
 }
 
@@ -431,13 +428,4 @@ pub fn str_equal<'a, 'ctx, 'env>(
         &[str1_i128.into(), str2_i128.into()],
         bitcode::STR_EQUAL,
     )
-}
-
-// TODO investigate: does this cause problems when the layout is known? this value is now not refcounted!
-pub fn empty_str<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
-    let struct_type = super::convert::zig_str_type(env);
-
-    // The pointer should be null (aka zero) and the length should be zero,
-    // so the whole struct should be a const_zero
-    BasicValueEnum::StructValue(struct_type.const_zero())
 }

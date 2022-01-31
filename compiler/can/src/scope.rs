@@ -2,7 +2,7 @@ use roc_collections::all::{MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, Type};
 
@@ -41,7 +41,7 @@ impl Scope {
             let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
             type_variables.sort();
             for (loc_name, (_, var)) in vars.iter().zip(type_variables) {
-                variables.push(Located::at(loc_name.region, (loc_name.value.clone(), var)));
+                variables.push(Loc::at(loc_name.region, (loc_name.value.clone(), var)));
             }
 
             let alias = Alias {
@@ -87,7 +87,7 @@ impl Scope {
         match self.idents.get(ident) {
             Some((symbol, _)) => Ok(*symbol),
             None => Err(RuntimeError::LookupNotInScope(
-                Located {
+                Loc {
                     region,
                     value: ident.clone(),
                 },
@@ -110,15 +110,21 @@ impl Scope {
         exposed_ident_ids: &IdentIds,
         all_ident_ids: &mut IdentIds,
         region: Region,
-    ) -> Result<Symbol, (Region, Located<Ident>)> {
+    ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
         match self.idents.get(&ident) {
-            Some((_, original_region)) => {
-                let shadow = Located {
-                    value: ident,
+            Some(&(_, original_region)) => {
+                let shadow = Loc {
+                    value: ident.clone(),
                     region,
                 };
 
-                Err((*original_region, shadow))
+                let ident_id = all_ident_ids.add(ident.clone());
+                let symbol = Symbol::new(self.home, ident_id);
+
+                self.symbols.insert(symbol, region);
+                self.idents.insert(ident, (symbol, region));
+
+                Err((original_region, shadow, symbol))
             }
             None => {
                 // If this IdentId was already added previously
@@ -172,7 +178,7 @@ impl Scope {
         &mut self,
         name: Symbol,
         region: Region,
-        vars: Vec<Located<(Lowercase, Variable)>>,
+        vars: Vec<Loc<(Lowercase, Variable)>>,
         typ: Type,
     ) {
         let roc_types::types::VariableDetail {

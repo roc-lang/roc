@@ -15,6 +15,7 @@ mod test_reporting {
     use roc_module::symbol::{Interns, ModuleId};
     use roc_mono::ir::{Procs, Stmt, UpdateModeIds};
     use roc_mono::layout::LayoutCache;
+    use roc_region::all::LineInfo;
     use roc_reporting::report::{
         can_problem, mono_problem, parse_problem, type_problem, Report, Severity, BLUE_CODE,
         BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE,
@@ -22,6 +23,7 @@ mod test_reporting {
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
+    use roc_test_utils::assert_multiline_str_eq;
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
@@ -94,8 +96,8 @@ mod test_reporting {
             let mut update_mode_ids = UpdateModeIds::new();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let ptr_bytes = 8;
-            let mut layout_cache = LayoutCache::new(ptr_bytes);
+            let target_info = roc_target::TargetInfo::default_x86_64();
+            let mut layout_cache = LayoutCache::new(target_info);
             let mut mono_env = roc_mono::ir::Env {
                 arena: &arena,
                 subs: &mut subs,
@@ -103,7 +105,7 @@ mod test_reporting {
                 home,
                 ident_ids: &mut ident_ids,
                 update_mode_ids: &mut update_mode_ids,
-                ptr_bytes,
+                target_info,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,
             };
@@ -126,6 +128,7 @@ mod test_reporting {
         use ven_pretty::DocAllocator;
 
         let src_lines: Vec<&str> = src.split('\n').collect();
+        let lines = LineInfo::new(src);
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
 
@@ -139,8 +142,8 @@ mod test_reporting {
 
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-                let problem = fail.into_parse_problem(filename.clone(), "", src.as_bytes());
-                let doc = parse_problem(&alloc, filename, 0, problem);
+                let problem = fail.into_file_error(filename.clone());
+                let doc = parse_problem(&alloc, &lines, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
             }
@@ -150,18 +153,20 @@ mod test_reporting {
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
                 for problem in can_problems {
-                    let report = can_problem(&alloc, filename.clone(), problem.clone());
+                    let report = can_problem(&alloc, &lines, filename.clone(), problem.clone());
                     reports.push(report);
                 }
 
                 for problem in type_problems {
-                    if let Some(report) = type_problem(&alloc, filename.clone(), problem.clone()) {
+                    if let Some(report) =
+                        type_problem(&alloc, &lines, filename.clone(), problem.clone())
+                    {
                         reports.push(report);
                     }
                 }
 
                 for problem in mono_problems {
-                    let report = mono_problem(&alloc, filename.clone(), problem.clone());
+                    let report = mono_problem(&alloc, &lines, filename.clone(), problem.clone());
                     reports.push(report);
                 }
 
@@ -186,12 +191,13 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
-        use roc_parse::parser::State;
+        use roc_parse::state::State;
 
         let state = State::new(src.as_bytes());
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
         let src_lines: Vec<&str> = src.split('\n').collect();
+        let lines = LineInfo::new(src);
 
         match roc_parse::module::parse_header(arena, state) {
             Err(fail) => {
@@ -201,12 +207,10 @@ mod test_reporting {
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
                 use roc_parse::parser::SyntaxError;
-                let problem = SyntaxError::Header(fail).into_parse_problem(
-                    filename.clone(),
-                    "",
-                    src.as_bytes(),
-                );
-                let doc = parse_problem(&alloc, filename, 0, problem);
+                let problem = fail
+                    .map_problem(SyntaxError::Header)
+                    .into_file_error(filename.clone());
+                let doc = parse_problem(&alloc, &lines, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
             }
@@ -233,7 +237,7 @@ mod test_reporting {
             }
         }
 
-        assert_eq!(buf, expected_rendering);
+        assert_multiline_str_eq!(expected_rendering, buf.as_str());
     }
 
     fn report_header_problem_as(src: &str, expected_rendering: &str) {
@@ -420,6 +424,16 @@ mod test_reporting {
 
                 `Booly` is not used anywhere in your code.
 
+                3│  Booly : [ Yes, No, Maybe ]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                
+                If you didn't intend on using `Booly` then remove it so future readers
+                of your code don't wonder why it is there.
+                
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+                
+                `Booly` is not used anywhere in your code.
+                
                 1│  Booly : [ Yes, No ]
                     ^^^^^^^^^^^^^^^^^^^
 
@@ -572,14 +586,14 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
-                
+
                 I cannot find a `true` value
-                
+
                 1│  if true then 1 else 2
                        ^^^^
-                
+
                 Did you mean one of these?
-                
+
                     True
                     Str
                     Num
@@ -626,12 +640,12 @@ mod test_reporting {
             indoc!(
                 r#"
                  y = 9
-    
+
                  box = \class, htmlChildren ->
                      div [ class ] []
-    
+
                  div = \_, _ -> 4
-    
+
                  box "wizard" []
              "#
             ),
@@ -640,7 +654,7 @@ mod test_reporting {
                  ── UNUSED ARGUMENT ─────────────────────────────────────────────────────────────
 
                  `box` doesn't use `htmlChildren`.
-    
+
                  3│  box = \class, htmlChildren ->
                                    ^^^^^^^^^^^^
 
@@ -1481,7 +1495,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn pattern_guard_mismatch() {
+    fn pattern_guard_mismatch_alias() {
         report_problem_as(
             indoc!(
                 r#"
@@ -1500,11 +1514,41 @@ mod test_reporting {
 
                 The first pattern is trying to match record values of type:
 
-                    { foo : [ True ]a }
+                    { foo : [ True ] }
 
                 But the expression between `when` and `is` has the type:
 
                     { foo : Num a }
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_guard_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 when { foo: "" } is
+                     { foo: True } -> 42
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st pattern in this `when` is causing a mismatch:
+
+                2│      { foo: True } -> 42
+                        ^^^^^^^^^^^^^
+
+                The first pattern is trying to match record values of type:
+
+                    { foo : [ True ] }
+
+                But the expression between `when` and `is` has the type:
+
+                    { foo : Str }
                 "#
             ),
         )
@@ -1632,7 +1676,7 @@ mod test_reporting {
 
                 But you are trying to use it as:
 
-                    [ Foo a ]b
+                    [ Foo a ]
                 "#
             ),
         )
@@ -2451,20 +2495,26 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This pattern does not cover all the possibilities:
+                This expression is used in an unexpected way:
 
                 5│  (Left y) = x
-                     ^^^^^^
+                               ^
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Right _
+                    [ Left I64, Right Bool ]
 
-                I would have to crash if I saw one of those! You can use a binding to
-                deconstruct a value if there is only ONE possibility. Use a `when` to
-                account for all possibilities.
+                But you are trying to use it as:
+
+                    [ Left a ]
+
+                Tip: Seems like a tag typo. Maybe `Right` should be `Left`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -6048,9 +6098,9 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 app "test-base64"
-                    packages { base: "platform" }
-                    imports [base.Task, Base64 ]
-                    provides [ main, @Foo ] to base
+                    packages { pf: "platform" }
+                    imports [pf.Task, Base64 ]
+                    provides [ main, @Foo ] to pf
                 "#
             ),
             indoc!(
@@ -6059,8 +6109,8 @@ I need all branches in an `if` to have the same type!
 
                 I am partway through parsing a provides list, but I got stuck here:
 
-                3│      imports [base.Task, Base64 ]
-                4│      provides [ main, @Foo ] to base
+                3│      imports [pf.Task, Base64 ]
+                4│      provides [ main, @Foo ] to pf
                                          ^
 
                 I was expecting a type name, value name or function name next, like
@@ -6076,7 +6126,7 @@ I need all branches in an `if` to have the same type!
         report_header_problem_as(
             indoc!(
                 r#"
-                platform folkertdev/foo
+                platform "folkertdev/foo"
                     requires { main : Effect {} }
                     exposes []
                     packages {}
@@ -6092,18 +6142,18 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── BAD REQUIRES RIGIDS ─────────────────────────────────────────────────────────
+                ── BAD REQUIRES ────────────────────────────────────────────────────────────────
 
                 I am partway through parsing a header, but I got stuck here:
 
-                1│  platform folkertdev/foo
+                1│  platform "folkertdev/foo"
                 2│      requires { main : Effect {} }
                                    ^
 
-                I am expecting a list of rigids like `{}` or `{model=>Model}` next. A full
+                I am expecting a list of type names like `{}` or `{ Model }` next. A full
                 `requires` definition looks like
 
-                    requires {model=>Model, msg=>Msg} {main : Effect {}}
+                    requires { Model, Msg } {main : Effect {}}
             "#
             ),
         )
@@ -6116,7 +6166,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 interface Foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6144,7 +6194,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 interface foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6170,7 +6220,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 app foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6879,6 +6929,311 @@ I need all branches in an `if` to have the same type!
                 Tip: Any connection between types must use a named type variable, not
                 a `*`! Maybe the annotation  on `f` should have a named type variable in
                 place of the `*`?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_not_an_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NOT AN INLINE ALIAS ─────────────────────────────────────────────────────────
+
+                The inline type after this `as` is not a type alias:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as a
+                                                             ^
+
+                Inline alias types must start with an uppercase identifier and be
+                followed by zero or more type arguments, like Point or List a.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_qualified() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── QUALIFIED ALIAS NAME ────────────────────────────────────────────────────────
+
+                This type alias has a qualified name:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
+                                                             ^
+
+                An alias introduces a new name to the current scope, so it must be
+                unqualified.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_argument_uppercase() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as LinkedList U
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE ARGUMENT NOT LOWERCASE ─────────────────────────────────────────────────
+
+                This alias type argument is not lowercase:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as LinkedList U
+                                                                        ^
+
+                All type arguments must be lowercase.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn mismatched_single_tag_arg() {
+        report_problem_as(
+            indoc!(
+                r#"
+                isEmpty =
+                    \email ->
+                        Email str = email
+                        Str.isEmpty str
+
+                isEmpty (Name "boo")
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `isEmpty` is not what I expect:
+
+                6│  isEmpty (Name "boo")
+                             ^^^^^^^^^^
+
+                This `Name` global tag application has the type:
+
+                    [ Name Str ]a
+
+                But `isEmpty` needs the 1st argument to be:
+
+                    [ Email Str ]
+
+                Tip: Seems like a tag typo. Maybe `Name` should be `Email`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2326() {
+        report_problem_as(
+            indoc!(
+                r#"
+                C a b : a -> D a b
+                D a b : { a, b }
+
+                f : C a Nat -> D a Nat
+                f = \c -> c 6
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `c` is not what I expect:
+
+                5│  f = \c -> c 6
+                                ^
+
+                This argument is a number of type:
+
+                    Num a
+
+                But `c` needs the 1st argument to be:
+
+                    a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `Num` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2380_annotations_only() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F : F
+                a : F
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `F` alias is self-recursive in an invalid way:
+
+                1│  F : F
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tag.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2380_typed_body() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F : F
+                a : F
+                a = 1
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `F` alias is self-recursive in an invalid way:
+
+                1│  F : F
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tag.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2380_alias_with_vars() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F a b : F a b
+                a : F Str Str
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `F` alias is self-recursive in an invalid way:
+
+                1│  F a b : F a b
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tag.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2167_record_field_optional_and_required_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Job : [ @Job { inputs : List Str } ]
+                job : { inputs ? List Str } -> Job
+                job = \{ inputs } ->
+                    @Job { inputs }
+
+                job { inputs: [ "build", "test" ] }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `job` is weird:
+
+                3│  job = \{ inputs } ->
+                           ^^^^^^^^^^
+
+                The argument is a pattern that matches record values of type:
+
+                    { inputs : List Str }
+
+                But the annotation on `job` says the 1st argument should be:
+
+                    { inputs ? List Str }
+
+                Tip: To extract the `.inputs` field it must be non-optional, but the
+                type says this field is optional. Learn more about optional fields at
+                TODO.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unify_recursive_with_nonrecursive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Job : [ @Job { inputs : List Job } ]
+
+                job : { inputs : List Str } -> Job
+                job = \{ inputs } ->
+                    @Job { inputs }
+
+                job { inputs: [ "build", "test" ] }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `job` definition:
+
+                3│  job : { inputs : List Str } -> Job
+                4│  job = \{ inputs } ->
+                5│      @Job { inputs }
+                        ^^^^^^^^^^^^^^^
+
+                This `@Job` private tag application has the type:
+
+                    [ @Job { inputs : List Str } ]
+
+                But the type annotation on `job` says it should be:
+
+                    [ @Job { inputs : List a } ] as a
                 "#
             ),
         )

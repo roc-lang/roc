@@ -1,7 +1,7 @@
 use const_format::concatcp;
 #[cfg(feature = "llvm")]
 use gen::{gen_and_eval, ReplOutput};
-use roc_parse::parser::{EExpr, SyntaxError};
+use roc_parse::parser::{EExpr, ELambda, SyntaxError};
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
@@ -27,6 +27,7 @@ pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
+mod app_memory;
 #[cfg(feature = "llvm")]
 mod eval;
 #[cfg(feature = "llvm")]
@@ -92,12 +93,13 @@ impl Validator for InputValidator {
             Ok(ValidationResult::Incomplete)
         } else {
             let arena = bumpalo::Bump::new();
-            let state = roc_parse::parser::State::new(ctx.input().trim().as_bytes());
+            let state = roc_parse::state::State::new(ctx.input().trim().as_bytes());
 
             match roc_parse::expr::parse_loc_expr(0, &arena, state) {
                 // Special case some syntax errors to allow for multi-line inputs
-                Err((_, EExpr::DefMissingFinalExpr(_, _), _))
-                | Err((_, EExpr::DefMissingFinalExpr2(_, _, _), _)) => {
+                Err((_, EExpr::DefMissingFinalExpr(_), _))
+                | Err((_, EExpr::DefMissingFinalExpr2(_, _), _))
+                | Err((_, EExpr::Lambda(ELambda::Body(_, _), _), _)) => {
                     Ok(ValidationResult::Incomplete)
                 }
                 _ => Ok(ValidationResult::Valid(None)),

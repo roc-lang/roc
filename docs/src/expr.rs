@@ -37,7 +37,7 @@ pub fn expr_to_html<'a>(
     );
 
     let mut scope = lang::scope::Scope::new(env.home, env.pool, env.var_store);
-    let region = Region::new(0, 0, 0, 0);
+    let region = Region::zero();
 
     // TODO remove unwrap
     write_expr_to_bump_str_html(&mut env, &mut scope, region, &expr, interns, buf).unwrap();

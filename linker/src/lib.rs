@@ -142,10 +142,11 @@ pub fn build_and_preprocess_host(
     target: &Triple,
     host_input_path: &Path,
     exposed_to_host: Vec<String>,
+    exported_closure_types: Vec<String>,
     target_valgrind: bool,
 ) -> io::Result<()> {
     let dummy_lib = host_input_path.with_file_name("libapp.so");
-    generate_dynamic_lib(target, exposed_to_host, &dummy_lib)?;
+    generate_dynamic_lib(target, exposed_to_host, exported_closure_types, &dummy_lib)?;
     rebuild_host(
         opt_level,
         target,
@@ -193,6 +194,7 @@ pub fn link_preprocessed_host(
 fn generate_dynamic_lib(
     _target: &Triple,
     exposed_to_host: Vec<String>,
+    exported_closure_types: Vec<String>,
     dummy_lib_path: &Path,
 ) -> io::Result<()> {
     let dummy_obj_file = Builder::new().prefix("roc_lib").suffix(".o").tempfile()?;
@@ -203,25 +205,37 @@ fn generate_dynamic_lib(
         write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
 
     let text_section = out_object.section_id(write::StandardSection::Text);
+
+    let mut add_symbol = |name: &String| {
+        out_object.add_symbol(write::Symbol {
+            name: name.as_bytes().to_vec(),
+            value: 0,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Dynamic,
+            weak: false,
+            section: write::SymbolSection::Section(text_section),
+            flags: SymbolFlags::None,
+        });
+    };
+
     for sym in exposed_to_host {
         for name in &[
             format!("roc__{}_1_exposed", sym),
             format!("roc__{}_1_exposed_generic", sym),
-            format!("roc__{}_1_Fx_caller", sym),
-            format!("roc__{}_1_Fx_size", sym),
-            format!("roc__{}_1_Fx_result_size", sym),
             format!("roc__{}_size", sym),
         ] {
-            out_object.add_symbol(write::Symbol {
-                name: name.as_bytes().to_vec(),
-                value: 0,
-                size: 0,
-                kind: SymbolKind::Text,
-                scope: SymbolScope::Dynamic,
-                weak: false,
-                section: write::SymbolSection::Section(text_section),
-                flags: SymbolFlags::None,
-            });
+            add_symbol(name);
+        }
+
+        for closure_type in &exported_closure_types {
+            for name in &[
+                format!("roc__{}_1_{}_caller", sym, closure_type),
+                format!("roc__{}_1_{}_size", sym, closure_type),
+                format!("roc__{}_1_{}_result_size", sym, closure_type),
+            ] {
+                add_symbol(name)
+            }
         }
     }
     std::fs::write(

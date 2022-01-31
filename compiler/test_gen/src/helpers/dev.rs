@@ -3,10 +3,11 @@ use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
+use roc_region::all::LineInfo;
 use tempfile::tempdir;
 
 #[allow(unused_imports)]
-use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
+use roc_mono::ir::pretty_print_ir_symbols;
 
 #[allow(dead_code)]
 fn promote_expr_to_module(src: &str) -> String {
@@ -56,7 +57,7 @@ pub fn helper(
         &stdlib,
         src_dir,
         exposed_types,
-        8,
+        roc_target::TargetInfo::default_x86_64(),
         builtin_defs_map,
     );
 
@@ -75,7 +76,7 @@ pub fn helper(
     // while you're working on the dev backend!
     {
         // println!("=========== Procedures ==========");
-        // if PRETTY_PRINT_IR_SYMBOLS {
+        // if pretty_print_ir_symbols() {
         //     println!("");
         //     for proc in procedures.values() {
         //         println!("{}", proc.to_pretty(200));
@@ -94,7 +95,7 @@ pub fn helper(
         // println!("=================================\n");
     }
 
-    debug_assert_eq!(exposed_to_host.len(), 1);
+    debug_assert_eq!(exposed_to_host.values.len(), 1);
     let main_fn_symbol = loaded.entry_point.symbol;
     let main_fn_layout = loaded.entry_point.layout;
 
@@ -124,6 +125,7 @@ pub fn helper(
             continue;
         }
 
+        let line_info = LineInfo::new(&src);
         let src_lines: Vec<&str> = src.split('\n').collect();
         let palette = DEFAULT_PALETTE;
 
@@ -139,7 +141,7 @@ pub fn helper(
                     continue;
                 }
                 _ => {
-                    let report = can_problem(&alloc, module_path.clone(), problem);
+                    let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
                     let mut buf = String::new();
 
                     report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -150,7 +152,7 @@ pub fn helper(
         }
 
         for problem in type_problems {
-            if let Some(report) = type_problem(&alloc, module_path.clone(), problem) {
+            if let Some(report) = type_problem(&alloc, &line_info, module_path.clone(), problem) {
                 let mut buf = String::new();
 
                 report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -160,7 +162,7 @@ pub fn helper(
         }
 
         for problem in mono_problems {
-            let report = mono_problem(&alloc, module_path.clone(), problem);
+            let report = mono_problem(&alloc, &line_info, module_path.clone(), problem);
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -177,7 +179,7 @@ pub fn helper(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        exposed_to_host: exposed_to_host.keys().copied().collect(),
+        exposed_to_host: exposed_to_host.values.keys().copied().collect(),
         lazy_literals,
         generate_allocators: true, // Needed for testing, since we don't have a platform
     };

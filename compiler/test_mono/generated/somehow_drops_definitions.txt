@@ -1,27 +1,27 @@
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Test.27 = lowlevel NumAdd #Attr.2 #Attr.3;
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Test.27 : Builtin(Int(I64)) = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Test.27;
 
-procedure Num.26 (#Attr.2, #Attr.3):
-    let Test.22 = lowlevel NumMul #Attr.2 #Attr.3;
+procedure Num.24 (#Attr.2, #Attr.3):
+    let Test.22 : Builtin(Int(I64)) = lowlevel NumMul #Attr.2 #Attr.3;
     ret Test.22;
 
 procedure Test.1 ():
-    let Test.28 = 1i64;
+    let Test.28 : Builtin(Int(I64)) = 1i64;
     ret Test.28;
 
 procedure Test.2 ():
-    let Test.23 = 2i64;
+    let Test.23 : Builtin(Int(I64)) = 2i64;
     ret Test.23;
 
 procedure Test.3 (Test.6):
-    let Test.26 = CallByName Test.1;
-    let Test.25 = CallByName Num.24 Test.6 Test.26;
+    let Test.26 : Builtin(Int(I64)) = CallByName Test.1;
+    let Test.25 : Builtin(Int(I64)) = CallByName Num.22 Test.6 Test.26;
     ret Test.25;
 
 procedure Test.4 (Test.7):
-    let Test.21 = CallByName Test.2;
-    let Test.20 = CallByName Num.26 Test.7 Test.21;
+    let Test.21 : Builtin(Int(I64)) = CallByName Test.2;
+    let Test.20 : Builtin(Int(I64)) = CallByName Num.24 Test.7 Test.21;
     ret Test.20;
 
 procedure Test.5 (Test.8, Test.9):
@@ -30,24 +30,24 @@ procedure Test.5 (Test.8, Test.9):
     in
     switch Test.8:
         case 0:
-            let Test.16 = CallByName Test.3 Test.9;
+            let Test.16 : Builtin(Int(I64)) = CallByName Test.3 Test.9;
             jump Test.15 Test.16;
     
         default:
-            let Test.17 = CallByName Test.4 Test.9;
+            let Test.17 : Builtin(Int(I64)) = CallByName Test.4 Test.9;
             jump Test.15 Test.17;
     
 
 procedure Test.0 ():
     joinpoint Test.19 Test.12:
-        let Test.13 = 42i64;
-        let Test.11 = CallByName Test.5 Test.12 Test.13;
+        let Test.13 : Builtin(Int(I64)) = 42i64;
+        let Test.11 : Builtin(Int(I64)) = CallByName Test.5 Test.12 Test.13;
         ret Test.11;
     in
-    let Test.24 = true;
+    let Test.24 : Builtin(Bool) = true;
     if Test.24 then
-        let Test.3 = false;
+        let Test.3 : LambdaSet(LambdaSet { set: [( Test.3, []), ( Test.4, [])], representation: Builtin(Bool) }) = false;
         jump Test.19 Test.3;
     else
-        let Test.4 = true;
+        let Test.4 : LambdaSet(LambdaSet { set: [( Test.3, []), ( Test.4, [])], representation: Builtin(Bool) }) = true;
         jump Test.19 Test.4;

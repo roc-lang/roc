@@ -70,6 +70,9 @@ use super::break_line::break_line;
 use super::break_line::insert_new_blank;
 use super::let_update::start_new_let_value;
 
+/// ed_update.rs contains all functions that change the ed_model.
+/// Additions and deletions of new characters to the editor are handled here.
+/// A large percentage of the editor's tests are at the end of this file.
 impl<'a> EdModel<'a> {
     pub fn move_caret(
         &mut self,
@@ -837,7 +840,7 @@ fn if_modifiers(modifiers: &Modifiers, shortcut_result: UIResult<()>) -> EdResul
     }
 }
 
-// current(=caret is here) MarkupNode corresponds to a Def2 in the AST
+// handle new char when current(=caret is here) MarkupNode corresponds to a Def2 in the AST
 pub fn handle_new_char_def(
     received_char: &char,
     def_id: DefId,
@@ -895,7 +898,7 @@ pub fn handle_new_char_def(
     Ok(outcome)
 }
 
-// current(=caret is here) MarkupNode corresponds to an Expr2 in the AST
+// handle new char when the current(caret is here) MarkupNode corresponds to an Expr2 in the AST
 pub fn handle_new_char_expr(
     received_char: &char,
     expr_id: ExprId,
@@ -1163,6 +1166,7 @@ pub fn handle_new_char_diff_mark_nodes_prev_is_expr(
     Ok(outcome)
 }
 
+// updates the ed_model based on the char the user just typed if the result would be syntactically correct.
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let input_outcome = match received_char {
             '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html

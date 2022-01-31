@@ -1,21 +1,21 @@
 procedure List.7 (#Attr.2):
-    let Test.7 = lowlevel ListLen #Attr.2;
-    ret Test.7;
+    let Test.10 : Builtin(Int(U64)) = lowlevel ListLen #Attr.2;
+    ret Test.10;
 
 procedure List.7 (#Attr.2):
-    let Test.8 = lowlevel ListLen #Attr.2;
+    let Test.8 : Builtin(Int(U64)) = lowlevel ListLen #Attr.2;
     ret Test.8;
 
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Test.6 = lowlevel NumAdd #Attr.2 #Attr.3;
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Test.6 : Builtin(Int(U64)) = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Test.6;
 
 procedure Test.0 ():
-    let Test.1 = Array [1i64, 2i64, 3i64];
-    let Test.2 = Array [1f64];
-    let Test.4 = CallByName List.7 Test.1;
-    dec Test.1;
-    let Test.5 = CallByName List.7 Test.2;
-    dec Test.2;
-    let Test.3 = CallByName Num.24 Test.4 Test.5;
+    let Test.9 : Builtin(List(Builtin(Int(I64)))) = Array [1i64, 2i64, 3i64];
+    let Test.4 : Builtin(Int(U64)) = CallByName List.7 Test.9;
+    dec Test.9;
+    let Test.7 : Builtin(List(Builtin(Float(F64)))) = Array [1f64];
+    let Test.5 : Builtin(Int(U64)) = CallByName List.7 Test.7;
+    dec Test.7;
+    let Test.3 : Builtin(Int(U64)) = CallByName Num.22 Test.4 Test.5;
     ret Test.3;

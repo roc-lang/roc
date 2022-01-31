@@ -1,4 +1,5 @@
 use roc_module::symbol::Symbol;
+use roc_target::TargetInfo;
 use std::ops::Index;
 
 pub const BUILTINS_HOST_OBJ_PATH: &str = env!(
@@ -46,14 +47,21 @@ impl FloatWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self) -> u32 {
+    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+        use roc_target::Architecture;
         use std::mem::align_of;
         use FloatWidth::*;
 
         // TODO actually alignment is architecture-specific
         match self {
             F32 => align_of::<f32>() as u32,
-            F64 => align_of::<f64>() as u32,
+            F64 => match target_info.architecture {
+                Architecture::X86_64
+                | Architecture::Aarch64
+                | Architecture::Arm
+                | Architecture::Wasm32 => 8,
+                Architecture::X86_32 => 4,
+            },
             F128 => align_of::<i128>() as u32,
         }
     }
@@ -106,16 +114,22 @@ impl IntWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self) -> u32 {
+    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+        use roc_target::Architecture;
         use std::mem::align_of;
         use IntWidth::*;
 
-        // TODO actually alignment is architecture-specific
         match self {
             U8 | I8 => align_of::<i8>() as u32,
             U16 | I16 => align_of::<i16>() as u32,
             U32 | I32 => align_of::<i32>() as u32,
-            U64 | I64 => align_of::<i64>() as u32,
+            U64 | I64 => match target_info.architecture {
+                Architecture::X86_64
+                | Architecture::Aarch64
+                | Architecture::Arm
+                | Architecture::Wasm32 => 8,
+                Architecture::X86_32 => 4,
+            },
             U128 | I128 => align_of::<i128>() as u32,
         }
     }
@@ -201,22 +215,28 @@ macro_rules! float_intrinsic {
 
 #[macro_export]
 macro_rules! int_intrinsic {
-    ($name:literal) => {{
+    ($signed_name:literal, $unsigned_name:literal) => {{
         let mut output = IntrinsicName::default();
 
-        output.options[4] = concat!($name, ".i8");
-        output.options[5] = concat!($name, ".i16");
-        output.options[6] = concat!($name, ".i32");
-        output.options[7] = concat!($name, ".i64");
-        output.options[8] = concat!($name, ".i128");
-        output.options[9] = concat!($name, ".i8");
-        output.options[10] = concat!($name, ".i16");
-        output.options[11] = concat!($name, ".i32");
-        output.options[12] = concat!($name, ".i64");
-        output.options[13] = concat!($name, ".i128");
+        // The indeces align with the `Index` impl for `IntrinsicName`.
+        output.options[4] = concat!($unsigned_name, ".i8");
+        output.options[5] = concat!($unsigned_name, ".i16");
+        output.options[6] = concat!($unsigned_name, ".i32");
+        output.options[7] = concat!($unsigned_name, ".i64");
+        output.options[8] = concat!($unsigned_name, ".i128");
+
+        output.options[9] = concat!($signed_name, ".i8");
+        output.options[10] = concat!($signed_name, ".i16");
+        output.options[11] = concat!($signed_name, ".i32");
+        output.options[12] = concat!($signed_name, ".i64");
+        output.options[13] = concat!($signed_name, ".i128");
 
         output
     }};
+
+    ($name:literal) => {
+        int_intrinsic!($name, $name)
+    };
 }
 
 pub const NUM_ASIN: IntrinsicName = float_intrinsic!("roc_builtins.num.asin");

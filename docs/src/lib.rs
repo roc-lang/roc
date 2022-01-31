@@ -14,8 +14,9 @@ use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::file::{LoadedModule, LoadingProblem};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::ident::{parse_ident, Ident};
-use roc_parse::parser::{State, SyntaxError};
-use roc_region::all::Region;
+use roc_parse::parser::SyntaxError;
+use roc_parse::state::State;
+use roc_region::all::{Position, Region};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -127,7 +128,7 @@ pub fn syntax_highlight_expr<'a>(
 
             Ok(buf.to_string())
         }
-        Err(fail) => Err(SyntaxError::Expr(fail)),
+        Err(fail) => Err(SyntaxError::Expr(fail, Position::default())),
     }
 }
 
@@ -427,7 +428,7 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>, std_lib: StdLib) -> Vec<L
             &std_lib,
             src_dir.as_path(),
             MutMap::default(),
-            std::mem::size_of::<usize>() as u32, // This is just type-checking for docs, so "target" doesn't matter
+            roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
             builtin_defs_map,
         ) {
             Ok(loaded) => modules.push(loaded),

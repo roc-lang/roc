@@ -2,41 +2,43 @@ interface List
     exposes
         [
             List,
-            isEmpty,
-            get,
-            set,
             append,
-            len,
-            walkBackwards,
             concat,
-            first,
-            single,
-            repeat,
-            reverse,
-            prepend,
-            join,
-            keepIf,
             contains,
-            sum,
-            walk,
-            last,
-            keepOks,
+            drop,
+            dropAt,
+            dropLast,
+            first,
+            get,
+            isEmpty,
+            join,
             keepErrs,
+            keepIf,
+            keepOks,
+            last,
+            len,
             map,
             map2,
             map3,
             map4,
-            mapWithIndex,
-            mapOrDrop,
             mapJoin,
+            mapOrDrop,
+            mapWithIndex,
+            prepend,
             product,
-            walkUntil,
             range,
+            repeat,
+            reverse,
+            set,
+            single,
             sortWith,
-            drop,
-            dropAt,
-            dropLast,
-            swap
+            split,
+            sublist,
+            sum,
+            swap,
+            walk,
+            walkBackwards,
+            walkUntil
         ]
     imports []
 
@@ -205,7 +207,7 @@ empty : List *
 ## Returns a list with the given length, where every element is the given value.
 ##
 ##
-repeat : elem, Nat -> List elem
+repeat : Nat, elem -> List elem
 
 ## Returns a list of all the integers between one and another,
 ## including both of the given numbers.
@@ -277,7 +279,7 @@ map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
 
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
-mapWithIndex : List before, (before, Nat -> after) -> List after
+mapWithIndex : List before, (Nat, before -> after) -> List after
 
 ## This works like [List.map], except at any time you can return `Err` to
 ## cancel the entire operation immediately, and return that #Err.
@@ -445,9 +447,6 @@ drop : List elem, Nat -> List elem
 ##
 ## To replace the element at a given index, instead of dropping it, see [List.set].
 dropAt : List elem, Nat -> List elem
-
-## Drops the last element in a List.
-dropLast : List elem -> List elem
 
 ## Adds a new element to the end of the list.
 ##
@@ -685,8 +684,6 @@ startsWith : List elem, List elem -> Bool
 
 endsWith : List elem, List elem -> Bool
 
-all : List elem, (elem -> Bool) -> Bool
-
 ## Run the given predicate on each element of the list, returning `True` if
 ## any of the elements satisfy it.
 any : List elem, (elem -> Bool) -> Bool
@@ -698,3 +695,11 @@ all : List elem, (elem -> Bool) -> Bool
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
+
+## Apply a function that returns a Result on a list, only successful
+## Results are kept and returned unwrapped.
+keepOks : List before, (before -> Result after *) -> List after
+
+## Apply a function that returns a Result on a list, only unsuccessful
+## Results are kept and returned unwrapped.
+keepErrs : List before, (before -> Result * after) -> List after

@@ -11,11 +11,12 @@ mod test_fmt {
     use roc_fmt::module::fmt_module;
     use roc_fmt::Buf;
     use roc_parse::module::{self, module_defs};
-    use roc_parse::parser::{Parser, State};
+    use roc_parse::parser::Parser;
+    use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
 
     // Not intended to be used directly in tests; please use expr_formats_to or expr_formats_same
-    fn expect_format_helper(input: &str, expected: &str) {
+    fn expect_format_expr_helper(input: &str, expected: &str) {
         let arena = Bump::new();
         match roc_parse::test_helpers::parse_expr_with(&arena, input.trim()) {
             Ok(actual) => {
@@ -34,21 +35,20 @@ mod test_fmt {
         let expected = expected.trim_end();
 
         // First check that input formats to the expected version
-        expect_format_helper(input, expected);
+        expect_format_expr_helper(input, expected);
 
         // Parse the expected result format it, asserting that it doesn't change
         // It's important that formatting be stable / idempotent
-        expect_format_helper(expected, expected);
+        expect_format_expr_helper(expected, expected);
     }
 
     fn expr_formats_same(input: &str) {
         expr_formats_to(input, input);
     }
 
-    fn module_formats_to(src: &str, expected: &str) {
+    // Not intended to be used directly in tests; please use module_formats_to or module_formats_same
+    fn expect_format_module_helper(src: &str, expected: &str) {
         let arena = Bump::new();
-        let src = src.trim_end();
-
         match module::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
                 let mut buf = Buf::new_in(&arena);
@@ -63,11 +63,19 @@ mod test_fmt {
                     }
                     Err(error) => panic!("Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
                 }
-
                 assert_multiline_str_eq!(expected, buf.as_str())
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
         };
+    }
+
+    fn module_formats_to(input: &str, expected: &str) {
+        // First check that input formats to the expected version
+        expect_format_module_helper(input, expected);
+
+        // Parse the expected result format it, asserting that it doesn't change
+        // It's important that formatting be stable / idempotent
+        expect_format_module_helper(expected, expected);
     }
 
     fn module_formats_same(input: &str) {
@@ -402,19 +410,19 @@ mod test_fmt {
             indoc!(
                 r#"
                 x = (5)
-    
-    
+
+
                 y = ((10))
-    
+
                 42
                 "#
             ),
             indoc!(
                 r#"
                 x = 5
-    
+
                 y = 10
-    
+
                 42
                 "#
             ),
@@ -758,9 +766,9 @@ mod test_fmt {
 
                 # comment 2
                 x: 42
-                
+
                 # comment 3
-                
+
                 # comment 4
             }"#
             ),
@@ -811,7 +819,7 @@ mod test_fmt {
                 f: {                    y : Int *,
                                          x : Int * ,
                    }
-                
+
                 f"#
             ),
             indoc!(
@@ -902,7 +910,7 @@ mod test_fmt {
                     {
                         # comment
                     }
-                
+
                 f"#
             ),
         );
@@ -927,7 +935,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 f :
-                    { 
+                    {
                         x: Int * # comment 1
                         ,
                         # comment 2
@@ -943,7 +951,7 @@ mod test_fmt {
                         # comment 1
                         # comment 2
                     }
-                
+
                 f"#
             ),
         );
@@ -999,7 +1007,7 @@ mod test_fmt {
             indoc!(
                 r#"
                     identity = \a
-                        -> 
+                        ->
                             a + b
 
                     identity 4010
@@ -1379,7 +1387,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-            {    
+            {
             }"#
             ),
             "{}",
@@ -2563,6 +2571,17 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn pipline_op_with_apply() {
+        expr_formats_same(indoc!(
+            r#"
+            output
+                |> List.set (offset + 0) b
+                |> List.set (offset + 1) a
+            "#
+        ));
+    }
+
     // MODULES
 
     #[test]
@@ -2625,15 +2644,15 @@ mod test_fmt {
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
-                app "Foo" packages { base: "platform" } imports [] provides [ main ] to base"#
+                app "Foo" packages { pf: "platform" } imports [] provides [ main ] to pf"#
         ));
     }
 
     #[test]
     fn single_line_platform() {
         module_formats_same(
-            "platform folkertdev/foo \
-            requires { model=>Model, msg=>Msg } { main : Effect {} } \
+            "platform \"folkertdev/foo\" \
+            requires { Model, Msg } { main : Effect {} } \
             exposes [] \
             packages {} \
             imports [ Task.{ Task } ] \
@@ -2706,7 +2725,7 @@ mod test_fmt {
     fn multiline_tag_union_annotation_beginning_on_same_line() {
         expr_formats_same(indoc!(
             r#"
-            Expr  : [
+            Expr : [
                     Add Expr Expr,
                     Mul Expr Expr,
                     Val I64,
@@ -2744,7 +2763,7 @@ mod test_fmt {
                         # comment 2
                         # comment 3
                     ]
-    
+
                 b
                 "#
             ),
@@ -2917,6 +2936,38 @@ mod test_fmt {
                 42
             "#
         ));
+    }
+
+    #[test]
+    /// Test that everything under examples/ is formatted correctly
+    /// If this test fails on your diff, it probably means you need to re-format the examples.
+    /// Try this:
+    /// `cargo run -- format $(find examples -name \*.roc)`
+    fn test_fmt_examples() {
+        let mut count = 0;
+        let mut root = std::env::current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_owned();
+        root.push("examples");
+        for entry in walkdir::WalkDir::new(&root) {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension() == Some(&std::ffi::OsStr::new("roc")) {
+                count += 1;
+                let src = std::fs::read_to_string(path).unwrap();
+                println!("Now trying to format {}", path.display());
+                module_formats_same(&src);
+            }
+        }
+        assert!(
+            count > 0,
+            "Expecting to find at least 1 .roc file to format under {}",
+            root.display()
+        );
     }
 
     // this is a parse error atm

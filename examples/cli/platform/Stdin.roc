@@ -3,4 +3,4 @@ interface Stdin
     imports [ fx.Effect, Task ]
 
 line : Task.Task Str *
-line = Effect.after Effect.getLine Task.succeed # TODO FIXME Effect.getLine should suffice
+line = Effect.after Effect.getLine Task.succeed# TODO FIXME Effect.getLine should suffice

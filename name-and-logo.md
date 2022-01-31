@@ -8,16 +8,16 @@ That’s why the logo is a bird. It’s specifically an [*origami* bird](https:/
 to [Elm](https://elm-lang.org/)’s tangram logo.
 
 Roc is a direct descendant of Elm. The languages are similar, but not the same.
-[Origami](https://en.wikipedia.org/wiki/Origami) likewise has similarities to [tangrams](https://en.wikipedia.org/wiki/Tangram), although they are not the same. 
-Both involve making a surprising variety of things 
-from simple primitives. [*Folds*](https://en.wikipedia.org/wiki/Fold_(higher-order_function)) 
+[Origami](https://en.wikipedia.org/wiki/Origami) likewise has similarities to [tangrams](https://en.wikipedia.org/wiki/Tangram), although they are not the same.
+Both involve making a surprising variety of things
+from simple primitives. [*Folds*](https://en.wikipedia.org/wiki/Fold_(higher-order_function))
 are also common in functional programming.
 
-The logo was made by tracing triangles onto a photo of a physical origami bird. 
-It’s made of triangles because triangles are a foundational primitive in 
+The logo was made by tracing triangles onto a photo of a physical origami bird.
+It’s made of triangles because triangles are a foundational primitive in
 computer graphics.
 
-The name was chosen because it makes for a three-letter file extension, it means 
+The name was chosen because it makes for a three-letter file extension, it means
 something fantastical, and it has incredible potential for puns.
 
 # Different Ways to Spell Roc
@@ -29,4 +29,4 @@ something fantastical, and it has incredible potential for puns.
 
 # Fun Facts
 
-Roc translates to 鹏 in Chinese, [which means](https://www.mdbg.net/chinese/dictionary?page=worddict&wdrst=0&wdqb=%E9%B9%8F) "a large fabulous bird." 
+Roc translates to 鹏 in Chinese, [which means](https://www.mdbg.net/chinese/dictionary?page=worddict&wdrst=0&wdqb=%E9%B9%8F) "a large fabulous bird."

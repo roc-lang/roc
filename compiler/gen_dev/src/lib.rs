@@ -5,16 +5,16 @@
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::ident::{ModuleName, TagName};
-use roc_module::low_level::LowLevel;
+use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::gen_refcount::RefcountProcGenerator;
+use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
 };
 use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds};
-use roc_reporting::internal_error;
 
 mod generic64;
 mod object_builder;
@@ -62,9 +62,7 @@ trait Backend<'a> {
     // This method is suboptimal, but it seems to be the only way to make rust understand
     // that all of these values can be mutable at the same time. By returning them together,
     // rust understands that they are part of a single use of mutable self.
-    fn env_interns_refcount_mut(
-        &mut self,
-    ) -> (&Env<'a>, &mut Interns, &mut RefcountProcGenerator<'a>);
+    fn env_interns_helpers_mut(&mut self) -> (&Env<'a>, &mut Interns, &mut CodeGenHelp<'a>);
 
     fn symbol_to_string(&self, symbol: Symbol, layout_id: LayoutId) -> String {
         layout_id.to_symbol_string(symbol, self.interns())
@@ -76,11 +74,11 @@ trait Backend<'a> {
             .starts_with(ModuleName::APP)
     }
 
-    fn refcount_proc_gen_mut(&mut self) -> &mut RefcountProcGenerator<'a>;
+    fn helper_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a>;
 
-    fn refcount_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)>;
+    fn helper_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)>;
 
-    fn refcount_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)>;
+    fn helper_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)>;
 
     /// reset resets any registers or other values that may be occupied at the end of a procedure.
     /// It also passes basic procedure information to the builder for setup of the next function.
@@ -116,17 +114,17 @@ trait Backend<'a> {
         self.scan_ast(&proc.body);
         self.create_free_map();
         self.build_stmt(&proc.body, &proc.ret_layout);
-        let mut rc_proc_names = bumpalo::vec![in self.env().arena];
-        rc_proc_names.reserve(self.refcount_proc_symbols().len());
-        for (rc_proc_sym, rc_proc_layout) in self.refcount_proc_symbols() {
+        let mut helper_proc_names = bumpalo::vec![in self.env().arena];
+        helper_proc_names.reserve(self.helper_proc_symbols().len());
+        for (rc_proc_sym, rc_proc_layout) in self.helper_proc_symbols() {
             let name = layout_ids
                 .get_toplevel(*rc_proc_sym, rc_proc_layout)
                 .to_symbol_string(*rc_proc_sym, self.interns());
 
-            rc_proc_names.push((*rc_proc_sym, name));
+            helper_proc_names.push((*rc_proc_sym, name));
         }
         let (bytes, relocs) = self.finalize();
-        (bytes, relocs, rc_proc_names)
+        (bytes, relocs, helper_proc_names)
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
@@ -150,20 +148,19 @@ trait Backend<'a> {
                 // Expand the Refcounting statement into more detailed IR with a function call
                 // If this layout requires a new RC proc, we get enough info to create a linker symbol
                 // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
-                let (rc_stmt, new_proc_info) = {
-                    let (env, interns, rc_proc_gen) = self.env_interns_refcount_mut();
+                let (rc_stmt, new_specializations) = {
+                    let (env, interns, rc_proc_gen) = self.env_interns_helpers_mut();
                     let module_id = env.module_id;
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
                     rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, *following)
                 };
 
-                if let Some((rc_proc_symbol, rc_proc_layout)) = new_proc_info {
-                    self.refcount_proc_symbols_mut()
-                        .push((rc_proc_symbol, rc_proc_layout));
+                for spec in new_specializations.into_iter() {
+                    self.helper_proc_symbols_mut().push(spec);
                 }
 
-                self.build_stmt(&rc_stmt, ret_layout)
+                self.build_stmt(rc_stmt, ret_layout)
             }
             Stmt::Switch {
                 cond_symbol,
@@ -263,8 +260,9 @@ trait Backend<'a> {
                         ret_layout,
                         ..
                     } => {
-                        // If this function is just a lowlevel wrapper, then inline it
-                        if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
+                        if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
+                            LowLevelWrapperType::from_symbol(*func_sym)
+                        {
                             self.build_run_low_level(
                                 sym,
                                 &lowlevel,
@@ -534,13 +532,13 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::RefCountGetPtr => {
+            LowLevel::PtrCast => {
                 debug_assert_eq!(
                     1,
                     args.len(),
-                    "RefCountGetPtr: expected to have exactly two argument"
+                    "RefCountGetPtr: expected to have exactly one argument"
                 );
-                self.build_refcount_getptr(sym, &args[0])
+                self.build_ptr_cast(sym, &args[0])
             }
             LowLevel::RefCountDec => self.build_fn_call(
                 sym,
@@ -645,7 +643,7 @@ trait Backend<'a> {
     );
 
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
-    fn build_refcount_getptr(&mut self, dst: &Symbol, src: &Symbol);
+    fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
 
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>;

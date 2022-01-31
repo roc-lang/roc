@@ -6,10 +6,10 @@ use crate::file::LoadedModule;
 use roc_can::scope::Scope;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
-use roc_parse::ast;
 use roc_parse::ast::CommentOrNewline;
+use roc_parse::ast::{self, AliasHeader};
 use roc_parse::ast::{AssignedField, Def};
-use roc_region::all::Located;
+use roc_region::all::Loc;
 
 // Documentation generation requirements
 
@@ -91,7 +91,7 @@ pub fn generate_module_docs<'a>(
     scope: Scope,
     module_name: ModuleName,
     ident_ids: &'a IdentIds,
-    parsed_defs: &'a [Located<ast::Def<'a>>],
+    parsed_defs: &'a [Loc<ast::Def<'a>>],
 ) -> ModuleDocumentation {
     let (entries, _) =
         parsed_defs
@@ -205,7 +205,10 @@ fn generate_entry_doc<'a>(
             _ => (acc, None),
         },
 
-        Def::Alias { name, vars, ann } => {
+        Def::Alias {
+            header: AliasHeader { name, vars },
+            ann,
+        } => {
             let mut type_vars = Vec::new();
 
             for var in vars.iter() {

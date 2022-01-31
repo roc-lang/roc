@@ -1,0 +1,20 @@
+procedure Test.2 (Test.4):
+    let Test.11 : Builtin(Int(U8)) = 0i64;
+    let Test.12 : Builtin(Int(U8)) = GetTagId Test.4;
+    let Test.13 : Builtin(Bool) = lowlevel Eq Test.11 Test.12;
+    if Test.13 then
+        let Test.5 : Builtin(Str) = UnionAtIndex (Id 0) (Index 0) Test.4;
+        inc Test.5;
+        dec Test.4;
+        ret Test.5;
+    else
+        let Test.6 : Builtin(Str) = UnionAtIndex (Id 1) (Index 0) Test.4;
+        inc Test.6;
+        dec Test.4;
+        ret Test.6;
+
+procedure Test.0 ():
+    let Test.14 : Builtin(Str) = "A";
+    let Test.8 : Union(NonRecursive([[Builtin(Str)], [Builtin(Str)]])) = A Test.14;
+    let Test.7 : Builtin(Str) = CallByName Test.2 Test.8;
+    ret Test.7;

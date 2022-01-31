@@ -1,21 +1,19 @@
 App {
     header: AppHeader {
-        name: |L 0-0, C 4-15| PlainLine(
+        name: @4-15 PlainLine(
             "quicksort",
         ),
         packages: [
-            |L 1-1, C 15-33| Entry {
-                shorthand: "base",
+            @31-47 PackageEntry {
+                shorthand: "pf",
                 spaces_after_shorthand: [],
-                package_or_path: |L 1-1, C 21-33| Path(
-                    PlainLine(
-                        "./platform",
-                    ),
+                package_name: @35-47 PackageName(
+                    "./platform",
                 ),
             },
         ],
         imports: [
-            |L 2-2, C 14-25| Package(
+            @64-75 Package(
                 "foo",
                 ModuleName(
                     "Bar.Baz",
@@ -24,12 +22,13 @@ App {
             ),
         ],
         provides: [
-            |L 3-3, C 15-24| Exposed(
+            @93-102 ExposedName(
                 "quicksort",
             ),
         ],
-        to: |L 3-3, C 30-34| ExistingPackage(
-            "base",
+        provides_types: None,
+        to: @108-110 ExistingPackage(
+            "pf",
         ),
         before_header: [],
         after_app_keyword: [],

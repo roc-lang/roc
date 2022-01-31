@@ -1,0 +1,77 @@
+Platform {
+    header: PlatformHeader {
+        name: @9-21 PackageName(
+            "test/types",
+        ),
+        requires: PlatformRequires {
+            rigids: [
+                @37-42 UppercaseIdent(
+                    "Flags",
+                ),
+                @44-49 UppercaseIdent(
+                    "Model",
+                ),
+            ],
+            signature: @55-77 TypedIdent {
+                ident: @55-59 "main",
+                spaces_before_colon: [],
+                ann: @62-77 Apply(
+                    "",
+                    "App",
+                    [
+                        @66-71 Apply(
+                            "",
+                            "Flags",
+                            [],
+                        ),
+                        @72-77 Apply(
+                            "",
+                            "Model",
+                            [],
+                        ),
+                    ],
+                ),
+            },
+        },
+        exposes: [],
+        packages: [],
+        imports: [],
+        provides: [
+            @141-152 ExposedName(
+                "mainForHost",
+            ),
+        ],
+        effects: Effects {
+            spaces_before_effects_keyword: [
+                Newline,
+            ],
+            spaces_after_effects_keyword: [],
+            spaces_after_type_name: [],
+            effect_shortname: "fx",
+            effect_type_name: "Effect",
+            entries: [],
+        },
+        before_header: [],
+        after_platform_keyword: [],
+        before_requires: [
+            Newline,
+        ],
+        after_requires: [],
+        before_exposes: [
+            Newline,
+        ],
+        after_exposes: [],
+        before_packages: [
+            Newline,
+        ],
+        after_packages: [],
+        before_imports: [
+            Newline,
+        ],
+        after_imports: [],
+        before_provides: [
+            Newline,
+        ],
+        after_provides: [],
+    },
+}

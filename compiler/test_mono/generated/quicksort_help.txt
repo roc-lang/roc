@@ -1,32 +1,32 @@
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Test.19 = lowlevel NumAdd #Attr.2 #Attr.3;
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Test.19 : Builtin(Int(I64)) = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Test.19;
 
-procedure Num.25 (#Attr.2, #Attr.3):
-    let Test.22 = lowlevel NumSub #Attr.2 #Attr.3;
+procedure Num.23 (#Attr.2, #Attr.3):
+    let Test.22 : Builtin(Int(I64)) = lowlevel NumSub #Attr.2 #Attr.3;
     ret Test.22;
 
-procedure Num.27 (#Attr.2, #Attr.3):
-    let Test.26 = lowlevel NumLt #Attr.2 #Attr.3;
+procedure Num.25 (#Attr.2, #Attr.3):
+    let Test.26 : Builtin(Bool) = lowlevel NumLt #Attr.2 #Attr.3;
     ret Test.26;
 
 procedure Test.1 (Test.27, Test.28, Test.29):
     joinpoint Test.12 Test.2 Test.3 Test.4:
-        let Test.14 = CallByName Num.27 Test.3 Test.4;
+        let Test.14 : Builtin(Bool) = CallByName Num.25 Test.3 Test.4;
         if Test.14 then
             dec Test.2;
-            let Test.25 = Array [];
-            let Test.24 = 0i64;
-            let Test.23 = Struct {Test.24, Test.25};
-            let Test.5 = StructAtIndex 0 Test.23;
-            let Test.6 = StructAtIndex 1 Test.23;
+            let Test.25 : Builtin(List(Union(NonRecursive([])))) = Array [];
+            let Test.24 : Builtin(Int(I64)) = 0i64;
+            let Test.23 : Struct([Builtin(Int(I64)), Builtin(List(Union(NonRecursive([]))))]) = Struct {Test.24, Test.25};
+            let Test.5 : Builtin(Int(I64)) = StructAtIndex 0 Test.23;
+            let Test.6 : Builtin(List(Union(NonRecursive([])))) = StructAtIndex 1 Test.23;
             inc Test.6;
             dec Test.23;
-            let Test.21 = 1i64;
-            let Test.20 = CallByName Num.25 Test.5 Test.21;
-            let Test.16 = CallByName Test.1 Test.6 Test.3 Test.20;
-            let Test.18 = 1i64;
-            let Test.17 = CallByName Num.24 Test.5 Test.18;
+            let Test.21 : Builtin(Int(I64)) = 1i64;
+            let Test.20 : Builtin(Int(I64)) = CallByName Num.23 Test.5 Test.21;
+            let Test.16 : Builtin(List(Builtin(Int(I64)))) = CallByName Test.1 Test.6 Test.3 Test.20;
+            let Test.18 : Builtin(Int(I64)) = 1i64;
+            let Test.17 : Builtin(Int(I64)) = CallByName Num.22 Test.5 Test.18;
             jump Test.12 Test.16 Test.17 Test.4;
         else
             ret Test.2;
@@ -34,8 +34,8 @@ procedure Test.1 (Test.27, Test.28, Test.29):
     jump Test.12 Test.27 Test.28 Test.29;
 
 procedure Test.0 ():
-    let Test.9 = Array [];
-    let Test.10 = 0i64;
-    let Test.11 = 0i64;
-    let Test.8 = CallByName Test.1 Test.9 Test.10 Test.11;
+    let Test.9 : Builtin(List(Builtin(Int(I64)))) = Array [];
+    let Test.10 : Builtin(Int(I64)) = 0i64;
+    let Test.11 : Builtin(Int(I64)) = 0i64;
+    let Test.8 : Builtin(List(Builtin(Int(I64)))) = CallByName Test.1 Test.9 Test.10 Test.11;
     ret Test.8;

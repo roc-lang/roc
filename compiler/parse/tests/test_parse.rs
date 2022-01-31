@@ -20,79 +20,85 @@ mod test_parse {
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{self, EscapedChar};
     use roc_parse::module::module_defs;
-    use roc_parse::parser::{Parser, State, SyntaxError};
+    use roc_parse::parser::{Parser, SyntaxError};
+    use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
-    use roc_region::all::{Located, Region};
+    use roc_region::all::{Loc, Region};
     use roc_test_utils::assert_multiline_str_eq;
     use std::{f64, i64};
 
+    macro_rules! parse_snapshot_kind {
+        (expr => $arena:expr, $input:expr) => {
+            parse_expr_with($arena, $input.trim())
+        };
+        (header => $arena:expr, $input:expr) => {
+            roc_parse::module::parse_header($arena, State::new($input.trim().as_bytes()))
+                .map(|tuple| tuple.0)
+        };
+        (module => $arena:expr, $input:expr) => {
+            module_defs()
+                .parse($arena, State::new($input.as_bytes()))
+                .map(|tuple| tuple.1)
+        };
+    }
+
+    macro_rules! should_pass {
+        (pass) => {
+            true
+        };
+        (fail) => {
+            false
+        };
+    }
+
     macro_rules! snapshot_tests {
         (
-            expr => {
-                $($expr_test_name:ident),*
-            }
-            header => {
-                $($header_test_name:ident),*
-            }
-            module => {
-                $($module_test_name:ident),*
-            }
+            $($pass_or_fail:ident / $test_name:ident . $kind:ident),*
+            $(,)?
         ) => {
             #[test]
             fn no_extra_snapshot_test_files() {
                 let tests = &[
-                    $(concat!(stringify!($expr_test_name), ".expr")),*,
-                    $(concat!(stringify!($header_test_name), ".header")),*,
-                    $(concat!(stringify!($module_test_name), ".module")),*,
+                    $(concat!(
+                        stringify!($pass_or_fail),
+                        "/",
+                        stringify!($test_name),
+                        ".",
+                        stringify!($kind)
+                    )),*,
                 ].iter().map(|t| *t).collect::<std::collections::HashSet<&str>>();
+
+                fn list(dir: &std::path::Path) -> std::vec::Vec<String> {
+                    std::fs::read_dir(dir).unwrap().map(|f| f.unwrap().file_name().to_str().unwrap().to_string()).collect::<std::vec::Vec<_>>()
+                }
 
                 let mut base = std::path::PathBuf::from("tests");
                 base.push("snapshots");
-                base.push("pass");
-                let files = std::fs::read_dir(&base).unwrap().map(|f| f.unwrap().file_name().to_str().unwrap().to_string()).collect::<std::vec::Vec<_>>();
-                for file in files {
-                    if let Some(file) = file.strip_suffix(".roc") {
-                        assert!(tests.contains(file), "{}", file);
-                    } else if let Some(file) = file.strip_suffix(".result-ast") {
-                        assert!(tests.contains(file), "{}", file);
-                    } else {
-                        panic!("unexpected test file found: {}", file);
+                let pass_or_fail_names = list(&base);
+                for res in pass_or_fail_names {
+                    assert!(res == "pass" || res == "fail");
+                    let res_dir = base.join(&res);
+                    for file in list(&res_dir) {
+                        if let Some(file) = file.strip_suffix(".roc") {
+                            assert!(tests.contains(format!("{}/{}", &res, file).as_str()), "{}", file);
+                        } else if let Some(file) = file.strip_suffix(".result-ast") {
+                            assert!(tests.contains(format!("{}/{}", &res, file).as_str()), "{}", file);
+                        } else {
+                            panic!("unexpected test file found: {}", file);
+                        }
                     }
                 }
             }
 
             $(
                 #[test]
-                fn $expr_test_name() {
-                    snapshot_test(stringify!($expr_test_name), "expr", |input| {
+                fn $test_name() {
+                    snapshot_test(should_pass!($pass_or_fail), stringify!($test_name), stringify!($kind), |input| {
                         let arena = Bump::new();
-                        let actual_ast = parse_expr_with(&arena, input.trim()).unwrap();
-                        format!("{:#?}\n", actual_ast)
-                    });
-                }
-            )*
-
-            $(
-                #[test]
-                fn $header_test_name() {
-                    snapshot_test(stringify!($header_test_name), "header", |input| {
-                        let arena = Bump::new();
-                        let actual_ast = roc_parse::module::parse_header(&arena, State::new(input.as_bytes()))
-                            .map(|tuple| tuple.0).unwrap();
-                        format!("{:#?}\n", actual_ast)
-                    });
-                }
-            )*
-
-            $(
-                #[test]
-                fn $module_test_name() {
-                    snapshot_test(stringify!($module_test_name), "module", |input| {
-                        let arena = Bump::new();
-                        let actual_ast = module_defs()
-                            .parse(&arena, State::new(input.as_bytes()))
-                            .map(|tuple| tuple.1).unwrap();
-                        format!("{:#?}\n", actual_ast)
+                        let result = parse_snapshot_kind!($kind => &arena, input);
+                        result
+                            .map(|actual_ast| format!("{:#?}\n", actual_ast))
+                            .map_err(|error| format!("{:?}", error))
                     });
                 }
             )*
@@ -100,155 +106,177 @@ mod test_parse {
     }
 
     snapshot_tests! {
-        expr => {
-            add_var_with_spaces,
-            add_with_spaces,
-            apply_global_tag,
-            apply_parenthetical_global_tag_args,
-            apply_private_tag,
-            apply_three_args,
-            apply_two_args,
-            apply_unary_negation,
-            apply_unary_not,
-            basic_apply,
-            basic_docs,
-            basic_field,
-            basic_global_tag,
-            basic_private_tag,
-            basic_var,
-            closure_with_underscores,
-            comment_after_op,
-            comment_before_op,
-            comment_inside_empty_list,
-            comment_with_non_ascii,
-            empty_list,
-            empty_record,
-            empty_string,
-            equals,
-            equals_with_spaces,
-            expect,
-            float_with_underscores,
-            highest_float,
-            highest_int,
-            if_def,
-            int_with_underscore,
-            lowest_float,
-            lowest_int,
-            malformed_ident_due_to_underscore,
-            malformed_pattern_field_access, // See https://github.com/rtfeldman/roc/issues/399
-            malformed_pattern_module_name, // See https://github.com/rtfeldman/roc/issues/399
-            minus_twelve_minus_five,
-            mixed_docs,
-            multi_backpassing,
-            multi_char_string,
-            multiline_type_signature,
-            multiline_type_signature_with_comment,
-            multiple_fields,
-            multiple_operators,
-            neg_inf_float,
-            negative_float,
-            negative_int,
-            newline_after_equals, // Regression test for https://github.com/rtfeldman/roc/issues/51
-            newline_after_mul,
-            newline_after_sub,
-            newline_and_spaces_before_less_than,
-            newline_before_add,
-            newline_before_sub,
-            newline_inside_empty_list,
-            newline_singleton_list,
-            not_docs,
-            one_backpassing,
-            one_char_string,
-            one_def,
-            one_minus_two,
-            one_plus_two,
-            one_spaced_def,
-            ops_with_newlines,
-            packed_singleton_list,
-            parenthetical_apply,
-            parenthetical_basic_field,
-            parenthetical_field_qualified_var,
-            parenthetical_var,
-            parse_alias,
-            parse_as_ann,
-            pattern_with_space_in_parens, // https://github.com/rtfeldman/roc/issues/929
-            pos_inf_float,
-            positive_float,
-            positive_int,
-            private_qualified_tag,
-            qualified_field,
-            qualified_global_tag,
-            qualified_var,
-            record_destructure_def,
-            record_update,
-            record_with_if,
-            single_arg_closure,
-            single_underscore_closure,
-            space_only_after_minus,
-            spaced_singleton_list,
-            spaces_inside_empty_list,
-            string_without_escape,
-            sub_var_with_spaces,
-            sub_with_spaces,
-            tag_pattern,
-            ten_times_eleven,
-            three_arg_closure,
-            two_arg_closure,
-            two_backpassing,
-            two_branch_when,
-            two_spaced_def,
-            type_decl_with_underscore,
-            unary_negation,
-            unary_negation_access, // Regression test for https://github.com/rtfeldman/roc/issues/509
-            unary_negation_arg,
-            unary_negation_with_parens,
-            unary_not,
-            unary_not_with_parens,
-            underscore_backpassing,
-            var_else,
-            var_if,
-            var_is,
-            var_minus_two,
-            var_then,
-            var_when,
-            when_if_guard,
-            when_in_parens,
-            when_in_parens_indented,
-            when_with_alternative_patterns,
-            when_with_function_application,
-            when_with_negative_numbers,
-            when_with_numbers,
-            when_with_records,
-            zero_float,
-            zero_int
-        }
-        header => {
-            empty_app_header,
-            empty_interface_header,
-            empty_platform_header,
-            full_app_header,
-            full_app_header_trailing_commas,
-            minimal_app_header,
-            nested_module,
-            nonempty_platform_header
-        }
-        module => {
-            standalone_module_defs,
-            module_def_newline,
-            nested_def_annotation
-        }
+        fail/type_argument_no_arrow.expr,
+        fail/type_double_comma.expr,
+        pass/add_var_with_spaces.expr,
+        pass/add_with_spaces.expr,
+        pass/annotated_record_destructure.expr,
+        pass/annotated_tag_destructure.expr,
+        pass/apply_global_tag.expr,
+        pass/apply_parenthetical_global_tag_args.expr,
+        pass/apply_private_tag.expr,
+        pass/apply_three_args.expr,
+        pass/apply_two_args.expr,
+        pass/apply_unary_negation.expr,
+        pass/apply_unary_not.expr,
+        pass/basic_apply.expr,
+        pass/basic_docs.expr,
+        pass/basic_field.expr,
+        pass/basic_global_tag.expr,
+        pass/basic_private_tag.expr,
+        pass/basic_var.expr,
+        pass/closure_with_underscores.expr,
+        pass/comment_after_op.expr,
+        pass/comment_before_op.expr,
+        pass/comment_inside_empty_list.expr,
+        pass/comment_with_non_ascii.expr,
+        pass/destructure_tag_assignment.expr,
+        pass/empty_app_header.header,
+        pass/empty_interface_header.header,
+        pass/empty_list.expr,
+        pass/empty_platform_header.header,
+        pass/empty_record.expr,
+        pass/empty_string.expr,
+        pass/equals_with_spaces.expr,
+        pass/equals.expr,
+        pass/expect.expr,
+        pass/float_with_underscores.expr,
+        pass/full_app_header_trailing_commas.header,
+        pass/full_app_header.header,
+        pass/function_effect_types.header,
+        pass/highest_float.expr,
+        pass/highest_int.expr,
+        pass/if_def.expr,
+        pass/int_with_underscore.expr,
+        pass/interface_with_newline.header,
+        pass/lowest_float.expr,
+        pass/lowest_int.expr,
+        pass/malformed_ident_due_to_underscore.expr,
+        pass/malformed_pattern_field_access.expr, // See https://github.com/rtfeldman/roc/issues/399
+        pass/malformed_pattern_module_name.expr, // See https://github.com/rtfeldman/roc/issues/399
+        pass/minimal_app_header.header,
+        pass/minus_twelve_minus_five.expr,
+        pass/mixed_docs.expr,
+        pass/module_def_newline.module,
+        pass/multi_backpassing.expr,
+        pass/multi_char_string.expr,
+        pass/multiline_type_signature_with_comment.expr,
+        pass/multiline_type_signature.expr,
+        pass/multiple_fields.expr,
+        pass/multiple_operators.expr,
+        pass/neg_inf_float.expr,
+        pass/negative_float.expr,
+        pass/negative_int.expr,
+        pass/nested_def_annotation.module,
+        pass/nested_if.expr,
+        pass/nested_module.header,
+        pass/newline_after_equals.expr, // Regression test for https://github.com/rtfeldman/roc/issues/51
+        pass/newline_after_mul.expr,
+        pass/newline_after_sub.expr,
+        pass/newline_and_spaces_before_less_than.expr,
+        pass/newline_before_add.expr,
+        pass/newline_before_sub.expr,
+        pass/newline_inside_empty_list.expr,
+        pass/newline_singleton_list.expr,
+        pass/nonempty_platform_header.header,
+        pass/not_docs.expr,
+        pass/one_backpassing.expr,
+        pass/one_char_string.expr,
+        pass/one_def.expr,
+        pass/one_minus_two.expr,
+        pass/one_plus_two.expr,
+        pass/one_spaced_def.expr,
+        pass/ops_with_newlines.expr,
+        pass/packed_singleton_list.expr,
+        pass/parenthetical_apply.expr,
+        pass/parenthetical_basic_field.expr,
+        pass/parenthetical_field_qualified_var.expr,
+        pass/parenthetical_var.expr,
+        pass/parse_alias.expr,
+        pass/parse_as_ann.expr,
+        pass/pattern_with_space_in_parens.expr, // https://github.com/rtfeldman/roc/issues/929
+        pass/pos_inf_float.expr,
+        pass/positive_float.expr,
+        pass/positive_int.expr,
+        pass/private_qualified_tag.expr,
+        pass/provides_type.header,
+        pass/qualified_field.expr,
+        pass/qualified_global_tag.expr,
+        pass/qualified_var.expr,
+        pass/record_destructure_def.expr,
+        pass/record_func_type_decl.expr,
+        pass/record_update.expr,
+        pass/record_with_if.expr,
+        pass/requires_type.header,
+        pass/single_arg_closure.expr,
+        pass/single_underscore_closure.expr,
+        pass/space_only_after_minus.expr,
+        pass/spaced_singleton_list.expr,
+        pass/spaces_inside_empty_list.expr,
+        pass/standalone_module_defs.module,
+        pass/string_without_escape.expr,
+        pass/sub_var_with_spaces.expr,
+        pass/sub_with_spaces.expr,
+        pass/tag_pattern.expr,
+        pass/ten_times_eleven.expr,
+        pass/three_arg_closure.expr,
+        pass/two_arg_closure.expr,
+        pass/two_backpassing.expr,
+        pass/two_branch_when.expr,
+        pass/two_spaced_def.expr,
+        pass/type_decl_with_underscore.expr,
+        pass/unary_negation_access.expr, // Regression test for https://github.com/rtfeldman/roc/issues/509
+        pass/unary_negation_arg.expr,
+        pass/unary_negation_with_parens.expr,
+        pass/unary_negation.expr,
+        pass/unary_not_with_parens.expr,
+        pass/unary_not.expr,
+        pass/underscore_backpassing.expr,
+        pass/var_else.expr,
+        pass/var_if.expr,
+        pass/var_is.expr,
+        pass/var_minus_two.expr,
+        pass/var_then.expr,
+        pass/var_when.expr,
+        pass/when_if_guard.expr,
+        pass/when_in_parens_indented.expr,
+        pass/when_in_parens.expr,
+        pass/when_with_alternative_patterns.expr,
+        pass/when_with_function_application.expr,
+        pass/when_with_negative_numbers.expr,
+        pass/when_with_numbers.expr,
+        pass/when_with_records.expr,
+        pass/zero_float.expr,
+        pass/zero_int.expr,
     }
 
-    fn snapshot_test(name: &str, ty: &str, func: impl Fn(&str) -> String) {
+    fn snapshot_test(
+        should_pass: bool,
+        name: &str,
+        ty: &str,
+        func: impl Fn(&str) -> Result<String, String>,
+    ) {
         let mut parent = std::path::PathBuf::from("tests");
         parent.push("snapshots");
-        parent.push("pass");
+        parent.push(if should_pass { "pass" } else { "fail" });
         let input_path = parent.join(&format!("{}.{}.roc", name, ty));
         let result_path = parent.join(&format!("{}.{}.result-ast", name, ty));
 
         let input = std::fs::read_to_string(&input_path).unwrap();
 
-        let actual_result = func(&input);
+        let result = func(&input);
+
+        let actual_result = if should_pass {
+            eprintln!("The source code for this test did not successfully parse!\n");
+
+            result.unwrap()
+        } else {
+            eprintln!(
+                "The source code for this test successfully parsed, but it was not expected to!\n"
+            );
+
+            result.unwrap_err()
+        };
 
         if std::env::var("ROC_PARSER_SNAPSHOT_TEST_OVERWRITE").is_ok() {
             std::fs::write(&result_path, actual_result).unwrap();
@@ -347,7 +375,7 @@ mod test_parse {
         assert_segments(r#""Hi, \u(123)!""#, |arena| {
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Unicode(Located::new(0, 0, 8, 11, "123")),
+                Unicode(Loc::new(8, 11, "123")),
                 Plaintext("!")
             ]
         });
@@ -357,7 +385,7 @@ mod test_parse {
     fn unicode_escape_in_front() {
         assert_segments(r#""\u(1234) is a unicode char""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Located::new(0, 0, 4, 8, "1234")),
+                Unicode(Loc::new(4, 8, "1234")),
                 Plaintext(" is a unicode char")
             ]
         });
@@ -368,7 +396,7 @@ mod test_parse {
         assert_segments(r#""this is unicode: \u(1)""#, |arena| {
             bumpalo::vec![in arena;
                 Plaintext("this is unicode: "),
-                Unicode(Located::new(0, 0, 21, 22, "1"))
+                Unicode(Loc::new(21, 22, "1"))
             ]
         });
     }
@@ -377,11 +405,11 @@ mod test_parse {
     fn unicode_escape_multiple() {
         assert_segments(r#""\u(a1) this is \u(2Bcd) unicode \u(ef97)""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Located::new(0, 0, 4, 6, "a1")),
+                Unicode(Loc::new(4, 6, "a1")),
                 Plaintext(" this is "),
-                Unicode(Located::new(0, 0, 19, 23, "2Bcd")),
+                Unicode(Loc::new(19, 23, "2Bcd")),
                 Plaintext(" unicode "),
-                Unicode(Located::new(0, 0, 36, 40, "ef97"))
+                Unicode(Loc::new(36, 40, "ef97"))
             ]
         });
     }
@@ -398,7 +426,7 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Interpolated(Located::new(0, 0, 7, 11, expr)),
+                Interpolated(Loc::new(7, 11, expr)),
                 Plaintext("!")
             ]
         });
@@ -413,7 +441,7 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Interpolated(Located::new(0, 0, 3, 7, expr)),
+                Interpolated(Loc::new(3, 7, expr)),
                 Plaintext(", hi!")
             ]
         });
@@ -429,7 +457,7 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hello "),
-                Interpolated(Located::new(0, 0, 9, 13, expr))
+                Interpolated(Loc::new(9, 13, expr))
             ]
         });
     }
@@ -449,9 +477,9 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Interpolated(Located::new(0, 0, 7, 11, expr1)),
+                Interpolated(Loc::new(7, 11, expr1)),
                 Plaintext("! How is "),
-                Interpolated(Located::new(0, 0, 23, 30, expr2)),
+                Interpolated(Loc::new(23, 30, expr2)),
                 Plaintext(" going?")
             ]
         });
@@ -460,23 +488,6 @@ mod test_parse {
     #[test]
     fn empty_source_file() {
         assert_parsing_fails("", SyntaxError::Eof(Region::zero()));
-    }
-
-    #[test]
-    fn first_line_too_long() {
-        let max_line_length = u16::MAX as usize;
-
-        // the string literal "ZZZZZZZZZ" but with way more Zs
-        let too_long_str_body: String = (1..max_line_length)
-            .into_iter()
-            .map(|_| "Z".to_string())
-            .collect();
-        let too_long_str = format!("\"{}\"", too_long_str_body);
-
-        // Make sure it's longer than our maximum line length
-        assert_eq!(too_long_str.len(), max_line_length + 1);
-
-        assert_parsing_fails(&too_long_str, SyntaxError::LineTooLong(0));
     }
 
     #[quickcheck]

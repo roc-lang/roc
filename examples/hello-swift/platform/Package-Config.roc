@@ -1,5 +1,5 @@
-platform examples/hello-swift
-    requires {}{ main : Str }
+platform "examples/hello-swift"
+    requires {} { main : Str }
     exposes []
     packages {}
     imports []

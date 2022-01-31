@@ -1,3 +1,3 @@
 procedure Test.0 ():
-    let Test.4 = 2i64;
+    let Test.4 : Builtin(Int(I64)) = 2i64;
     ret Test.4;

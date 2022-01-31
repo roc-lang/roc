@@ -1,26 +1,26 @@
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Test.7 = lowlevel NumAdd #Attr.2 #Attr.3;
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Test.7 : Builtin(Int(I64)) = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Test.7;
 
 procedure Test.0 ():
-    let Test.16 = 3i64;
-    let Test.15 = 2i64;
-    let Test.4 = Struct {Test.15, Test.16};
+    let Test.16 : Builtin(Int(I64)) = 3i64;
+    let Test.15 : Builtin(Int(I64)) = 2i64;
+    let Test.4 : Struct([Builtin(Int(I64)), Builtin(Int(I64))]) = Struct {Test.15, Test.16};
     joinpoint Test.12:
-        let Test.2 = StructAtIndex 0 Test.4;
-        let Test.3 = StructAtIndex 1 Test.4;
-        let Test.6 = CallByName Num.24 Test.2 Test.3;
+        let Test.2 : Builtin(Int(I64)) = StructAtIndex 0 Test.4;
+        let Test.3 : Builtin(Int(I64)) = StructAtIndex 1 Test.4;
+        let Test.6 : Builtin(Int(I64)) = CallByName Num.22 Test.2 Test.3;
         ret Test.6;
     in
-    let Test.10 = StructAtIndex 1 Test.4;
-    let Test.11 = 3i64;
-    let Test.14 = lowlevel Eq Test.11 Test.10;
+    let Test.10 : Builtin(Int(I64)) = StructAtIndex 1 Test.4;
+    let Test.11 : Builtin(Int(I64)) = 3i64;
+    let Test.14 : Builtin(Bool) = lowlevel Eq Test.11 Test.10;
     if Test.14 then
-        let Test.8 = StructAtIndex 0 Test.4;
-        let Test.9 = 4i64;
-        let Test.13 = lowlevel Eq Test.9 Test.8;
+        let Test.8 : Builtin(Int(I64)) = StructAtIndex 0 Test.4;
+        let Test.9 : Builtin(Int(I64)) = 4i64;
+        let Test.13 : Builtin(Bool) = lowlevel Eq Test.9 Test.8;
         if Test.13 then
-            let Test.5 = 9i64;
+            let Test.5 : Builtin(Int(I64)) = 9i64;
             ret Test.5;
         else
             jump Test.12;

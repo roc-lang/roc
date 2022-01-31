@@ -6,15 +6,15 @@ use crate::{
     Buf,
 };
 
-pub fn fmt_collection<'a, 'b, T: ExtractSpaces<'a> + Formattable<'b>>(
-    buf: &mut Buf<'b>,
+pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
+    buf: &mut Buf<'buf>,
     indent: u16,
     start: char,
     end: char,
     items: Collection<'a, T>,
     newline: Newlines,
 ) where
-    <T as ExtractSpaces<'a>>::Item: Formattable<'b>,
+    <T as ExtractSpaces<'a>>::Item: Formattable,
 {
     buf.indent(indent);
     let is_multiline =
@@ -52,14 +52,13 @@ pub fn fmt_collection<'a, 'b, T: ExtractSpaces<'a> + Formattable<'b>>(
             item_indent,
         );
         buf.newline();
-        buf.indent(braces_indent);
     } else {
         // is_multiline == false
         // there is no comment to add
         buf.push(start);
         let mut iter = items.iter().peekable();
         while let Some(item) = iter.next() {
-            buf.push(' ');
+            buf.spaces(1);
             item.format(buf, indent);
             if iter.peek().is_some() {
                 buf.push(',');
@@ -67,8 +66,9 @@ pub fn fmt_collection<'a, 'b, T: ExtractSpaces<'a> + Formattable<'b>>(
         }
 
         if !items.is_empty() {
-            buf.push(' ');
+            buf.spaces(1);
         }
     }
+    buf.indent(indent);
     buf.push(end);
 }

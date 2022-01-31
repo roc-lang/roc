@@ -14,25 +14,27 @@ pub trait Wasm32TestResult {
         wrapper_name: &str,
         main_function_index: u32,
     ) {
-        let index = module.code.code_builders.len() as u32;
+        let index = module.import.function_count
+            + module.code.preloaded_count
+            + module.code.code_builders.len() as u32;
 
         module.add_function_signature(Signature {
             param_types: Vec::with_capacity_in(0, arena),
             ret_type: Some(ValueType::I32),
         });
 
-        module.export.entries.push(Export {
-            name: wrapper_name.to_string(),
+        module.export.append(Export {
+            name: arena.alloc_slice_copy(wrapper_name.as_bytes()),
             ty: ExportType::Func,
             index,
         });
 
-        let symbol_table = module.linking.symbol_table_mut();
-        symbol_table.push(SymInfo::Function(WasmObjectSymbol::Defined {
+        let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
             flags: 0,
             index,
             name: wrapper_name.to_string(),
-        }));
+        });
+        module.linking.symbol_table.push(linker_symbol);
 
         let mut code_builder = CodeBuilder::new(arena);
         Self::build_wrapper_body(&mut code_builder, main_function_index);
@@ -57,7 +59,7 @@ macro_rules! build_wrapper_body_primitive {
             code_builder.$store_instruction($align, 0);
             code_builder.get_local(frame_pointer_id);
 
-            code_builder.build_fn_header(local_types, frame_size, frame_pointer);
+            code_builder.build_fn_header_and_footer(local_types, frame_size, frame_pointer);
         }
     };
 }
@@ -84,7 +86,7 @@ fn build_wrapper_body_stack_memory(
     code_builder.get_local(local_id);
     code_builder.call(main_function_index, main_symbol_index, 0, true);
     code_builder.get_local(local_id);
-    code_builder.build_fn_header(local_types, size as i32, frame_pointer);
+    code_builder.build_fn_header_and_footer(local_types, size as i32, frame_pointer);
 }
 
 macro_rules! wasm_test_result_stack_memory {
@@ -114,7 +116,7 @@ wasm_test_result_primitive!(u64, i64_store, Align::Bytes8);
 wasm_test_result_primitive!(i64, i64_store, Align::Bytes8);
 wasm_test_result_primitive!(usize, i32_store, Align::Bytes4);
 
-wasm_test_result_primitive!(f32, f32_store, Align::Bytes8);
+wasm_test_result_primitive!(f32, f32_store, Align::Bytes4);
 wasm_test_result_primitive!(f64, f64_store, Align::Bytes8);
 
 wasm_test_result_stack_memory!(u128);
@@ -147,7 +149,7 @@ impl Wasm32TestResult for () {
         let main_symbol_index = main_function_index;
         code_builder.call(main_function_index, main_symbol_index, 0, false);
         code_builder.get_global(0);
-        code_builder.build_fn_header(&[], 0, None);
+        code_builder.build_fn_header_and_footer(&[], 0, None);
     }
 }
 

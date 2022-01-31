@@ -1,3 +1,3 @@
 (when x is
-    Ok -> 3 
+    Ok -> 3
      )

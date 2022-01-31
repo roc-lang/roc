@@ -6,12 +6,16 @@ extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
 
+#[macro_use]
+extern crate indoc;
+
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        example_file, examples_dir, extract_valgrind_errors, fixture_file, run_cmd, run_roc,
-        run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
+        example_file, examples_dir, extract_valgrind_errors, fixture_file, known_bad_file, run_cmd,
+        run_roc, run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
     };
+    use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::path::{Path, PathBuf};
 
@@ -44,6 +48,27 @@ mod cli_run {
         use_valgrind: bool,
     }
 
+    fn strip_colors(str: &str) -> String {
+        use roc_reporting::report::*;
+        str.replace(RED_CODE, "")
+            .replace(WHITE_CODE, "")
+            .replace(BLUE_CODE, "")
+            .replace(YELLOW_CODE, "")
+            .replace(GREEN_CODE, "")
+            .replace(CYAN_CODE, "")
+            .replace(MAGENTA_CODE, "")
+            .replace(RESET_CODE, "")
+            .replace(BOLD_CODE, "")
+            .replace(UNDERLINE_CODE, "")
+    }
+
+    fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
+        let compile_out = run_roc(&[&["check", file.to_str().unwrap()], &flags[..]].concat());
+        let err = compile_out.stdout.trim();
+        let err = strip_colors(&err);
+        assert_multiline_str_eq!(err, expected.into());
+    }
+
     fn check_output_with_stdin(
         file: &Path,
         stdin: &[&str],
@@ -62,7 +87,7 @@ mod cli_run {
 
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], &all_flags[..]].concat());
         if !compile_out.stderr.is_empty() {
-            panic!("{}", compile_out.stderr);
+            panic!("roc build had stderr: {}", compile_out.stderr);
         }
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);
@@ -351,11 +376,19 @@ mod cli_run {
         //     use_valgrind: true,
         // },
         cli:"cli" => Example {
-            filename: "Echo.roc",
-            executable_filename: "echo",
+            filename: "form.roc",
+            executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
             input_file: None,
-            expected_ending: "Hi, Giovanni Giorgio!\n",
+            expected_ending: "Hi, Giovanni Giorgio! 👋\n",
+            use_valgrind: true,
+        },
+        tui:"tui" => Example {
+            filename: "Main.roc",
+            executable_filename: "tui",
+            stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
+            input_file: None,
+            expected_ending: "Hello Worldfoo!\n",
             use_valgrind: true,
         },
         // custom_malloc:"custom-malloc" => Example {
@@ -388,9 +421,11 @@ mod cli_run {
 
     macro_rules! benchmarks {
         ($($test_name:ident => $benchmark:expr,)+) => {
+
             $(
                 #[test]
                 #[cfg_attr(not(debug_assertions), serial(benchmark))]
+                #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
                 fn $test_name() {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);
@@ -601,6 +636,14 @@ mod cli_run {
                 expected_ending: "",
                 use_valgrind: true,
             },
+            issue2279 => Example {
+                filename: "Issue2279.roc",
+                executable_filename: "issue2279",
+                stdin: &[],
+                input_file: None,
+                expected_ending: "Hello, world!\n",
+                use_valgrind: true,
+            },
             quicksort_app => Example {
                 filename: "QuicksortApp.roc",
                 executable_filename: "quicksortapp",
@@ -730,6 +773,32 @@ mod cli_run {
             None,
             "I am Dep2.value2\n",
             true,
+        );
+    }
+
+    #[test]
+    fn known_type_error() {
+        check_compile_error(
+            &known_bad_file("TypeError.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                I cannot find a `d` value
+
+                10│      _ <- await (line d)
+                                          ^
+
+                Did you mean one of these?
+
+                    U8
+                    Ok
+                    I8
+                    F64
+
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
         );
     }
 }
