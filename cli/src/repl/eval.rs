@@ -241,16 +241,16 @@ fn tag_id_from_recursive_ptr<'a, M: AppMemory>(
     rec_addr: usize,
 ) -> (i64, usize) {
     let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.target_info);
+    let addr_with_id = env.app_memory.deref_usize(rec_addr);
+
     if tag_in_ptr {
-        let addr_with_id = env.app_memory.deref_usize(rec_addr);
         let (_, tag_id_mask) = UnionLayout::tag_id_pointer_bits_and_mask(env.target_info);
         let tag_id = addr_with_id & tag_id_mask;
         let data_addr = addr_with_id & !tag_id_mask;
         (tag_id as i64, data_addr)
     } else {
-        let data_addr = env.app_memory.deref_usize(rec_addr);
-        let tag_id = tag_id_from_data(env, union_layout, data_addr);
-        (tag_id, data_addr)
+        let tag_id = tag_id_from_data(env, union_layout, addr_with_id);
+        (tag_id, addr_with_id)
     }
 }
 

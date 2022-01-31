@@ -133,6 +133,8 @@ mod test_parse {
         pass/destructure_tag_assignment.expr,
         pass/empty_app_header.header,
         pass/empty_interface_header.header,
+        pass/empty_hosted_header.header,
+        pass/nonempty_hosted_header.header,
         pass/empty_list.expr,
         pass/empty_platform_header.header,
         pass/empty_record.expr,
