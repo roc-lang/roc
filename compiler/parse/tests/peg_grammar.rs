@@ -1,3 +1,16 @@
+
+
+/*
+To debug grammar, add `dbg!(&tokens);`, execute with:
+```
+cargo test --features peg/trace test_fibo -- --nocapture
+```
+With visualization, see necessary format for temp_trace.txt [here](https://github.com/fasterthanlime/pegviz):
+```
+cat compiler/parse/temp_trace.txt | pegviz --output ./pegviz.html
+```
+*/
+
 #[cfg(test)]
 mod test_peg_grammar {
     use std::fs;
@@ -712,6 +725,36 @@ peg::parser!{
         rule apply_args() =
           type_annotation() type_annotation()*
 
+        // TODO write tests for precedence
+        rule op_expr() = precedence!{ // lowest precedence
+            x:(@) [T::OpPizza] y:@ {}// |>
+            --
+            x:(@) [T::OpAnd] y:@ {}
+            x:(@) [T::OpOr] y:@ {}
+            --
+            x:(@) [T::OpEquals] y:@ {}
+            x:(@) [T::OpNotEquals] y:@ {}
+            x:(@) [T::OpLessThan] y:@ {}
+            x:(@) [T::OpGreaterThan] y:@ {}
+            x:(@) [T::OpLessThanOrEq] y:@ {}
+            x:(@) [T::OpGreaterThanOrEq] y:@ {}
+            --
+            x:(@) [T::OpPlus] y:@ {}
+            x:(@) [T::OpMinus] y:@ {}
+            --
+            x:(@) [T::Asterisk] y:@ {}
+            x:(@) [T::OpSlash] y:@ {}
+            x:(@) [T::OpDoubleSlash] y:@ {}
+            x:(@) [T::OpPercent] y:@ {}
+            x:(@) [T::OpDoublePercent] y:@ {}
+            --
+            x:@ [T::OpCaret] y:(@) {} // ^
+            --
+            [T::OpMinus] x:@ {}
+            [T::Bang] x:@ {} // !
+            --
+            expr() {}
+        }  // highest precedence
 
         rule unary_op() =
           [T::OpMinus]
@@ -1111,6 +1154,22 @@ fn test_astar_test() {
 fn test_cli_echo() {
   let tokens = test_tokenize(&example_path("cli/Echo.roc"));
   
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza() {
+  let tokens = test_tokenize(r#"closure = \_ ->
+  Task.succeed {}
+      |> Task.map (\_ -> x)"#);
+  dbg!(&tokens);
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn test_closure_file() {
+  let tokens = test_tokenize(&example_path("benchmarks/Closure.roc"));
+  dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
