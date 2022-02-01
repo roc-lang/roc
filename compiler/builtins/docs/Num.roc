@@ -1143,7 +1143,7 @@ shr : Int a, Int a -> Int a
 
 ## [Arithmetic bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Arithmetic_shift) right.
 ##
-## This is called `shlWrap` because any bits shifted
+## This is called `shrWrap` because any bits shifted
 ## off the end of the number will be wrapped around to
 ## the beginning. (In contrast, [shr] replaces discarded bits with zeroes.)
 shrWrap : Int a, Int a -> Int a
