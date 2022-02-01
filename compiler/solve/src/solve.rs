@@ -771,7 +771,7 @@ fn type_to_variable<'a>(
 
     match typ {
         Variable(var) => *var,
-        Apply(symbol, arguments) => {
+        Apply(symbol, arguments, _) => {
             let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
             for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
                 let var = type_to_variable(subs, rank, pools, arena, var_index);
