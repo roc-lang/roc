@@ -5,18 +5,22 @@ version = "0.1.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies]
-bumpalo = {version = "3.8.0", features = ["collections"]} 
-inkwell = {path = "../vendor/inkwell"}# TODO      
-libloading = "0.7.1" # TODO
-target-lexicon = "0.12.2" 
+[features]
+default = ["llvm"]
+llvm = ["inkwell", "libloading", "roc_gen_llvm", "roc_build/llvm"]
 
-roc_build = {path = "../compiler/build", default-features = false, features = ["llvm"]}# TODO
+[dependencies]
+bumpalo = {version = "3.8.0", features = ["collections"]}
+inkwell = {path = "../vendor/inkwell", optional = true}
+libloading = {version = "0.7.1", optional = true}
+target-lexicon = "0.12.2"
+
+roc_build = {path = "../compiler/build", default-features = false}
 roc_builtins = {path = "../compiler/builtins"}
 roc_can = {path = "../compiler/can"}
 roc_collections = {path = "../compiler/collections"}
 roc_fmt = {path = "../compiler/fmt"}
-roc_gen_llvm = {path = "../compiler/gen_llvm"}# TODO
+roc_gen_llvm = {path = "../compiler/gen_llvm", optional = true}
 roc_load = {path = "../compiler/load"}
 roc_module = {path = "../compiler/module"}
 roc_mono = {path = "../compiler/mono"}
