@@ -82,11 +82,6 @@ mod test_load {
         let app_module = files.pop().unwrap();
         let interfaces = files;
 
-        debug_assert!(
-            app_module.1.starts_with("app"),
-            "The final module should be the application module"
-        );
-
         for (name, source) in interfaces {
             let mut filename = PathBuf::from(name);
             filename.set_extension("roc");
@@ -278,15 +273,10 @@ mod test_load {
                 "Main",
                 indoc!(
                     r#"
-                        app "test-app"
-                            packages { blah: "./blah" }
-                            imports [ RBTree ]
-                            provides [ main ] to blah
+                        interface Other exposes [ empty ] imports [ RBTree ]
 
                         empty : RBTree.RedBlackTree I64 I64
                         empty = RBTree.empty
-
-                        main = empty
                     "#
                 ),
             ),
@@ -530,10 +520,10 @@ mod test_load {
             "Main",
             indoc!(
                 r#"
-                        app "test-app" packages { blah: "./blah" } provides [ main ] to blah
+                interface Main exposes [ main ] imports []
 
-                        main = [
-                    "#
+                main = [
+                "#
             ),
         )];
 
@@ -561,9 +551,7 @@ mod test_load {
     }
 
     #[test]
-    #[should_panic(
-        expected = "FileProblem { filename: \"tests/fixtures/build/interface_with_deps/invalid$name.roc\", error: NotFound }"
-    )]
+    #[should_panic(expected = "FILE NOT FOUND")]
     fn file_not_found() {
         let subs_by_module = MutMap::default();
         let loaded_module = load_fixture("interface_with_deps", "invalid$name", subs_by_module);
@@ -588,5 +576,30 @@ mod test_load {
                 "str" => "Str",
             },
         );
+    }
+
+    #[test]
+    fn platform_does_not_exist() {
+        let modules = vec![(
+            "Main",
+            indoc!(
+                r#"
+                app "example"
+                    packages { pf: "./zzz-does-not-exist" }
+                    imports [ ]
+                    provides [ main ] to pf
+
+                main = ""
+                "#
+            ),
+        )];
+
+        match multiple_modules(modules) {
+            Err(report) => {
+                assert!(report.contains("FILE NOT FOUND"));
+                assert!(report.contains("zzz-does-not-exist/Package-Config.roc"));
+            }
+            Ok(_) => unreachable!("we expect failure here"),
+        }
     }
 }

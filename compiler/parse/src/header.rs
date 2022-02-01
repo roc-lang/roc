@@ -81,6 +81,27 @@ pub struct InterfaceHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostedHeader<'a> {
+    pub name: Loc<ModuleName<'a>>,
+    pub exposes: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
+    pub generates: UppercaseIdent<'a>,
+    pub generates_with: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+
+    // Potential comments and newlines - these will typically all be empty.
+    pub before_header: &'a [CommentOrNewline<'a>],
+    pub after_hosted_keyword: &'a [CommentOrNewline<'a>],
+    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub after_exposes: &'a [CommentOrNewline<'a>],
+    pub before_imports: &'a [CommentOrNewline<'a>],
+    pub after_imports: &'a [CommentOrNewline<'a>],
+    pub before_generates: &'a [CommentOrNewline<'a>],
+    pub after_generates: &'a [CommentOrNewline<'a>],
+    pub before_with: &'a [CommentOrNewline<'a>],
+    pub after_with: &'a [CommentOrNewline<'a>],
+}
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum To<'a> {
     ExistingPackage(&'a str),

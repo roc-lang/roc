@@ -1217,6 +1217,10 @@ impl<'a> LoadStart<'a> {
                     let buf = to_parse_problem_report(problem, module_ids, root_exposed_ident_ids);
                     return Err(LoadingProblem::FormattedReport(buf));
                 }
+                Err(LoadingProblem::FileProblem { filename, error }) => {
+                    let buf = to_file_problem_report(&filename, error);
+                    return Err(LoadingProblem::FormattedReport(buf));
+                }
                 Err(e) => return Err(e),
             }
         };
@@ -1367,7 +1371,7 @@ where
 
     // We need to allocate worker *queues* on the main thread and then move them
     // into the worker threads, because those workers' stealers need to be
-    // shared bet,een all threads, and this coordination work is much easier
+    // shared between all threads, and this coordination work is much easier
     // on the main thread.
     let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
     let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
@@ -1745,7 +1749,7 @@ fn update<'a>(
                 state.module_cache.module_names.insert(*id, name.clone());
             }
 
-            // This was a dependency. Write it down and keep processing messaages.
+            // This was a dependency. Write it down and keep processing messages.
             let mut exposed_symbols: MutSet<Symbol> =
                 HashSet::with_capacity_and_hasher(header.exposes.len(), default_hasher());
 
@@ -1801,7 +1805,6 @@ fn update<'a>(
             //
             // e.g. for `app "blah"` we should generate an output file named "blah"
             match &parsed.module_name {
-                ModuleNameEnum::PkgConfig => {}
                 ModuleNameEnum::App(output_str) => match output_str {
                     StrLiteral::PlainLine(path) => {
                         state.output_path = Some(path);
@@ -1810,7 +1813,9 @@ fn update<'a>(
                         todo!("TODO gracefully handle a malformed string literal after `app` keyword.");
                     }
                 },
-                ModuleNameEnum::Interface(_) => {}
+                ModuleNameEnum::PkgConfig
+                | ModuleNameEnum::Interface(_)
+                | ModuleNameEnum::Hosted(_) => {}
             }
 
             let module_id = parsed.module_id;
@@ -2409,6 +2414,12 @@ fn load_pkg_config<'a>(
 
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
+                Ok((ast::Module::Hosted { header }, _parse_state)) => {
+                    Err(LoadingProblem::UnexpectedHeader(format!(
+                        "expected platform/package module, got Hosted module with header\n{:?}",
+                        header
+                    )))
+                }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
                         .into_file_error(filename),
@@ -2638,7 +2649,10 @@ fn parse_header<'a>(
                                 Msg::Many(vec![app_module_header_msg, load_pkg_config_msg]),
                             ))
                         } else {
-                            Ok((module_id, app_module_header_msg))
+                            Err(LoadingProblem::FileProblem {
+                                filename: pkg_config_roc,
+                                error: io::ErrorKind::NotFound,
+                            })
                         }
                     } else {
                         panic!("could not find base")
@@ -2655,6 +2669,29 @@ fn parse_header<'a>(
             header,
             module_timing,
         )),
+        Ok((ast::Module::Hosted { header }, parse_state)) => {
+            let info = HeaderInfo {
+                loc_name: Loc {
+                    region: header.name.region,
+                    value: ModuleNameEnum::Hosted(header.name.value),
+                },
+                filename,
+                is_root_module,
+                opt_shorthand,
+                packages: &[],
+                exposes: unspace(arena, header.exposes.items),
+                imports: unspace(arena, header.imports.items),
+                to_platform: None,
+            };
+
+            Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ))
+        }
         Err(fail) => Err(LoadingProblem::ParsingFailed(
             fail.map_problem(SyntaxError::Header)
                 .into_file_error(filename),
@@ -2728,6 +2765,7 @@ enum ModuleNameEnum<'a> {
     /// A filename
     App(StrLiteral<'a>),
     Interface(roc_parse::header::ModuleName<'a>),
+    Hosted(roc_parse::header::ModuleName<'a>),
     PkgConfig,
 }
 
@@ -2767,7 +2805,7 @@ fn send_header<'a>(
     let declared_name: ModuleName = match &loc_name.value {
         PkgConfig => unreachable!(),
         App(_) => ModuleName::APP.into(),
-        Interface(module_name) => {
+        Interface(module_name) | Hosted(module_name) => {
             // TODO check to see if module_name is consistent with filename.
             // If it isn't, report a problem!
 
@@ -3663,12 +3701,14 @@ where
             let module_docs = match module_name {
                 ModuleNameEnum::PkgConfig => None,
                 ModuleNameEnum::App(_) => None,
-                ModuleNameEnum::Interface(name) => Some(crate::docs::generate_module_docs(
-                    module_output.scope,
-                    name.as_str().into(),
-                    &module_output.ident_ids,
-                    parsed_defs,
-                )),
+                ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
+                    Some(crate::docs::generate_module_docs(
+                        module_output.scope,
+                        name.as_str().into(),
+                        &module_output.ident_ids,
+                        parsed_defs,
+                    ))
+                }
             };
 
             let constraint = constrain_module(&module_output.declarations, module_id);

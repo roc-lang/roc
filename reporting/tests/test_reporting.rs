@@ -426,14 +426,14 @@ mod test_reporting {
 
                 3│  Booly : [ Yes, No, Maybe ]
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
-                
+
                 If you didn't intend on using `Booly` then remove it so future readers
                 of your code don't wonder why it is there.
-                
+
                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
-                
+
                 `Booly` is not used anywhere in your code.
-                
+
                 1│  Booly : [ Yes, No ]
                     ^^^^^^^^^^^^^^^^^^^
 
@@ -6173,7 +6173,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── WEIRD EXPOSES ───────────────────────────────────────────────────────────────
 
-                I am partway through parsing a exposes list, but I got stuck here:
+                I am partway through parsing an `exposes` list, but I got stuck here:
 
                 1│  interface Foobar
                 2│      exposes [ main, @Foo ]
@@ -7159,6 +7159,81 @@ I need all branches in an `if` to have the same type!
 
                 Recursion in aliases is only allowed if recursion happens behind a
                 tag.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2167_record_field_optional_and_required_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Job : [ @Job { inputs : List Str } ]
+                job : { inputs ? List Str } -> Job
+                job = \{ inputs } ->
+                    @Job { inputs }
+
+                job { inputs: [ "build", "test" ] }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `job` is weird:
+
+                3│  job = \{ inputs } ->
+                           ^^^^^^^^^^
+
+                The argument is a pattern that matches record values of type:
+
+                    { inputs : List Str }
+
+                But the annotation on `job` says the 1st argument should be:
+
+                    { inputs ? List Str }
+
+                Tip: To extract the `.inputs` field it must be non-optional, but the
+                type says this field is optional. Learn more about optional fields at
+                TODO.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unify_recursive_with_nonrecursive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Job : [ @Job { inputs : List Job } ]
+
+                job : { inputs : List Str } -> Job
+                job = \{ inputs } ->
+                    @Job { inputs }
+
+                job { inputs: [ "build", "test" ] }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `job` definition:
+
+                3│  job : { inputs : List Str } -> Job
+                4│  job = \{ inputs } ->
+                5│      @Job { inputs }
+                        ^^^^^^^^^^^^^^^
+
+                This `@Job` private tag application has the type:
+
+                    [ @Job { inputs : List Str } ]
+
+                But the type annotation on `job` says it should be:
+
+                    [ @Job { inputs : List a } ] as a
                 "#
             ),
         )

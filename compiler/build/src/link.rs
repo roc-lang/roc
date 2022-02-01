@@ -856,11 +856,23 @@ fn link_macos(
         "-lSystem",
         "-lresolv",
         "-lpthread",
+        // This `-F PATH` flag is needed for `-framework` flags to work
+        "-F",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/",
+        // These frameworks are needed for GUI examples to work
+        "-framework",
+        "Cocoa",
+        "-framework",
+        "CoreVideo",
+        "-framework",
+        "Metal",
+        "-framework",
+        "QuartzCore",
         // "-lrt", // TODO shouldn't we need this?
         // "-lc_nonshared", // TODO shouldn't we need this?
         // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-        // "-framework", // Uncomment this line & the following ro run the `rand` crate in examples/cli
-        // "Security",
+        "-framework",
+        "Security",
         // Output
         "-o",
         output_path.to_str().unwrap(), // app
