@@ -319,10 +319,9 @@ const CSlice = extern struct {
     len: usize,
 };
 pub fn getExpectFailuresC() callconv(.C) CSlice {
-
     var bytes = @ptrCast(*c_void, failures);
 
-    return .{.pointer = bytes, .len = failure_length};
+    return .{ .pointer = bytes, .len = failure_length };
 }
 
 pub fn deinitFailures() void {
