@@ -687,7 +687,8 @@ peg::parser!{
           / type_annotation_no_fun()
 
         rule type_annotation_no_fun() =
-          tag_union()
+          [T::OpenParen] type_annotation_no_fun() [T::CloseParen]
+          / tag_union()
           / apply_type()
           / bound_variable()
           / record_type()
@@ -721,18 +722,18 @@ peg::parser!{
         rule function_type() =
           ( type_annotation_paren_fun() ([T::Comma] type_annotation_paren_fun())* [T::Arrow])? type_annotation_paren_fun()
 
-        rule apply_type() =
+        pub rule apply_type() =
           concrete_type() apply_args()?
         rule concrete_type() =
           [T::UppercaseIdent] ([T::Dot] [T::UppercaseIdent])*
         rule apply_args() =
-          type_annotation() type_annotation()*
+          type_annotation_no_fun() type_annotation_no_fun()*
 
         rule _() =
-          ([T::SameIndent] / [T::OpenIndent])?
+          [T::OpenIndent]?
 
         // TODO write tests for precedence
-        rule op_expr() = precedence!{ // lowest precedence
+        pub rule op_expr() = precedence!{ // lowest precedence
             x:(@) _ [T::OpPizza] _ y:@ {}// |>
             --
             x:(@) _ [T::OpAnd] _ y:@ {}
@@ -793,8 +794,8 @@ peg::parser!{
           no_apply_expr() {}
       }  // highest precedence
 
-        rule defs() =
-          def()+ full_expr()
+        pub rule defs() =
+          def()+ [T::SameIndent] full_expr()
 
         pub rule def() =
           __ // __ for optional indent
@@ -1072,8 +1073,15 @@ fn test_fibo() {
 #[test]
 fn test_annotation() {
   let tokens = test_tokenize( r#"ConsList a : [ Cons a (ConsList a), Nil ]"#);
-  
+
   assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn test_apply_type() {
+  let tokens = test_tokenize( r#"Cons a (ConsList a)"#);
+
+  assert_eq!(tokenparser::apply_type(&tokens), Ok(()));
 }
 
 #[test]
@@ -1129,9 +1137,24 @@ fn test_base64_test() {
 }
 
 #[test]
+fn test_when_branch() {
+  let tokens = test_tokenize(r#"Ok path -> path"#);
+
+  assert_eq!(tokenparser::when_branch(&tokens), Ok(()));
+}
+#[test]
+fn test_def_in_def() {
+  let tokens = test_tokenize(r#"example =
+  cost = 1
+
+  cost"#);
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
 fn test_astar_test() {
   let tokens = test_tokenize(&example_path("benchmarks/TestAStar.roc"));
-  dbg!(&tokens);
+
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
