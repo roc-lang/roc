@@ -489,11 +489,6 @@ peg::parser!{
 
       pub rule full_expr() = [T::OpenIndent]? op_expr() [T::CloseIndent]?
 
-      // necessary to prevent `f x y` from being parsed as `Apply(f, Apply(x, y))` instead of `Apply(f, (x y))`
-      rule no_apply_full_expr() = 
-        [T::OpenIndent] no_apply_op_expr() [T::CloseIndent]
-        / [T::OpenIndent]? no_apply_op_expr()
-
       
       rule common_expr() =
           closure()
@@ -509,18 +504,18 @@ peg::parser!{
           / [T::Number]
           / [T::NumberBase]
           / [T::String]
+          / module_var()
           / tag()
           / accessor_function()
           / defs()
+          / [T::LowercaseIdent]
       pub rule expr() =
           apply()
           / common_expr()
-          / var()
           // / access() // TODO prevent infinite loop
 
       rule no_apply_expr() =
           common_expr()
-          / var()
 
         rule closure() =
           [T::LambdaStart] args() [T::Arrow] __ full_expr()
@@ -531,6 +526,7 @@ peg::parser!{
         rule arg() =
           [T::Underscore]
           / ident()
+          / record_destructure()
 
 
         rule tag() =
@@ -723,10 +719,10 @@ peg::parser!{
           ( type_annotation_paren_fun() ([T::Comma] type_annotation_paren_fun())* [T::Arrow])? type_annotation_paren_fun()
 
         pub rule apply_type() =
-          concrete_type() apply_args()?
+          concrete_type() apply_type_args()?
         rule concrete_type() =
           [T::UppercaseIdent] ([T::Dot] [T::UppercaseIdent])*
-        rule apply_args() =
+        rule apply_type_args() =
           type_annotation_no_fun() type_annotation_no_fun()*
 
         rule _() =
@@ -839,20 +835,36 @@ peg::parser!{
           / expr()
 
         rule var() =
-          ident()
-          / module_name() [T::Dot] ident()
+          [T::LowercaseIdent]
+          / module_var()
+
+        rule module_var() =
+          module_name() [T::Dot] [T::LowercaseIdent]
 
         pub rule apply() =
-          apply_expr() no_apply_full_expr()+ end()?
+          apply_expr() apply_args() end()?
+
+        pub rule apply_args() =
+          [T::OpenIndent] no_apply_op_expr() single_line_apply_args()? ([T::CloseIndent]/indented_end())
+          / no_apply_op_expr()+
+
+        rule single_line_apply_args() =
+          ([T::SameIndent] no_apply_op_expr()) indented_end()
+          / ([T::OpenIndent] no_apply_op_expr() indented_end())
+          / ([T::SameIndent] no_apply_op_expr()) single_line_apply_args()*
+          / ([T::OpenIndent] no_apply_op_expr() single_line_apply_args()* [T::CloseIndent])
 
         rule apply_expr() =
-          tag()
-          / var()
+          var()
+          / tag()
 
         rule end() =
           [T::CloseIndent]
           / [T::SameIndent]
           / end_of_file()
+
+        rule indented_end() =
+          ([T::OpenIndent] / [T::CloseIndent] / [T::SameIndent])* end_of_file()
 
         // for optionalindents
         // underscore rules do not require parentheses  
@@ -1177,6 +1189,48 @@ fn test_pizza() {
 #[test]
 fn test_closure_file() {
   let tokens = test_tokenize(&example_path("benchmarks/Closure.roc"));
+
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}
+
+#[test]
+fn test_def_with_indents() {
+  let tokens = test_tokenize(r#"main =
+  Task.after
+      Task.getInt
+      \n ->
+          queens n"#);
+
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn test_nqueens() {
+  let tokens = test_tokenize(&example_path("benchmarks/NQueens.roc"));
+  dbg!(&tokens);
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}
+
+// TODO fix infinite loop
+/*#[test]
+fn test_quicksort() {
+  let tokens = test_tokenize(&example_path("benchmarks/Quicksort.roc"));
+
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}*/
+
+#[test]
+fn test_indented_closure_apply() {
+  let tokens = test_tokenize(r#"
+  effect
+  \result -> result"#);
+
+  assert_eq!(tokenparser::apply_args(&tokens), Ok(()));
+}
+
+#[test]
+fn test_task() {
+  let tokens = test_tokenize(&example_path("benchmarks/platform/Task.roc"));
   dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
