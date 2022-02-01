@@ -1730,12 +1730,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL ──────────────────────────────────────────────────────
+                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
 
-                This number literal is malformed:
+                It looks like you are trying to use type suffix on this number
+                literal, but it's not one that I recognize:
 
                 2│      100A -> 3
-                        ^
+                           ^
                 "#
             ),
         )
@@ -1753,12 +1754,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL ──────────────────────────────────────────────────────
+                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
 
-                This number literal is malformed:
+                It looks like you are trying to use type suffix on this number
+                literal, but it's not one that I recognize:
 
                 2│      2.X -> 3
-                        ^
+                          ^
                 "#
             ),
         )
@@ -1776,9 +1778,10 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL ──────────────────────────────────────────────────────
+                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
 
-                This number literal is malformed:
+                It looks like you are trying to use type suffix on this number
+                literal, but it's not one that I recognize:
 
                 2│      0xZ -> 3
                         ^
@@ -3533,12 +3536,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL ──────────────────────────────────────────────────────
+                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
 
-                This number literal is malformed:
+                It looks like you are trying to use type suffix on this number
+                literal, but it's not one that I recognize:
 
                 1│  dec = 100A
-                          ^
+                             ^
                 "#
             ),
         )
@@ -3614,12 +3618,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL ──────────────────────────────────────────────────────
+                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
 
-                This number literal is malformed:
+                It looks like you are trying to use type suffix on this number
+                literal, but it's not one that I recognize:
 
                 1│  x = 3.0A
-                        ^
+                           ^
                 "#
             ),
         )
@@ -7315,5 +7320,91 @@ I need all branches in an `if` to have the same type!
         1, "dec",  mismatched_suffix_dec
         1, "f32",  mismatched_suffix_f32
         1, "f64",  mismatched_suffix_f64
+    }
+
+    #[test]
+    fn bad_numeric_literal_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1u256
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
+
+                It looks like you are trying to use type suffix on this number
+                literal, but it's not one that I recognize:
+
+                1│  1u256
+                     ^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn numer_literal_multi_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1u8u8
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
+
+                It looks like you are trying to use type suffix on this number
+                literal, but it's not one that I recognize:
+
+                1│  1u8u8
+                     ^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn int_literal_has_float_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                0b1f32
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NUMBER LITERAL CONFLICTS WITH SUFFIX ────────────────────────────────────────
+
+                This number literal is an integer, but its suffix says it's a float
+
+                1│  0b1f32
+                    ^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn float_literal_has_int_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1.0u8
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NUMBER LITERAL CONFLICTS WITH SUFFIX ────────────────────────────────────────
+
+                This number literal is a float, but its suffix says it's an integer
+
+                1│  1.0u8
+                    ^
+                "#
+            ),
+        )
     }
 }

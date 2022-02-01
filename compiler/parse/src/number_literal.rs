@@ -152,7 +152,9 @@ fn chomp_number_base<'a>(
             },
             new,
         )),
-        Some(NumWidth::Float(_)) => Err((Progress::MadeProgress, ENumber::End, state)),
+        Some(NumWidth::Float(_)) => {
+            Err((Progress::MadeProgress, ENumber::IntHasFloatSuffix, state))
+        }
     }
 }
 
@@ -201,7 +203,9 @@ fn chomp_number_dec<'a>(
             NumLiteral::Int(string, NumericBound::Exact(iw)),
             new,
         )),
-        (true, Some(NumWidth::Int(_))) => Err((Progress::MadeProgress, ENumber::End, state)),
+        (true, Some(NumWidth::Int(_))) => {
+            Err((Progress::MadeProgress, ENumber::FloatHasIntSuffix, state))
+        }
     }
 }
 
@@ -280,6 +284,20 @@ fn chomp_number<'a>(
                 if start_bytes_len - bytes.len() == 0 && is_negative {
                     // We're probably actually looking at unary negation here. Reset the progress.
                     return Err((Progress::NoProgress, ENumber::End, state));
+                }
+
+                if bytes
+                    .get(0)
+                    .copied()
+                    .unwrap_or_default()
+                    .is_ascii_alphabetic()
+                {
+                    // The user likely mistyped a literal suffix type here.
+                    return Err((
+                        Progress::MadeProgress,
+                        ENumber::LiteralSuffix,
+                        state.advance(start_bytes_len - bytes.len()),
+                    ));
                 }
 
                 return Err((Progress::MadeProgress, ENumber::End, state));

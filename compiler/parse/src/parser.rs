@@ -338,6 +338,9 @@ pub enum EExpr<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ENumber {
     End,
+    LiteralSuffix,
+    IntHasFloatSuffix,
+    FloatHasIntSuffix,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
