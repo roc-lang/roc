@@ -2666,6 +2666,14 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn single_line_hosted() {
+        module_formats_same(indoc!(
+            r#"
+                hosted Foo exposes [] imports [] generates Bar with []"#
+        ));
+    }
+
     /// Annotations and aliases
 
     #[test]

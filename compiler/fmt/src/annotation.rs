@@ -3,7 +3,7 @@ use crate::{
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
-use roc_parse::ast::{AliasHeader, AssignedField, Expr, Tag, TypeAnnotation};
+use roc_parse::ast::{AliasHeader, AssignedField, Collection, Expr, Tag, TypeAnnotation};
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
@@ -37,8 +37,8 @@ pub enum Parens {
 /// newlines are taken into account.
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Newlines {
-    Yes,
     No,
+    Yes,
 }
 
 pub trait Formattable {
@@ -80,6 +80,15 @@ where
 
     fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
         (*self).format(buf, indent)
+    }
+}
+
+impl<'a, T> Formattable for Collection<'a, T>
+where
+    T: Formattable,
+{
+    fn is_multiline(&self) -> bool {
+        self.items.iter().any(|item| item.is_multiline()) || !self.final_comments().is_empty()
     }
 }
 

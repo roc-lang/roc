@@ -5,8 +5,8 @@ use crate::spaces::{fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{Collection, Module, Spaced};
 use roc_parse::header::{
-    AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
+    AppHeader, Effects, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
+    PackageEntry, PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -21,6 +21,9 @@ pub fn fmt_module<'a, 'buf>(buf: &mut Buf<'buf>, module: &'a Module<'a>) {
         }
         Module::Platform { header } => {
             fmt_platform_header(buf, header);
+        }
+        Module::Hosted { header } => {
+            fmt_hosted_header(buf, header);
         }
     }
 }
@@ -48,6 +51,45 @@ pub fn fmt_interface_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a Interface
     buf.push_str("imports");
     fmt_default_spaces(buf, header.after_imports, indent);
     fmt_imports(buf, header.imports, indent);
+}
+
+pub fn fmt_hosted_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a HostedHeader<'a>) {
+    let indent = INDENT;
+
+    buf.indent(0);
+    buf.push_str("hosted");
+
+    // module name
+    fmt_default_spaces(buf, header.after_hosted_keyword, indent);
+    buf.push_str(header.name.value.as_str());
+
+    // exposes
+    fmt_default_spaces(buf, header.before_exposes, indent);
+    buf.indent(indent);
+    buf.push_str("exposes");
+    fmt_default_spaces(buf, header.after_exposes, indent);
+    fmt_exposes(buf, header.exposes, indent);
+
+    // imports
+    fmt_default_spaces(buf, header.before_imports, indent);
+    buf.indent(indent);
+    buf.push_str("imports");
+    fmt_default_spaces(buf, header.after_imports, indent);
+    fmt_imports(buf, header.imports, indent);
+
+    // generates
+    fmt_default_spaces(buf, header.before_generates, indent);
+    buf.indent(indent);
+    buf.push_str("generates");
+    fmt_default_spaces(buf, header.after_generates, indent);
+    buf.push_str(header.generates.into());
+
+    // with
+    fmt_default_spaces(buf, header.before_with, indent);
+    buf.indent(indent);
+    buf.push_str("with");
+    fmt_default_spaces(buf, header.after_with, indent);
+    fmt_exposes(buf, header.generates_with, indent);
 }
 
 pub fn fmt_app_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a AppHeader<'a>) {
