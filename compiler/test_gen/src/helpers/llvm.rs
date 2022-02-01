@@ -643,6 +643,8 @@ macro_rules! assert_expect_failed {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
     };
+}
+
 macro_rules! expect_runtime_error_panic {
     ($src:expr) => {{
         #[cfg(feature = "wasm-cli-run")]
