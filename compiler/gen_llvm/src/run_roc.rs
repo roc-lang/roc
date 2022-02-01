@@ -42,6 +42,7 @@ macro_rules! run_jit_function {
     }};
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr, $expect_failures:expr) => {{
         use inkwell::context::Context;
+        use roc_builtins::bitcode;
         use roc_gen_llvm::run_roc::RocCallResult;
         use std::mem::MaybeUninit;
 
@@ -62,11 +63,11 @@ macro_rules! run_jit_function {
             let get_expect_failures: libloading::Symbol<
                 unsafe extern "C" fn() -> (*const Failure, usize),
             > = $lib
-                .get("roc_builtins.utils.get_expect_failures".as_bytes())
+                .get(bitcode::UTILS_GET_EXPECT_FAILURES.as_bytes())
                 .ok()
                 .ok_or(format!(
                     "Unable to JIT compile `{}`",
-                    "roc_builtins.utils.get_expect_failures"
+                    bitcode::UTILS_GET_EXPECT_FAILURES
                 ))
                 .expect("errored");
             let mut main_result = MaybeUninit::uninit();
