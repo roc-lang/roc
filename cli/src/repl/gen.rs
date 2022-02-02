@@ -2,9 +2,7 @@ use crate::repl::app_memory::AppMemoryInternal;
 use crate::repl::eval;
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::module::Linkage;
 use roc_build::link::module_to_dylib;
-use roc_build::program::FunctionIterator;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
@@ -138,14 +136,6 @@ pub fn gen_and_eval<'a>(
         let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
             &target, &context, "",
         ));
-
-        // mark our zig-defined builtins as internal
-        for function in FunctionIterator::from_module(module) {
-            let name = function.get_name().to_str().unwrap();
-            if name.starts_with("roc_builtins") {
-                function.set_linkage(Linkage::Internal);
-            }
-        }
 
         debug_assert_eq!(exposed_to_host.values.len(), 1);
         let (main_fn_symbol, main_fn_var) = exposed_to_host.values.iter().next().unwrap();
