@@ -485,7 +485,7 @@ peg::parser!{
     grammar tokenparser() for [T] {
 
       pub rule module() =
-        header() module_defs() __ // __ for optional indent
+        header() module_defs()? indented_end()
 
       pub rule full_expr() = [T::OpenIndent]? op_expr() [T::CloseIndent]?
 
@@ -495,7 +495,6 @@ peg::parser!{
           / expect()
           / if_expr()
           / when()
-          / annotation()
           / backpass()
           / list()
           / record()
@@ -508,6 +507,7 @@ peg::parser!{
           / tag()
           / accessor_function()
           / defs()
+          / annotation()
           / [T::LowercaseIdent]
       pub rule expr() =
           apply()
@@ -798,20 +798,17 @@ peg::parser!{
       }  // highest precedence
 
         pub rule defs() =
-          def()+ [T::SameIndent] full_expr()
+          def() ([T::SameIndent]? def())* [T::SameIndent]? full_expr()
 
         pub rule def() =
-          __ // __ for optional indent
-            (
-              annotated_body()
-              / annotation()
-              / body()
-              / alias()
-              / expect()
-            )
+            annotated_body()
+            / annotation()
+            / body()
+            / alias()
+            / expect()
 
         pub rule module_defs() =
-          def() def()* __
+          ([T::SameIndent]? def())+
 
         rule annotation() =
         annotation_pre_colon() [T::Colon] type_annotation()
@@ -822,7 +819,7 @@ peg::parser!{
           / ident()
 
         rule body() =
-        ident() [T::OpAssignment] [T::OpenIndent] full_expr() ([T::SameIndent] full_expr())* ([T::CloseIndent] / end_of_file())
+        ident() [T::OpAssignment] [T::OpenIndent] full_expr() ([T::SameIndent]? full_expr())* ([T::CloseIndent] / end_of_file())
         /  ident() [T::OpAssignment] full_expr()
 
         rule annotated_body() =
@@ -997,8 +994,7 @@ fn test_record_def_1() {
 #[test]
 fn test_record_def_2() {
 
-  let tokens = test_tokenize( r#"
-x =
+  let tokens = test_tokenize( r#"x =
    { content: 4 }"#);
 
   assert_eq!(tokenparser::def(&tokens), Ok(()));
@@ -1007,8 +1003,7 @@ x =
 #[test]
 fn test_record_def_3() {
 
-  let tokens = test_tokenize( r#"
-x =
+  let tokens = test_tokenize( r#"x =
    {
      a: 4,
      b: 5
@@ -1020,8 +1015,7 @@ x =
 #[test]
 fn test_record_def_4() {
 
-  let tokens = test_tokenize( r#"
-x =
+  let tokens = test_tokenize( r#"x =
    {
      a: 4,
        b: 5,
@@ -1034,8 +1028,7 @@ x =
 #[test]
 fn test_record_def_5() {
 
-  let tokens = test_tokenize( r#"
-x =
+  let tokens = test_tokenize( r#"x =
    {
    a: 4,
    }"#);
@@ -1290,6 +1283,25 @@ fn test_cfold() {
   dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }*/
+
+#[test]
+fn test_multi_defs() {
+  let tokens = test_tokenize(r#"main =
+    tree : I64
+    tree = 0
+
+    tree"#);
+
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn test_rbtree_insert() {
+  let tokens = test_tokenize(&example_path("benchmarks/RBTreeInsert.roc"));
+
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}
+
 
 
 }
