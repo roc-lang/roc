@@ -681,6 +681,10 @@ enum HeaderFor<'a> {
     App {
         to_platform: To<'a>,
     },
+    Hosted {
+        generates: UppercaseIdent<'a>,
+        generates_with: &'a [Loc<ExposedName<'a>>],
+    },
     PkgConfig {
         /// usually `pf`
         config_shorthand: &'a str,
@@ -861,6 +865,7 @@ enum PlatformPath<'a> {
     NotSpecified,
     Valid(To<'a>),
     RootIsInterface,
+    RootIsHosted,
     RootIsPkgConfig,
 }
 
@@ -1742,6 +1747,12 @@ fn update<'a>(
                         state.platform_path = PlatformPath::RootIsInterface;
                     }
                 }
+                Hosted { .. } => {
+                    if header.is_root_module {
+                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                        state.platform_path = PlatformPath::RootIsHosted;
+                    }
+                }
             }
 
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
@@ -2551,7 +2562,33 @@ fn parse_header<'a>(
                 packages: &[],
                 exposes: unspace(arena, header.exposes.items),
                 imports: unspace(arena, header.imports.items),
-                to_platform: None,
+                extra: HeaderFor::Interface,
+            };
+
+            Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ))
+        }
+        Ok((ast::Module::Hosted { header }, parse_state)) => {
+            let info = HeaderInfo {
+                loc_name: Loc {
+                    region: header.name.region,
+                    value: ModuleNameEnum::Hosted(header.name.value),
+                },
+                filename,
+                is_root_module,
+                opt_shorthand,
+                packages: &[],
+                exposes: unspace(arena, header.exposes.items),
+                imports: unspace(arena, header.imports.items),
+                extra: HeaderFor::Hosted {
+                    generates: header.generates,
+                    generates_with: unspace(arena, header.generates_with.items),
+                },
             };
 
             Ok(send_header(
@@ -2593,7 +2630,9 @@ fn parse_header<'a>(
                 packages,
                 exposes,
                 imports: unspace(arena, header.imports.items),
-                to_platform: Some(header.to.value),
+                extra: HeaderFor::App {
+                    to_platform: header.to.value,
+                },
             };
 
             let (module_id, app_module_header_msg) = send_header(
@@ -2669,29 +2708,6 @@ fn parse_header<'a>(
             header,
             module_timing,
         )),
-        Ok((ast::Module::Hosted { header }, parse_state)) => {
-            let info = HeaderInfo {
-                loc_name: Loc {
-                    region: header.name.region,
-                    value: ModuleNameEnum::Hosted(header.name.value),
-                },
-                filename,
-                is_root_module,
-                opt_shorthand,
-                packages: &[],
-                exposes: unspace(arena, header.exposes.items),
-                imports: unspace(arena, header.imports.items),
-                to_platform: None,
-            };
-
-            Ok(send_header(
-                info,
-                parse_state,
-                module_ids,
-                ident_ids_by_module,
-                module_timing,
-            ))
-        }
         Err(fail) => Err(LoadingProblem::ParsingFailed(
             fail.map_problem(SyntaxError::Header)
                 .into_file_error(filename),
@@ -2769,7 +2785,7 @@ struct HeaderInfo<'a> {
     packages: &'a [Loc<PackageEntry<'a>>],
     exposes: &'a [Loc<ExposedName<'a>>],
     imports: &'a [Loc<ImportsEntry<'a>>],
-    to_platform: Option<To<'a>>,
+    extra: HeaderFor<'a>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2790,7 +2806,7 @@ fn send_header<'a>(
         packages,
         exposes,
         imports,
-        to_platform,
+        extra,
     } = info;
 
     let declared_name: ModuleName = match &loc_name.value {
@@ -2927,11 +2943,6 @@ fn send_header<'a>(
     // We always need to send these, even if deps is empty,
     // because the coordinator thread needs to receive this message
     // to decrement its "pending" count.
-    let extra = match to_platform {
-        Some(to_platform) => HeaderFor::App { to_platform },
-        None => HeaderFor::Interface,
-    };
-
     let mut package_qualified_imported_modules = MutSet::default();
     for (pq_module_name, module_id) in &deps_by_name {
         match pq_module_name {
@@ -4424,7 +4435,23 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsInterface => {
                 let doc = alloc.stack(vec![
-                                alloc.reflow(r"The input file is a interface file, but only app modules can be ran."),
+                                alloc.reflow(r"The input file is an interface module, but only app modules can be ran."),
+                                alloc.concat(vec![
+                                    alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
+                                    alloc.reflow(r"but won't output any executable."),
+                                ])
+                            ]);
+
+                Report {
+                    filename: "UNKNOWN.roc".into(),
+                    doc,
+                    title: "NO PLATFORM".to_string(),
+                    severity: Severity::RuntimeError,
+                }
+            }
+            RootIsHosted => {
+                let doc = alloc.stack(vec![
+                                alloc.reflow(r"The input file is a hosted module, but only app modules can be ran."),
                                 alloc.concat(vec![
                                     alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
                                     alloc.reflow(r"but won't output any executable."),
