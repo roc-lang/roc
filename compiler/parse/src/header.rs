@@ -47,6 +47,15 @@ impl<'a> ModuleName<'a> {
     }
 }
 
+#[derive(Debug)]
+pub enum ModuleNameEnum<'a> {
+    /// A filename
+    App(StrLiteral<'a>),
+    Interface(ModuleName<'a>),
+    Hosted(ModuleName<'a>),
+    PkgConfig,
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct ExposedName<'a>(&'a str);
 

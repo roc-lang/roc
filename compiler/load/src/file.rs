@@ -24,8 +24,8 @@ use roc_mono::ir::{
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
-use roc_parse::header::PackageName;
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
+use roc_parse::header::{ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
@@ -2761,15 +2761,6 @@ fn load_from_str<'a>(
 }
 
 #[derive(Debug)]
-enum ModuleNameEnum<'a> {
-    /// A filename
-    App(StrLiteral<'a>),
-    Interface(roc_parse::header::ModuleName<'a>),
-    Hosted(roc_parse::header::ModuleName<'a>),
-    PkgConfig,
-}
-
-#[derive(Debug)]
 struct HeaderInfo<'a> {
     loc_name: Loc<ModuleNameEnum<'a>>,
     filename: PathBuf,
@@ -3680,6 +3671,7 @@ where
     let canonicalized = canonicalize_module_defs(
         arena,
         parsed_defs,
+        &module_name,
         module_id,
         module_ids,
         exposed_ident_ids,
@@ -3702,12 +3694,14 @@ where
                 ModuleNameEnum::PkgConfig => None,
                 ModuleNameEnum::App(_) => None,
                 ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
-                    Some(crate::docs::generate_module_docs(
+                    let docs = crate::docs::generate_module_docs(
                         module_output.scope,
                         name.as_str().into(),
                         &module_output.ident_ids,
                         parsed_defs,
-                    ))
+                    );
+
+                    Some(docs)
                 }
             };
 

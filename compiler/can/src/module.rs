@@ -44,6 +44,7 @@ pub struct ModuleOutput {
 pub fn canonicalize_module_defs<'a, F>(
     arena: &Bump,
     loc_defs: &'a [Loc<ast::Def<'a>>],
+    module_name: &roc_parse::header::ModuleNameEnum,
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
