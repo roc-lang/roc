@@ -1,9 +1,9 @@
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::LetConstraint;
 use roc_can::expected::Expected::{self, *};
+use roc_can::num::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use roc_collections::all::SendMap;
 use roc_module::ident::{Lowercase, TagName};
-use roc_module::numeric::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::subs::Variable;
@@ -331,7 +331,9 @@ impl TypedNumericBound for NumericBound<NumWidth> {
         match self {
             NumericBound::None => None,
             NumericBound::Exact(NumWidth::Int(iw)) => NumericBound::Exact(*iw).concrete_num_type(),
-            NumericBound::Exact(NumWidth::Float(fw)) => NumericBound::Exact(*fw).concrete_num_type(),
+            NumericBound::Exact(NumWidth::Float(fw)) => {
+                NumericBound::Exact(*fw).concrete_num_type()
+            }
         }
     }
 }

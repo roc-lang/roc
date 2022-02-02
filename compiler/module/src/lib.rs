@@ -6,7 +6,6 @@ pub mod called_via;
 pub mod ident;
 pub mod low_level;
 pub mod module_err;
-pub mod numeric;
 pub mod symbol;
 
 #[macro_use]

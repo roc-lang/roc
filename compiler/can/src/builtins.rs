@@ -1,12 +1,12 @@
 use crate::def::Def;
 use crate::expr::{self, ClosureData, Expr::*};
 use crate::expr::{Expr, Field, Recursive};
+use crate::num::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::numeric::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};

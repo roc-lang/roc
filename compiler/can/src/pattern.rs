@@ -1,9 +1,11 @@
 use crate::env::Env;
 use crate::expr::{canonicalize_expr, unescape_char, Expr, Output};
-use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult};
+use crate::num::{
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatWidth, IntWidth, NumWidth,
+    NumericBound, ParsedNumResult,
+};
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
-use roc_module::numeric::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;

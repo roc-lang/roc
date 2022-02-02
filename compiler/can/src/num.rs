@@ -1,6 +1,5 @@
 use crate::env::Env;
 use crate::expr::Expr;
-use roc_module::numeric::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use roc_parse::ast::Base;
 use roc_problem::can::Problem;
 use roc_problem::can::RuntimeError::*;
@@ -334,6 +333,46 @@ fn from_str_radix<T: FromStrRadixHelper>(
         }
     }
     Ok((result, bound))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IntWidth {
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Nat,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FloatWidth {
+    Dec,
+    F32,
+    F64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NumWidth {
+    Int(IntWidth),
+    Float(FloatWidth),
+}
+
+/// Describes a bound on the width of a numeric literal.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NumericBound<W>
+where
+    W: Copy,
+{
+    /// There is no bound on the width.
+    None,
+    /// Must have exactly the width `W`.
+    Exact(W),
 }
 
 /// An error which can be returned when parsing an integer.

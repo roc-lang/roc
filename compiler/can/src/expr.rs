@@ -4,7 +4,7 @@ use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
-    int_expr_from_result, num_expr_from_result,
+    int_expr_from_result, num_expr_from_result, FloatWidth, IntWidth, NumWidth, NumericBound,
 };
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
@@ -13,7 +13,6 @@ use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::numeric::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
