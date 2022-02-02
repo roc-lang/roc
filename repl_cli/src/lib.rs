@@ -231,7 +231,7 @@ fn eval_and_format<'a>(src: &str) -> Result<String, SyntaxError<'a>> {
     use roc_mono::ir::OptLevel;
     use target_lexicon::Triple;
 
-    gen_and_eval(src.as_bytes(), Triple::host(), OptLevel::Normal).map(|output| match output {
+    gen_and_eval(src, Triple::host(), OptLevel::Normal).map(|output| match output {
         ReplOutput::NoProblems { expr, expr_type } => {
             format!("\n{} {}:{} {}", expr, PINK, END_COL, expr_type)
         }

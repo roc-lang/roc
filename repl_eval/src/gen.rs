@@ -1,6 +1,5 @@
 use bumpalo::Bump;
 use std::path::{Path, PathBuf};
-use std::str::from_utf8_unchecked;
 use target_lexicon::Triple;
 
 use roc_can::builtins::builtin_defs_map;
@@ -32,7 +31,7 @@ pub enum ReplOutput {
 }
 
 pub fn gen_and_eval<'a>(
-    src: &[u8],
+    src: &str,
     target: Triple,
     opt_level: OptLevel,
 ) -> Result<ReplOutput, SyntaxError<'a>> {
@@ -44,7 +43,7 @@ pub fn gen_and_eval<'a>(
 }
 
 pub fn gen_and_eval_llvm<'a>(
-    src: &[u8],
+    src: &str,
     target: Triple,
     opt_level: OptLevel,
 ) -> Result<ReplOutput, SyntaxError<'a>> {
@@ -209,21 +208,18 @@ fn format_answer(
 
 fn compile_to_mono<'a>(
     arena: &'a Bump,
-    src: &[u8],
+    src: &str,
     target_info: TargetInfo,
 ) -> Result<MonomorphizedModule<'a>, Vec<String>> {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };
 
-    // SAFETY: we've already verified that this is valid UTF-8 during parsing.
-    let src_str: &str = unsafe { from_utf8_unchecked(src) };
-
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
     let filename = PathBuf::from("REPL.roc");
     let src_dir = Path::new("fake/test/path");
 
-    let module_src = arena.alloc(promote_expr_to_module(src_str));
+    let module_src = arena.alloc(promote_expr_to_module(src));
 
     let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
