@@ -518,7 +518,11 @@ peg::parser!{
           common_expr()
 
         pub rule closure() =
-          [T::LambdaStart] args() [T::Arrow] __ full_expr()
+          [T::LambdaStart] args() [T::Arrow] closure_body()
+
+        rule closure_body() =
+          [T::OpenIndent] full_expr() ([T::CloseIndent] / end_of_file())
+          / [T::SameIndent]? full_expr()
 
         rule args() =
           (arg() [T::Comma])* arg()
@@ -820,7 +824,7 @@ peg::parser!{
 
         rule body() =
         ident() [T::OpAssignment] [T::OpenIndent] full_expr() ([T::SameIndent]? full_expr())* ([T::CloseIndent] / end_of_file())
-        /  ident() [T::OpAssignment] full_expr()
+        /  ident() [T::OpAssignment] full_expr() end_of_file()?
 
         rule annotated_body() =
           annotation() [T::SameIndent] body()
@@ -832,7 +836,11 @@ peg::parser!{
           [T::KeywordWhen] expr() [T::KeywordIs] when_branch()+
 
         pub rule when_branch() =
-          __ matchable() ([T::Pipe] full_expr())* ([T::KeywordIf] full_expr())? [T::Arrow] __ full_expr() 
+          __ matchable() ([T::Pipe] full_expr())* ([T::KeywordIf] full_expr())? [T::Arrow] when_branch_body() 
+
+        rule when_branch_body() =
+          [T::OpenIndent] full_expr() ([T::CloseIndent] / end_of_file())
+          / full_expr()
 
         rule matchable() =
           type_annotation_no_fun()
@@ -846,17 +854,17 @@ peg::parser!{
           module_name() [T::Dot] [T::LowercaseIdent]
 
         pub rule apply() =
-          apply_expr() apply_args() end()?
+          apply_expr() apply_args()
 
         pub rule apply_args() =
-          [T::OpenIndent] no_apply_op_expr() single_line_apply_args()? ([T::CloseIndent]/indented_end())
+          [T::OpenIndent] op_expr() single_line_apply_args()? ([T::CloseIndent]/indented_end())
           / no_apply_op_expr()+
 
         rule single_line_apply_args() =
-          ([T::SameIndent] no_apply_op_expr()) indented_end()
-          / ([T::OpenIndent] no_apply_op_expr() indented_end())
-          / ([T::SameIndent] no_apply_op_expr()) single_line_apply_args()*
-          / ([T::OpenIndent] no_apply_op_expr() single_line_apply_args()* [T::CloseIndent])
+          ([T::SameIndent] op_expr()) indented_end()
+          / ([T::OpenIndent] op_expr() indented_end())
+          / ([T::SameIndent] op_expr()) single_line_apply_args()*
+          / ([T::OpenIndent] op_expr() single_line_apply_args()* [T::CloseIndent])
 
         rule apply_expr() =
           var()
@@ -1253,7 +1261,7 @@ fn test_indented_closure_apply() {
 #[test]
 fn test_task() {
   let tokens = test_tokenize(&example_path("benchmarks/platform/Task.roc"));
-
+  dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
@@ -1301,6 +1309,69 @@ fn test_rbtree_insert() {
 
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
+
+#[test]
+fn test_closure_1() {
+  let tokens = test_tokenize(r#"\key ->
+      when dict is
+          Empty ->
+              4
+
+          Node ->
+              5"#);
+
+  dbg!(&tokens);
+  assert_eq!(tokenparser::closure(&tokens), Ok(()));
+}
+
+
+#[test]
+fn test_closure_2() {
+  let tokens = test_tokenize(r#"\key ->
+      when dict is
+          Empty ->
+              Node Red
+
+          Node nColor ->
+              when key is  
+                  GT ->
+                      balance nColor"#);
+
+  assert_eq!(tokenparser::closure(&tokens), Ok(()));
+}
+
+#[test]
+fn test_nested_apply() {
+  let tokens = test_tokenize(r#"after = \effect ->
+  Effect.after
+      transform a
+
+map : Str"#);
+  dbg!(&tokens);
+
+  assert_eq!(tokenparser::module_defs(&tokens), Ok(()));
+}
+
+#[test]
+fn test_deep_indented_defs() {
+  let tokens = test_tokenize(r#"after = \effect ->
+  after
+      \result ->
+          transform a
+
+map : Str"#);
+  dbg!(&tokens);
+
+  assert_eq!(tokenparser::module_defs(&tokens), Ok(()));
+}
+
+// TODO fix infinite loop
+/*#[test]
+fn test_rbtree_ck() {
+  let tokens = test_tokenize(&example_path("benchmarks/RBTreeCk.roc"));
+
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}*/
 
 
 
