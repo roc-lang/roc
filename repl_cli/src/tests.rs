@@ -192,7 +192,7 @@ fn num_addition() {
 
 #[test]
 fn int_addition() {
-    expect_success("0x1 + 2", "3 : I64");
+    expect_success("0x1 + 2", "3 : Int *");
 }
 
 #[test]
@@ -425,7 +425,7 @@ fn nested_num_list() {
 fn nested_int_list() {
     expect_success(
         r#"[ [ [ 4, 3, 2 ], [ 1, 0x0 ] ], [ [] ], [] ]"#,
-        r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List I64))"#,
+        r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List Int *))"#,
     );
 }
 
@@ -461,7 +461,7 @@ fn num_bitwise_xor() {
 fn num_add_wrap() {
     expect_success(
         "Num.addWrap Num.maxI64 1",
-        "-9223372036854775808 : Int Signed64",
+        "-9223372036854775808 : I64",
     );
 }
 
@@ -469,13 +469,13 @@ fn num_add_wrap() {
 fn num_sub_wrap() {
     expect_success(
         "Num.subWrap Num.minI64 1",
-        "9223372036854775807 : Int Signed64",
+        "9223372036854775807 : I64",
     );
 }
 
 #[test]
 fn num_mul_wrap() {
-    expect_success("Num.mulWrap Num.maxI64 2", "-2 : Int Signed64");
+    expect_success("Num.mulWrap Num.maxI64 2", "-2 : I64");
 }
 
 #[test]
