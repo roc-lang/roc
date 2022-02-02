@@ -62,6 +62,8 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
     }
 }
 
+/// Run user code that returns a builtin layout
+/// Size is determined at REPL compile time using the equivalent Rust type
 pub fn run_jit_function<'a, T: Sized, F: Fn(T) -> Expr<'a>>(
     lib: Library,
     main_fn_name: &str,
@@ -85,10 +87,8 @@ pub fn run_jit_function<'a, T: Sized, F: Fn(T) -> Expr<'a>>(
     }
 }
 
-/// In the repl, we don't know the type that is returned; if it's large enough to not fit in 2
-/// registers (i.e. size bigger than 16 bytes on 64-bit systems), then we use this function.
-/// It explicitly allocates a buffer that the roc main function can write its result into.
-pub fn run_jit_function_dynamic_type<'a, T: Sized, F: Fn(usize) -> T>(
+/// Run user code that returns a struct or union, where the size is provided at runtime
+pub fn run_jit_function_dynamic_size<'a, T: Sized, F: Fn(usize) -> T>(
     lib: Library,
     main_fn_name: &str,
     bytes: usize,
@@ -482,7 +482,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
 
             let result_stack_size = layout.stack_size(env.target_info);
 
-            run_jit_function_dynamic_type(
+            run_jit_function_dynamic_size(
                 app,
                 main_fn_name,
                 result_stack_size as usize,
@@ -491,7 +491,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
             let size = layout.stack_size(env.target_info);
-            Ok(run_jit_function_dynamic_type(
+            Ok(run_jit_function_dynamic_size(
                 app,
                 main_fn_name,
                 size as usize,
@@ -503,7 +503,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
             let size = layout.stack_size(env.target_info);
-            Ok(run_jit_function_dynamic_type(
+            Ok(run_jit_function_dynamic_size(
                 app,
                 main_fn_name,
                 size as usize,
