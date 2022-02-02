@@ -27,8 +27,8 @@ impl<'a> Formattable for Expr<'a> {
             }
 
             // These expressions never have newlines
-            Float(_)
-            | Num(_)
+            Float(..)
+            | Num(..)
             | NonBase10Int { .. }
             | Access(_, _)
             | AccessorFunction(_)
@@ -196,17 +196,25 @@ impl<'a> Formattable for Expr<'a> {
                     buf.push(')');
                 }
             }
-            Num(string) | Float(string) | GlobalTag(string) | PrivateTag(string) => {
+            &Num(string) => {
+                buf.indent(indent);
+                buf.push_str(string);
+            }
+            &Float(string) => {
+                buf.indent(indent);
+                buf.push_str(string);
+            }
+            GlobalTag(string) | PrivateTag(string) => {
                 buf.indent(indent);
                 buf.push_str(string)
             }
-            NonBase10Int {
+            &NonBase10Int {
                 base,
                 string,
                 is_negative,
             } => {
                 buf.indent(indent);
-                if *is_negative {
+                if is_negative {
                     buf.push('-');
                 }
 

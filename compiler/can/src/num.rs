@@ -7,6 +7,7 @@ use roc_problem::can::{FloatErrorKind, IntErrorKind};
 use roc_region::all::Region;
 use roc_types::subs::VarStore;
 use std::i64;
+use std::str;
 
 // TODO use rust's integer parsing again
 //
@@ -16,12 +17,28 @@ use std::i64;
 #[inline(always)]
 pub fn num_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<(&str, i64), (&str, IntErrorKind)>,
+    result: Result<(&str, ParsedNumResult), (&str, IntErrorKind)>,
     region: Region,
     env: &mut Env,
 ) -> Expr {
     match result {
-        Ok((str, num)) => Expr::Num(var_store.fresh(), (*str).into(), num),
+        Ok((str, ParsedNumResult::UnknownNum(num))) => {
+            Expr::Num(var_store.fresh(), (*str).into(), num, NumericBound::None)
+        }
+        Ok((str, ParsedNumResult::Int(num, bound))) => Expr::Int(
+            var_store.fresh(),
+            var_store.fresh(),
+            (*str).into(),
+            num.into(),
+            bound,
+        ),
+        Ok((str, ParsedNumResult::Float(num, bound))) => Expr::Float(
+            var_store.fresh(),
+            var_store.fresh(),
+            (*str).into(),
+            num,
+            bound,
+        ),
         Err((raw, error)) => {
             // (Num *) compiles to Int if it doesn't
             // get specialized to something else first,
@@ -38,14 +55,20 @@ pub fn num_expr_from_result(
 #[inline(always)]
 pub fn int_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<(&str, i128), (&str, IntErrorKind)>,
+    result: Result<(&str, i128, NumericBound<IntWidth>), (&str, IntErrorKind)>,
     region: Region,
     base: Base,
     env: &mut Env,
 ) -> Expr {
     // Int stores a variable to generate better error messages
     match result {
-        Ok((str, int)) => Expr::Int(var_store.fresh(), var_store.fresh(), (*str).into(), int),
+        Ok((str, int, bound)) => Expr::Int(
+            var_store.fresh(),
+            var_store.fresh(),
+            (*str).into(),
+            int,
+            bound,
+        ),
         Err((raw, error)) => {
             let runtime_error = InvalidInt(error, base, region, raw.into());
 
@@ -59,13 +82,19 @@ pub fn int_expr_from_result(
 #[inline(always)]
 pub fn float_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<(&str, f64), (&str, FloatErrorKind)>,
+    result: Result<(&str, f64, NumericBound<FloatWidth>), (&str, FloatErrorKind)>,
     region: Region,
     env: &mut Env,
 ) -> Expr {
     // Float stores a variable to generate better error messages
     match result {
-        Ok((str, float)) => Expr::Float(var_store.fresh(), var_store.fresh(), (*str).into(), float),
+        Ok((str, float, bound)) => Expr::Float(
+            var_store.fresh(),
+            var_store.fresh(),
+            (*str).into(),
+            float,
+            bound,
+        ),
         Err((raw, error)) => {
             let runtime_error = InvalidFloat(error, region, raw.into());
 
@@ -76,11 +105,28 @@ pub fn float_expr_from_result(
     }
 }
 
+pub enum ParsedNumResult {
+    Int(i64, NumericBound<IntWidth>),
+    Float(f64, NumericBound<FloatWidth>),
+    UnknownNum(i64),
+}
+
 #[inline(always)]
-pub fn finish_parsing_int(raw: &str) -> Result<i64, (&str, IntErrorKind)> {
+pub fn finish_parsing_num(raw: &str) -> Result<ParsedNumResult, (&str, IntErrorKind)> {
     // Ignore underscores.
     let radix = 10;
-    from_str_radix::<i64>(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e.kind))
+    let (num, bound) =
+        from_str_radix::<i64>(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e.kind))?;
+    // Let's try to specialize the number
+    Ok(match bound {
+        NumericBound::None => ParsedNumResult::UnknownNum(num),
+        NumericBound::Exact(NumWidth::Int(iw)) => {
+            ParsedNumResult::Int(num, NumericBound::Exact(iw))
+        }
+        NumericBound::Exact(NumWidth::Float(fw)) => {
+            ParsedNumResult::Float(num as f64, NumericBound::Exact(fw))
+        }
+    })
 }
 
 #[inline(always)]
@@ -88,7 +134,7 @@ pub fn finish_parsing_base(
     raw: &str,
     base: Base,
     is_negative: bool,
-) -> Result<i64, (&str, IntErrorKind)> {
+) -> Result<(i64, NumericBound<IntWidth>), (&str, IntErrorKind)> {
     let radix = match base {
         Base::Hex => 16,
         Base::Decimal => 10,
@@ -102,14 +148,36 @@ pub fn finish_parsing_base(
     } else {
         from_str_radix::<i64>(raw.replace("_", "").as_str(), radix)
     })
-    .map_err(|e| (raw, e.kind))
+    .map_err(|e| e.kind)
+    .and_then(|(n, bound)| {
+        let bound = match bound {
+            NumericBound::None => NumericBound::None,
+            NumericBound::Exact(NumWidth::Int(iw)) => NumericBound::Exact(iw),
+            NumericBound::Exact(NumWidth::Float(_)) => return Err(IntErrorKind::FloatSuffix),
+        };
+        Ok((n, bound))
+    })
+    .map_err(|e| (raw, e))
 }
 
 #[inline(always)]
-pub fn finish_parsing_float(raw: &str) -> Result<f64, (&str, FloatErrorKind)> {
+pub fn finish_parsing_float(
+    raw: &str,
+) -> Result<(f64, NumericBound<FloatWidth>), (&str, FloatErrorKind)> {
+    let (bound, raw_without_suffix) = parse_literal_suffix(raw.as_bytes());
+    // Safety: `raw` is valid UTF8, and `parse_literal_suffix` will only chop UTF8
+    // characters off the end, if it chops off anything at all.
+    let raw_without_suffix = unsafe { str::from_utf8_unchecked(raw_without_suffix) };
+
+    let bound = match bound {
+        NumericBound::None => NumericBound::None,
+        NumericBound::Exact(NumWidth::Float(fw)) => NumericBound::Exact(fw),
+        NumericBound::Exact(NumWidth::Int(_)) => return Err((raw, FloatErrorKind::IntSuffix)),
+    };
+
     // Ignore underscores.
-    match raw.replace("_", "").parse::<f64>() {
-        Ok(float) if float.is_finite() => Ok(float),
+    match raw_without_suffix.replace("_", "").parse::<f64>() {
+        Ok(float) if float.is_finite() => Ok((float, bound)),
         Ok(float) => {
             if float.is_sign_positive() {
                 Err((raw, FloatErrorKind::PositiveInfinity))
@@ -119,6 +187,35 @@ pub fn finish_parsing_float(raw: &str) -> Result<f64, (&str, FloatErrorKind)> {
         }
         Err(_) => Err((raw, FloatErrorKind::Error)),
     }
+}
+
+fn parse_literal_suffix(num_str: &[u8]) -> (NumericBound<NumWidth>, &[u8]) {
+    macro_rules! parse_num_suffix {
+        ($($suffix:expr, $width:expr)*) => {$(
+            if num_str.ends_with($suffix) {
+                return (NumericBound::Exact($width), num_str.get(0..num_str.len() - $suffix.len()).unwrap());
+            }
+        )*}
+    }
+
+    parse_num_suffix! {
+        b"u8",   NumWidth::Int(IntWidth::U8)
+        b"u16",  NumWidth::Int(IntWidth::U16)
+        b"u32",  NumWidth::Int(IntWidth::U32)
+        b"u64",  NumWidth::Int(IntWidth::U64)
+        b"u128", NumWidth::Int(IntWidth::U128)
+        b"i8",   NumWidth::Int(IntWidth::I8)
+        b"i16",  NumWidth::Int(IntWidth::I16)
+        b"i32",  NumWidth::Int(IntWidth::I32)
+        b"i64",  NumWidth::Int(IntWidth::I64)
+        b"i128", NumWidth::Int(IntWidth::I128)
+        b"nat",  NumWidth::Int(IntWidth::Nat)
+        b"dec",  NumWidth::Float(FloatWidth::Dec)
+        b"f32",  NumWidth::Float(FloatWidth::F32)
+        b"f64",  NumWidth::Float(FloatWidth::F64)
+    }
+
+    (NumericBound::None, num_str)
 }
 
 /// Integer parsing code taken from the rust libcore,
@@ -164,7 +261,10 @@ macro_rules! doit {
 // doit! { i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize }
 doit! { i64 }
 
-fn from_str_radix<T: FromStrRadixHelper>(src: &str, radix: u32) -> Result<T, ParseIntError> {
+fn from_str_radix<T: FromStrRadixHelper>(
+    src: &str,
+    radix: u32,
+) -> Result<(T, NumericBound<NumWidth>), ParseIntError> {
     use self::IntErrorKind::*;
     use self::ParseIntError as PIE;
 
@@ -191,6 +291,8 @@ fn from_str_radix<T: FromStrRadixHelper>(src: &str, radix: u32) -> Result<T, Par
         b'-' if is_signed_ty => (false, &src[1..]),
         _ => (true, src),
     };
+
+    let (bound, digits) = parse_literal_suffix(digits);
 
     if digits.is_empty() {
         return Err(PIE { kind: Empty });
@@ -230,7 +332,47 @@ fn from_str_radix<T: FromStrRadixHelper>(src: &str, radix: u32) -> Result<T, Par
             };
         }
     }
-    Ok(result)
+    Ok((result, bound))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IntWidth {
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Nat,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FloatWidth {
+    Dec,
+    F32,
+    F64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NumWidth {
+    Int(IntWidth),
+    Float(FloatWidth),
+}
+
+/// Describes a bound on the width of a numeric literal.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NumericBound<W>
+where
+    W: Copy,
+{
+    /// There is no bound on the width.
+    None,
+    /// Must have exactly the width `W`.
+    Exact(W),
 }
 
 /// An error which can be returned when parsing an integer.

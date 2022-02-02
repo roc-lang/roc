@@ -514,7 +514,7 @@ fn numeric_negate_expression<'a, T>(
     let start = state.pos();
     let region = Region::new(start, expr.region.end());
 
-    let new_expr = match &expr.value {
+    let new_expr = match expr.value {
         Expr::Num(string) => {
             let new_string =
                 unsafe { std::str::from_utf8_unchecked(&state.bytes()[..string.len() + 1]) };
@@ -536,7 +536,7 @@ fn numeric_negate_expression<'a, T>(
             Expr::NonBase10Int {
                 is_negative: !is_negative,
                 string,
-                base: *base,
+                base,
             }
         }
         _ => Expr::UnaryOp(arena.alloc(expr), Loc::at(loc_op.region, UnaryOp::Negate)),
@@ -1450,8 +1450,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             Ok(Pattern::RecordDestructure(patterns))
         }
 
-        Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
-        Expr::Num(string) => Ok(Pattern::NumLiteral(string)),
+        &Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
+        &Expr::Num(string) => Ok(Pattern::NumLiteral(string)),
         Expr::NonBase10Int {
             string,
             base,

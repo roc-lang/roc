@@ -4,7 +4,9 @@
 
 use bumpalo::collections::Vec as BumpVec;
 use roc_can::expr::unescape_char;
-use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use roc_can::num::{
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult,
+};
 use roc_collections::all::BumpMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_parse::ast::{StrLiteral, StrSegment};
@@ -183,18 +185,24 @@ pub fn to_pattern2<'a>(
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(float) => Pattern2::FloatLiteral(FloatVal::F64(float)),
+                Ok((float, _bound)) => Pattern2::FloatLiteral(FloatVal::F64(float)),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
 
         NumLiteral(string) => match pattern_type {
-            WhenBranch => match finish_parsing_int(string) {
+            WhenBranch => match finish_parsing_num(string) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => Pattern2::NumLiteral(env.var_store.fresh(), int),
+                Ok(ParsedNumResult::UnknownNum(int)) => {
+                    Pattern2::NumLiteral(env.var_store.fresh(), int)
+                }
+                Ok(ParsedNumResult::Int(int, _bound)) => Pattern2::IntLiteral(IntVal::I64(int)),
+                Ok(ParsedNumResult::Float(int, _bound)) => {
+                    Pattern2::FloatLiteral(FloatVal::F64(int))
+                }
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -209,7 +217,7 @@ pub fn to_pattern2<'a>(
                     let problem = MalformedPatternProblem::MalformedBase(*base);
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => {
+                Ok((int, _bound)) => {
                     if *is_negative {
                         Pattern2::IntLiteral(IntVal::I64(-int))
                     } else {

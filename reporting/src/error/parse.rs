@@ -1,4 +1,4 @@
-use roc_parse::parser::{FileError, SyntaxError};
+use roc_parse::parser::{ENumber, FileError, SyntaxError};
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
 
@@ -518,6 +518,10 @@ fn to_expr_report<'a>(
         }
 
         EExpr::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
+
+        &EExpr::Number(ENumber::End, pos) => {
+            to_malformed_number_literal_report(alloc, lines, filename, pos)
+        }
 
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
@@ -1554,6 +1558,9 @@ fn to_pattern_report<'a>(
         EPattern::PInParens(inparens, pos) => {
             to_pattern_in_parens_report(alloc, lines, filename, inparens, *pos)
         }
+        &EPattern::NumLiteral(ENumber::End, pos) => {
+            to_malformed_number_literal_report(alloc, lines, filename, pos)
+        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -1944,6 +1951,28 @@ fn to_pattern_in_parens_report<'a>(
         }
 
         PInParens::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+    }
+}
+
+fn to_malformed_number_literal_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    start: Position,
+) -> Report<'a> {
+    let surroundings = Region::new(start, start);
+    let region = LineColumnRegion::from_pos(lines.convert_pos(start));
+
+    let doc = alloc.stack(vec![
+        alloc.reflow(r"This number literal is malformed:"),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "INVALID NUMBER LITERAL".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 
