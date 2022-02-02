@@ -517,7 +517,7 @@ peg::parser!{
       rule no_apply_expr() =
           common_expr()
 
-        rule closure() =
+        pub rule closure() =
           [T::LambdaStart] args() [T::Arrow] __ full_expr()
 
         rule args() =
@@ -577,7 +577,7 @@ peg::parser!{
 
         rule expect() = [T::KeywordExpect] expr()
 
-        rule backpass() =
+        pub rule backpass() =
           __ pattern() [T::OpBackpassing] expr()
 
         rule pattern() =
@@ -596,7 +596,7 @@ peg::parser!{
           [T::Dot] ident()
 
         pub rule header() =
-          __ almost_header() [T::CloseIndent]*
+          __ almost_header() header_end()
 
         pub rule almost_header() =
           app_header()
@@ -604,14 +604,17 @@ peg::parser!{
           / platform_header()
 
         rule app_header() =
-          [T::KeywordApp] [T::String] [T::OpenIndent]? packages() imports() provides() end()// check String to be non-empty?
+          [T::KeywordApp] [T::String] [T::OpenIndent]? packages() imports() provides()// check String to be non-empty?
         
         rule interface_header() =
-          [T::KeywordInterface] module_name() [T::OpenIndent]? exposes() imports() end()
+          [T::KeywordInterface] module_name() [T::OpenIndent]? exposes() imports()
 
         rule platform_header() =
-          [T::KeywordPlatform] [T::String] [T::OpenIndent]? requires() exposes() packages() imports() provides() effects() end()// check String to be nonempty?
+          [T::KeywordPlatform] [T::String] [T::OpenIndent]? requires() exposes() packages() imports() provides() effects()// check String to be nonempty?
 
+        rule header_end() =
+          ([T::CloseIndent]
+          / &[T::SameIndent])? // & to not consume the SameIndent
         rule packages() =
           __ [T::KeywordPackages] record() 
 
@@ -698,7 +701,11 @@ peg::parser!{
 
         rule tag_union() =
           empty_list()
-          / [T::OpenSquare] (apply_type() [T::Comma])* apply_type() [T::CloseSquare] type_variable()?
+          / [T::OpenSquare] tags() [T::CloseSquare] type_variable()?
+
+        rule tags() =
+          [T::OpenIndent] apply_type() (__ [T::Comma] __ apply_type() __)* [T::Comma]? [T::CloseIndent]
+          / (apply_type() [T::Comma])* apply_type() [T::Comma]?
         
         rule type_variable() =
           [T::Underscore]
@@ -726,7 +733,7 @@ peg::parser!{
           type_annotation_no_fun() type_annotation_no_fun()*
 
         rule _() =
-          [T::OpenIndent]?
+          ([T::OpenIndent]/[T::SameIndent])?
 
         // TODO write tests for precedence
         pub rule op_expr() = precedence!{ // lowest precedence
@@ -815,7 +822,7 @@ peg::parser!{
           / ident()
 
         rule body() =
-        ident() [T::OpAssignment] [T::OpenIndent] full_expr()+ ([T::CloseIndent] / end_of_file())
+        ident() [T::OpAssignment] [T::OpenIndent] full_expr() ([T::SameIndent] full_expr())* ([T::CloseIndent] / end_of_file())
         /  ident() [T::OpAssignment] full_expr()
 
         rule annotated_body() =
@@ -860,7 +867,7 @@ peg::parser!{
 
         rule end() =
           [T::CloseIndent]
-          / [T::SameIndent]
+          / &[T::SameIndent] // & to not consume the SameIndent
           / end_of_file()
 
         rule indented_end() =
@@ -927,8 +934,7 @@ app "test-app"
 #[test]
 fn test_interface_header() {
   let tokens = test_tokenize( r#"
-interface Foo.Bar.Baz exposes [] imports []
-"#);
+interface Foo.Bar.Baz exposes [] imports []"#);
 
   assert_eq!(tokenparser::header(&tokens), Ok(()));
 }
@@ -939,9 +945,7 @@ fn test_interface_header_2() {
 
   interface Base64.Encode
       exposes [ toBytes ]
-      imports [ Bytes.Encode.{ Encoder } ]
-
-"#);
+      imports [ Bytes.Encode.{ Encoder } ]"#);
 
   assert_eq!(tokenparser::header(&tokens), Ok(()));
 }
@@ -1097,10 +1101,26 @@ fn test_apply_type() {
 }
 
 #[test]
-fn test_apply_expect_fail() {
+fn test_apply_expect_fail_1() {
   assert!(tokenparser::apply(&[
     T::LowercaseIdent, T::LowercaseIdent,T::CloseIndent, T::UppercaseIdent
   ]).is_err());
+}
+
+#[test]
+fn test_apply_expect_fail_2() {
+  let tokens = test_tokenize( r#"eval a
+b"#);
+
+  assert!(tokenparser::apply(&tokens).is_err());
+}
+
+#[test]
+fn test_backpass_expect_fail() {
+  let tokens = test_tokenize( r#"lastName <- 4
+5"#);
+
+  assert!(tokenparser::backpass(&tokens).is_err());
 }
 
 #[test]
@@ -1164,6 +1184,15 @@ fn test_def_in_def() {
 }
 
 #[test]
+fn test_backpass_in_def() {
+  let tokens = test_tokenize(r#"main =
+  lastName <- 4
+  Stdout.line "Hi!""#);
+
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
 fn test_astar_test() {
   let tokens = test_tokenize(&example_path("benchmarks/TestAStar.roc"));
 
@@ -1173,7 +1202,7 @@ fn test_astar_test() {
 #[test]
 fn test_cli_echo() {
   let tokens = test_tokenize(&example_path("cli/Echo.roc"));
-  
+  dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
@@ -1231,9 +1260,36 @@ fn test_indented_closure_apply() {
 #[test]
 fn test_task() {
   let tokens = test_tokenize(&example_path("benchmarks/platform/Task.roc"));
-  dbg!(&tokens);
+
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
+
+#[test]
+fn test_pizza_line() {
+  let tokens = test_tokenize(r#"unoptimized
+      |> Num.toStr
+      |> Task.putLine"#);
+
+  assert_eq!(tokenparser::full_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_defs_w_apply() {
+  let tokens = test_tokenize(r#"unoptimized = eval e
+
+42"#);
+  dbg!(&tokens);
+  assert_eq!(tokenparser::defs(&tokens), Ok(()));
+}
+
+// TODO fix infinite loop
+/*
+#[test]
+fn test_cfold() {
+  let tokens = test_tokenize(&example_path("benchmarks/CFold.roc"));
+  dbg!(&tokens);
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}*/
 
 
 }
