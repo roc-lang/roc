@@ -47,6 +47,7 @@ macro_rules! run_jit_function {
         use std::mem::MaybeUninit;
 
         #[derive(Debug, Copy, Clone)]
+        #[repr(C)]
         struct Failure {
             start_line: u32,
             end_line: u32,
@@ -60,9 +61,14 @@ macro_rules! run_jit_function {
                     .ok()
                     .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                     .expect("errored");
-            let get_expect_failures: libloading::Symbol<
-                unsafe extern "C" fn() -> (*const Failure, usize),
-            > = $lib
+
+            #[repr(C)]
+            struct Failures {
+                failures: *const Failure,
+                count: usize,
+            }
+
+            let get_expect_failures: libloading::Symbol<unsafe extern "C" fn() -> Failures> = $lib
                 .get(bitcode::UTILS_GET_EXPECT_FAILURES.as_bytes())
                 .ok()
                 .ok_or(format!(
@@ -73,15 +79,13 @@ macro_rules! run_jit_function {
             let mut main_result = MaybeUninit::uninit();
 
             main(main_result.as_mut_ptr());
-            let (failures_ptr, num_failures) = get_expect_failures();
-            let mut failures = std::vec::Vec::new();
+            let failures = get_expect_failures();
 
-            for index in 0..num_failures {
-                failures.push(*failures_ptr.add(index));
-            }
+            if failures.count > 0 {
+                let failures =
+                    unsafe { core::slice::from_raw_parts(failures.failures, failures.count) };
 
-            if (num_failures > 0) {
-                panic!("Failed with {} failures. Failures: ", num_failures);
+                panic!("Failed with {} failures. Failures: ", failures.len());
             }
 
             match main_result.assume_init().into() {
