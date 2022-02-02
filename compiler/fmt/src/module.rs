@@ -222,8 +222,14 @@ fn fmt_package_name<'buf>(buf: &mut Buf<'buf>, name: PackageName, _indent: u16) 
 
 impl<'a, T: Formattable> Formattable for Spaced<'a, T> {
     fn is_multiline(&self) -> bool {
-        // TODO
-        false
+        use Spaced::*;
+
+        match self {
+            Item(formattable) => formattable.is_multiline(),
+            SpaceBefore(formattable, spaces) | SpaceAfter(formattable, spaces) => {
+                !spaces.is_empty() || formattable.is_multiline()
+            }
+        }
     }
 
     fn format_with_options<'buf>(
