@@ -24,11 +24,6 @@ roc_repl_eval = {path = "../repl_eval"}
 roc_target = {path = "../compiler/roc_target"}
 roc_types = {path = "../compiler/types"}
 
-[dev-dependencies]
-indoc = "1.0.3"
-roc_test_utils = {path = "../test_utils"}
-strip-ansi-escapes = "0.1.1"
-
 [lib]
 name = "roc_repl_cli"
 path = "src/lib.rs"
