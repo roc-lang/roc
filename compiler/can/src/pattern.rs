@@ -27,9 +27,9 @@ pub enum Pattern {
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
     },
-    IntLiteral(Variable, Box<str>, i64, NumericBound<IntWidth>),
     NumLiteral(Variable, Box<str>, i64, NumericBound<NumWidth>),
-    FloatLiteral(Variable, Box<str>, f64, NumericBound<FloatWidth>),
+    IntLiteral(Variable, Variable, Box<str>, i64, NumericBound<IntWidth>),
+    FloatLiteral(Variable, Variable, Box<str>, f64, NumericBound<FloatWidth>),
     StrLiteral(Box<str>),
     Underscore,
 
@@ -192,9 +192,13 @@ pub fn canonicalize_pattern<'a>(
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok((float, bound)) => {
-                    Pattern::FloatLiteral(var_store.fresh(), (str).into(), float, bound)
-                }
+                Ok((float, bound)) => Pattern::FloatLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    float,
+                    bound,
+                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -213,12 +217,20 @@ pub fn canonicalize_pattern<'a>(
                 Ok(ParsedNumResult::UnknownNum(int)) => {
                     Pattern::NumLiteral(var_store.fresh(), (str).into(), int, NumericBound::None)
                 }
-                Ok(ParsedNumResult::Int(int, bound)) => {
-                    Pattern::IntLiteral(var_store.fresh(), (str).into(), int, bound)
-                }
-                Ok(ParsedNumResult::Float(float, bound)) => {
-                    Pattern::FloatLiteral(var_store.fresh(), (str).into(), float, bound)
-                }
+                Ok(ParsedNumResult::Int(int, bound)) => Pattern::IntLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    int,
+                    bound,
+                ),
+                Ok(ParsedNumResult::Float(float, bound)) => Pattern::FloatLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    float,
+                    bound,
+                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -237,7 +249,7 @@ pub fn canonicalize_pattern<'a>(
                     let sign_str = if is_negative { "-" } else { "" };
                     let int_str = format!("{}{}", sign_str, int.to_string()).into_boxed_str();
                     let i = if is_negative { -int } else { int };
-                    Pattern::IntLiteral(var_store.fresh(), int_str, i, bound)
+                    Pattern::IntLiteral(var_store.fresh(), var_store.fresh(), int_str, i, bound)
                 }
             },
             ptype => unsupported_pattern(env, ptype, region),

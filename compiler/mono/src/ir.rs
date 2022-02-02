@@ -7662,8 +7662,8 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        IntLiteral(var, _, int, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
+        IntLiteral(_, precision_var, _, int, _bound) => {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, false) {
                 IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*int as i128, precision)),
                 other => {
                     panic!(
@@ -7673,11 +7673,11 @@ fn from_can_pattern_help<'a>(
                 }
             }
         }
-        FloatLiteral(var, float_str, float, _bound) => {
+        FloatLiteral(_, precision_var, float_str, float, _bound) => {
             // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
-            match num_argument_to_int_or_float(env.subs, env.target_info, *var, true) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, true) {
                 IntOrFloat::Int(_) => {
-                    panic!("Invalid precision for float pattern {:?}", var)
+                    panic!("Invalid precision for float pattern {:?}", precision_var)
                 }
                 IntOrFloat::Float(precision) => {
                     Ok(Pattern::FloatLiteral(f64::to_bits(*float), precision))

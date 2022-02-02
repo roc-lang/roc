@@ -364,6 +364,7 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                     match *content {
                         Alias(Symbol::NUM_BINARY32, _, _) => buf.push_str("F32"),
                         Alias(Symbol::NUM_BINARY64, _, _) => buf.push_str("F64"),
+                        Alias(Symbol::NUM_DECIMAL, _, _) => buf.push_str("Dec"),
                         _ => write_parens!(write_parens, buf, {
                             buf.push_str("Float ");
                             write_content(env, content, subs, buf, parens);
@@ -411,7 +412,7 @@ fn write_integer(
     use crate::subs::Content::*;
 
     macro_rules! derive_num_writes {
-        ($($lit:expr, $tag:path, $private_tag:path)*) => {
+        ($($lit:expr, $tag:path)*) => {
             write_parens!(
                 write_parens,
                 buf,
@@ -431,17 +432,17 @@ fn write_integer(
     }
 
     derive_num_writes! {
-        "U8", Symbol::NUM_UNSIGNED8, Symbol::NUM_AT_UNSIGNED8
-        "U16", Symbol::NUM_UNSIGNED16, Symbol::NUM_AT_UNSIGNED16
-        "U32", Symbol::NUM_UNSIGNED32, Symbol::NUM_AT_UNSIGNED32
-        "U64", Symbol::NUM_UNSIGNED64, Symbol::NUM_AT_UNSIGNED64
-        "U128", Symbol::NUM_UNSIGNED128, Symbol::NUM_AT_UNSIGNED128
-        "I8", Symbol::NUM_SIGNED8, Symbol::NUM_AT_SIGNED8
-        "I16", Symbol::NUM_SIGNED16, Symbol::NUM_AT_SIGNED16
-        "I32", Symbol::NUM_SIGNED32, Symbol::NUM_AT_SIGNED32
-        "I64", Symbol::NUM_SIGNED64, Symbol::NUM_AT_SIGNED64
-        "I128", Symbol::NUM_SIGNED128, Symbol::NUM_AT_SIGNED128
-        "Nat", Symbol::NUM_NATURAL, Symbol::NUM_AT_NATURAL
+        "U8", Symbol::NUM_UNSIGNED8
+        "U16", Symbol::NUM_UNSIGNED16
+        "U32", Symbol::NUM_UNSIGNED32
+        "U64", Symbol::NUM_UNSIGNED64
+        "U128", Symbol::NUM_UNSIGNED128
+        "I8", Symbol::NUM_SIGNED8
+        "I16", Symbol::NUM_SIGNED16
+        "I32", Symbol::NUM_SIGNED32
+        "I64", Symbol::NUM_SIGNED64
+        "I128", Symbol::NUM_SIGNED128
+        "Nat", Symbol::NUM_NATURAL
     }
 }
 

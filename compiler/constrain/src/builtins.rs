@@ -11,7 +11,7 @@ use roc_types::types::Category;
 use roc_types::types::Reason;
 use roc_types::types::Type::{self, *};
 
-fn add_numeric_bound_constr(
+pub fn add_numeric_bound_constr(
     constrs: &mut Vec<Constraint>,
     num_type: Type,
     bound: impl TypedNumericBound,

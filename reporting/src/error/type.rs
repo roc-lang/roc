@@ -1468,7 +1468,7 @@ fn add_pattern_category<'b>(
         Str => alloc.reflow(" strings:"),
         Num => alloc.reflow(" numbers:"),
         Int => alloc.reflow(" integers:"),
-        Float => alloc.reflow(" floats"),
+        Float => alloc.reflow(" floats:"),
     };
 
     alloc.concat(vec![i_am_trying_to_match, rest])

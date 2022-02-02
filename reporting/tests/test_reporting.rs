@@ -7369,6 +7369,69 @@ I need all branches in an `if` to have the same type!
         1, "f64",  mismatched_suffix_f64
     }
 
+    macro_rules! mismatched_suffix_tests_in_pattern {
+        ($($number:expr, $suffix:expr, $name:ident)*) => {$(
+            #[test]
+            fn $name() {
+                let number = $number.to_string();
+                let mut typ = $suffix.to_string();
+                typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                let bad_suffix = if $suffix == "u8" { "i8" } else { "u8" };
+                let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
+                let carets = "^".repeat(number.len() + $suffix.len());
+                let kind = match $suffix {
+                    "dec"|"f32"|"f64" => "floats",
+                    _ => "integers",
+                };
+
+                report_problem_as(
+                    &format!(indoc!(
+                        r#"
+                        when {}{} is
+                            {}{} -> 1
+                            _ -> 1
+                        "#
+                    ), number, bad_suffix, number, $suffix),
+                    &format!(indoc!(
+                        r#"
+                        ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                        The 1st pattern in this `when` is causing a mismatch:
+
+                        2│      {}{} -> 1
+                                {}
+
+                        The first pattern is trying to match {}:
+        
+                            {}
+        
+                        But the expression between `when` and `is` has the type:
+        
+                            {}
+                        "#
+                    ), number, $suffix, carets, kind, typ, bad_type),
+                )
+            }
+        )*}
+    }
+
+    mismatched_suffix_tests_in_pattern! {
+        1, "u8",   mismatched_suffix_u8_pattern
+        1, "u16",  mismatched_suffix_u16_pattern
+        1, "u32",  mismatched_suffix_u32_pattern
+        1, "u64",  mismatched_suffix_u64_pattern
+        1, "u128", mismatched_suffix_u128_pattern
+        1, "i8",   mismatched_suffix_i8_pattern
+        1, "i16",  mismatched_suffix_i16_pattern
+        1, "i32",  mismatched_suffix_i32_pattern
+        1, "i64",  mismatched_suffix_i64_pattern
+        1, "i128", mismatched_suffix_i128_pattern
+        1, "nat",  mismatched_suffix_nat_pattern
+        1, "dec",  mismatched_suffix_dec_pattern
+        1, "f32",  mismatched_suffix_f32_pattern
+        1, "f64",  mismatched_suffix_f64_pattern
+    }
+
     #[test]
     fn bad_numeric_literal_suffix() {
         report_problem_as(
