@@ -5,7 +5,6 @@ use inkwell::module::Linkage;
 use libloading::{Library, Symbol};
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::Expr;
-use roc_repl_eval::app_memory::AppMemoryInternal;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
@@ -379,10 +378,12 @@ fn gen_and_eval_llvm<'a>(
     let lib = module_to_dylib(env.module, &target, opt_level)
         .expect("Error loading compiled dylib for test");
 
+    let app = CliReplApp { lib };
+
     let res_answer = unsafe {
         jit_to_ast(
             &arena,
-            lib,
+            &app,
             main_fn_name,
             main_fn_layout,
             content,
@@ -390,7 +391,6 @@ fn gen_and_eval_llvm<'a>(
             home,
             &subs,
             target_info,
-            &AppMemoryInternal,
         )
     };
 
