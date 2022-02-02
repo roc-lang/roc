@@ -331,7 +331,8 @@ impl<'a> Formattable for ExposedName<'a> {
         false
     }
 
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, _indent: u16) {
+    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+        buf.indent(indent);
         buf.push_str(self.as_str());
     }
 }
@@ -378,6 +379,8 @@ fn fmt_packages_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &PackageEntry<'a>, i
 
 fn fmt_imports_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &ImportsEntry<'a>, indent: u16) {
     use roc_parse::header::ImportsEntry::*;
+
+    buf.indent(indent);
 
     match entry {
         Module(module, loc_exposes_entries) => {
