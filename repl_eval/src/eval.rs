@@ -1282,15 +1282,15 @@ fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_>
 }
 
 #[cfg(target_endian = "little")]
-#[cfg(target_pointer_width = "64")]
-/// TODO implement this for 32-bit and big-endian targets. NOTE: As of this writing,
-/// we don't have big-endian small strings implemented yet!
+/// NOTE: As of this writing, we don't have big-endian small strings implemented yet!
 fn str_to_ast<'a>(arena: &'a Bump, string: &'a str) -> Expr<'a> {
-    let bytes: [u8; 16] = unsafe { std::mem::transmute::<&'a str, [u8; 16]>(string) };
-    let is_small = (bytes[15] & 0b1000_0000) != 0;
+    const STR_SIZE: usize = 2 * std::mem::size_of::<usize>();
+
+    let bytes: [u8; STR_SIZE] = unsafe { std::mem::transmute(string) };
+    let is_small = (bytes[STR_SIZE - 1] & 0b1000_0000) != 0;
 
     if is_small {
-        let len = (bytes[15] & 0b0111_1111) as usize;
+        let len = (bytes[STR_SIZE - 1] & 0b0111_1111) as usize;
         let mut string = bumpalo::collections::String::with_capacity_in(len, arena);
 
         for byte in bytes.iter().take(len) {
