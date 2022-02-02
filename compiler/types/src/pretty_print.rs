@@ -361,7 +361,7 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                     let arg_var = subs[arg_var_index];
                     let content = subs.get_content_without_compacting(arg_var);
 
-                    match *content {
+                    match content {
                         Alias(Symbol::NUM_BINARY32, _, _) => buf.push_str("F32"),
                         Alias(Symbol::NUM_BINARY64, _, _) => buf.push_str("F64"),
                         Alias(Symbol::NUM_DECIMAL, _, _) => buf.push_str("Dec"),

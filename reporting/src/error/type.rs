@@ -940,7 +940,7 @@ fn to_expr_report<'b>(
                 region,
                 Some(expr_region),
                 alloc.text("This numeric literal is being used improperly:"),
-                alloc.text("Here's it's been used as"),
+                alloc.text("Here the value is used as a:"),
                 alloc.text("But its suffix says it's a:"),
                 None,
             ),
