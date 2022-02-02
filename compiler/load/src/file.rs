@@ -25,7 +25,7 @@ use roc_mono::ir::{
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
-use roc_parse::header::{ModuleNameEnum, PackageName};
+use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
@@ -674,28 +674,7 @@ struct ModuleHeader<'a> {
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parse_state: roc_parse::state::State<'a>,
     module_timing: ModuleTiming,
-}
-
-#[derive(Debug)]
-enum HeaderFor<'a> {
-    App {
-        to_platform: To<'a>,
-    },
-    Hosted {
-        generates: UppercaseIdent<'a>,
-        generates_with: &'a [Loc<ExposedName<'a>>],
-    },
-    PkgConfig {
-        /// usually `pf`
-        config_shorthand: &'a str,
-        /// the type scheme of the main function (required by the platform)
-        /// (currently unused)
-        #[allow(dead_code)]
-        platform_main_type: TypedIdent<'a>,
-        /// provided symbol to host (commonly `mainForHost`)
-        main_for_host: Symbol,
-    },
-    Interface,
+    header_for: HeaderFor<'a>,
 }
 
 #[derive(Debug)]
@@ -778,7 +757,6 @@ impl<'a> MonomorphizedModule<'a> {
 #[derive(Debug)]
 struct ParsedModule<'a> {
     module_id: ModuleId,
-    module_name: ModuleNameEnum<'a>,
     module_path: PathBuf,
     src: &'a str,
     module_timing: ModuleTiming,
@@ -787,6 +765,8 @@ struct ParsedModule<'a> {
     exposed_ident_ids: IdentIds,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parsed_defs: &'a [Loc<roc_parse::ast::Def<'a>>],
+    module_name: ModuleNameEnum<'a>,
+    header_for: HeaderFor<'a>,
 }
 
 /// A message sent out _from_ a worker thread,
@@ -794,7 +774,7 @@ struct ParsedModule<'a> {
 #[derive(Debug)]
 enum Msg<'a> {
     Many(Vec<Msg<'a>>),
-    Header(ModuleHeader<'a>, HeaderFor<'a>),
+    Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
     CanonicalizedAndConstrained {
         constrained_module: ConstrainedModule,
@@ -1700,7 +1680,7 @@ fn update<'a>(
 
             Ok(state)
         }
-        Header(header, header_extra) => {
+        Header(header) => {
             use HeaderFor::*;
 
             log!("loaded header for {:?}", header.module_id);
@@ -1717,13 +1697,13 @@ fn update<'a>(
 
                 if let PkgConfig {
                     config_shorthand, ..
-                } = header_extra
+                } = header.header_for
                 {
                     work.extend(state.dependencies.notify_package(config_shorthand));
                 }
             }
 
-            match header_extra {
+            match header.header_for {
                 App { to_platform } => {
                     debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                     state.platform_path = PlatformPath::Valid(to_platform);
@@ -2959,24 +2939,22 @@ fn send_header<'a>(
 
     (
         home,
-        Msg::Header(
-            ModuleHeader {
-                module_id: home,
-                module_path: filename,
-                is_root_module,
-                exposed_ident_ids: ident_ids,
-                module_name: loc_name.value,
-                packages: package_entries,
-                imported_modules,
-                package_qualified_imported_modules,
-                deps_by_name,
-                exposes: exposed,
-                parse_state,
-                exposed_imports: scope,
-                module_timing,
-            },
-            extra,
-        ),
+        Msg::Header(ModuleHeader {
+            module_id: home,
+            module_path: filename,
+            is_root_module,
+            exposed_ident_ids: ident_ids,
+            module_name: loc_name.value,
+            packages: package_entries,
+            imported_modules,
+            package_qualified_imported_modules,
+            deps_by_name,
+            exposes: exposed,
+            parse_state,
+            exposed_imports: scope,
+            module_timing,
+            header_for: extra,
+        }),
     )
 }
 
@@ -3200,24 +3178,22 @@ fn send_header_two<'a>(
 
     (
         home,
-        Msg::Header(
-            ModuleHeader {
-                module_id: home,
-                module_path: filename,
-                is_root_module,
-                exposed_ident_ids: ident_ids,
-                module_name,
-                packages: package_entries,
-                imported_modules,
-                package_qualified_imported_modules,
-                deps_by_name,
-                exposes: exposed,
-                parse_state,
-                exposed_imports: scope,
-                module_timing,
-            },
-            extra,
-        ),
+        Msg::Header(ModuleHeader {
+            module_id: home,
+            module_path: filename,
+            is_root_module,
+            exposed_ident_ids: ident_ids,
+            module_name,
+            packages: package_entries,
+            imported_modules,
+            package_qualified_imported_modules,
+            deps_by_name,
+            exposes: exposed,
+            parse_state,
+            exposed_imports: scope,
+            module_timing,
+            header_for: extra,
+        }),
     )
 }
 
@@ -3670,6 +3646,7 @@ where
     let ParsedModule {
         module_id,
         module_name,
+        header_for,
         exposed_ident_ids,
         parsed_defs,
         exposed_imports,
@@ -3682,7 +3659,7 @@ where
     let canonicalized = canonicalize_module_defs(
         arena,
         parsed_defs,
-        &module_name,
+        &header_for,
         module_id,
         module_ids,
         exposed_ident_ids,
@@ -3789,6 +3766,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         exposed_ident_ids,
         exposed_imports,
         module_path,
+        header_for,
         ..
     } = header;
 
@@ -3803,6 +3781,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         exposed_ident_ids,
         exposed_imports,
         parsed_defs,
+        header_for,
     };
 
     Ok(Msg::Parsed(parsed))

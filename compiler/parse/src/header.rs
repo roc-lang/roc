@@ -8,6 +8,28 @@ use crate::string_literal;
 use bumpalo::collections::Vec;
 use roc_region::all::Loc;
 
+#[derive(Debug)]
+pub enum HeaderFor<'a> {
+    App {
+        to_platform: To<'a>,
+    },
+    Hosted {
+        generates: UppercaseIdent<'a>,
+        generates_with: &'a [Loc<ExposedName<'a>>],
+    },
+    PkgConfig {
+        /// usually `pf`
+        config_shorthand: &'a str,
+        /// the type scheme of the main function (required by the platform)
+        /// (currently unused)
+        #[allow(dead_code)]
+        platform_main_type: TypedIdent<'a>,
+        /// provided symbol to host (commonly `mainForHost`)
+        main_for_host: roc_module::symbol::Symbol,
+    },
+    Interface,
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum Version<'a> {
     Exact(&'a str),

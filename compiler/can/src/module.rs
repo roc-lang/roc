@@ -10,7 +10,7 @@ use roc_module::ident::Lowercase;
 use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
-use roc_parse::header::ModuleNameEnum;
+use roc_parse::header::HeaderFor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -45,7 +45,7 @@ pub struct ModuleOutput {
 pub fn canonicalize_module_defs<'a, F>(
     arena: &Bump,
     loc_defs: &'a [Loc<ast::Def<'a>>],
-    module_name: &roc_parse::header::ModuleNameEnum,
+    header_for: &roc_parse::header::HeaderFor,
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
@@ -68,9 +68,9 @@ where
         scope.add_alias(name, alias.region, alias.type_variables, alias.typ);
     }
 
-    let effect_symbol = if let ModuleNameEnum::Hosted(_) = module_name {
+    let effect_symbol = if let HeaderFor::Hosted { generates, .. } = header_for {
         // TODO extract effect name from the header
-        let name = "Effect";
+        let name: &str = generates.into();
         let effect_symbol = scope
             .introduce(
                 name.into(),
