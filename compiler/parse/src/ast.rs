@@ -232,6 +232,16 @@ pub struct AliasHeader<'a> {
     pub vars: &'a [Loc<Pattern<'a>>],
 }
 
+impl<'a> AliasHeader<'a> {
+    pub fn region(&self) -> Region {
+        Region::across_all(
+            [self.name.region]
+                .iter()
+                .chain(self.vars.iter().map(|v| &v.region)),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns

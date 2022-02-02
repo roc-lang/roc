@@ -1,0 +1,31 @@
+[package]
+edition = "2021"
+name = "roc_repl_eval"
+version = "0.1.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["llvm"]
+llvm = ["inkwell", "libloading", "roc_gen_llvm", "roc_build/llvm"]
+
+[dependencies]
+bumpalo = {version = "3.8.0", features = ["collections"]}
+inkwell = {path = "../vendor/inkwell", optional = true}
+libloading = {version = "0.7.1", optional = true}
+target-lexicon = "0.12.2"
+
+roc_build = {path = "../compiler/build", default-features = false}
+roc_builtins = {path = "../compiler/builtins"}
+roc_can = {path = "../compiler/can"}
+roc_collections = {path = "../compiler/collections"}
+roc_fmt = {path = "../compiler/fmt"}
+roc_gen_llvm = {path = "../compiler/gen_llvm", optional = true}
+roc_load = {path = "../compiler/load"}
+roc_module = {path = "../compiler/module"}
+roc_mono = {path = "../compiler/mono"}
+roc_parse = {path = "../compiler/parse"}
+roc_region = {path = "../compiler/region"}
+roc_reporting = {path = "../reporting"}
+roc_target = {path = "../compiler/roc_target"}
+roc_types = {path = "../compiler/types"}

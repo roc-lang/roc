@@ -1,9 +1,9 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use libloading::Library;
+use std::cmp::{max_by_key, min_by_key};
+
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -15,7 +15,12 @@ use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
 use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
-use std::cmp::{max_by_key, min_by_key};
+
+#[cfg(feature = "llvm")]
+use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
+
+#[cfg(feature = "llvm")]
+type AppExecutable = libloading::Library;
 
 use super::app_memory::AppMemory;
 
@@ -43,7 +48,7 @@ pub enum ToAstProblem {
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn jit_to_ast<'a, M: AppMemory>(
     arena: &'a Bump,
-    lib: Library,
+    app: AppExecutable,
     main_fn_name: &str,
     layout: ProcLayout<'a>,
     content: &'a Content,
@@ -68,7 +73,7 @@ pub unsafe fn jit_to_ast<'a, M: AppMemory>(
             result,
         } => {
             // this is a thunk
-            jit_to_ast_help(&env, lib, main_fn_name, &result, content)
+            jit_to_ast_help(&env, app, main_fn_name, &result, content)
         }
         _ => Err(ToAstProblem::FunctionLayout),
     }
@@ -261,7 +266,7 @@ const OPAQUE_FUNCTION: Expr = Expr::Var {
 
 fn jit_to_ast_help<'a, M: AppMemory>(
     env: &Env<'a, 'a, M>,
-    lib: Library,
+    app: AppExecutable,
     main_fn_name: &str,
     layout: &Layout<'a>,
     content: &'a Content,
@@ -269,7 +274,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
     let (newtype_containers, content) = unroll_newtypes(env, content);
     let content = unroll_aliases(env, content);
     let result = match layout {
-        Layout::Builtin(Builtin::Bool) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
+        Layout::Builtin(Builtin::Bool) => Ok(run_jit_function!(app, main_fn_name, bool, |num| {
             bool_to_ast(env, num, content)
         })),
         Layout::Builtin(Builtin::Int(int_width)) => {
@@ -277,7 +282,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
 
             macro_rules! helper {
                 ($ty:ty) => {
-                    run_jit_function!(lib, main_fn_name, $ty, |num| num_to_ast(
+                    run_jit_function!(app, main_fn_name, $ty, |num| num_to_ast(
                         env,
                         number_literal_to_ast(env.arena, num),
                         content
@@ -288,7 +293,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
             let result = match int_width {
                 U8 | I8 => {
                     // NOTE: this is does not handle 8-bit numbers yet
-                    run_jit_function!(lib, main_fn_name, u8, |num| byte_to_ast(env, num, content))
+                    run_jit_function!(app, main_fn_name, u8, |num| byte_to_ast(env, num, content))
                 }
                 U16 => helper!(u16),
                 U32 => helper!(u32),
@@ -307,7 +312,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
 
             macro_rules! helper {
                 ($ty:ty) => {
-                    run_jit_function!(lib, main_fn_name, $ty, |num| num_to_ast(
+                    run_jit_function!(app, main_fn_name, $ty, |num| num_to_ast(
                         env,
                         number_literal_to_ast(env.arena, num),
                         content
@@ -324,13 +329,13 @@ fn jit_to_ast_help<'a, M: AppMemory>(
             Ok(result)
         }
         Layout::Builtin(Builtin::Str) => Ok(run_jit_function!(
-            lib,
+            app,
             main_fn_name,
             &'static str,
             |string: &'static str| { str_to_ast(env.arena, env.arena.alloc(string)) }
         )),
         Layout::Builtin(Builtin::List(elem_layout)) => Ok(run_jit_function!(
-            lib,
+            app,
             main_fn_name,
             (usize, usize),
             |(addr, len): (usize, usize)| { list_to_ast(env, addr, len, elem_layout, content) }
@@ -391,7 +396,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
             let result_stack_size = layout.stack_size(env.target_info);
 
             run_jit_function_dynamic_type!(
-                lib,
+                app,
                 main_fn_name,
                 result_stack_size as usize,
                 |bytes_addr: usize| { struct_addr_to_ast(bytes_addr as usize) }
@@ -400,7 +405,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
         Layout::Union(UnionLayout::NonRecursive(_)) => {
             let size = layout.stack_size(env.target_info);
             Ok(run_jit_function_dynamic_type!(
-                lib,
+                app,
                 main_fn_name,
                 size as usize,
                 |addr: usize| {
@@ -414,7 +419,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
         | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
             let size = layout.stack_size(env.target_info);
             Ok(run_jit_function_dynamic_type!(
-                lib,
+                app,
                 main_fn_name,
                 size as usize,
                 |addr: usize| {

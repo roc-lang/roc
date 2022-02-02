@@ -78,6 +78,11 @@ pub enum Problem {
     InvalidInterpolation(Region),
     InvalidHexadecimal(Region),
     InvalidUnicodeCodePt(Region),
+    NestedDatatype {
+        alias: Symbol,
+        def_region: Region,
+        differing_recursion_region: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

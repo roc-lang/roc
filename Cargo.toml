@@ -33,6 +33,8 @@ members = [
     "code_markup",
     "error_macros",
     "reporting",
+    "repl_cli",
+    "repl_eval",
     "roc_std",
     "test_utils",
     "utils",
