@@ -88,7 +88,12 @@ where
     T: Formattable,
 {
     fn is_multiline(&self) -> bool {
-        self.items.iter().any(|item| item.is_multiline()) || !self.final_comments().is_empty()
+        // if there are any comments, they must go on their own line
+        // because otherwise they'd comment out the closing delimiter
+        !self.final_comments().is_empty() ||
+        // if any of the items in the collection are multiline,
+        // then the whole collection must be multiline
+        self.items.iter().any(Formattable::is_multiline)
     }
 }
 
