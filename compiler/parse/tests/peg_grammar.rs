@@ -492,7 +492,7 @@ fn test_tokenization_line_with_only_spaces() {
   
       Node ->
           5"#);
-          
+
   assert_eq!(
     tokens,
     [T::LambdaStart, T::LowercaseIdent, T::Arrow,
@@ -1329,6 +1329,38 @@ fn test_multi_defs() {
     tree"#);
 
   assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+// TODO fix slow execution; likely a problem with apply, adding ZeroIndent in module_defs rule might solve this
+#[test]
+fn test_perf_issue() {
+  let tokens = test_tokenize(r#"main =
+  tree = insert 0 {} Empty
+
+  tree
+      |> Task.putLine
+
+nodeInParens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
+nodeInParens = \tree, showKey, showValue ->
+  when tree is
+      _ ->
+          "(\(inner))"
+
+RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
+
+Key k : Num k
+
+balance = \color, key, value, left, right ->
+  when right is
+      Node Red rK rV rLeft rRight ->
+          when left is
+              _ ->
+                  Node color rK rV (Node Red key value left rLeft) rRight
+
+      _ ->
+          5"#);
+
+  assert_eq!(tokenparser::module_defs(&tokens), Ok(()));
 }
 
 #[test]
