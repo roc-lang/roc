@@ -72,13 +72,12 @@ impl Display for NumWidth {
 
 /// Describes a bound on the width of a numeric literal.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum NumericBound<W, V>
+pub enum NumericBound<W>
 where
     W: Copy,
-    V: Copy,
 {
     /// There is no bound on the width.
-    None { width_variable: V },
+    None,
     /// Must have exactly the width `W`.
     Exact(W),
 }

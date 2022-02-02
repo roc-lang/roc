@@ -1,18 +1,14 @@
-use crate::ast::{Base, NumericBound};
+use crate::ast::Base;
 use crate::parser::{ENumber, ParseResult, Parser, Progress};
 use crate::state::State;
-use roc_module::numeric::{FloatWidth, IntWidth, NumWidth};
 
-#[derive(Debug, Copy, Clone)]
 pub enum NumLiteral<'a> {
-    Float(&'a str, NumericBound<FloatWidth>),
-    Int(&'a str, NumericBound<IntWidth>),
-    Num(&'a str, NumericBound<NumWidth>),
+    Float(&'a str),
+    Num(&'a str),
     NonBase10Int {
         string: &'a str,
         base: Base,
         is_negative: bool,
-        bound: NumericBound<IntWidth>,
     },
 }
 
@@ -61,101 +57,27 @@ fn parse_number_base<'a>(
     }
 }
 
-macro_rules! parse_num_suffix {
-    ($bytes:expr, $($suffix:expr, $width:expr)*) => {
-        $(
-            {
-                let len = $suffix.len();
-                if $bytes.starts_with($suffix)
-                    && {
-                        let next = $bytes[len..].get(0);
-                        match next { Some(c) => !(c.is_ascii_digit() || c.is_ascii_alphabetic()), None => true, }
-                    }
-                {
-                    return Some(($width, len))
-                }
-            }
-        )*
-    }
-}
-
-fn get_int_suffix(bytes: &[u8]) -> Option<(IntWidth, usize)> {
-    parse_num_suffix! {
-        bytes,
-        b"u8", IntWidth::U8
-        b"u16", IntWidth::U16
-        b"u32", IntWidth::U32
-        b"u64", IntWidth::U64
-        b"u128", IntWidth::U128
-        b"i8", IntWidth::I8
-        b"i16", IntWidth::I16
-        b"i32", IntWidth::I32
-        b"i64", IntWidth::I64
-        b"i128", IntWidth::I128
-        b"nat", IntWidth::Nat
-    }
-    None
-}
-
-fn get_float_suffix(bytes: &[u8]) -> Option<(FloatWidth, usize)> {
-    parse_num_suffix! {
-        bytes,
-        b"dec", FloatWidth::Dec
-        b"f32", FloatWidth::F32
-        b"f64", FloatWidth::F64
-    }
-    None
-}
-
-fn get_num_suffix(bytes: &[u8]) -> Option<(NumWidth, usize)> {
-    (get_int_suffix(bytes).map(|(iw, l)| (NumWidth::Int(iw), l)))
-        .or_else(|| get_float_suffix(bytes).map(|(fw, l)| (NumWidth::Float(fw), l)))
-}
-
 fn chomp_number_base<'a>(
     base: Base,
     is_negative: bool,
     bytes: &'a [u8],
     state: State<'a>,
 ) -> ParseResult<'a, NumLiteral<'a>, ENumber> {
-    let (_, (_is_float, bound, chomped), state) =
-        chomp_number(bytes, state, is_negative, base == Base::Hex)?;
+    let (_is_float, chomped) = chomp_number(bytes);
 
-    let (bound, chomped_number) = if let Some((bound, chomped_before_suffix)) = bound {
-        (Some(bound), chomped_before_suffix)
-    } else {
-        (None, chomped)
-    };
-
-    let string = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped_number]) };
+    let string = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
 
     let new = state.advance(chomped + 2 + is_negative as usize);
 
-    match bound {
-        None => Ok((
-            Progress::MadeProgress,
-            NumLiteral::NonBase10Int {
-                is_negative,
-                string,
-                base,
-                bound: NumericBound::None { width_variable: () },
-            },
-            new,
-        )),
-        Some(NumWidth::Int(iw)) => Ok((
-            Progress::MadeProgress,
-            NumLiteral::NonBase10Int {
-                is_negative,
-                string,
-                base,
-                bound: NumericBound::Exact(iw),
-            },
-            new,
-        )),
-        Some(NumWidth::Float(_)) => {
-            Err((Progress::MadeProgress, ENumber::IntHasFloatSuffix, state))
-        }
-    }
+    Ok((
+        Progress::MadeProgress,
+        NumLiteral::NonBase10Int {
+            is_negative,
+            string,
+            base,
+        },
+        new,
+    ))
 }
 
 fn chomp_number_dec<'a>(
@@ -163,62 +85,37 @@ fn chomp_number_dec<'a>(
     bytes: &'a [u8],
     state: State<'a>,
 ) -> ParseResult<'a, NumLiteral<'a>, ENumber> {
-    let (_, (is_float, bound, chomped), state) = chomp_number(bytes, state, is_negative, false)?;
+    let (is_float, chomped) = chomp_number(bytes);
+
+    if is_negative && chomped == 0 {
+        // we're probably actually looking at unary negation here
+        return Err((Progress::NoProgress, ENumber::End, state));
+    }
 
     if !bytes.get(0).copied().unwrap_or_default().is_ascii_digit() {
         // we're probably actually looking at unary negation here
         return Err((Progress::NoProgress, ENumber::End, state));
     }
 
-    let (bound, chomped_number) = if let Some((bound, chomped_before_suffix)) = bound {
-        (Some(bound), chomped_before_suffix)
-    } else {
-        (None, chomped)
-    };
-
-    let string = unsafe {
-        std::str::from_utf8_unchecked(&state.bytes()[0..chomped_number + is_negative as usize])
-    };
+    let string =
+        unsafe { std::str::from_utf8_unchecked(&state.bytes()[0..chomped + is_negative as usize]) };
 
     let new = state.advance(chomped + is_negative as usize);
 
-    match (is_float, bound) {
-        (true, None) => Ok((
-            Progress::MadeProgress,
-            NumLiteral::Float(string, NumericBound::None { width_variable: () }),
-            new,
-        )),
-        (false, None) => Ok((
-            Progress::MadeProgress,
-            NumLiteral::Num(string, NumericBound::None { width_variable: () }),
-            new,
-        )),
-        (_, Some(NumWidth::Float(fw))) => Ok((
-            Progress::MadeProgress,
-            NumLiteral::Float(string, NumericBound::Exact(fw)),
-            new,
-        )),
-        (false, Some(NumWidth::Int(iw))) => Ok((
-            Progress::MadeProgress,
-            NumLiteral::Int(string, NumericBound::Exact(iw)),
-            new,
-        )),
-        (true, Some(NumWidth::Int(_))) => {
-            Err((Progress::MadeProgress, ENumber::FloatHasIntSuffix, state))
-        }
-    }
+    Ok((
+        Progress::MadeProgress,
+        if is_float {
+            NumLiteral::Float(string)
+        } else {
+            NumLiteral::Num(string)
+        },
+        new,
+    ))
 }
 
-#[allow(clippy::type_complexity)]
-fn chomp_number<'a>(
-    mut bytes: &'a [u8],
-    state: State<'a>,
-    is_negative: bool,
-    hex: bool,
-) -> ParseResult<'a, (bool, Option<(NumWidth, usize)>, usize), ENumber> {
+fn chomp_number(mut bytes: &[u8]) -> (bool, usize) {
     let start_bytes_len = bytes.len();
     let mut is_float = false;
-    let mut suffix_and_chomped_before = None;
 
     while let Some(byte) = bytes.get(0) {
         match byte {
@@ -247,69 +144,18 @@ fn chomp_number<'a>(
                 // skip
                 bytes = &bytes[1..];
             }
-            _ if byte.is_ascii_digit() => {
+            _ if byte.is_ascii_digit() || byte.is_ascii_alphabetic() => {
+                // valid digits (alphabetic in hex digits, and the `e` in `12e26` scientific notation
                 bytes = &bytes[1..];
-            }
-            _ if byte.is_ascii_hexdigit() && hex => {
-                bytes = &bytes[1..];
-            }
-            _ if byte.is_ascii_whitespace() || byte.is_ascii_punctuation() => {
-                // not a valid digit; we're done
-                return Ok((
-                    Progress::MadeProgress,
-                    (
-                        is_float,
-                        suffix_and_chomped_before,
-                        start_bytes_len - bytes.len(),
-                    ),
-                    state,
-                ));
             }
             _ => {
-                // This might be a suffix; try that first.
-                let parsed_suffix = if suffix_and_chomped_before.is_none() {
-                    get_num_suffix(bytes)
-                } else {
-                    None
-                };
-
-                if let Some((bound, advanced_by)) = parsed_suffix {
-                    suffix_and_chomped_before = Some((bound, start_bytes_len - bytes.len()));
-                    bytes = &bytes[advanced_by..];
-                    continue;
-                }
-
-                // Okay, this number is invalid.
-
-                if start_bytes_len - bytes.len() == 0 && is_negative {
-                    // We're probably actually looking at unary negation here. Reset the progress.
-                    return Err((Progress::NoProgress, ENumber::End, state));
-                }
-
-                if bytes
-                    .get(0)
-                    .copied()
-                    .unwrap_or_default()
-                    .is_ascii_alphabetic()
-                {
-                    // The user likely mistyped a literal suffix type here.
-                    return Err((
-                        Progress::MadeProgress,
-                        ENumber::LiteralSuffix,
-                        state.advance(start_bytes_len - bytes.len()),
-                    ));
-                }
-
-                return Err((Progress::MadeProgress, ENumber::End, state));
+                // not a valid digit; we're done
+                return (is_float, start_bytes_len - bytes.len());
             }
         }
     }
 
     // if the above loop exits, we must be dealing with an empty slice
     // therefore we parsed all of the bytes in the input
-    Ok((
-        Progress::MadeProgress,
-        (is_float, suffix_and_chomped_before, start_bytes_len),
-        state,
-    ))
+    (is_float, start_bytes_len)
 }

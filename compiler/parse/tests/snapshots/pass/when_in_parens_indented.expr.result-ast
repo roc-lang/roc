@@ -19,9 +19,6 @@ ParensAround(
                     ],
                     value: @21-22 Num(
                         "3",
-                        None {
-                            width_variable: (),
-                        },
                     ),
                     guard: None,
                 },

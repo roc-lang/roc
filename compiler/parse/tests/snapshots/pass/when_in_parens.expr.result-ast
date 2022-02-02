@@ -19,9 +19,6 @@ ParensAround(
                 value: @29-30 SpaceBefore(
                     Num(
                         "3",
-                        None {
-                            width_variable: (),
-                        },
                     ),
                     [
                         Newline,

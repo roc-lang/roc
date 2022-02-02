@@ -25,6 +25,7 @@ const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const VALUE_NOT_EXPOSED: &str = "NOT EXPOSED";
 const MODULE_NOT_IMPORTED: &str = "MODULE NOT IMPORTED";
 const NESTED_DATATYPE: &str = "NESTED DATATYPE";
+const CONFLICTING_NUMBER_SUFFIX: &str = "CONFLICTING NUMBER SUFFIX";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -1055,12 +1056,22 @@ fn pretty_runtime_error<'b>(
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat(vec![
-                    alloc.reflow("Floating point literals can only contain the digits 0-9, or use scientific notation 10e4"),
+                    alloc.reflow("Floating point literals can only contain the digits 0-9, or use scientific notation 10e4, or have a float suffix."),
                 ]),
                 tip,
             ]);
 
             title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::InvalidFloat(FloatErrorKind::IntSuffix, region, _raw_str) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This number literal is a float, but it has an integer suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+            ]);
+
+            title = CONFLICTING_NUMBER_SUFFIX;
         }
         RuntimeError::InvalidInt(error @ IntErrorKind::InvalidDigit, base, region, _raw_str)
         | RuntimeError::InvalidInt(error @ IntErrorKind::Empty, base, region, _raw_str) => {
@@ -1116,7 +1127,7 @@ fn pretty_runtime_error<'b>(
                     alloc.text(plurals),
                     contains,
                     alloc.text(charset),
-                    alloc.text("."),
+                    alloc.text(", or have an integer suffix."),
                 ]),
                 tip,
             ]);
@@ -1147,6 +1158,16 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::InvalidInt(IntErrorKind::FloatSuffix, _base, region, _raw_str) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This number literal is an integer, but it has a float suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+            ]);
+
+            title = CONFLICTING_NUMBER_SUFFIX;
         }
         RuntimeError::InvalidOptionalValue {
             field_name,

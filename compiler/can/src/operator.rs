@@ -122,7 +122,6 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
 pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc<Expr<'a>> {
     match &loc_expr.value {
         Float(..)
-        | Int(..)
         | Num(..)
         | NonBase10Int { .. }
         | Str(_)

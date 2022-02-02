@@ -6,8 +6,7 @@ use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
-    AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, NumericBound, Pattern,
-    WhenBranch,
+    AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_region::all::Loc;
@@ -30,7 +29,6 @@ impl<'a> Formattable for Expr<'a> {
             // These expressions never have newlines
             Float(..)
             | Num(..)
-            | Int(..)
             | NonBase10Int { .. }
             | Access(_, _)
             | AccessorFunction(_)
@@ -198,29 +196,13 @@ impl<'a> Formattable for Expr<'a> {
                     buf.push(')');
                 }
             }
-            &Num(string, bound) => {
+            &Num(string) => {
                 buf.indent(indent);
                 buf.push_str(string);
-
-                if let NumericBound::Exact(width) = bound {
-                    buf.push_str(&width.to_string());
-                }
             }
-            &Float(string, bound) => {
+            &Float(string) => {
                 buf.indent(indent);
                 buf.push_str(string);
-
-                if let NumericBound::Exact(width) = bound {
-                    buf.push_str(&width.to_string());
-                }
-            }
-            &Int(string, bound) => {
-                buf.indent(indent);
-                buf.push_str(string);
-
-                if let NumericBound::Exact(width) = bound {
-                    buf.push_str(&width.to_string());
-                }
             }
             GlobalTag(string) | PrivateTag(string) => {
                 buf.indent(indent);
@@ -230,7 +212,6 @@ impl<'a> Formattable for Expr<'a> {
                 base,
                 string,
                 is_negative,
-                bound,
             } => {
                 buf.indent(indent);
                 if is_negative {
@@ -245,10 +226,6 @@ impl<'a> Formattable for Expr<'a> {
                 }
 
                 buf.push_str(string);
-
-                if let NumericBound::Exact(width) = bound {
-                    buf.push_str(&width.to_string());
-                }
             }
             Record(fields) => {
                 fmt_record(buf, None, *fields, indent);

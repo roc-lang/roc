@@ -12,8 +12,5 @@ Closure(
     ],
     @12-14 Num(
         "42",
-        None {
-            width_variable: (),
-        },
     ),
 )

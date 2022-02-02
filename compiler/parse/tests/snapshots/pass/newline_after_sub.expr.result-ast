@@ -3,9 +3,6 @@ BinOps(
         (
             @0-1 Num(
                 "3",
-                None {
-                    width_variable: (),
-                },
             ),
             @3-4 Minus,
         ),
@@ -13,9 +10,6 @@ BinOps(
     @7-8 SpaceBefore(
         Num(
             "4",
-            None {
-                width_variable: (),
-            },
         ),
         [
             Newline,

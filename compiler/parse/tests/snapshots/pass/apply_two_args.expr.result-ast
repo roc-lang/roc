@@ -6,15 +6,9 @@ Apply(
     [
         @6-8 Num(
             "12",
-            None {
-                width_variable: (),
-            },
         ),
         @10-12 Num(
             "34",
-            None {
-                width_variable: (),
-            },
         ),
     ],
     Space,

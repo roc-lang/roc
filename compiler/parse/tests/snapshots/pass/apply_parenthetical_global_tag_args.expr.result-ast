@@ -6,17 +6,11 @@ Apply(
         @6-8 ParensAround(
             Num(
                 "12",
-                None {
-                    width_variable: (),
-                },
             ),
         ),
         @11-13 ParensAround(
             Num(
                 "34",
-                None {
-                    width_variable: (),
-                },
             ),
         ),
     ],

@@ -5,11 +5,8 @@ Record(
                 RequiredValue(
                     @4-6 "u8",
                     [],
-                    @10-15 Int(
-                        "123",
-                        Exact(
-                            U8,
-                        ),
+                    @10-15 Num(
+                        "123u8",
                     ),
                 ),
                 [
@@ -20,11 +17,8 @@ Record(
                 RequiredValue(
                     @19-22 "u16",
                     [],
-                    @25-31 Int(
-                        "123",
-                        Exact(
-                            U16,
-                        ),
+                    @25-31 Num(
+                        "123u16",
                     ),
                 ),
                 [
@@ -35,11 +29,8 @@ Record(
                 RequiredValue(
                     @35-38 "u32",
                     [],
-                    @41-47 Int(
-                        "123",
-                        Exact(
-                            U32,
-                        ),
+                    @41-47 Num(
+                        "123u32",
                     ),
                 ),
                 [
@@ -50,11 +41,8 @@ Record(
                 RequiredValue(
                     @51-54 "u64",
                     [],
-                    @57-63 Int(
-                        "123",
-                        Exact(
-                            U64,
-                        ),
+                    @57-63 Num(
+                        "123u64",
                     ),
                 ),
                 [
@@ -65,11 +53,8 @@ Record(
                 RequiredValue(
                     @67-71 "u128",
                     [],
-                    @73-80 Int(
-                        "123",
-                        Exact(
-                            U128,
-                        ),
+                    @73-80 Num(
+                        "123u128",
                     ),
                 ),
                 [
@@ -80,11 +65,8 @@ Record(
                 RequiredValue(
                     @84-86 "i8",
                     [],
-                    @90-95 Int(
-                        "123",
-                        Exact(
-                            I8,
-                        ),
+                    @90-95 Num(
+                        "123i8",
                     ),
                 ),
                 [
@@ -95,11 +77,8 @@ Record(
                 RequiredValue(
                     @99-102 "i16",
                     [],
-                    @105-111 Int(
-                        "123",
-                        Exact(
-                            I16,
-                        ),
+                    @105-111 Num(
+                        "123i16",
                     ),
                 ),
                 [
@@ -110,11 +89,8 @@ Record(
                 RequiredValue(
                     @115-118 "i32",
                     [],
-                    @121-127 Int(
-                        "123",
-                        Exact(
-                            I32,
-                        ),
+                    @121-127 Num(
+                        "123i32",
                     ),
                 ),
                 [
@@ -125,11 +101,8 @@ Record(
                 RequiredValue(
                     @131-134 "i64",
                     [],
-                    @137-143 Int(
-                        "123",
-                        Exact(
-                            I64,
-                        ),
+                    @137-143 Num(
+                        "123i64",
                     ),
                 ),
                 [
@@ -140,11 +113,8 @@ Record(
                 RequiredValue(
                     @147-151 "i128",
                     [],
-                    @153-160 Int(
-                        "123",
-                        Exact(
-                            I128,
-                        ),
+                    @153-160 Num(
+                        "123i128",
                     ),
                 ),
                 [
@@ -155,11 +125,8 @@ Record(
                 RequiredValue(
                     @164-167 "nat",
                     [],
-                    @170-176 Int(
-                        "123",
-                        Exact(
-                            Nat,
-                        ),
+                    @170-176 Num(
+                        "123nat",
                     ),
                 ),
                 [
@@ -170,11 +137,8 @@ Record(
                 RequiredValue(
                     @180-183 "dec",
                     [],
-                    @186-192 Float(
-                        "123",
-                        Exact(
-                            Dec,
-                        ),
+                    @186-192 Num(
+                        "123dec",
                     ),
                 ),
                 [
@@ -185,14 +149,8 @@ Record(
                 RequiredValue(
                     @196-201 "u8Neg",
                     [],
-                    @205-211 UnaryOp(
-                        @206-211 Int(
-                            "123",
-                            Exact(
-                                U8,
-                            ),
-                        ),
-                        @205-206 Negate,
+                    @205-211 Num(
+                        "-123u8",
                     ),
                 ),
                 [
@@ -203,14 +161,8 @@ Record(
                 RequiredValue(
                     @215-221 "u16Neg",
                     [],
-                    @224-231 UnaryOp(
-                        @225-231 Int(
-                            "123",
-                            Exact(
-                                U16,
-                            ),
-                        ),
-                        @224-225 Negate,
+                    @224-231 Num(
+                        "-123u16",
                     ),
                 ),
                 [
@@ -221,14 +173,8 @@ Record(
                 RequiredValue(
                     @235-241 "u32Neg",
                     [],
-                    @244-251 UnaryOp(
-                        @245-251 Int(
-                            "123",
-                            Exact(
-                                U32,
-                            ),
-                        ),
-                        @244-245 Negate,
+                    @244-251 Num(
+                        "-123u32",
                     ),
                 ),
                 [
@@ -239,14 +185,8 @@ Record(
                 RequiredValue(
                     @255-261 "u64Neg",
                     [],
-                    @264-271 UnaryOp(
-                        @265-271 Int(
-                            "123",
-                            Exact(
-                                U64,
-                            ),
-                        ),
-                        @264-265 Negate,
+                    @264-271 Num(
+                        "-123u64",
                     ),
                 ),
                 [
@@ -257,14 +197,8 @@ Record(
                 RequiredValue(
                     @275-282 "u128Neg",
                     [],
-                    @284-292 UnaryOp(
-                        @285-292 Int(
-                            "123",
-                            Exact(
-                                U128,
-                            ),
-                        ),
-                        @284-285 Negate,
+                    @284-292 Num(
+                        "-123u128",
                     ),
                 ),
                 [
@@ -275,14 +209,8 @@ Record(
                 RequiredValue(
                     @296-301 "i8Neg",
                     [],
-                    @305-311 UnaryOp(
-                        @306-311 Int(
-                            "123",
-                            Exact(
-                                I8,
-                            ),
-                        ),
-                        @305-306 Negate,
+                    @305-311 Num(
+                        "-123i8",
                     ),
                 ),
                 [
@@ -293,14 +221,8 @@ Record(
                 RequiredValue(
                     @315-321 "i16Neg",
                     [],
-                    @324-331 UnaryOp(
-                        @325-331 Int(
-                            "123",
-                            Exact(
-                                I16,
-                            ),
-                        ),
-                        @324-325 Negate,
+                    @324-331 Num(
+                        "-123i16",
                     ),
                 ),
                 [
@@ -311,14 +233,8 @@ Record(
                 RequiredValue(
                     @335-341 "i32Neg",
                     [],
-                    @344-351 UnaryOp(
-                        @345-351 Int(
-                            "123",
-                            Exact(
-                                I32,
-                            ),
-                        ),
-                        @344-345 Negate,
+                    @344-351 Num(
+                        "-123i32",
                     ),
                 ),
                 [
@@ -329,14 +245,8 @@ Record(
                 RequiredValue(
                     @355-361 "i64Neg",
                     [],
-                    @364-371 UnaryOp(
-                        @365-371 Int(
-                            "123",
-                            Exact(
-                                I64,
-                            ),
-                        ),
-                        @364-365 Negate,
+                    @364-371 Num(
+                        "-123i64",
                     ),
                 ),
                 [
@@ -347,14 +257,8 @@ Record(
                 RequiredValue(
                     @375-382 "i128Neg",
                     [],
-                    @384-392 UnaryOp(
-                        @385-392 Int(
-                            "123",
-                            Exact(
-                                I128,
-                            ),
-                        ),
-                        @384-385 Negate,
+                    @384-392 Num(
+                        "-123i128",
                     ),
                 ),
                 [
@@ -365,14 +269,8 @@ Record(
                 RequiredValue(
                     @396-402 "natNeg",
                     [],
-                    @405-412 UnaryOp(
-                        @406-412 Int(
-                            "123",
-                            Exact(
-                                Nat,
-                            ),
-                        ),
-                        @405-406 Negate,
+                    @405-412 Num(
+                        "-123nat",
                     ),
                 ),
                 [
@@ -383,11 +281,8 @@ Record(
                 RequiredValue(
                     @416-422 "decNeg",
                     [],
-                    @425-432 Float(
-                        "-123",
-                        Exact(
-                            Dec,
-                        ),
+                    @425-432 Num(
+                        "-123dec",
                     ),
                 ),
                 [
@@ -399,12 +294,9 @@ Record(
                     @436-441 "u8Bin",
                     [],
                     @445-452 NonBase10Int {
-                        string: "101",
+                        string: "101u8",
                         base: Binary,
                         is_negative: false,
-                        bound: Exact(
-                            U8,
-                        ),
                     },
                 ),
                 [
@@ -416,12 +308,9 @@ Record(
                     @456-462 "u16Bin",
                     [],
                     @465-473 NonBase10Int {
-                        string: "101",
+                        string: "101u16",
                         base: Binary,
                         is_negative: false,
-                        bound: Exact(
-                            U16,
-                        ),
                     },
                 ),
                 [
@@ -433,12 +322,9 @@ Record(
                     @477-483 "u32Bin",
                     [],
                     @486-494 NonBase10Int {
-                        string: "101",
+                        string: "101u32",
                         base: Binary,
                         is_negative: false,
-                        bound: Exact(
-                            U32,
-                        ),
                     },
                 ),
                 [
@@ -450,12 +336,9 @@ Record(
                     @498-504 "u64Bin",
                     [],
                     @507-515 NonBase10Int {
-                        string: "101",
+                        string: "101u64",
                         base: Binary,
                         is_negative: false,
-                        bound: Exact(
-                            U64,
-                        ),
                     },
                 ),
                 [
@@ -467,12 +350,9 @@ Record(
                     @519-526 "u128Bin",
                     [],
                     @528-537 NonBase10Int {
-                        string: "101",
+                        string: "101u128",
                         base: Binary,
                         is_negative: false,
-                        bound: Exact(
-                            U128,
-                        ),
                     },
                 ),
                 [
@@ -484,12 +364,9 @@ Record(
                     @541-546 "i8Bin",
                     [],
                     @550-557 NonBase10Int {
-                        string: "101",
+                        string: "101i8",
                         base: Binary,
                         is_negative: false,
-                        bound: Exact(
-                            I8,
-                        ),
                     },
                 ),
                 [
@@ -501,12 +378,9 @@ Record(
                     @561-567 "i16Bin",
                     [],
                     @570-578 NonBase10Int {
-                        string: "101",
+                        string: "101i16",
                         base: Binary,
                         is_negative: false,
-                        bound: Exact(
-                            I16,
-                        ),
                     },
                 ),
                 [
@@ -518,12 +392,9 @@ Record(
                     @582-588 "i32Bin",
                     [],
                     @591-599 NonBase10Int {
-                        string: "101",
+                        string: "101i32",
                         base: Binary,
                         is_negative: false,
-                        bound: Exact(
-                            I32,
-                        ),
                     },
                 ),
                 [
@@ -535,12 +406,9 @@ Record(
                     @603-609 "i64Bin",
                     [],
                     @612-620 NonBase10Int {
-                        string: "101",
+                        string: "101i64",
                         base: Binary,
                         is_negative: false,
-                        bound: Exact(
-                            I64,
-                        ),
                     },
                 ),
                 [
@@ -552,12 +420,9 @@ Record(
                     @624-631 "i128Bin",
                     [],
                     @633-642 NonBase10Int {
-                        string: "101",
+                        string: "101i128",
                         base: Binary,
                         is_negative: false,
-                        bound: Exact(
-                            I128,
-                        ),
                     },
                 ),
                 [
@@ -569,12 +434,9 @@ Record(
                     @646-652 "natBin",
                     [],
                     @655-663 NonBase10Int {
-                        string: "101",
+                        string: "101nat",
                         base: Binary,
                         is_negative: false,
-                        bound: Exact(
-                            Nat,
-                        ),
                     },
                 ),
                 [

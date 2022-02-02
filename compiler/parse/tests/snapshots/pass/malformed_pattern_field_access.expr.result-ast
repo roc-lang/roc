@@ -17,9 +17,6 @@ When(
             ],
             value: @25-26 Num(
                 "1",
-                None {
-                    width_variable: (),
-                },
             ),
             guard: None,
         },
@@ -36,9 +33,6 @@ When(
             ],
             value: @36-37 Num(
                 "4",
-                None {
-                    width_variable: (),
-                },
             ),
             guard: None,
         },

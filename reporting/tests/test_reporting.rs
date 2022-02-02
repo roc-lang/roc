@@ -1730,13 +1730,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                It looks like you are trying to use type suffix on this number
-                literal, but it's not one that I recognize:
+                This integer pattern is malformed:
 
                 2│      100A -> 3
-                           ^
+                        ^^^^
+
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -1754,13 +1755,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                It looks like you are trying to use type suffix on this number
-                literal, but it's not one that I recognize:
+                This float pattern is malformed:
 
                 2│      2.X -> 3
-                          ^
+                        ^^^
+
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -1778,13 +1780,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                It looks like you are trying to use type suffix on this number
-                literal, but it's not one that I recognize:
+                This hex integer pattern is malformed:
 
                 2│      0xZ -> 3
-                        ^
+                        ^^^
+
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -3536,13 +3539,53 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                It looks like you are trying to use type suffix on this number
-                literal, but it's not one that I recognize:
+                This integer literal contains an invalid digit:
 
                 1│  dec = 100A
-                             ^
+                          ^^^^
+
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
+
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This hex integer literal contains an invalid digit:
+
+                3│  hex = 0xZZZ
+                          ^^^^^
+
+                Hexadecimal (base-16) integer literals can only contain the digits
+                0-9, a-f and A-F, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
+
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This octal integer literal contains an invalid digit:
+
+                5│  oct = 0o9
+                          ^^^
+
+                Octal (base-8) integer literals can only contain the digits
+                0-7, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
+
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This binary integer literal contains an invalid digit:
+
+                7│  bin = 0b2
+                          ^^^
+
+                Binary (base-2) integer literals can only contain the digits
+                0 and 1, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -3574,7 +3617,7 @@ mod test_reporting {
                           ^^
 
                 Hexadecimal (base-16) integer literals must contain at least one of
-                the digits 0-9, a-f and A-F.
+                the digits 0-9, a-f and A-F, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3586,7 +3629,7 @@ mod test_reporting {
                           ^^
 
                 Octal (base-8) integer literals must contain at least one of the
-                digits 0-7.
+                digits 0-7, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3598,7 +3641,7 @@ mod test_reporting {
                           ^^
 
                 Binary (base-2) integer literals must contain at least one of the
-                digits 0 and 1.
+                digits 0 and 1, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -3618,13 +3661,17 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                It looks like you are trying to use type suffix on this number
-                literal, but it's not one that I recognize:
+                This float literal contains an invalid digit:
 
                 1│  x = 3.0A
-                           ^
+                        ^^^^
+
+                Floating point literals can only contain the digits 0-9, or use
+                scientific notation 10e4, or have a float suffix.
+
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -5456,7 +5503,7 @@ mod test_reporting {
                     ^^^^^
 
                 Floating point literals can only contain the digits 0-9, or use
-                scientific notation 10e4
+                scientific notation 10e4, or have a float suffix.
 
                 Tip: Learn more about number literals at TODO
             "#
@@ -7330,15 +7377,20 @@ I need all branches in an `if` to have the same type!
                 1u256
                 "#
             ),
+            // TODO: link to number suffixes
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                It looks like you are trying to use type suffix on this number
-                literal, but it's not one that I recognize:
+                This integer literal contains an invalid digit:
 
                 1│  1u256
-                     ^
+                    ^^^^^
+
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -7352,15 +7404,20 @@ I need all branches in an `if` to have the same type!
                 1u8u8
                 "#
             ),
+            // TODO: link to number suffixes
             indoc!(
                 r#"
-                ── INVALID NUMBER LITERAL SUFFIX ───────────────────────────────────────────────
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                It looks like you are trying to use type suffix on this number
-                literal, but it's not one that I recognize:
+                This integer literal contains an invalid digit:
 
                 1│  1u8u8
-                     ^
+                    ^^^^^
+
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -7376,12 +7433,12 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── NUMBER LITERAL CONFLICTS WITH SUFFIX ────────────────────────────────────────
+                ── CONFLICTING NUMBER SUFFIX ───────────────────────────────────────────────────
 
-                This number literal is an integer, but its suffix says it's a float
+                This number literal is an integer, but it has a float suffix:
 
                 1│  0b1f32
-                    ^
+                    ^^^^^^
                 "#
             ),
         )
@@ -7397,12 +7454,12 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── NUMBER LITERAL CONFLICTS WITH SUFFIX ────────────────────────────────────────
+                ── CONFLICTING NUMBER SUFFIX ───────────────────────────────────────────────────
 
-                This number literal is a float, but its suffix says it's an integer
+                This number literal is a float, but it has an integer suffix:
 
                 1│  1.0u8
-                    ^
+                    ^^^^^
                 "#
             ),
         )

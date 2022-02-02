@@ -14,9 +14,6 @@
                                 ),
                                 @15-17 Num(
                                     "64",
-                                    None {
-                                        width_variable: (),
-                                    },
                                 ),
                             ),
                         ],

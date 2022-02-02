@@ -20,9 +20,6 @@ Defs(
     @21-23 SpaceBefore(
         Num(
             "42",
-            None {
-                width_variable: (),
-            },
         ),
         [
             Newline,

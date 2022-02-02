@@ -5,7 +5,6 @@ use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
-use roc_module::numeric::{FloatWidth, IntWidth, NumWidth};
 use roc_region::all::{Loc, Position, Region};
 
 #[derive(Debug)]
@@ -139,14 +138,12 @@ pub enum StrLiteral<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Expr<'a> {
     // Number Literals
-    Float(&'a str, NumericBound<FloatWidth>),
-    Num(&'a str, NumericBound<NumWidth>),
-    Int(&'a str, NumericBound<IntWidth>),
+    Float(&'a str),
+    Num(&'a str),
     NonBase10Int {
         string: &'a str,
         base: Base,
         is_negative: bool,
-        bound: NumericBound<IntWidth>,
     },
 
     // String Literals
@@ -411,9 +408,6 @@ impl<'a> CommentOrNewline<'a> {
     }
 }
 
-/// A `NumericBound` with the unit type as a placeholder width variable.
-pub type NumericBound<W> = roc_module::numeric::NumericBound<W, ()>;
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
@@ -437,15 +431,13 @@ pub enum Pattern<'a> {
     OptionalField(&'a str, &'a Loc<Expr<'a>>),
 
     // Literal
-    NumLiteral(&'a str, NumericBound<NumWidth>),
+    NumLiteral(&'a str),
     NonBase10Literal {
         string: &'a str,
         base: Base,
         is_negative: bool,
-        bound: NumericBound<IntWidth>,
     },
-    FloatLiteral(&'a str, NumericBound<FloatWidth>),
-    IntLiteral(&'a str, NumericBound<IntWidth>),
+    FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
     Underscore(&'a str),
 
@@ -548,27 +540,20 @@ impl<'a> Pattern<'a> {
                 x == y
             }
             // Literal
-            (NumLiteral(x, bound_x), NumLiteral(y, bound_y)) => x == y && bound_x == bound_y,
+            (NumLiteral(x), NumLiteral(y)) => x == y,
             (
                 NonBase10Literal {
                     string: string_x,
                     base: base_x,
                     is_negative: is_negative_x,
-                    bound: bound_x,
                 },
                 NonBase10Literal {
                     string: string_y,
                     base: base_y,
                     is_negative: is_negative_y,
-                    bound: bound_y,
                 },
-            ) => {
-                string_x == string_y
-                    && base_x == base_y
-                    && is_negative_x == is_negative_y
-                    && bound_x == bound_y
-            }
-            (FloatLiteral(x, bound_x), FloatLiteral(y, bound_y)) => x == y && bound_x == bound_y,
+            ) => string_x == string_y && base_x == base_y && is_negative_x == is_negative_y,
+            (FloatLiteral(x), FloatLiteral(y)) => x == y,
             (StrLiteral(x), StrLiteral(y)) => x == y,
             (Underscore(x), Underscore(y)) => x == y,
 

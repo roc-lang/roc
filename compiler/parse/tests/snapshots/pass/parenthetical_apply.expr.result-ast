@@ -8,9 +8,6 @@ Apply(
     [
         @7-8 Num(
             "1",
-            None {
-                width_variable: (),
-            },
         ),
     ],
     Space,

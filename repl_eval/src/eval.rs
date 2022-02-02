@@ -11,7 +11,7 @@ use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
     union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant, WrappedVariant,
 };
-use roc_parse::ast::{AssignedField, Collection, Expr, NumericBound, StrLiteral};
+use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
 use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
@@ -1041,10 +1041,7 @@ fn byte_to_ast<'a, M: AppMemory>(env: &Env<'a, '_, M>, value: u8, content: &Cont
                     // If this tag union represents a number, skip right to
                     // returning it as an Expr::Num
                     if let TagName::Private(Symbol::NUM_AT_NUM) = &tag_name {
-                        return Expr::Num(
-                            env.arena.alloc_str(&value.to_string()),
-                            NumericBound::None { width_variable: () },
-                        );
+                        return Expr::Num(env.arena.alloc_str(&value.to_string()));
                     }
 
                     let loc_tag_expr = {
@@ -1198,10 +1195,7 @@ fn num_to_ast<'a, M: AppMemory>(
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
 fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_> {
-    Expr::Num(
-        arena.alloc(format!("{}", num)),
-        NumericBound::None { width_variable: () },
-    )
+    Expr::Num(arena.alloc(format!("{}", num)))
 }
 
 #[cfg(target_endian = "little")]

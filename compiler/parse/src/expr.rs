@@ -16,7 +16,6 @@ use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
-use roc_module::numeric::NumericBound;
 use roc_region::all::{Loc, Position, Region};
 
 use crate::parser::Progress::{self, *};
@@ -378,7 +377,7 @@ impl<'a> ExprState<'a> {
             } else {
                 let region = self.expr.region;
 
-                let mut value = Expr::Num("", NumericBound::None { width_variable: () });
+                let mut value = Expr::Num("");
                 std::mem::swap(&mut self.expr.value, &mut value);
 
                 self.expr = arena
@@ -516,30 +515,28 @@ fn numeric_negate_expression<'a, T>(
     let region = Region::new(start, expr.region.end());
 
     let new_expr = match expr.value {
-        Expr::Num(string, bound) => {
+        Expr::Num(string) => {
             let new_string =
                 unsafe { std::str::from_utf8_unchecked(&state.bytes()[..string.len() + 1]) };
 
-            Expr::Num(new_string, bound)
+            Expr::Num(new_string)
         }
-        Expr::Float(string, bound) => {
+        Expr::Float(string) => {
             let new_string =
                 unsafe { std::str::from_utf8_unchecked(&state.bytes()[..string.len() + 1]) };
 
-            Expr::Float(new_string, bound)
+            Expr::Float(new_string)
         }
         Expr::NonBase10Int {
             string,
             base,
             is_negative,
-            bound,
         } => {
             // don't include the minus sign here; it will not be parsed right
             Expr::NonBase10Int {
                 is_negative: !is_negative,
                 string,
                 base,
-                bound,
             }
         }
         _ => Expr::UnaryOp(arena.alloc(expr), Loc::at(loc_op.region, UnaryOp::Negate)),
@@ -1453,19 +1450,16 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             Ok(Pattern::RecordDestructure(patterns))
         }
 
-        &Expr::Float(string, bound) => Ok(Pattern::FloatLiteral(string, bound)),
-        &Expr::Num(string, bound) => Ok(Pattern::NumLiteral(string, bound)),
-        &Expr::Int(string, bound) => Ok(Pattern::IntLiteral(string, bound)),
+        &Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
+        &Expr::Num(string) => Ok(Pattern::NumLiteral(string)),
         Expr::NonBase10Int {
             string,
             base,
             is_negative,
-            bound,
         } => Ok(Pattern::NonBase10Literal {
             string,
             base: *base,
             is_negative: *is_negative,
-            bound: *bound,
         }),
         // These would not have parsed as patterns
         Expr::AccessorFunction(_)
@@ -2325,19 +2319,16 @@ fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
             use crate::number_literal::NumLiteral::*;
 
             match literal {
-                Num(s, bound) => Expr::Num(s, bound),
-                Float(s, bound) => Expr::Float(s, bound),
-                Int(s, bound) => Expr::Int(s, bound),
+                Num(s) => Expr::Num(s),
+                Float(s) => Expr::Float(s),
                 NonBase10Int {
                     string,
                     base,
                     is_negative,
-                    bound,
                 } => Expr::NonBase10Int {
                     string,
                     base,
                     is_negative,
-                    bound,
                 },
             }
         }
@@ -2349,19 +2340,16 @@ fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
         use crate::number_literal::NumLiteral::*;
 
         match literal {
-            Num(s, bound) => Expr::Num(s, bound),
-            Float(s, bound) => Expr::Float(s, bound),
-            Int(s, bound) => Expr::Int(s, bound),
+            Num(s) => Expr::Num(s),
+            Float(s) => Expr::Float(s),
             NonBase10Int {
                 string,
                 base,
                 is_negative,
-                bound,
             } => Expr::NonBase10Int {
                 string,
                 base,
                 is_negative,
-                bound,
             },
         }
     })

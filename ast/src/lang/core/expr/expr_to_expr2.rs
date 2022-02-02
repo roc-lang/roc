@@ -1,6 +1,8 @@
 use bumpalo::Bump;
 use roc_can::expr::Recursive;
-use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use roc_can::num::{
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult,
+};
 use roc_can::operator::desugar_expr;
 use roc_collections::all::MutSet;
 use roc_module::symbol::Symbol;
@@ -50,9 +52,9 @@ pub fn expr_to_expr2<'a>(
     use roc_parse::ast::Expr::*;
 
     match parse_expr {
-        Float(string, _bound) => {
+        Float(string) => {
             match finish_parsing_float(string) {
-                Ok(float) => {
+                Ok((float, _bound)) => {
                     let expr = Expr2::Float {
                         number: FloatVal::F64(float),
                         var: env.var_store.fresh(),
@@ -72,14 +74,23 @@ pub fn expr_to_expr2<'a>(
                 }
             }
         }
-        Num(string, _bound) => {
-            match finish_parsing_int(string) {
-                Ok(int) => {
+        Num(string) => {
+            match finish_parsing_num(string) {
+                Ok(ParsedNumResult::UnknownNum(int) | ParsedNumResult::Int(int, _)) => {
                     let expr = Expr2::SmallInt {
                         number: IntVal::I64(int),
                         var: env.var_store.fresh(),
                         // TODO non-hardcode
                         style: IntStyle::Decimal,
+                        text: PoolStr::new(string, env.pool),
+                    };
+
+                    (expr, Output::default())
+                }
+                Ok(ParsedNumResult::Float(float, _)) => {
+                    let expr = Expr2::Float {
+                        number: FloatVal::F64(float),
+                        var: env.var_store.fresh(),
                         text: PoolStr::new(string, env.pool),
                     };
 
@@ -105,10 +116,9 @@ pub fn expr_to_expr2<'a>(
             string,
             base,
             is_negative,
-            bound: _,
         } => {
             match finish_parsing_base(string, *base, *is_negative) {
-                Ok(int) => {
+                Ok((int, _bound)) => {
                     let expr = Expr2::SmallInt {
                         number: IntVal::I64(int),
                         var: env.var_store.fresh(),

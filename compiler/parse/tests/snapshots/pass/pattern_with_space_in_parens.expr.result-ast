@@ -20,9 +20,6 @@ When(
             ),
             @21-22 Num(
                 "0",
-                None {
-                    width_variable: (),
-                },
             ),
         ],
         Space,
@@ -66,9 +63,6 @@ When(
                     ),
                     @63-64 Num(
                         "0",
-                        None {
-                            width_variable: (),
-                        },
                     ),
                     @65-70 GlobalTag(
                         "False",

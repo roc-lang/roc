@@ -107,6 +107,8 @@ pub enum IntErrorKind {
     Overflow,
     /// Integer is too small to store in target integer type.
     Underflow,
+    /// This is an integer, but it has a float numeric suffix.
+    FloatSuffix,
 }
 
 /// Enum to store the various types of errors that can cause parsing a float to fail.
@@ -118,6 +120,8 @@ pub enum FloatErrorKind {
     NegativeInfinity,
     /// the literal is too large for f64
     PositiveInfinity,
+    /// This is a float, but it has an integer numeric suffix.
+    IntSuffix,
 }
 
 #[derive(Clone, Debug, PartialEq)]

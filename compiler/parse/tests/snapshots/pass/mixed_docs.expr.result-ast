@@ -7,18 +7,12 @@ SpaceBefore(
                 ),
                 @117-118 Num(
                     "5",
-                    None {
-                        width_variable: (),
-                    },
                 ),
             ),
         ],
         @120-122 SpaceBefore(
             Num(
                 "42",
-                None {
-                    width_variable: (),
-                },
             ),
             [
                 Newline,

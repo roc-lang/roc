@@ -1,11 +1,9 @@
 use crate::env::Env;
-use crate::expr::{canonicalize_expr, unescape_char, Expr, NumericBound, Output};
-use crate::num::{
-    finish_parsing_base, finish_parsing_float, finish_parsing_int, reify_numeric_bound,
-};
+use crate::expr::{canonicalize_expr, unescape_char, Expr, Output};
+use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult};
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
-use roc_module::numeric::{FloatWidth, IntWidth, NumWidth};
+use roc_module::numeric::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
@@ -188,18 +186,15 @@ pub fn canonicalize_pattern<'a>(
             }
         }
 
-        &FloatLiteral(str, bound) => match pattern_type {
+        &FloatLiteral(str) => match pattern_type {
             WhenBranch => match finish_parsing_float(str) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(float) => Pattern::FloatLiteral(
-                    var_store.fresh(),
-                    (str).into(),
-                    float,
-                    reify_numeric_bound(var_store, bound),
-                ),
+                Ok((float, bound)) => {
+                    Pattern::FloatLiteral(var_store.fresh(), (str).into(), float, bound)
+                }
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -209,18 +204,21 @@ pub fn canonicalize_pattern<'a>(
             TopLevelDef | DefExpr => bad_underscore(env, region),
         },
 
-        &NumLiteral(str, bound) => match pattern_type {
-            WhenBranch => match finish_parsing_int(str) {
+        &NumLiteral(str) => match pattern_type {
+            WhenBranch => match finish_parsing_num(str) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => Pattern::NumLiteral(
-                    var_store.fresh(),
-                    (str).into(),
-                    int,
-                    reify_numeric_bound(var_store, bound),
-                ),
+                Ok(ParsedNumResult::UnknownNum(int)) => {
+                    Pattern::NumLiteral(var_store.fresh(), (str).into(), int, NumericBound::None)
+                }
+                Ok(ParsedNumResult::Int(int, bound)) => {
+                    Pattern::IntLiteral(var_store.fresh(), (str).into(), int, bound)
+                }
+                Ok(ParsedNumResult::Float(float, bound)) => {
+                    Pattern::FloatLiteral(var_store.fresh(), (str).into(), float, bound)
+                }
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -229,40 +227,18 @@ pub fn canonicalize_pattern<'a>(
             string,
             base,
             is_negative,
-            bound,
         } => match pattern_type {
             WhenBranch => match finish_parsing_base(string, base, is_negative) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedBase(base);
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => {
+                Ok((int, bound)) => {
                     let sign_str = if is_negative { "-" } else { "" };
                     let int_str = format!("{}{}", sign_str, int.to_string()).into_boxed_str();
                     let i = if is_negative { -int } else { int };
-                    Pattern::IntLiteral(
-                        var_store.fresh(),
-                        int_str,
-                        i,
-                        reify_numeric_bound(var_store, bound),
-                    )
+                    Pattern::IntLiteral(var_store.fresh(), int_str, i, bound)
                 }
-            },
-            ptype => unsupported_pattern(env, ptype, region),
-        },
-
-        &IntLiteral(str, bound) => match pattern_type {
-            WhenBranch => match finish_parsing_int(str) {
-                Err(_error) => {
-                    let problem = MalformedPatternProblem::MalformedInt;
-                    malformed_pattern(env, problem, region)
-                }
-                Ok(int) => Pattern::IntLiteral(
-                    var_store.fresh(),
-                    str.into(),
-                    int,
-                    reify_numeric_bound(var_store, bound),
-                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },

@@ -72,15 +72,9 @@
                                 [
                                     @112-113 Num(
                                         "2",
-                                        None {
-                                            width_variable: (),
-                                        },
                                     ),
                                     @114-115 Num(
                                         "3",
-                                        None {
-                                            width_variable: (),
-                                        },
                                     ),
                                 ],
                                 Space,

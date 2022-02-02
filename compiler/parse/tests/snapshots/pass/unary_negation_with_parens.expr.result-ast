@@ -8,9 +8,6 @@ UnaryOp(
             [
                 @8-10 Num(
                     "12",
-                    None {
-                        width_variable: (),
-                    },
                 ),
                 @11-14 Var {
                     module_name: "",

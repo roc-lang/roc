@@ -6,9 +6,6 @@
             ),
             @18-19 Num(
                 "1",
-                None {
-                    width_variable: (),
-                },
             ),
         ),
         [

@@ -3,9 +3,6 @@ BinOps(
         (
             @0-2 Num(
                 "12",
-                None {
-                    width_variable: (),
-                },
             ),
             @4-5 Star,
         ),
@@ -13,9 +10,6 @@ BinOps(
     @15-17 SpaceBefore(
         Num(
             "92",
-            None {
-                width_variable: (),
-            },
         ),
         [
             LineComment(

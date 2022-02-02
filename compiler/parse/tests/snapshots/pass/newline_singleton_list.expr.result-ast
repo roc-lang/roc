@@ -4,9 +4,6 @@ List(
             SpaceAfter(
                 Num(
                     "1",
-                    None {
-                        width_variable: (),
-                    },
                 ),
                 [
                     Newline,

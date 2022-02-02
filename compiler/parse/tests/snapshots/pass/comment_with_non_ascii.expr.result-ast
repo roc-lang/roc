@@ -4,9 +4,6 @@ BinOps(
             @0-1 SpaceAfter(
                 Num(
                     "3",
-                    None {
-                        width_variable: (),
-                    },
                 ),
                 [
                     LineComment(
@@ -19,8 +16,5 @@ BinOps(
     ],
     @14-15 Num(
         "4",
-        None {
-            width_variable: (),
-        },
     ),
 )

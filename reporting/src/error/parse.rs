@@ -522,15 +522,6 @@ fn to_expr_report<'a>(
         &EExpr::Number(ENumber::End, pos) => {
             to_malformed_number_literal_report(alloc, lines, filename, pos)
         }
-        &EExpr::Number(ENumber::LiteralSuffix, pos) => {
-            to_number_literal_with_bad_suffix_report(alloc, lines, filename, pos)
-        }
-        &EExpr::Number(ENumber::IntHasFloatSuffix, pos) => {
-            to_number_literal_mismatch_suffix(alloc, lines, filename, pos, "an integer", "a float")
-        }
-        &EExpr::Number(ENumber::FloatHasIntSuffix, pos) => {
-            to_number_literal_mismatch_suffix(alloc, lines, filename, pos, "a float", "an integer")
-        }
 
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
@@ -1570,15 +1561,6 @@ fn to_pattern_report<'a>(
         &EPattern::NumLiteral(ENumber::End, pos) => {
             to_malformed_number_literal_report(alloc, lines, filename, pos)
         }
-        &EPattern::NumLiteral(ENumber::LiteralSuffix, pos) => {
-            to_number_literal_with_bad_suffix_report(alloc, lines, filename, pos)
-        }
-        &EPattern::NumLiteral(ENumber::IntHasFloatSuffix, pos) => {
-            to_number_literal_mismatch_suffix(alloc, lines, filename, pos, "an integer", "a float")
-        }
-        &EPattern::NumLiteral(ENumber::FloatHasIntSuffix, pos) => {
-            to_number_literal_mismatch_suffix(alloc, lines, filename, pos, "a float", "an integer")
-        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -1990,57 +1972,6 @@ fn to_malformed_number_literal_report<'a>(
         filename,
         doc,
         title: "INVALID NUMBER LITERAL".to_string(),
-        severity: Severity::RuntimeError,
-    }
-}
-
-fn to_number_literal_with_bad_suffix_report<'a>(
-    alloc: &'a RocDocAllocator<'a>,
-    lines: &LineInfo,
-    filename: PathBuf,
-    start: Position,
-) -> Report<'a> {
-    let surroundings = Region::new(start, start);
-    let region = LineColumnRegion::from_pos(lines.convert_pos(start));
-
-    let doc = alloc.stack(vec![
-        alloc.reflow(r"It looks like you are trying to use type suffix on this number literal, but it's not one that I recognize:"),
-        alloc.region_with_subregion(lines.convert_region(surroundings), region),
-    ]);
-
-    Report {
-        filename,
-        doc,
-        title: "INVALID NUMBER LITERAL SUFFIX".to_string(),
-        severity: Severity::RuntimeError,
-    }
-}
-
-fn to_number_literal_mismatch_suffix<'a>(
-    alloc: &'a RocDocAllocator<'a>,
-    lines: &LineInfo,
-    filename: PathBuf,
-    start: Position,
-    literal_kind: &'static str,
-    suffix_kind: &'static str,
-) -> Report<'a> {
-    let surroundings = Region::new(start, start);
-    let region = LineColumnRegion::from_pos(lines.convert_pos(start));
-
-    let doc = alloc.stack(vec![
-        alloc.concat(vec![
-            alloc.text(r"This number literal is "),
-            alloc.text(literal_kind),
-            alloc.text(", but its suffix says it's "),
-            alloc.text(suffix_kind),
-        ]),
-        alloc.region_with_subregion(lines.convert_region(surroundings), region),
-    ]);
-
-    Report {
-        filename,
-        doc,
-        title: "NUMBER LITERAL CONFLICTS WITH SUFFIX".to_string(),
         severity: Severity::RuntimeError,
     }
 }

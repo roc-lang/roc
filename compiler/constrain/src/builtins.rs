@@ -1,10 +1,9 @@
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::LetConstraint;
 use roc_can::expected::Expected::{self, *};
-use roc_can::expr::NumericBound;
 use roc_collections::all::SendMap;
 use roc_module::ident::{Lowercase, TagName};
-use roc_module::numeric::{FloatWidth, IntWidth, NumWidth};
+use roc_module::numeric::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::subs::Variable;
@@ -19,10 +18,10 @@ fn add_numeric_bound_constr(
     region: Region,
     category: Category,
 ) {
-    if bound.is_concrete() {
+    if let Some(typ) = bound.concrete_num_type() {
         constrs.push(Eq(
             num_type,
-            Expected::ForReason(Reason::NumericLiteralSuffix, bound.num_type(), region),
+            Expected::ForReason(Reason::NumericLiteralSuffix, typ, region),
             category,
             region,
         ));
@@ -288,17 +287,16 @@ pub fn num_num(typ: Type) -> Type {
 }
 
 pub trait TypedNumericBound {
-    fn num_type(&self) -> Type;
-
-    /// Whether the bound has a concrete range, and could not be filled by an arbitrary type.
-    fn is_concrete(&self) -> bool;
+    /// Get a concrete type for this number, if one exists.
+    /// Returns `None` e.g. if the bound is open, like `Int *`.
+    fn concrete_num_type(&self) -> Option<Type>;
 }
 
 impl TypedNumericBound for NumericBound<IntWidth> {
-    fn num_type(&self) -> Type {
+    fn concrete_num_type(&self) -> Option<Type> {
         match self {
-            &NumericBound::None { width_variable } => num_num(Type::Variable(width_variable)),
-            NumericBound::Exact(w) => match w {
+            NumericBound::None => None,
+            NumericBound::Exact(w) => Some(match w {
                 IntWidth::U8 => num_u8(),
                 IntWidth::U16 => num_u16(),
                 IntWidth::U32 => num_u32(),
@@ -310,42 +308,30 @@ impl TypedNumericBound for NumericBound<IntWidth> {
                 IntWidth::I64 => num_i64(),
                 IntWidth::I128 => num_i128(),
                 IntWidth::Nat => num_nat(),
-            },
+            }),
         }
-    }
-
-    fn is_concrete(&self) -> bool {
-        !matches!(self, NumericBound::None { .. })
     }
 }
 
 impl TypedNumericBound for NumericBound<FloatWidth> {
-    fn num_type(&self) -> Type {
+    fn concrete_num_type(&self) -> Option<Type> {
         match self {
-            &NumericBound::None { width_variable } => num_num(Type::Variable(width_variable)),
-            NumericBound::Exact(w) => match w {
+            NumericBound::None => None,
+            NumericBound::Exact(w) => Some(match w {
                 FloatWidth::Dec => num_dec(),
                 FloatWidth::F32 => num_f32(),
                 FloatWidth::F64 => num_f64(),
-            },
+            }),
         }
-    }
-
-    fn is_concrete(&self) -> bool {
-        !matches!(self, NumericBound::None { .. })
     }
 }
 
 impl TypedNumericBound for NumericBound<NumWidth> {
-    fn num_type(&self) -> Type {
+    fn concrete_num_type(&self) -> Option<Type> {
         match *self {
-            NumericBound::None { width_variable } => num_num(Type::Variable(width_variable)),
-            NumericBound::Exact(NumWidth::Int(iw)) => NumericBound::Exact(iw).num_type(),
-            NumericBound::Exact(NumWidth::Float(fw)) => NumericBound::Exact(fw).num_type(),
+            NumericBound::None => None,
+            NumericBound::Exact(NumWidth::Int(iw)) => NumericBound::Exact(iw).concrete_num_type(),
+            NumericBound::Exact(NumWidth::Float(fw)) => NumericBound::Exact(fw).concrete_num_type(),
         }
-    }
-
-    fn is_concrete(&self) -> bool {
-        !matches!(self, NumericBound::None { .. })
     }
 }

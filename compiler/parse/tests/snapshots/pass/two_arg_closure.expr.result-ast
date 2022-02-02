@@ -9,8 +9,5 @@ Closure(
     ],
     @9-11 Num(
         "42",
-        None {
-            width_variable: (),
-        },
     ),
 )

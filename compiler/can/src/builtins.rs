@@ -1,12 +1,12 @@
 use crate::def::Def;
-use crate::expr::{self, ClosureData, Expr::*, NumericBound};
+use crate::expr::{self, ClosureData, Expr::*};
 use crate::expr::{Expr, Field, Recursive};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::numeric::{FloatWidth, IntWidth, NumWidth};
+use roc_module::numeric::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -794,10 +794,7 @@ fn num_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::Eq,
         args: vec![
             (arg_var, Var(Symbol::ARG_1)),
-            (
-                arg_var,
-                num(unbound_zero_var, 0, num_no_bound(var_store.fresh())),
-            ),
+            (arg_var, num(unbound_zero_var, 0, num_no_bound())),
         ],
         ret_var: bool_var,
     };
@@ -820,10 +817,7 @@ fn num_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::NumGt,
         args: vec![
-            (
-                arg_var,
-                num(unbound_zero_var, 0, num_no_bound(var_store.fresh())),
-            ),
+            (arg_var, num(unbound_zero_var, 0, num_no_bound())),
             (arg_var, Var(Symbol::ARG_1)),
         ],
         ret_var: bool_var,
@@ -848,10 +842,7 @@ fn num_is_positive(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::NumGt,
         args: vec![
             (arg_var, Var(Symbol::ARG_1)),
-            (
-                arg_var,
-                num(unbound_zero_var, 0, num_no_bound(var_store.fresh())),
-            ),
+            (arg_var, num(unbound_zero_var, 0, num_no_bound())),
         ],
         ret_var: bool_var,
     };
@@ -876,12 +867,7 @@ fn num_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
         args: vec![
             (
                 arg_var,
-                int::<i128>(
-                    var_store.fresh(),
-                    var_store.fresh(),
-                    1,
-                    num_no_bound(var_store.fresh()),
-                ),
+                int::<i128>(var_store.fresh(), var_store.fresh(), 1, num_no_bound()),
             ),
             (
                 arg_var,
@@ -889,10 +875,7 @@ fn num_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NumRemUnchecked,
                     args: vec![
                         (arg_var, Var(Symbol::ARG_1)),
-                        (
-                            arg_var,
-                            num(unbound_two_var, 2, num_no_bound(var_store.fresh())),
-                        ),
+                        (arg_var, num(unbound_two_var, 2, num_no_bound())),
                     ],
                     ret_var: arg_var,
                 },
@@ -919,20 +902,14 @@ fn num_is_even(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (
-                arg_var,
-                num(arg_num_var, 0, num_no_bound(var_store.fresh())),
-            ),
+            (arg_var, num(arg_num_var, 0, num_no_bound())),
             (
                 arg_var,
                 RunLowLevel {
                     op: LowLevel::NumRemUnchecked,
                     args: vec![
                         (arg_var, Var(Symbol::ARG_1)),
-                        (
-                            arg_var,
-                            num(arg_num_var, 2, num_no_bound(var_store.fresh())),
-                        ),
+                        (arg_var, num(arg_num_var, 2, num_no_bound())),
                     ],
                     ret_var: arg_var,
                 },
@@ -988,12 +965,7 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     (float_var, Var(Symbol::ARG_1)),
                     (
                         float_var,
-                        float(
-                            unbound_zero_var,
-                            precision_var,
-                            0.0,
-                            num_no_bound(var_store.fresh()),
-                        ),
+                        float(unbound_zero_var, precision_var, 0.0, num_no_bound()),
                     ),
                 ],
                 ret_var: bool_var,
@@ -1042,12 +1014,7 @@ fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     (float_var, Var(Symbol::ARG_1)),
                     (
                         float_var,
-                        float(
-                            unbound_zero_var,
-                            precision_var,
-                            0.0,
-                            num_no_bound(var_store.fresh()),
-                        ),
+                        float(unbound_zero_var, precision_var, 0.0, num_no_bound()),
                     ),
                 ],
                 ret_var: bool_var,
@@ -1474,10 +1441,7 @@ fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (
-                len_var,
-                num(unbound_zero_var, 0, num_no_bound(var_store.fresh())),
-            ),
+            (len_var, num(unbound_zero_var, 0, num_no_bound())),
             (
                 len_var,
                 RunLowLevel {
@@ -2739,12 +2703,7 @@ fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
             (list_var, Var(Symbol::ARG_1)),
             (
                 index_var,
-                int::<i128>(
-                    num_var,
-                    num_precision_var,
-                    0,
-                    num_no_bound(var_store.fresh()),
-                ),
+                int::<i128>(num_var, num_precision_var, 0, num_no_bound()),
             ),
         ],
         ret_var: list_var,
@@ -2844,12 +2803,7 @@ fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         ),
                         (
                             arg_var,
-                            int::<i128>(
-                                num_var,
-                                num_precision_var,
-                                1,
-                                num_no_bound(var_store.fresh()),
-                            ),
+                            int::<i128>(num_var, num_precision_var, 1, num_no_bound()),
                         ),
                     ],
                     ret_var: len_var,
@@ -3050,12 +3004,7 @@ fn list_min(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     args: vec![
                         (
                             len_var,
-                            int::<i128>(
-                                num_var,
-                                num_precision_var,
-                                0,
-                                num_no_bound(var_store.fresh()),
-                            ),
+                            int::<i128>(num_var, num_precision_var, 0, num_no_bound()),
                         ),
                         (
                             len_var,
@@ -3093,7 +3042,7 @@ fn list_min(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     num_var,
                                                     num_precision_var,
                                                     0,
-                                                    num_no_bound(var_store.fresh()),
+                                                    num_no_bound(),
                                                 ),
                                             ),
                                         ],
@@ -3196,12 +3145,7 @@ fn list_max(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     args: vec![
                         (
                             len_var,
-                            int::<i128>(
-                                num_var,
-                                num_precision_var,
-                                0,
-                                num_no_bound(var_store.fresh()),
-                            ),
+                            int::<i128>(num_var, num_precision_var, 0, num_no_bound()),
                         ),
                         (
                             len_var,
@@ -3239,7 +3183,7 @@ fn list_max(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     num_var,
                                                     num_precision_var,
                                                     0,
-                                                    num_no_bound(var_store.fresh()),
+                                                    num_no_bound(),
                                                 ),
                                             ),
                                         ],
@@ -3337,7 +3281,7 @@ fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
             (list_var, Loc::at_zero(Var(Symbol::ARG_1))),
             (
                 num_var,
-                Loc::at_zero(num(var_store.fresh(), 0, num_no_bound(var_store.fresh()))),
+                Loc::at_zero(num(var_store.fresh(), 0, num_no_bound())),
             ),
             (closure_var, Loc::at_zero(Var(Symbol::NUM_ADD))),
         ],
@@ -3372,7 +3316,7 @@ fn list_product(symbol: Symbol, var_store: &mut VarStore) -> Def {
             (list_var, Loc::at_zero(Var(Symbol::ARG_1))),
             (
                 num_var,
-                Loc::at_zero(num(var_store.fresh(), 1, num_no_bound(var_store.fresh()))),
+                Loc::at_zero(num(var_store.fresh(), 1, num_no_bound())),
             ),
             (closure_var, Loc::at_zero(Var(Symbol::NUM_MUL))),
         ],
@@ -4027,10 +3971,7 @@ fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (num_var, Var(Symbol::ARG_2)),
-                        (
-                            num_var,
-                            num(unbound_zero_var, 0, num_no_bound(var_store.fresh())),
-                        ),
+                        (num_var, num(unbound_zero_var, 0, num_no_bound())),
                     ],
                     ret_var: bool_var,
                 },
@@ -4135,12 +4076,7 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         (num_var, Var(Symbol::ARG_2)),
                         (
                             num_var,
-                            float(
-                                unbound_zero_var,
-                                precision_var,
-                                0.0,
-                                num_no_bound(var_store.fresh()),
-                            ),
+                            float(unbound_zero_var, precision_var, 0.0, num_no_bound()),
                         ),
                     ],
                     ret_var: bool_var,
@@ -4210,7 +4146,7 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                 unbound_zero_var,
                                 unbound_zero_precision_var,
                                 0,
-                                num_no_bound(var_store.fresh()),
+                                num_no_bound(),
                             ),
                         ),
                     ],
@@ -4281,7 +4217,7 @@ fn num_div_ceil(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                 unbound_zero_var,
                                 unbound_zero_precision_var,
                                 0,
-                                num_no_bound(var_store.fresh()),
+                                num_no_bound(),
                             ),
                         ),
                     ],
@@ -4354,12 +4290,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     args: vec![
                         (
                             len_var,
-                            int::<i128>(
-                                zero_var,
-                                zero_precision_var,
-                                0,
-                                num_no_bound(var_store.fresh()),
-                            ),
+                            int::<i128>(zero_var, zero_precision_var, 0, num_no_bound()),
                         ),
                         (
                             len_var,
@@ -4386,12 +4317,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                 (list_var, Var(Symbol::ARG_1)),
                                 (
                                     len_var,
-                                    int::<i128>(
-                                        zero_var,
-                                        zero_precision_var,
-                                        0,
-                                        num_no_bound(var_store.fresh()),
-                                    ),
+                                    int::<i128>(zero_var, zero_precision_var, 0, num_no_bound()),
                                 ),
                             ],
                             ret_var: list_elem_var,
@@ -4451,12 +4377,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     args: vec![
                         (
                             len_var,
-                            int::<i128>(
-                                num_var,
-                                num_precision_var,
-                                0,
-                                num_no_bound(var_store.fresh()),
-                            ),
+                            int::<i128>(num_var, num_precision_var, 0, num_no_bound()),
                         ),
                         (
                             len_var,
@@ -4502,7 +4423,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     num_var,
                                                     num_precision_var,
                                                     1,
-                                                    num_no_bound(var_store.fresh()),
+                                                    num_no_bound(),
                                                 ),
                                             ),
                                         ],
@@ -5134,11 +5055,7 @@ fn num_bytes_to(symbol: Symbol, var_store: &mut VarStore, offset: i64, low_level
                                             ret_var: cast_var,
                                             args: vec![(
                                                 cast_var,
-                                                num(
-                                                    var_store.fresh(),
-                                                    offset,
-                                                    num_no_bound(var_store.fresh()),
-                                                ),
+                                                num(var_store.fresh(), offset, num_no_bound()),
                                             )],
                                             op: LowLevel::NumIntCast,
                                         },
@@ -5261,8 +5178,8 @@ where
     }
 }
 
-fn num_no_bound<W: Copy>(width_variable: Variable) -> NumericBound<W> {
-    NumericBound::None { width_variable }
+fn num_no_bound<W: Copy>() -> NumericBound<W> {
+    NumericBound::None
 }
 
 #[inline(always)]

@@ -10,8 +10,5 @@ BinOps(
     ],
     @2-3 Num(
         "2",
-        None {
-            width_variable: (),
-        },
     ),
 )
