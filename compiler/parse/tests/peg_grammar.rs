@@ -280,6 +280,7 @@ mod test_peg_grammar {
       skip
   }
   
+  // also skips lines that contain only whitespace
   fn skip_newlines(bytes: &[u8]) -> (usize, usize) {
       let mut skip = 0;
       let mut indent = 0;
@@ -293,8 +294,13 @@ mod test_peg_grammar {
           } else {
             0
           };
-          
-          indent = spaces;
+
+          if bytes.len() > (skip + spaces) && bytes[skip + spaces] == b'\n' {
+            indent = 0;
+            skip += spaces;
+          } else {
+            indent = spaces;
+          }
       }
   
       (skip, indent)
@@ -474,6 +480,28 @@ fn test_indent_tokenization_2() {
     T::OpenIndent, T::UppercaseIdent, T::Arrow,
     T::OpenIndent, T::String,
     T::CloseIndent, T::CloseIndent, T::CloseIndent]
+  );
+}
+
+#[test]
+fn test_tokenization_line_with_only_spaces() {
+  let tokens = test_tokenize(r#"\key ->
+  when dict is
+      Empty ->
+          4
+  
+      Node ->
+          5"#);
+          
+  assert_eq!(
+    tokens,
+    [T::LambdaStart, T::LowercaseIdent, T::Arrow,
+    T::OpenIndent, T::KeywordWhen, T::LowercaseIdent, T::KeywordIs,
+    T::OpenIndent, T::UppercaseIdent, T::Arrow,
+    T::OpenIndent, T::Number,
+    T::CloseIndent,
+    T::UppercaseIdent, T::Arrow,
+    T::OpenIndent, T::Number]
   );
 }
 
