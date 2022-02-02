@@ -311,13 +311,33 @@ pub fn expectFailedC(
 }
 
 pub fn getExpectFailures() []Failure {
-    return failures[0..failure_length];
+    // TODO FOR ZIG 0.9: this API changed in https://github.com/ziglang/zig/commit/008b0ec5e58fc7e31f3b989868a7d1ea4df3f41d
+    // to this: https://github.com/ziglang/zig/blob/c710d5eefe3f83226f1651947239730e77af43cb/lib/std/Thread/Mutex.zig
+    //
+    // ...so just use these two lines of code instead of the non-commented-out ones to make this work in Zig 0.9:
+    //
+    // failures_mutex.lock();
+    // defer failures_mutex.release();
+    //
+    // 👆 👆 👆 IF UPGRADING TO ZIG 0.9, LOOK HERE! 👆 👆 👆
+    const held = failures_mutex.acquire();
+    defer held.release();
+
+    // defensively clone failures, in case someone modifies the originals after the mutex has been released.
+    const num_bytes = failure_length * @sizeOf(Failure);
+    const raw_clones = roc_alloc(num_bytes, @alignOf(Failure));
+    const clones = @ptrCast([*]Failure, @alignCast(@alignOf(Failure), raw_clones));
+
+    roc_memcpy(@ptrCast([*]u8, clones), @ptrCast([*]u8, raw_clones), num_bytes);
+
+    return clones[0..failure_length];
 }
 
 const CSlice = extern struct {
     pointer: *c_void,
     len: usize,
 };
+
 pub fn getExpectFailuresC() callconv(.C) CSlice {
     var bytes = @ptrCast(*c_void, failures);
 
@@ -325,6 +345,18 @@ pub fn getExpectFailuresC() callconv(.C) CSlice {
 }
 
 pub fn deinitFailures() void {
+    // TODO FOR ZIG 0.9: this API changed in https://github.com/ziglang/zig/commit/008b0ec5e58fc7e31f3b989868a7d1ea4df3f41d
+    // to this: https://github.com/ziglang/zig/blob/c710d5eefe3f83226f1651947239730e77af43cb/lib/std/Thread/Mutex.zig
+    //
+    // ...so just use these two lines of code instead of the non-commented-out ones to make this work in Zig 0.9:
+    //
+    // failures_mutex.lock();
+    // defer failures_mutex.release();
+    //
+    // 👆 👆 👆 IF UPGRADING TO ZIG 0.9, LOOK HERE! 👆 👆 👆
+    const held = failures_mutex.acquire();
+    defer held.release();
+
     roc_dealloc(failures, @alignOf(Failure));
     failure_length = 0;
 }
