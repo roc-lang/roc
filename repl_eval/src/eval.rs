@@ -1,6 +1,10 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use libloading::Library;
 use std::cmp::{max_by_key, min_by_key};
+use std::ffi::CString;
+use std::mem::MaybeUninit;
+use std::os::raw::c_char;
 
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
@@ -16,10 +20,6 @@ use roc_region::all::{Loc, Region};
 use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 
-#[cfg(feature = "llvm")]
-use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-
-#[cfg(feature = "llvm")]
 type AppExecutable = libloading::Library;
 
 use super::app_memory::AppMemory;
@@ -35,6 +35,99 @@ struct Env<'a, 'env, M> {
 
 pub enum ToAstProblem {
     FunctionLayout,
+}
+
+#[repr(C)]
+pub struct RocCallResult<T> {
+    tag: u64,
+    error_msg: *mut c_char,
+    value: MaybeUninit<T>,
+}
+
+impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
+    fn from(call_result: RocCallResult<T>) -> Self {
+        match call_result.tag {
+            0 => Ok(unsafe { call_result.value.assume_init() }),
+            _ => Err({
+                let raw = unsafe { CString::from_raw(call_result.error_msg) };
+
+                let result = format!("{:?}", raw);
+
+                // make sure rust does not try to free the Roc string
+                std::mem::forget(raw);
+
+                result
+            }),
+        }
+    }
+}
+
+pub fn run_jit_function<'a, T: Sized, F: Fn(T) -> Expr<'a>>(
+    lib: Library,
+    main_fn_name: &str,
+    transform: F,
+) -> Expr<'a> {
+    unsafe {
+        let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<T>) -> ()> = lib
+            .get(main_fn_name.as_bytes())
+            .ok()
+            .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
+            .expect("errored");
+
+        let mut result = MaybeUninit::uninit();
+
+        main(result.as_mut_ptr());
+
+        match result.assume_init().into() {
+            Ok(success) => transform(success),
+            Err(error_msg) => panic!("Roc failed with message: {}", error_msg),
+        }
+    }
+}
+
+/// In the repl, we don't know the type that is returned; if it's large enough to not fit in 2
+/// registers (i.e. size bigger than 16 bytes on 64-bit systems), then we use this function.
+/// It explicitly allocates a buffer that the roc main function can write its result into.
+pub fn run_jit_function_dynamic_type<'a, T: Sized, F: Fn(usize) -> T>(
+    lib: Library,
+    main_fn_name: &str,
+    bytes: usize,
+    transform: F,
+) -> T {
+    unsafe {
+        let main: libloading::Symbol<unsafe extern "C" fn(*const u8)> = lib
+            .get(main_fn_name.as_bytes())
+            .ok()
+            .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
+            .expect("errored");
+
+        let size = std::mem::size_of::<RocCallResult<()>>() + bytes;
+        let layout = std::alloc::Layout::array::<u8>(size).unwrap();
+        let result = std::alloc::alloc(layout);
+        main(result);
+
+        let flag = *result;
+
+        if flag == 0 {
+            transform(result.add(std::mem::size_of::<RocCallResult<()>>()) as usize)
+        } else {
+            // first field is a char pointer (to the error message)
+            // read value, and transmute to a pointer
+            let ptr_as_int = *(result as *const u64).offset(1);
+            let ptr = std::mem::transmute::<u64, *mut c_char>(ptr_as_int);
+
+            // make CString (null-terminated)
+            let raw = CString::from_raw(ptr);
+
+            let result = format!("{:?}", raw);
+
+            // make sure rust doesn't try to free the Roc constant string
+            std::mem::forget(raw);
+
+            eprintln!("{}", result);
+            panic!("Roc hit an error");
+        }
+    }
 }
 
 /// JIT execute the given main function, and then wrap its results in an Expr
@@ -274,7 +367,7 @@ fn jit_to_ast_help<'a, M: AppMemory>(
     let (newtype_containers, content) = unroll_newtypes(env, content);
     let content = unroll_aliases(env, content);
     let result = match layout {
-        Layout::Builtin(Builtin::Bool) => Ok(run_jit_function!(app, main_fn_name, bool, |num| {
+        Layout::Builtin(Builtin::Bool) => Ok(run_jit_function(app, main_fn_name, |num: bool| {
             bool_to_ast(env, num, content)
         })),
         Layout::Builtin(Builtin::Int(int_width)) => {
@@ -282,18 +375,16 @@ fn jit_to_ast_help<'a, M: AppMemory>(
 
             macro_rules! helper {
                 ($ty:ty) => {
-                    run_jit_function!(app, main_fn_name, $ty, |num| num_to_ast(
-                        env,
-                        number_literal_to_ast(env.arena, num),
-                        content
-                    ))
+                    run_jit_function(app, main_fn_name, |num: $ty| {
+                        num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+                    })
                 };
             }
 
             let result = match int_width {
                 U8 | I8 => {
                     // NOTE: this is does not handle 8-bit numbers yet
-                    run_jit_function!(app, main_fn_name, u8, |num| byte_to_ast(env, num, content))
+                    run_jit_function(app, main_fn_name, |num: u8| byte_to_ast(env, num, content))
                 }
                 U16 => helper!(u16),
                 U32 => helper!(u32),
@@ -312,11 +403,9 @@ fn jit_to_ast_help<'a, M: AppMemory>(
 
             macro_rules! helper {
                 ($ty:ty) => {
-                    run_jit_function!(app, main_fn_name, $ty, |num| num_to_ast(
-                        env,
-                        number_literal_to_ast(env.arena, num),
-                        content
-                    ))
+                    run_jit_function(app, main_fn_name, |num: $ty| {
+                        num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+                    })
                 };
             }
 
@@ -328,17 +417,15 @@ fn jit_to_ast_help<'a, M: AppMemory>(
 
             Ok(result)
         }
-        Layout::Builtin(Builtin::Str) => Ok(run_jit_function!(
+        Layout::Builtin(Builtin::Str) => Ok(run_jit_function(
             app,
             main_fn_name,
-            &'static str,
-            |string: &'static str| { str_to_ast(env.arena, env.arena.alloc(string)) }
+            |string: &'static str| str_to_ast(env.arena, env.arena.alloc(string)),
         )),
-        Layout::Builtin(Builtin::List(elem_layout)) => Ok(run_jit_function!(
+        Layout::Builtin(Builtin::List(elem_layout)) => Ok(run_jit_function(
             app,
             main_fn_name,
-            (usize, usize),
-            |(addr, len): (usize, usize)| { list_to_ast(env, addr, len, elem_layout, content) }
+            |(addr, len): (usize, usize)| list_to_ast(env, addr, len, elem_layout, content),
         )),
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
@@ -395,22 +482,20 @@ fn jit_to_ast_help<'a, M: AppMemory>(
 
             let result_stack_size = layout.stack_size(env.target_info);
 
-            run_jit_function_dynamic_type!(
+            run_jit_function_dynamic_type(
                 app,
                 main_fn_name,
                 result_stack_size as usize,
-                |bytes_addr: usize| { struct_addr_to_ast(bytes_addr as usize) }
+                |bytes_addr: usize| struct_addr_to_ast(bytes_addr),
             )
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
             let size = layout.stack_size(env.target_info);
-            Ok(run_jit_function_dynamic_type!(
+            Ok(run_jit_function_dynamic_type(
                 app,
                 main_fn_name,
                 size as usize,
-                |addr: usize| {
-                    addr_to_ast(env, addr, layout, WhenRecursive::Unreachable, content)
-                }
+                |addr: usize| addr_to_ast(env, addr, layout, WhenRecursive::Unreachable, content),
             ))
         }
         Layout::Union(UnionLayout::Recursive(_))
@@ -418,13 +503,11 @@ fn jit_to_ast_help<'a, M: AppMemory>(
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
             let size = layout.stack_size(env.target_info);
-            Ok(run_jit_function_dynamic_type!(
+            Ok(run_jit_function_dynamic_type(
                 app,
                 main_fn_name,
                 size as usize,
-                |addr: usize| {
-                    addr_to_ast(env, addr, layout, WhenRecursive::Loop(*layout), content)
-                }
+                |addr: usize| addr_to_ast(env, addr, layout, WhenRecursive::Loop(*layout), content),
             ))
         }
         Layout::RecursivePointer => {

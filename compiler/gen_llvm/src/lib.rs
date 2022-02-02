@@ -5,5 +5,3 @@
 #![allow(clippy::float_cmp)]
 
 pub mod llvm;
-
-pub mod run_roc;
