@@ -273,7 +273,6 @@ macro_rules! assert_expect_failed {
             assert_eq!(&success, &expected);
         };
         run_jit_function_raw!(lib, main_fn_name, $ty, transform, errors);
-        todo!("Actually look up the failures and check them")
     }};
 }
 
