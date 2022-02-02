@@ -82,6 +82,7 @@ macro_rules! run_jit_function {
             let failures = get_expect_failures();
 
             if failures.count > 0 {
+                // TODO tell the user about the failures!
                 let failures =
                     unsafe { core::slice::from_raw_parts(failures.failures, failures.count) };
 

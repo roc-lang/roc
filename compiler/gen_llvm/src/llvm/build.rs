@@ -6061,6 +6061,8 @@ fn run_low_level<'a, 'ctx, 'env>(
                             .module
                             .get_function(bitcode::UTILS_EXPECT_FAILED)
                             .unwrap();
+                        // TODO get the actual line info instead of
+                        // hardcoding as zero!
                         let callable = CallableValue::try_from(func).unwrap();
                         let start_line = context.i32_type().const_int(0, false);
                         let end_line = context.i32_type().const_int(0, false);
