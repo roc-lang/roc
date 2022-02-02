@@ -929,6 +929,22 @@ fn to_expr_report<'b>(
                     None,
                 )
             }
+
+            Reason::NumericLiteralSuffix => report_mismatch(
+                alloc,
+                lines,
+                filename,
+                &category,
+                found,
+                expected_type,
+                region,
+                Some(expr_region),
+                alloc.text("This numeric literal is being used improperly:"),
+                alloc.text("Here the value is used as a:"),
+                alloc.text("But its suffix says it's a:"),
+                None,
+            ),
+
             Reason::LowLevelOpArg { op, arg_index } => {
                 panic!(
                     "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
@@ -946,6 +962,7 @@ fn to_expr_report<'b>(
                     foreign_symbol
                 );
             }
+
             Reason::FloatLiteral | Reason::IntLiteral | Reason::NumLiteral => {
                 unreachable!("I don't think these can be reached")
             }
@@ -1451,7 +1468,7 @@ fn add_pattern_category<'b>(
         Str => alloc.reflow(" strings:"),
         Num => alloc.reflow(" numbers:"),
         Int => alloc.reflow(" integers:"),
-        Float => alloc.reflow(" floats"),
+        Float => alloc.reflow(" floats:"),
     };
 
     alloc.concat(vec![i_am_trying_to_match, rest])

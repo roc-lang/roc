@@ -3546,7 +3546,8 @@ mod test_reporting {
                 1│  dec = 100A
                           ^^^^
 
-                Integer literals can only contain the digits 0-9.
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3558,7 +3559,7 @@ mod test_reporting {
                           ^^^^^
 
                 Hexadecimal (base-16) integer literals can only contain the digits
-                0-9, a-f and A-F.
+                0-9, a-f and A-F, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3569,7 +3570,8 @@ mod test_reporting {
                 5│  oct = 0o9
                           ^^^
 
-                Octal (base-8) integer literals can only contain the digits 0-7.
+                Octal (base-8) integer literals can only contain the digits
+                0-7, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3580,7 +3582,8 @@ mod test_reporting {
                 7│  bin = 0b2
                           ^^^
 
-                Binary (base-2) integer literals can only contain the digits 0 and 1.
+                Binary (base-2) integer literals can only contain the digits
+                0 and 1, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -3614,7 +3617,7 @@ mod test_reporting {
                           ^^
 
                 Hexadecimal (base-16) integer literals must contain at least one of
-                the digits 0-9, a-f and A-F.
+                the digits 0-9, a-f and A-F, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3626,7 +3629,7 @@ mod test_reporting {
                           ^^
 
                 Octal (base-8) integer literals must contain at least one of the
-                digits 0-7.
+                digits 0-7, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3638,7 +3641,7 @@ mod test_reporting {
                           ^^
 
                 Binary (base-2) integer literals must contain at least one of the
-                digits 0 and 1.
+                digits 0 and 1, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -3666,7 +3669,7 @@ mod test_reporting {
                         ^^^^
 
                 Floating point literals can only contain the digits 0-9, or use
-                scientific notation 10e4
+                scientific notation 10e4, or have a float suffix.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -5500,7 +5503,7 @@ mod test_reporting {
                     ^^^^^
 
                 Floating point literals can only contain the digits 0-9, or use
-                scientific notation 10e4
+                scientific notation 10e4, or have a float suffix.
 
                 Tip: Learn more about number literals at TODO
             "#
@@ -7300,6 +7303,226 @@ I need all branches in an `if` to have the same type!
                 Nested datatypes are not supported in Roc.
 
                 Hint: Consider rewriting the definition of `Nested` to use the recursive type with the same arguments.
+                "#
+            ),
+        )
+    }
+
+    macro_rules! mismatched_suffix_tests {
+        ($($number:expr, $suffix:expr, $name:ident)*) => {$(
+            #[test]
+            fn $name() {
+                let number = $number.to_string();
+                let mut typ = $suffix.to_string();
+                typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
+                let carets = "^".repeat(number.len() + $suffix.len());
+                let kind = match $suffix {
+                    "dec"|"f32"|"f64" => "a float",
+                    _ => "an integer",
+                };
+
+                report_problem_as(
+                    &format!(indoc!(
+                        r#"
+                        use : {} -> U8
+                        use {}{}
+                        "#
+                    ), bad_type, number, $suffix),
+                    &format!(indoc!(
+                        r#"
+                        ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                        The 1st argument to `use` is not what I expect:
+
+                        2│  use {}{}
+                                {}
+
+                        This argument is {} of type:
+
+                            {}
+
+                        But `use` needs the 1st argument to be:
+
+                            {}
+                        "#
+                    ), number, $suffix, carets, kind, typ, bad_type),
+                )
+            }
+        )*}
+    }
+
+    mismatched_suffix_tests! {
+        1, "u8",   mismatched_suffix_u8
+        1, "u16",  mismatched_suffix_u16
+        1, "u32",  mismatched_suffix_u32
+        1, "u64",  mismatched_suffix_u64
+        1, "u128", mismatched_suffix_u128
+        1, "i8",   mismatched_suffix_i8
+        1, "i16",  mismatched_suffix_i16
+        1, "i32",  mismatched_suffix_i32
+        1, "i64",  mismatched_suffix_i64
+        1, "i128", mismatched_suffix_i128
+        1, "nat",  mismatched_suffix_nat
+        1, "dec",  mismatched_suffix_dec
+        1, "f32",  mismatched_suffix_f32
+        1, "f64",  mismatched_suffix_f64
+    }
+
+    macro_rules! mismatched_suffix_tests_in_pattern {
+        ($($number:expr, $suffix:expr, $name:ident)*) => {$(
+            #[test]
+            fn $name() {
+                let number = $number.to_string();
+                let mut typ = $suffix.to_string();
+                typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                let bad_suffix = if $suffix == "u8" { "i8" } else { "u8" };
+                let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
+                let carets = "^".repeat(number.len() + $suffix.len());
+                let kind = match $suffix {
+                    "dec"|"f32"|"f64" => "floats",
+                    _ => "integers",
+                };
+
+                report_problem_as(
+                    &format!(indoc!(
+                        r#"
+                        when {}{} is
+                            {}{} -> 1
+                            _ -> 1
+                        "#
+                    ), number, bad_suffix, number, $suffix),
+                    &format!(indoc!(
+                        r#"
+                        ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                        The 1st pattern in this `when` is causing a mismatch:
+
+                        2│      {}{} -> 1
+                                {}
+
+                        The first pattern is trying to match {}:
+        
+                            {}
+        
+                        But the expression between `when` and `is` has the type:
+        
+                            {}
+                        "#
+                    ), number, $suffix, carets, kind, typ, bad_type),
+                )
+            }
+        )*}
+    }
+
+    mismatched_suffix_tests_in_pattern! {
+        1, "u8",   mismatched_suffix_u8_pattern
+        1, "u16",  mismatched_suffix_u16_pattern
+        1, "u32",  mismatched_suffix_u32_pattern
+        1, "u64",  mismatched_suffix_u64_pattern
+        1, "u128", mismatched_suffix_u128_pattern
+        1, "i8",   mismatched_suffix_i8_pattern
+        1, "i16",  mismatched_suffix_i16_pattern
+        1, "i32",  mismatched_suffix_i32_pattern
+        1, "i64",  mismatched_suffix_i64_pattern
+        1, "i128", mismatched_suffix_i128_pattern
+        1, "nat",  mismatched_suffix_nat_pattern
+        1, "dec",  mismatched_suffix_dec_pattern
+        1, "f32",  mismatched_suffix_f32_pattern
+        1, "f64",  mismatched_suffix_f64_pattern
+    }
+
+    #[test]
+    fn bad_numeric_literal_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1u256
+                "#
+            ),
+            // TODO: link to number suffixes
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This integer literal contains an invalid digit:
+
+                1│  1u256
+                    ^^^^^
+
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn numer_literal_multi_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1u8u8
+                "#
+            ),
+            // TODO: link to number suffixes
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This integer literal contains an invalid digit:
+
+                1│  1u8u8
+                    ^^^^^
+
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn int_literal_has_float_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                0b1f32
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CONFLICTING NUMBER SUFFIX ───────────────────────────────────────────────────
+
+                This number literal is an integer, but it has a float suffix:
+
+                1│  0b1f32
+                    ^^^^^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn float_literal_has_int_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1.0u8
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CONFLICTING NUMBER SUFFIX ───────────────────────────────────────────────────
+
+                This number literal is a float, but it has an integer suffix:
+
+                1│  1.0u8
+                    ^^^^^
                 "#
             ),
         )

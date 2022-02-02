@@ -121,8 +121,8 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
 /// then replace the BinOp nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
 pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc<Expr<'a>> {
     match &loc_expr.value {
-        Float(_)
-        | Num(_)
+        Float(..)
+        | Num(..)
         | NonBase10Int { .. }
         | Str(_)
         | AccessorFunction(_)
