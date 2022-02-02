@@ -3713,6 +3713,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_repl_wasm"
+version = "0.1.0"
+dependencies = [
+ "roc_parse",
+ "roc_repl_eval",
+]
+
+[[package]]
 name = "roc_reporting"
 version = "0.1.0"
 dependencies = [

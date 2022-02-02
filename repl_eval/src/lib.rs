@@ -1,6 +1,5 @@
 use roc_parse::ast::Expr;
 
-pub mod app_memory;
 pub mod eval;
 pub mod gen;
 
