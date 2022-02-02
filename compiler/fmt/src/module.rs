@@ -196,7 +196,14 @@ fn fmt_effects<'a, 'buf>(buf: &mut Buf<'buf>, effects: &Effects<'a>, indent: u16
 
     fmt_default_spaces(buf, effects.spaces_after_type_name, indent);
 
-    fmt_collection(buf, indent, '{', '}', effects.entries, Newlines::No)
+    fmt_collection(
+        buf,
+        indent + INDENT,
+        '{',
+        '}',
+        effects.entries,
+        Newlines::No,
+    )
 }
 
 impl<'a> Formattable for TypedIdent<'a> {
@@ -260,7 +267,7 @@ fn fmt_imports<'a, 'buf>(
     loc_entries: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     indent: u16,
 ) {
-    fmt_collection(buf, indent, '[', ']', loc_entries, Newlines::No)
+    fmt_collection(buf, indent + INDENT, '[', ']', loc_entries, Newlines::No)
 }
 
 fn fmt_provides<'a, 'buf>(
@@ -270,9 +277,9 @@ fn fmt_provides<'a, 'buf>(
     indent: u16,
 ) {
     fmt_collection(buf, indent, '[', ']', loc_exposed_names, Newlines::No);
-    if let Some(loc_provided_types) = loc_provided_types {
+    if let Some(loc_provided) = loc_provided_types {
         fmt_default_spaces(buf, &[], indent);
-        fmt_collection(buf, indent, '{', '}', loc_provided_types, Newlines::No);
+        fmt_collection(buf, indent + INDENT, '{', '}', loc_provided, Newlines::No);
     }
 }
 
@@ -290,7 +297,7 @@ fn fmt_exposes<'buf, N: Formattable + Copy>(
     loc_entries: Collection<'_, Loc<Spaced<'_, N>>>,
     indent: u16,
 ) {
-    fmt_collection(buf, indent, '[', ']', loc_entries, Newlines::No)
+    fmt_collection(buf, indent + INDENT, '[', ']', loc_entries, Newlines::No)
 }
 
 pub trait FormatName {
