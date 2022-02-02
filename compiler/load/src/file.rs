@@ -3395,7 +3395,7 @@ fn fabricate_effects_module<'a>(
     let declared_name: ModuleName = name.into();
 
     let hardcoded_effect_symbols = {
-        let mut functions: Vec<_> = crate::effect_module::BUILTIN_EFFECT_FUNCTIONS
+        let mut functions: Vec<_> = roc_can::effect_module::BUILTIN_EFFECT_FUNCTIONS
             .iter()
             .map(|x| x.0)
             .collect();
@@ -3499,7 +3499,7 @@ fn fabricate_effects_module<'a>(
     let alias = {
         let a_var = var_store.fresh();
 
-        let actual = crate::effect_module::build_effect_actual(
+        let actual = roc_can::effect_module::build_effect_actual(
             effect_tag_name,
             Type::Variable(a_var),
             &mut var_store,
@@ -3543,7 +3543,7 @@ fn fabricate_effects_module<'a>(
                     &mut var_store,
                 );
 
-                let def = crate::effect_module::build_host_exposed_def(
+                let def = roc_can::effect_module::build_host_exposed_def(
                     &mut can_env,
                     &mut scope,
                     symbol,
@@ -3559,7 +3559,7 @@ fn fabricate_effects_module<'a>(
         }
 
         // define Effect.after, Effect.map etc.
-        crate::effect_module::build_effect_builtins(
+        roc_can::effect_module::build_effect_builtins(
             &mut can_env,
             &mut scope,
             effect_symbol,

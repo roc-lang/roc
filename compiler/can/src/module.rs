@@ -6,15 +6,16 @@ use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet, SendMap};
-use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
+use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
+use roc_parse::header::ModuleNameEnum;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::Alias;
+use roc_types::types::{Alias, Type};
 
 #[derive(Debug)]
 pub struct Module {
@@ -60,11 +61,47 @@ where
 {
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home, var_store);
+    let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
         scope.add_alias(name, alias.region, alias.type_variables, alias.typ);
     }
+
+    let effect_symbol = if let ModuleNameEnum::Hosted(_) = module_name {
+        let name = "Effect";
+        let effect_symbol = scope
+            .introduce(
+                name.into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap();
+
+        let effect_tag_name = TagName::Private(effect_symbol);
+
+        {
+            let a_var = var_store.fresh();
+
+            let actual = crate::effect_module::build_effect_actual(
+                effect_tag_name,
+                Type::Variable(a_var),
+                var_store,
+            );
+
+            scope.add_alias(
+                effect_symbol,
+                Region::zero(),
+                vec![Loc::at_zero(("a".into(), a_var))],
+                actual,
+            );
+        }
+
+        Some(effect_symbol)
+    } else {
+        None
+    };
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -83,7 +120,6 @@ where
         }));
     }
 
-    let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
     let mut lookups = Vec::with_capacity(num_deps);
     let mut rigid_variables = MutMap::default();
 
@@ -144,7 +180,7 @@ where
         }
     }
 
-    let (defs, scope, output, symbols_introduced) = canonicalize_defs(
+    let (defs, mut scope, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
@@ -205,9 +241,33 @@ where
     // symbols from this set
     let mut exposed_but_not_defined = exposed_symbols.clone();
 
+    let hosted_declarations = if let Some(effect_symbol) = effect_symbol {
+        let mut declarations = Vec::new();
+        let mut exposed_symbols = MutSet::default();
+
+        // NOTE this currently builds all functions, not just the ones that the user requested
+        crate::effect_module::build_effect_builtins(
+            &mut env,
+            &mut scope,
+            effect_symbol,
+            var_store,
+            &mut exposed_symbols,
+            &mut declarations,
+        );
+
+        declarations
+    } else {
+        Vec::new()
+    };
+
     match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(mut declarations), output) => {
             use crate::def::Declaration::*;
+
+            for x in hosted_declarations {
+                // TODO should this be `insert(0, x)`?
+                declarations.push(x);
+            }
 
             for decl in declarations.iter() {
                 match decl {
@@ -253,6 +313,18 @@ where
             }
 
             let mut aliases = MutMap::default();
+
+            if let Some(effect_symbol) = effect_symbol {
+                // Remove this from exposed_symbols,
+                // so that at the end of the process,
+                // we can see if there were any
+                // exposed symbols which did not have
+                // corresponding defs.
+                exposed_but_not_defined.remove(&effect_symbol);
+
+                let hosted_alias = scope.lookup_alias(effect_symbol).unwrap().clone();
+                aliases.insert(effect_symbol, hosted_alias);
+            }
 
             for (symbol, alias) in output.aliases {
                 // Remove this from exposed_symbols,
