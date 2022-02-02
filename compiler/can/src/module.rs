@@ -69,6 +69,7 @@ where
     }
 
     let effect_symbol = if let ModuleNameEnum::Hosted(_) = module_name {
+        // TODO extract effect name from the header
         let name = "Effect";
         let effect_symbol = scope
             .introduce(
@@ -269,7 +270,7 @@ where
                 declarations.push(x);
             }
 
-            for decl in declarations.iter() {
+            for decl in declarations.iter_mut() {
                 match decl {
                     Declare(def) => {
                         for (symbol, _) in def.pattern_vars.iter() {
@@ -280,6 +281,59 @@ where
                                 // exposed symbols which did not have
                                 // corresponding defs.
                                 exposed_but_not_defined.remove(symbol);
+                            }
+                        }
+
+                        // Temporary hack: we don't know exactly what symbols are hosted symbols,
+                        // and which are meant to be normal definitions without a body. So for now
+                        // we just assume they are hosted functions (meant to be provided by the platform)
+                        if let Some(effect_symbol) = effect_symbol {
+                            macro_rules! make_hosted_def {
+                                () => {
+                                    let symbol = def.pattern_vars.iter().next().unwrap().0;
+                                    let ident_id = symbol.ident_id();
+                                    let ident =
+                                        env.ident_ids.get_name(ident_id).unwrap().to_string();
+                                    let def_annotation = def.annotation.clone().unwrap();
+                                    let annotation = crate::annotation::Annotation {
+                                        typ: def_annotation.signature,
+                                        introduced_variables: def_annotation.introduced_variables,
+                                        references: Default::default(),
+                                        aliases: Default::default(),
+                                    };
+
+                                    let hosted_def = crate::effect_module::build_host_exposed_def(
+                                        &mut env,
+                                        &mut scope,
+                                        *symbol,
+                                        &ident,
+                                        TagName::Private(effect_symbol),
+                                        var_store,
+                                        annotation,
+                                    );
+
+                                    *def = hosted_def;
+                                };
+                            }
+
+                            match &def.loc_expr.value {
+                                Expr::RuntimeError(RuntimeError::NoImplementationNamed {
+                                    ..
+                                }) => {
+                                    make_hosted_def!();
+                                }
+                                Expr::Closure(closure_data)
+                                    if matches!(
+                                        closure_data.loc_body.value,
+                                        Expr::RuntimeError(
+                                            RuntimeError::NoImplementationNamed { .. }
+                                        )
+                                    ) =>
+                                {
+                                    make_hosted_def!();
+                                }
+
+                                _ => {}
                             }
                         }
                     }
