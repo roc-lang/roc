@@ -459,18 +459,12 @@ fn num_bitwise_xor() {
 
 #[test]
 fn num_add_wrap() {
-    expect_success(
-        "Num.addWrap Num.maxI64 1",
-        "-9223372036854775808 : I64",
-    );
+    expect_success("Num.addWrap Num.maxI64 1", "-9223372036854775808 : I64");
 }
 
 #[test]
 fn num_sub_wrap() {
-    expect_success(
-        "Num.subWrap Num.minI64 1",
-        "9223372036854775807 : I64",
-    );
+    expect_success("Num.subWrap Num.minI64 1", "9223372036854775807 : I64");
 }
 
 #[test]
