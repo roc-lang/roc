@@ -6059,7 +6059,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     roc_target::PtrWidth::Bytes8 => {
                         let func = env
                             .module
-                            .get_function("roc_builtins.utils.expect_failed")
+                            .get_function(bitcode::UTILS_EXPECT_FAILED)
                             .unwrap();
                         let callable = CallableValue::try_from(func).unwrap();
                         let start_line = context.i32_type().const_int(0, false);
