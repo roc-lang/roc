@@ -101,7 +101,8 @@ pub fn getExpectFailures() []Failure {
 
     // defensively clone failures, in case someone modifies the originals after the mutex has been released.
     const num_bytes = failure_length * @sizeOf(Failure);
-    const raw_clones = utils.alloc(num_bytes, @alignOf(Failure));
+    // TODO handle the possibility of alloc failing
+    const raw_clones = utils.alloc(num_bytes, @alignOf(Failure)) orelse unreachable;
     const clones = @ptrCast([*]Failure, @alignCast(@alignOf(Failure), raw_clones));
 
     utils.memcpy(@ptrCast([*]u8, clones), @ptrCast([*]u8, raw_clones), num_bytes);

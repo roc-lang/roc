@@ -65,8 +65,8 @@ fn testing_roc_memcpy(dest: *c_void, src: *c_void, bytes: usize) callconv(.C) ?*
     return dest;
 }
 
-pub fn alloc(size: usize, alignment: u32) [*]u8 {
-    return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ size, alignment }));
+pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
+    return @ptrCast(?[*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ size, alignment }));
 }
 
 pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
@@ -189,7 +189,8 @@ pub fn allocateWithRefcount(
 
     switch (alignment) {
         16 => {
-            var new_bytes: [*]align(16) u8 = @alignCast(16, alloc(length, alignment));
+            // TODO handle alloc failing!
+            var new_bytes: [*]align(16) u8 = @alignCast(16, alloc(length, alignment) orelse unreachable);
 
             var as_usize_array = @ptrCast([*]usize, new_bytes);
             as_usize_array[0] = 0;
@@ -201,7 +202,8 @@ pub fn allocateWithRefcount(
             return first_slot;
         },
         8 => {
-            var raw = alloc(length, alignment);
+            // TODO handle alloc failing!
+            var raw = alloc(length, alignment) orelse unreachable;
             var new_bytes: [*]align(8) u8 = @alignCast(8, raw);
 
             var as_isize_array = @ptrCast([*]isize, new_bytes);
@@ -213,7 +215,8 @@ pub fn allocateWithRefcount(
             return first_slot;
         },
         4 => {
-            var raw = alloc(length, alignment);
+            // TODO handle alloc failing!
+            var raw = alloc(length, alignment) orelse unreachable;
             var new_bytes: [*]align(@alignOf(isize)) u8 = @alignCast(@alignOf(isize), raw);
 
             var as_isize_array = @ptrCast([*]isize, new_bytes);
