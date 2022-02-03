@@ -24,7 +24,7 @@ pub fn num_expr_from_result(
             var_store.fresh(),
             var_store.fresh(),
             (*str).into(),
-            num.into(),
+            num,
             bound,
         ),
         Ok((str, ParsedNumResult::Float(num, bound))) => Expr::Float(
@@ -305,6 +305,7 @@ fn from_str_radix(
 fn lower_bound_of_int(result: i128) -> IntWidth {
     use IntWidth::*;
     if result >= 0 {
+        // Positive
         let result = result as u128;
         if result > U64.max_value() {
             I128
@@ -326,6 +327,7 @@ fn lower_bound_of_int(result: i128) -> IntWidth {
             I8
         }
     } else {
+        // Negative
         if result < I64.min_value() {
             I128
         } else if result < I32.min_value() {
