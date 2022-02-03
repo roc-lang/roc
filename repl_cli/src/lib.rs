@@ -2,24 +2,22 @@ use bumpalo::Bump;
 use const_format::concatcp;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
-use libloading::{Library, Symbol};
-use roc_mono::ir::OptLevel;
-use roc_parse::ast::Expr;
+use libloading::Library;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
-use std::ffi::CString;
 use std::io;
-use std::mem::MaybeUninit;
-use std::os::raw::c_char;
 use target_lexicon::Triple;
 
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
+use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_load::file::MonomorphizedModule;
+use roc_mono::ir::OptLevel;
+use roc_parse::ast::Expr;
 use roc_parse::parser::{EExpr, ELambda, SyntaxError};
 use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{compile_to_mono, format_answer, ReplOutput};
@@ -121,31 +119,6 @@ impl Validator for InputValidator {
     }
 }
 
-#[repr(C)]
-pub struct RocCallResult<T> {
-    tag: u64,
-    error_msg: *mut c_char,
-    value: MaybeUninit<T>,
-}
-
-impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
-    fn from(call_result: RocCallResult<T>) -> Self {
-        match call_result.tag {
-            0 => Ok(unsafe { call_result.value.assume_init() }),
-            _ => Err({
-                let raw = unsafe { CString::from_raw(call_result.error_msg) };
-
-                let result = format!("{:?}", raw);
-
-                // make sure rust does not try to free the Roc string
-                std::mem::forget(raw);
-
-                result
-            }),
-        }
-    }
-}
-
 struct CliReplApp {
     lib: Library,
 }
@@ -190,23 +163,7 @@ impl ReplApp for CliReplApp {
         main_fn_name: &str,
         transform: F,
     ) -> Expr<'a> {
-        unsafe {
-            let main: Symbol<unsafe extern "C" fn(*mut RocCallResult<T>) -> ()> = self
-                .lib
-                .get(main_fn_name.as_bytes())
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-                .expect("errored");
-
-            let mut result = MaybeUninit::uninit();
-
-            main(result.as_mut_ptr());
-
-            match result.assume_init().into() {
-                Ok(success) => transform(success),
-                Err(error_msg) => panic!("Roc failed with message: {}", error_msg),
-            }
-        }
+        run_jit_function!(self.lib, main_fn_name, T, transform)
     }
 
     /// Run user code that returns a struct or union, whose size is provided as an argument
@@ -216,41 +173,7 @@ impl ReplApp for CliReplApp {
         bytes: usize,
         transform: F,
     ) -> T {
-        unsafe {
-            let main: Symbol<unsafe extern "C" fn(*const u8)> = self
-                .lib
-                .get(main_fn_name.as_bytes())
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-                .expect("errored");
-
-            let size = std::mem::size_of::<RocCallResult<()>>() + bytes;
-            let layout = std::alloc::Layout::array::<u8>(size).unwrap();
-            let result = std::alloc::alloc(layout);
-            main(result);
-
-            let flag = *result;
-
-            if flag == 0 {
-                transform(result.add(std::mem::size_of::<RocCallResult<()>>()) as usize)
-            } else {
-                // first field is a char pointer (to the error message)
-                // read value, and transmute to a pointer
-                let ptr_as_int = *(result as *const u64).offset(1);
-                let ptr = std::mem::transmute::<u64, *mut c_char>(ptr_as_int);
-
-                // make CString (null-terminated)
-                let raw = CString::from_raw(ptr);
-
-                let result = format!("{:?}", raw);
-
-                // make sure rust doesn't try to free the Roc constant string
-                std::mem::forget(raw);
-
-                eprintln!("{}", result);
-                panic!("Roc hit an error");
-            }
-        }
+        run_jit_function_dynamic_type!(self.lib, main_fn_name, bytes, transform)
     }
 }
 
