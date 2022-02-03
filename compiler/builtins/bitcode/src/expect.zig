@@ -99,15 +99,20 @@ pub fn getExpectFailures() []Failure {
     const held = failures_mutex.acquire();
     defer held.release();
 
-    // defensively clone failures, in case someone modifies the originals after the mutex has been released.
-    const num_bytes = failure_length * @sizeOf(Failure);
-    // TODO handle the possibility of alloc failing
-    const raw_clones = utils.alloc(num_bytes, @alignOf(Failure)) orelse unreachable;
-    const clones = @ptrCast([*]Failure, @alignCast(@alignOf(Failure), raw_clones));
+    if (failure_length > 0) {
+        // defensively clone failures, in case someone modifies the originals after the mutex has been released.
+        const num_bytes = failure_length * @sizeOf(Failure);
+        // TODO handle the possibility of alloc failing
+        const raw_clones = utils.alloc(num_bytes, @alignOf(Failure)) orelse unreachable;
 
-    utils.memcpy(@ptrCast([*]u8, clones), @ptrCast([*]u8, raw_clones), num_bytes);
+        utils.memcpy(raw_clones, @ptrCast([*]u8, failures), num_bytes);
 
-    return clones[0..failure_length];
+        const clones = @ptrCast([*]Failure, @alignCast(@alignOf(Failure), raw_clones));
+
+        return clones[0..failure_length];
+    } else {
+        return failures[0..0];
+    }
 }
 
 pub fn getExpectFailuresC() callconv(.C) CSlice {
@@ -140,9 +145,18 @@ pub fn deinitFailuresC() callconv(.C) void {
 test "expectFailure does something" {
     defer deinitFailures();
 
-    try std.testing.expectEqual(getExpectFailures().len, 0);
+    var fails = getExpectFailures();
+    try std.testing.expectEqual(fails.len, 0);
+
     expectFailed(1, 2, 3, 4);
-    try std.testing.expectEqual(getExpectFailures().len, 1);
+
+    fails = getExpectFailures();
+    try std.testing.expectEqual(fails.len, 1);
+    utils.dealloc(@ptrCast([*]u8, fails.ptr), @alignOf([*]Failure));
+
     const what_it_should_look_like = Failure{ .start_line = 1, .end_line = 2, .start_col = 3, .end_col = 4 };
-    try std.testing.expectEqual(getExpectFailures()[0], what_it_should_look_like);
+
+    fails = getExpectFailures();
+    try std.testing.expectEqual(fails[0], what_it_should_look_like);
+    utils.dealloc(@ptrCast([*]u8, fails.ptr), @alignOf([*]Failure));
 }
