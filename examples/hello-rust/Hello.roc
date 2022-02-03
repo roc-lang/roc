@@ -1,6 +1,6 @@
 app "hello-rust"
     packages { pf: "platform" }
-    imports [ Rbt.{ Rbt, init, Job, job } ]
+    imports [ Rbt.{ Rbt, Job, job } ]
     provides [ main ] to pf
 
 main = "Hello, World!"
@@ -8,7 +8,7 @@ main = "Hello, World!"
 # todo: bikeshed "init" name more
 init : Rbt
 init =
-    Rbt.init bundle
+    Rbt bundle
 
 bundle : Job
 bundle =

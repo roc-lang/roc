@@ -1,5 +1,5 @@
 interface Rbt
-  exposes [ Rbt, init, Job, job ]
+  exposes [ Rbt, Job, job ]
   imports []
 
 Job : [ Job [Command] (List Job) ]
@@ -9,6 +9,3 @@ job : [Command], List Job -> Job
 job = Job
 
 Rbt : [ Rbt Job ]
-
-init : Job -> Rbt
-init = \jobb -> Rbt jobb
