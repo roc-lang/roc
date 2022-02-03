@@ -1,6 +1,6 @@
 app "hello-rust"
     packages { pf: "platform" }
-    imports [ Rbt.{ Rbt, Job, job, exec } ]
+    imports [ Rbt.{ Rbt, init, Job, job } ]
     provides [ main ] to pf
 
 main = "Hello, World!"

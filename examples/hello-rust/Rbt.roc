@@ -1,5 +1,5 @@
 interface Rbt
-  exposes [ Rbt, init, Job, job, Command, exec ]
+  exposes [ Rbt, init, Job, job ]
   imports []
 
 Job : [ Job { command : [Command], inputs : List Job } ]
