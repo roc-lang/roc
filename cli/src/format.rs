@@ -12,8 +12,8 @@ use roc_parse::ast::{
     TypeAnnotation, WhenBranch,
 };
 use roc_parse::header::{
-    AppHeader,  ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
-    PackageEntry, PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
+    AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
+    PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
 use roc_parse::{
     ast::{Def, Module},
