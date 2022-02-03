@@ -1,5 +1,5 @@
 use bumpalo::Bump;
-use roc_can::expr::Recursive;
+use roc_can::expr::{IntValue, Recursive};
 use roc_can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult,
 };
@@ -78,7 +78,10 @@ pub fn expr_to_expr2<'a>(
             match finish_parsing_num(string) {
                 Ok(ParsedNumResult::UnknownNum(int) | ParsedNumResult::Int(int, _)) => {
                     let expr = Expr2::SmallInt {
-                        number: IntVal::I64(int),
+                        number: IntVal::I64(match int {
+                            IntValue::U128(_) => todo!(),
+                            IntValue::I128(n) => n as i64, // FIXME
+                        }),
                         var: env.var_store.fresh(),
                         // TODO non-hardcode
                         style: IntStyle::Decimal,
@@ -120,7 +123,10 @@ pub fn expr_to_expr2<'a>(
             match finish_parsing_base(string, *base, *is_negative) {
                 Ok((int, _bound)) => {
                     let expr = Expr2::SmallInt {
-                        number: IntVal::I64(int),
+                        number: IntVal::I64(match int {
+                            IntValue::U128(_) => todo!(),
+                            IntValue::I128(n) => n as i64, // FIXME
+                        }),
                         var: env.var_store.fresh(),
                         // TODO non-hardcode
                         style: IntStyle::from_base(*base),

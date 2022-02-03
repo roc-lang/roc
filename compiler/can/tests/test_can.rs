@@ -15,7 +15,7 @@ mod test_can {
     use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
-    use roc_can::expr::{ClosureData, Recursive};
+    use roc_can::expr::{ClosureData, IntValue, Recursive};
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::{Position, Region};
     use std::{f64, i64};
@@ -47,7 +47,7 @@ mod test_can {
 
         match actual_out.loc_expr.value {
             Expr::Int(_, _, _, actual, _) => {
-                assert_eq!(expected, actual);
+                assert_eq!(IntValue::I128(expected), actual);
             }
             actual => {
                 panic!("Expected an Int *, but got: {:?}", actual);
@@ -55,13 +55,13 @@ mod test_can {
         }
     }
 
-    fn assert_can_num(input: &str, expected: i64) {
+    fn assert_can_num(input: &str, expected: i128) {
         let arena = Bump::new();
         let actual_out = can_expr_with(&arena, test_home(), input);
 
         match actual_out.loc_expr.value {
             Expr::Num(_, _, actual, _) => {
-                assert_eq!(expected, actual);
+                assert_eq!(IntValue::I128(expected), actual);
             }
             actual => {
                 panic!("Expected a Num, but got: {:?}", actual);
@@ -79,7 +79,7 @@ mod test_can {
     fn int_too_large() {
         use roc_parse::ast::Base;
 
-        let string = (i64::MAX as i128 + 1).to_string();
+        let string = "340_282_366_920_938_463_463_374_607_431_768_211_456".to_string();
 
         assert_can(
             &string.clone(),
@@ -96,7 +96,7 @@ mod test_can {
     fn int_too_small() {
         use roc_parse::ast::Base;
 
-        let string = (i64::MIN as i128 - 1).to_string();
+        let string = "-170_141_183_460_469_231_731_687_303_715_884_105_729".to_string();
 
         assert_can(
             &string.clone(),
@@ -186,12 +186,12 @@ mod test_can {
 
     #[test]
     fn num_max() {
-        assert_can_num(&(i64::MAX.to_string()), i64::MAX);
+        assert_can_num(&(i64::MAX.to_string()), i64::MAX.into());
     }
 
     #[test]
     fn num_min() {
-        assert_can_num(&(i64::MIN.to_string()), i64::MIN);
+        assert_can_num(&(i64::MIN.to_string()), i64::MIN.into());
     }
 
     #[test]

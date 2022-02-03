@@ -1,5 +1,5 @@
 use crate::env::Env;
-use crate::expr::{canonicalize_expr, unescape_char, Expr, Output};
+use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatWidth, IntWidth, NumWidth,
     NumericBound, ParsedNumResult,
@@ -29,8 +29,14 @@ pub enum Pattern {
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
     },
-    NumLiteral(Variable, Box<str>, i64, NumericBound<NumWidth>),
-    IntLiteral(Variable, Variable, Box<str>, i64, NumericBound<IntWidth>),
+    NumLiteral(Variable, Box<str>, IntValue, NumericBound<NumWidth>),
+    IntLiteral(
+        Variable,
+        Variable,
+        Box<str>,
+        IntValue,
+        NumericBound<IntWidth>,
+    ),
     FloatLiteral(Variable, Variable, Box<str>, f64, NumericBound<FloatWidth>),
     StrLiteral(Box<str>),
     Underscore,
@@ -247,10 +253,20 @@ pub fn canonicalize_pattern<'a>(
                     let problem = MalformedPatternProblem::MalformedBase(base);
                     malformed_pattern(env, problem, region)
                 }
+                Ok((IntValue::U128(_), _)) if is_negative => {
+                    // Can't negate a u128; that doesn't fit in any integer literal type we support.
+                    let problem = MalformedPatternProblem::MalformedInt;
+                    malformed_pattern(env, problem, region)
+                }
                 Ok((int, bound)) => {
                     let sign_str = if is_negative { "-" } else { "" };
                     let int_str = format!("{}{}", sign_str, int.to_string()).into_boxed_str();
-                    let i = if is_negative { -int } else { int };
+                    let i = match int {
+                        // Safety: this is fine because I128::MAX = |I128::MIN| - 1
+                        IntValue::I128(n) if is_negative => IntValue::I128(-n),
+                        IntValue::I128(n) => IntValue::I128(n),
+                        IntValue::U128(_) => unreachable!(),
+                    };
                     Pattern::IntLiteral(var_store.fresh(), var_store.fresh(), int_str, i, bound)
                 }
             },

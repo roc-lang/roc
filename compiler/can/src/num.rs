@@ -1,5 +1,5 @@
 use crate::env::Env;
-use crate::expr::Expr;
+use crate::expr::{Expr, IntValue};
 use roc_parse::ast::Base;
 use roc_problem::can::Problem;
 use roc_problem::can::RuntimeError::*;
@@ -8,11 +8,6 @@ use roc_region::all::Region;
 use roc_types::subs::VarStore;
 use std::i64;
 use std::str;
-
-// TODO use rust's integer parsing again
-//
-// We're waiting for libcore here, see https://github.com/rust-lang/rust/issues/22639
-// There is a nightly API for exposing the parse error.
 
 #[inline(always)]
 pub fn num_expr_from_result(
@@ -29,7 +24,7 @@ pub fn num_expr_from_result(
             var_store.fresh(),
             var_store.fresh(),
             (*str).into(),
-            num.into(),
+            num,
             bound,
         ),
         Ok((str, ParsedNumResult::Float(num, bound))) => Expr::Float(
@@ -55,7 +50,7 @@ pub fn num_expr_from_result(
 #[inline(always)]
 pub fn int_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<(&str, i128, NumericBound<IntWidth>), (&str, IntErrorKind)>,
+    result: Result<(&str, IntValue, NumericBound<IntWidth>), (&str, IntErrorKind)>,
     region: Region,
     base: Base,
     env: &mut Env,
@@ -106,9 +101,9 @@ pub fn float_expr_from_result(
 }
 
 pub enum ParsedNumResult {
-    Int(i64, NumericBound<IntWidth>),
+    Int(IntValue, NumericBound<IntWidth>),
     Float(f64, NumericBound<FloatWidth>),
-    UnknownNum(i64),
+    UnknownNum(IntValue),
 }
 
 #[inline(always)]
@@ -116,7 +111,7 @@ pub fn finish_parsing_num(raw: &str) -> Result<ParsedNumResult, (&str, IntErrorK
     // Ignore underscores.
     let radix = 10;
     let (num, bound) =
-        from_str_radix::<i64>(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e.kind))?;
+        from_str_radix(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e))?;
     // Let's try to specialize the number
     Ok(match bound {
         NumericBound::None => ParsedNumResult::UnknownNum(num),
@@ -124,7 +119,11 @@ pub fn finish_parsing_num(raw: &str) -> Result<ParsedNumResult, (&str, IntErrorK
             ParsedNumResult::Int(num, NumericBound::Exact(iw))
         }
         NumericBound::Exact(NumWidth::Float(fw)) => {
-            ParsedNumResult::Float(num as f64, NumericBound::Exact(fw))
+            let num = match num {
+                IntValue::I128(n) => n as f64,
+                IntValue::U128(n) => n as f64,
+            };
+            ParsedNumResult::Float(num, NumericBound::Exact(fw))
         }
     })
 }
@@ -134,7 +133,7 @@ pub fn finish_parsing_base(
     raw: &str,
     base: Base,
     is_negative: bool,
-) -> Result<(i64, NumericBound<IntWidth>), (&str, IntErrorKind)> {
+) -> Result<(IntValue, NumericBound<IntWidth>), (&str, IntErrorKind)> {
     let radix = match base {
         Base::Hex => 16,
         Base::Decimal => 10,
@@ -144,11 +143,10 @@ pub fn finish_parsing_base(
 
     // Ignore underscores, insert - when negative to get correct underflow/overflow behavior
     (if is_negative {
-        from_str_radix::<i64>(format!("-{}", raw.replace("_", "")).as_str(), radix)
+        from_str_radix(format!("-{}", raw.replace("_", "")).as_str(), radix)
     } else {
-        from_str_radix::<i64>(raw.replace("_", "").as_str(), radix)
+        from_str_radix(raw.replace("_", "").as_str(), radix)
     })
-    .map_err(|e| e.kind)
     .and_then(|(n, bound)| {
         let bound = match bound {
             NumericBound::None => NumericBound::None,
@@ -164,15 +162,12 @@ pub fn finish_parsing_base(
 pub fn finish_parsing_float(
     raw: &str,
 ) -> Result<(f64, NumericBound<FloatWidth>), (&str, FloatErrorKind)> {
-    let (bound, raw_without_suffix) = parse_literal_suffix(raw.as_bytes());
-    // Safety: `raw` is valid UTF8, and `parse_literal_suffix` will only chop UTF8
-    // characters off the end, if it chops off anything at all.
-    let raw_without_suffix = unsafe { str::from_utf8_unchecked(raw_without_suffix) };
+    let (opt_bound, raw_without_suffix) = parse_literal_suffix(raw);
 
-    let bound = match bound {
-        NumericBound::None => NumericBound::None,
-        NumericBound::Exact(NumWidth::Float(fw)) => NumericBound::Exact(fw),
-        NumericBound::Exact(NumWidth::Int(_)) => return Err((raw, FloatErrorKind::IntSuffix)),
+    let bound = match opt_bound {
+        None => NumericBound::None,
+        Some(NumWidth::Float(fw)) => NumericBound::Exact(fw),
+        Some(NumWidth::Int(_)) => return Err((raw, FloatErrorKind::IntSuffix)),
     };
 
     // Ignore underscores.
@@ -189,33 +184,33 @@ pub fn finish_parsing_float(
     }
 }
 
-fn parse_literal_suffix(num_str: &[u8]) -> (NumericBound<NumWidth>, &[u8]) {
+fn parse_literal_suffix(num_str: &str) -> (Option<NumWidth>, &str) {
     macro_rules! parse_num_suffix {
         ($($suffix:expr, $width:expr)*) => {$(
             if num_str.ends_with($suffix) {
-                return (NumericBound::Exact($width), num_str.get(0..num_str.len() - $suffix.len()).unwrap());
+                return (Some($width), num_str.get(0..num_str.len() - $suffix.len()).unwrap());
             }
         )*}
     }
 
     parse_num_suffix! {
-        b"u8",   NumWidth::Int(IntWidth::U8)
-        b"u16",  NumWidth::Int(IntWidth::U16)
-        b"u32",  NumWidth::Int(IntWidth::U32)
-        b"u64",  NumWidth::Int(IntWidth::U64)
-        b"u128", NumWidth::Int(IntWidth::U128)
-        b"i8",   NumWidth::Int(IntWidth::I8)
-        b"i16",  NumWidth::Int(IntWidth::I16)
-        b"i32",  NumWidth::Int(IntWidth::I32)
-        b"i64",  NumWidth::Int(IntWidth::I64)
-        b"i128", NumWidth::Int(IntWidth::I128)
-        b"nat",  NumWidth::Int(IntWidth::Nat)
-        b"dec",  NumWidth::Float(FloatWidth::Dec)
-        b"f32",  NumWidth::Float(FloatWidth::F32)
-        b"f64",  NumWidth::Float(FloatWidth::F64)
+        "u8",   NumWidth::Int(IntWidth::U8)
+        "u16",  NumWidth::Int(IntWidth::U16)
+        "u32",  NumWidth::Int(IntWidth::U32)
+        "u64",  NumWidth::Int(IntWidth::U64)
+        "u128", NumWidth::Int(IntWidth::U128)
+        "i8",   NumWidth::Int(IntWidth::I8)
+        "i16",  NumWidth::Int(IntWidth::I16)
+        "i32",  NumWidth::Int(IntWidth::I32)
+        "i64",  NumWidth::Int(IntWidth::I64)
+        "i128", NumWidth::Int(IntWidth::I128)
+        "nat",  NumWidth::Int(IntWidth::Nat)
+        "dec",  NumWidth::Float(FloatWidth::Dec)
+        "f32",  NumWidth::Float(FloatWidth::F32)
+        "f64",  NumWidth::Float(FloatWidth::F64)
     }
 
-    (NumericBound::None, num_str)
+    (None, num_str)
 }
 
 /// Integer parsing code taken from the rust libcore,
@@ -226,47 +221,11 @@ fn parse_literal_suffix(num_str: &[u8]) -> (NumericBound<NumWidth>, &[u8]) {
 /// the LEGAL_DETAILS file in the root directory of this distribution.
 ///
 /// Thanks to the Rust project and its contributors!
-trait FromStrRadixHelper: PartialOrd + Copy {
-    fn min_value() -> Self;
-    fn max_value() -> Self;
-    fn from_u32(u: u32) -> Self;
-    fn checked_mul(&self, other: u32) -> Option<Self>;
-    fn checked_sub(&self, other: u32) -> Option<Self>;
-    fn checked_add(&self, other: u32) -> Option<Self>;
-}
-
-macro_rules! doit {
-    ($($t:ty)*) => ($(impl FromStrRadixHelper for $t {
-        #[inline]
-        fn min_value() -> Self { Self::min_value() }
-        #[inline]
-        fn max_value() -> Self { Self::max_value() }
-        #[inline]
-        fn from_u32(u: u32) -> Self { u as Self }
-        #[inline]
-        fn checked_mul(&self, other: u32) -> Option<Self> {
-            Self::checked_mul(*self, other as Self)
-        }
-        #[inline]
-        fn checked_sub(&self, other: u32) -> Option<Self> {
-            Self::checked_sub(*self, other as Self)
-        }
-        #[inline]
-        fn checked_add(&self, other: u32) -> Option<Self> {
-            Self::checked_add(*self, other as Self)
-        }
-    })*)
-}
-// We only need the i64 implementation, but libcore defines
-// doit! { i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize }
-doit! { i64 }
-
-fn from_str_radix<T: FromStrRadixHelper>(
+fn from_str_radix(
     src: &str,
     radix: u32,
-) -> Result<(T, NumericBound<NumWidth>), ParseIntError> {
+) -> Result<(IntValue, NumericBound<NumWidth>), IntErrorKind> {
     use self::IntErrorKind::*;
-    use self::ParseIntError as PIE;
 
     assert!(
         (2..=36).contains(&radix),
@@ -274,65 +233,119 @@ fn from_str_radix<T: FromStrRadixHelper>(
         radix
     );
 
-    if src.is_empty() {
-        return Err(PIE { kind: Empty });
-    }
+    let (opt_exact_bound, src) = parse_literal_suffix(src);
 
-    let is_signed_ty = T::from_u32(0) > T::min_value();
-
-    // all valid digits are ascii, so we will just iterate over the utf8 bytes
-    // and cast them to chars. .to_digit() will safely return None for anything
-    // other than a valid ascii digit for the given radix, including the first-byte
-    // of multi-byte sequences
-    let src = src.as_bytes();
-
-    let (is_positive, digits) = match src[0] {
-        b'+' => (true, &src[1..]),
-        b'-' if is_signed_ty => (false, &src[1..]),
-        _ => (true, src),
+    use std::num::IntErrorKind as StdIEK;
+    let result = match i128::from_str_radix(src, radix) {
+        Ok(result) => IntValue::I128(result),
+        Err(pie) => match pie.kind() {
+            StdIEK::Empty => return Err(IntErrorKind::Empty),
+            StdIEK::InvalidDigit => return Err(IntErrorKind::InvalidDigit),
+            StdIEK::NegOverflow => return Err(IntErrorKind::Underflow),
+            StdIEK::PosOverflow => {
+                // try a u128
+                match u128::from_str_radix(src, radix) {
+                    Ok(result) => IntValue::U128(result),
+                    Err(pie) => match pie.kind() {
+                        StdIEK::InvalidDigit => return Err(IntErrorKind::InvalidDigit),
+                        StdIEK::PosOverflow => return Err(IntErrorKind::Overflow),
+                        StdIEK::Empty | StdIEK::Zero | StdIEK::NegOverflow => unreachable!(),
+                        _ => unreachable!("I thought all possibilities were exhausted, but std::num added a new one")
+                    },
+                }
+            }
+            StdIEK::Zero => unreachable!("Parsed a i128"),
+            _ => unreachable!(
+                "I thought all possibilities were exhausted, but std::num added a new one"
+            ),
+        },
     };
 
-    let (bound, digits) = parse_literal_suffix(digits);
+    let (lower_bound, is_negative) = match result {
+        IntValue::I128(num) => (lower_bound_of_int(num), num <= 0),
+        IntValue::U128(_) => (IntWidth::U128, false),
+    };
 
-    if digits.is_empty() {
-        return Err(PIE { kind: Empty });
+    match opt_exact_bound {
+        None => {
+            // TODO: use the lower bound
+            Ok((result, NumericBound::None))
+        }
+        Some(bound @ NumWidth::Float(_)) => {
+            // For now, assume floats can represent all integers
+            // TODO: this is somewhat incorrect, revisit
+            Ok((result, NumericBound::Exact(bound)))
+        }
+        Some(NumWidth::Int(exact_width)) => {
+            // We need to check if the exact bound >= lower bound.
+            if exact_width.is_superset(&lower_bound, is_negative) {
+                // Great! Use the exact bound.
+                Ok((result, NumericBound::Exact(NumWidth::Int(exact_width))))
+            } else {
+                // This is something like 200i8; the lower bound is u8, which holds strictly more
+                // ints on the positive side than i8 does. Report an error depending on which side
+                // of the integers we checked.
+                let err = if is_negative {
+                    UnderflowsSuffix {
+                        suffix_type: exact_width.type_str(),
+                        min_value: exact_width.min_value(),
+                    }
+                } else {
+                    OverflowsSuffix {
+                        suffix_type: exact_width.type_str(),
+                        max_value: exact_width.max_value(),
+                    }
+                };
+                Err(err)
+            }
+        }
     }
+}
 
-    let mut result = T::from_u32(0);
-    if is_positive {
-        // The number is positive
-        for &c in digits {
-            let x = match (c as char).to_digit(radix) {
-                Some(x) => x,
-                None => return Err(PIE { kind: InvalidDigit }),
-            };
-            result = match result.checked_mul(radix) {
-                Some(result) => result,
-                None => return Err(PIE { kind: Overflow }),
-            };
-            result = match result.checked_add(x) {
-                Some(result) => result,
-                None => return Err(PIE { kind: Overflow }),
-            };
+fn lower_bound_of_int(result: i128) -> IntWidth {
+    use IntWidth::*;
+    if result >= 0 {
+        // Positive
+        let result = result as u128;
+        if result > U64.max_value() {
+            I128
+        } else if result > I64.max_value() {
+            U64
+        } else if result > U32.max_value() {
+            I64
+        } else if result > I32.max_value() {
+            U32
+        } else if result > U16.max_value() {
+            I32
+        } else if result > I16.max_value() {
+            U16
+        } else if result > U8.max_value() {
+            I16
+        } else if result > I8.max_value() {
+            U8
+        } else {
+            I8
         }
     } else {
-        // The number is negative
-        for &c in digits {
-            let x = match (c as char).to_digit(radix) {
-                Some(x) => x,
-                None => return Err(PIE { kind: InvalidDigit }),
-            };
-            result = match result.checked_mul(radix) {
-                Some(result) => result,
-                None => return Err(PIE { kind: Underflow }),
-            };
-            result = match result.checked_sub(x) {
-                Some(result) => result,
-                None => return Err(PIE { kind: Underflow }),
-            };
+        // Negative
+        if result < I64.min_value() {
+            I128
+        } else if result < I32.min_value() {
+            I64
+        } else if result < I16.min_value() {
+            I32
+        } else if result < I8.min_value() {
+            I16
+        } else {
+            I8
         }
     }
-    Ok((result, bound))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum IntSign {
+    Unsigned,
+    Signed,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -348,6 +361,109 @@ pub enum IntWidth {
     I64,
     I128,
     Nat,
+}
+
+impl IntWidth {
+    /// Returns the `IntSign` and bit width of a variant.
+    fn sign_and_width(&self) -> (IntSign, u32) {
+        use IntSign::*;
+        use IntWidth::*;
+        match self {
+            U8 => (Unsigned, 8),
+            U16 => (Unsigned, 16),
+            U32 => (Unsigned, 32),
+            U64 => (Unsigned, 64),
+            U128 => (Unsigned, 128),
+            I8 => (Signed, 8),
+            I16 => (Signed, 16),
+            I32 => (Signed, 32),
+            I64 => (Signed, 64),
+            I128 => (Signed, 128),
+            // TODO: this is platform specific!
+            Nat => (Unsigned, 64),
+        }
+    }
+
+    fn type_str(&self) -> &'static str {
+        use IntWidth::*;
+        match self {
+            U8 => "U8",
+            U16 => "U16",
+            U32 => "U32",
+            U64 => "U64",
+            U128 => "U128",
+            I8 => "I8",
+            I16 => "I16",
+            I32 => "I32",
+            I64 => "I64",
+            I128 => "I128",
+            Nat => "Nat",
+        }
+    }
+
+    fn max_value(&self) -> u128 {
+        use IntWidth::*;
+        match self {
+            U8 => u8::MAX as u128,
+            U16 => u16::MAX as u128,
+            U32 => u32::MAX as u128,
+            U64 => u64::MAX as u128,
+            U128 => u128::MAX,
+            I8 => i8::MAX as u128,
+            I16 => i16::MAX as u128,
+            I32 => i32::MAX as u128,
+            I64 => i64::MAX as u128,
+            I128 => i128::MAX as u128,
+            // TODO: this is platform specific!
+            Nat => u64::MAX as u128,
+        }
+    }
+
+    fn min_value(&self) -> i128 {
+        use IntWidth::*;
+        match self {
+            U8 | U16 | U32 | U64 | U128 | Nat => 0,
+            I8 => i8::MIN as i128,
+            I16 => i16::MIN as i128,
+            I32 => i32::MIN as i128,
+            I64 => i64::MIN as i128,
+            I128 => i128::MIN,
+        }
+    }
+
+    /// Checks if `self` represents superset of integers that `lower_bound` represents, on a particular
+    /// side of the integers relative to 0.
+    ///
+    /// If `is_negative` is true, the negative side is checked; otherwise the positive side is checked.
+    pub fn is_superset(&self, lower_bound: &Self, is_negative: bool) -> bool {
+        use IntSign::*;
+
+        if is_negative {
+            match (self.sign_and_width(), lower_bound.sign_and_width()) {
+                ((Signed, us), (Signed, lower_bound)) => us >= lower_bound,
+                // Unsigned ints can never represent negative numbers; signed (non-zero width)
+                // ints always can.
+                ((Unsigned, _), (Signed, _)) => false,
+                ((Signed, _), (Unsigned, _)) => true,
+                // Trivially true; both can only express 0.
+                ((Unsigned, _), (Unsigned, _)) => true,
+            }
+        } else {
+            match (self.sign_and_width(), lower_bound.sign_and_width()) {
+                ((Signed, us), (Signed, lower_bound))
+                | ((Unsigned, us), (Unsigned, lower_bound)) => us >= lower_bound,
+
+                // Unsigned ints with the same bit width as their unsigned counterparts can always
+                // express 2x more integers on the positive side as unsigned ints.
+                ((Unsigned, us), (Signed, lower_bound)) => us >= lower_bound,
+
+                // ...but that means signed int widths can represent less than their unsigned
+                // counterparts, so the below is true iff the bit width is strictly greater. E.g.
+                // i16 is a superset of u8, but i16 is not a superset of u16.
+                ((Signed, us), (Unsigned, lower_bound)) => us > lower_bound,
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -373,29 +489,4 @@ where
     None,
     /// Must have exactly the width `W`.
     Exact(W),
-}
-
-/// An error which can be returned when parsing an integer.
-///
-/// This error is used as the error type for the `from_str_radix()` functions
-/// on the primitive integer types, such as [`i8::from_str_radix`].
-///
-/// # Potential causes
-///
-/// Among other causes, `ParseIntError` can be thrown because of leading or trailing whitespace
-/// in the string e.g., when it is obtained from the standard input.
-/// Using the [`str.trim()`] method ensures that no whitespace remains before parsing.
-///
-/// [`str.trim()`]: ../../std/primitive.str.html#method.trim
-/// [`i8::from_str_radix`]: ../../std/primitive.i8.html#method.from_str_radix
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseIntError {
-    kind: IntErrorKind,
-}
-
-impl ParseIntError {
-    /// Outputs the detailed cause of parsing an integer failing.
-    pub fn kind(&self) -> &IntErrorKind {
-        &self.kind
-    }
 }

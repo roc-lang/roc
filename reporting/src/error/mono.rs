@@ -148,6 +148,7 @@ fn pattern_to_doc_help<'b>(
         Anything => alloc.text("_"),
         Literal(l) => match l {
             Int(i) => alloc.text(i.to_string()),
+            U128(i) => alloc.text(i.to_string()),
             Bit(true) => alloc.text("True"),
             Bit(false) => alloc.text("False"),
             Byte(b) => alloc.text(b.to_string()),

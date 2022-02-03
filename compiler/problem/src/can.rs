@@ -109,6 +109,16 @@ pub enum IntErrorKind {
     Underflow,
     /// This is an integer, but it has a float numeric suffix.
     FloatSuffix,
+    /// The integer literal overflows the width of the suffix associated with it.
+    OverflowsSuffix {
+        suffix_type: &'static str,
+        max_value: u128,
+    },
+    /// The integer literal underflows the width of the suffix associated with it.
+    UnderflowsSuffix {
+        suffix_type: &'static str,
+        min_value: i128,
+    },
 }
 
 /// Enum to store the various types of errors that can cause parsing a float to fail.
