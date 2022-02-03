@@ -2,13 +2,9 @@ platform "folkertdev/foo"
     requires {} { main : Effect {} }
     exposes []
     packages {}
-    imports [ fx.Effect ]
+    imports [ pf.Effect ]
     provides [ mainForHost ]
-    effects fx.Effect
-    {
-    putLine : Str -> Effect {},
-    getLine : Effect Str
-     }
+    effects fx.Unused { }
 
 mainForHost : Effect.Effect {} as Fx
 mainForHost = main
