@@ -1141,16 +1141,24 @@ fn pretty_runtime_error<'b>(
             let (big_or_small, info) = if let IntErrorKind::Underflow = error_kind {
                 (
                     "small",
-                    alloc.reflow(
-                        "The smallest number representable in Roc is the minimum I128 value, -170_141_183_460_469_231_731_687_303_715_884_105_728.",
-                    ),
+                    alloc.concat(vec![
+                        alloc.reflow(
+                            "The smallest number representable in Roc is the minimum I128 value, ",
+                        ),
+                        alloc.int_literal(i128::MIN),
+                        alloc.text("."),
+                    ]),
                 )
             } else {
                 (
                     "big",
-                    alloc.reflow(
-                        "The largest number representable in Roc is the maximum U128 value, 340_282_366_920_938_463_463_374_607_431_768_211_455.",
-                    ),
+                    alloc.concat(vec![
+                        alloc.reflow(
+                            "The largest number representable in Roc is the maximum U128 value, ",
+                        ),
+                        alloc.int_literal(u128::MAX),
+                        alloc.text("."),
+                    ]),
                 )
             };
 
@@ -1199,7 +1207,8 @@ fn pretty_runtime_error<'b>(
                     alloc.reflow("The suffix indicates this integer is a "),
                     alloc.type_str(suffix_type),
                     alloc.reflow(", whose maximum value is "),
-                    alloc.text(format!("{}.", max_value)),
+                    alloc.int_literal(max_value),
+                    alloc.reflow("."),
                 ])),
             ]);
 
@@ -1223,7 +1232,8 @@ fn pretty_runtime_error<'b>(
                     alloc.reflow("The suffix indicates this integer is a "),
                     alloc.type_str(suffix_type),
                     alloc.reflow(", whose minimum value is "),
-                    alloc.text(format!("{}.", min_value)),
+                    alloc.int_literal(min_value),
+                    alloc.reflow("."),
                 ])),
             ]);
 

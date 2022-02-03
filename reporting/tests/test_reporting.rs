@@ -7622,7 +7622,7 @@ I need all branches in an `if` to have the same type!
                     ^^^^^^^^^^^^^^^^
 
                 Tip: The suffix indicates this integer is a U32, whose maximum value
-                is 4294967295.
+                is 4_294_967_295.
                 "#
             ),
         )
@@ -7662,7 +7662,7 @@ I need all branches in an `if` to have the same type!
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Tip: The suffix indicates this integer is a U64, whose maximum value
-                is 18446744073709551615.
+                is 18_446_744_073_709_551_615.
                 "#
             ),
         )
@@ -7802,7 +7802,7 @@ I need all branches in an `if` to have the same type!
                     ^^^^^^^^^^^^^^^^
 
                 Tip: The suffix indicates this integer is a I32, whose maximum value
-                is 2147483647.
+                is 2_147_483_647.
                 "#
             ),
         )
@@ -7822,7 +7822,7 @@ I need all branches in an `if` to have the same type!
                     ^^^^^^^^^^^^^^^^^
 
                 Tip: The suffix indicates this integer is a I32, whose minimum value
-                is -2147483648.
+                is -2_147_483_648.
                 "#
             ),
         )
@@ -7842,7 +7842,7 @@ I need all branches in an `if` to have the same type!
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Tip: The suffix indicates this integer is a I64, whose maximum value
-                is 9223372036854775807.
+                is 9_223_372_036_854_775_807.
                 "#
             ),
         )
@@ -7862,7 +7862,7 @@ I need all branches in an `if` to have the same type!
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Tip: The suffix indicates this integer is a I64, whose minimum value
-                is -9223372036854775808.
+                is -9_223_372_036_854_775_808.
                 "#
             ),
         )
@@ -7882,7 +7882,7 @@ I need all branches in an `if` to have the same type!
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Tip: The suffix indicates this integer is a I128, whose maximum value
-                is 170141183460469231731687303715884105727.
+                is 170_141_183_460_469_231_731_687_303_715_884_105_727.
                 "#
             ),
         )
