@@ -8,7 +8,7 @@ main = "Hello, World!"
 # todo: bikeshed "init" name more
 init : Rbt
 init =
-    Rbt.init { default: bundle }
+    Rbt.init bundle
 
 bundle : Job
 bundle =

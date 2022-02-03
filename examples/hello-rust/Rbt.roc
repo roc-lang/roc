@@ -8,7 +8,7 @@ Job : [ Job [Command] (List Job) ]
 job : [Command], List Job -> Job
 job = Job
 
-Rbt : [ Rbt { default : Job } ]
+Rbt : [ Rbt Job ]
 
-init : { default : Job } -> Rbt
-init = \rbt -> Rbt rbt
+init : Job -> Rbt
+init = \jobb -> Rbt jobb
