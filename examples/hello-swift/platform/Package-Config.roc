@@ -4,7 +4,6 @@ platform "examples/hello-swift"
     packages {}
     imports []
     provides [ mainForHost ]
-    effects fx.Unused {}
 
 mainForHost : Str
 mainForHost = main

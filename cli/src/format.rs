@@ -12,7 +12,7 @@ use roc_parse::ast::{
     TypeAnnotation, WhenBranch,
 };
 use roc_parse::header::{
-    AppHeader, Effects, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
+    AppHeader,  ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
     PackageEntry, PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
 use roc_parse::{
@@ -199,14 +199,6 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     packages: header.packages.remove_spaces(arena),
                     imports: header.imports.remove_spaces(arena),
                     provides: header.provides.remove_spaces(arena),
-                    effects: Effects {
-                        spaces_before_effects_keyword: &[],
-                        spaces_after_effects_keyword: &[],
-                        spaces_after_type_name: &[],
-                        effect_shortname: header.effects.effect_shortname.remove_spaces(arena),
-                        effect_type_name: header.effects.effect_type_name.remove_spaces(arena),
-                        entries: header.effects.entries.remove_spaces(arena),
-                    },
                     before_header: &[],
                     after_platform_keyword: &[],
                     before_requires: &[],

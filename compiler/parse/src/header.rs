@@ -193,7 +193,6 @@ pub struct PlatformHeader<'a> {
     pub packages: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
     pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     pub provides: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
-    pub effects: Effects<'a>,
 
     // Potential comments and newlines - these will typically all be empty.
     pub before_header: &'a [CommentOrNewline<'a>],
@@ -208,17 +207,6 @@ pub struct PlatformHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
     pub before_provides: &'a [CommentOrNewline<'a>],
     pub after_provides: &'a [CommentOrNewline<'a>],
-}
-
-/// e.g. fx.Effects
-#[derive(Clone, Debug, PartialEq)]
-pub struct Effects<'a> {
-    pub spaces_before_effects_keyword: &'a [CommentOrNewline<'a>],
-    pub spaces_after_effects_keyword: &'a [CommentOrNewline<'a>],
-    pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
-    pub effect_shortname: &'a str,
-    pub effect_type_name: &'a str,
-    pub entries: Collection<'a, Loc<Spaced<'a, TypedIdent<'a>>>>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]

@@ -13,7 +13,7 @@ use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
-use roc_module::ident::{Ident, ModuleName, QualifiedModuleName, TagName};
+use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, PackageQualified,
     Symbol,
@@ -23,7 +23,7 @@ use roc_mono::ir::{
     UpdateModeIds,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
-use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
+use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
@@ -35,7 +35,7 @@ use roc_solve::solve;
 use roc_target::TargetInfo;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types::{Alias, Type};
+use roc_types::types::Alias;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -161,37 +161,6 @@ impl<'a> Dependencies<'a> {
         }
 
         self.add_to_status(module_id, goal_phase);
-
-        output
-    }
-
-    pub fn add_effect_module(
-        &mut self,
-        module_id: ModuleId,
-        dependencies: &MutSet<ModuleId>,
-        goal_phase: Phase,
-    ) -> MutSet<(ModuleId, Phase)> {
-        // add dependencies for self
-        // phase i + 1 of a file always depends on phase i being completed
-        {
-            let mut i = 2;
-
-            // platform modules should only start at CanonicalizeAndConstrain
-            debug_assert!(PHASES[i] == Phase::CanonicalizeAndConstrain);
-            while PHASES[i] < goal_phase {
-                self.add_dependency_help(module_id, module_id, PHASES[i + 1], PHASES[i]);
-                i += 1;
-            }
-        }
-
-        self.add_to_status(module_id, goal_phase);
-
-        let mut output = MutSet::default();
-
-        // all the dependencies can be loaded
-        for dep in dependencies {
-            output.insert((*dep, Phase::LoadHeader));
-        }
 
         output
     }
@@ -780,12 +749,6 @@ enum Msg<'a> {
         constrained_module: ConstrainedModule,
         canonicalization_problems: Vec<roc_problem::can::Problem>,
         module_docs: Option<ModuleDocumentation>,
-    },
-    MadeEffectModule {
-        type_shortname: &'a str,
-        constrained_module: ConstrainedModule,
-        canonicalization_problems: Vec<roc_problem::can::Problem>,
-        module_docs: ModuleDocumentation,
     },
     SolvedTypes {
         module_id: ModuleId,
@@ -1854,57 +1817,6 @@ fn update<'a>(
 
             Ok(state)
         }
-        MadeEffectModule {
-            constrained_module,
-            canonicalization_problems,
-            module_docs,
-            type_shortname,
-        } => {
-            let module_id = constrained_module.module.module_id;
-
-            log!("made effect module for {:?}", module_id);
-            state
-                .module_cache
-                .can_problems
-                .insert(module_id, canonicalization_problems);
-
-            state
-                .module_cache
-                .documentation
-                .insert(module_id, module_docs);
-
-            state
-                .module_cache
-                .aliases
-                .insert(module_id, constrained_module.module.aliases.clone());
-
-            state
-                .module_cache
-                .constrained
-                .insert(module_id, constrained_module);
-
-            let mut work = state.dependencies.add_effect_module(
-                module_id,
-                &MutSet::default(),
-                state.goal_phase,
-            );
-
-            work.extend(state.dependencies.notify_package(type_shortname));
-
-            work.extend(state.dependencies.notify(module_id, Phase::LoadHeader));
-
-            work.extend(state.dependencies.notify(module_id, Phase::Parse));
-
-            work.extend(
-                state
-                    .dependencies
-                    .notify(module_id, Phase::CanonicalizeAndConstrain),
-            );
-
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
-
-            Ok(state)
-        }
         SolvedTypes {
             module_id,
             ident_ids,
@@ -2357,13 +2269,9 @@ fn load_pkg_config<'a>(
 
             // Insert the first entries for this module's timings
             let mut pkg_module_timing = ModuleTiming::new(module_start_time);
-            let mut effect_module_timing = ModuleTiming::new(module_start_time);
 
             pkg_module_timing.read_roc_file = file_io_duration;
             pkg_module_timing.parse_header = parse_header_duration;
-
-            effect_module_timing.read_roc_file = file_io_duration;
-            effect_module_timing.parse_header = parse_header_duration;
 
             match parsed {
                 Ok((ast::Module::Interface { header }, _parse_state)) => {
@@ -2387,23 +2295,13 @@ fn load_pkg_config<'a>(
                         filename,
                         parser_state,
                         module_ids.clone(),
-                        ident_ids_by_module.clone(),
+                        ident_ids_by_module,
                         &header,
                         pkg_module_timing,
                     )
                     .1;
 
-                    let effects_module_msg = fabricate_effects_module(
-                        arena,
-                        header.effects.effect_shortname,
-                        module_ids,
-                        ident_ids_by_module,
-                        header,
-                        effect_module_timing,
-                    )
-                    .1;
-
-                    Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
+                    Ok(pkg_config_module_msg)
                 }
                 Ok((ast::Module::Hosted { header }, _parse_state)) => {
                     Err(LoadingProblem::UnexpectedHeader(format!(
@@ -2680,14 +2578,13 @@ fn parse_header<'a>(
                 To::NewPackage(_package_name) => Ok((module_id, app_module_header_msg)),
             }
         }
-        Ok((ast::Module::Platform { header }, _parse_state)) => Ok(fabricate_effects_module(
-            arena,
-            "",
-            module_ids,
-            ident_ids_by_module,
-            header,
-            module_timing,
-        )),
+        Ok((ast::Module::Platform { header }, _parse_state)) => {
+            Err(LoadingProblem::UnexpectedHeader(format!(
+                "got an unexpected platform header\n{:?}",
+                header
+            )))
+        }
+
         Err(fail) => Err(LoadingProblem::ParsingFailed(
             fail.map_problem(SyntaxError::Header)
                 .into_file_error(filename),
@@ -3003,7 +2900,6 @@ fn send_header_two<'a>(
         HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
 
     // add standard imports
-    // TODO add Effect by default
     imported_modules.insert(app_module_id, Region::zero());
     deps_by_name.insert(
         PQModuleName::Unqualified(ModuleName::APP.into()),
@@ -3359,272 +3255,6 @@ fn fabricate_pkg_config_module<'a>(
         ident_ids_by_module,
         module_timing,
     )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn fabricate_effects_module<'a>(
-    arena: &'a Bump,
-    shorthand: &'a str,
-    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-    header: PlatformHeader<'a>,
-    module_timing: ModuleTiming,
-) -> (ModuleId, Msg<'a>) {
-    let num_exposes = header.provides.len() + 1;
-    let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
-
-    let effects = header.effects;
-
-    let module_id: ModuleId;
-
-    let effect_entries = unpack_exposes_entries(arena, effects.entries.items);
-    let name = effects.effect_type_name;
-    let declared_name: ModuleName = name.into();
-
-    let hardcoded_effect_symbols = {
-        let mut functions: Vec<_> = roc_can::effect_module::BUILTIN_EFFECT_FUNCTIONS
-            .iter()
-            .map(|x| x.0)
-            .collect();
-        functions.push(name);
-
-        functions
-    };
-
-    {
-        let mut module_ids = (*module_ids).lock();
-
-        for exposed in header.exposes.iter() {
-            let module_name = exposed.value.extract_spaces().item;
-
-            module_ids.get_or_insert(&PQModuleName::Qualified(
-                shorthand,
-                module_name.as_str().into(),
-            ));
-        }
-    }
-
-    let exposed_ident_ids = {
-        // Lock just long enough to perform the minimal operations necessary.
-        let mut module_ids = (*module_ids).lock();
-        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
-
-        let name = PQModuleName::Qualified(shorthand, declared_name);
-        module_id = module_ids.get_or_insert(&name);
-
-        // Ensure this module has an entry in the exposed_ident_ids map.
-        ident_ids_by_module
-            .entry(module_id)
-            .or_insert_with(IdentIds::default);
-
-        let ident_ids = ident_ids_by_module.get_mut(&module_id).unwrap();
-
-        // Generate IdentIds entries for all values this module exposes.
-        // This way, when we encounter them in Defs later, they already
-        // have an IdentIds entry.
-        //
-        // We must *not* add them to scope yet, or else the Defs will
-        // incorrectly think they're shadowing them!
-        for (loc_exposed, _) in effect_entries.iter() {
-            // Use get_or_insert here because the ident_ids may already
-            // created an IdentId for this, when it was imported exposed
-            // in a dependent module.
-            //
-            // For example, if module A has [ B.{ foo } ], then
-            // when we get here for B, `foo` will already have
-            // an IdentId. We must reuse that!
-            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.into());
-            let symbol = Symbol::new(module_id, ident_id);
-
-            exposed.push(symbol);
-        }
-
-        for hardcoded in hardcoded_effect_symbols {
-            // Use get_or_insert here because the ident_ids may already
-            // created an IdentId for this, when it was imported exposed
-            // in a dependent module.
-            //
-            // For example, if module A has [ B.{ foo } ], then
-            // when we get here for B, `foo` will already have
-            // an IdentId. We must reuse that!
-            let ident_id = ident_ids.get_or_insert(&hardcoded.into());
-            let symbol = Symbol::new(module_id, ident_id);
-
-            exposed.push(symbol);
-        }
-
-        if cfg!(debug_assertions) {
-            module_id.register_debug_idents(ident_ids);
-        }
-
-        ident_ids.clone()
-    };
-
-    // a platform module has no dependencies, hence empty
-    let dep_idents: MutMap<ModuleId, IdentIds> = IdentIds::exposed_builtins(0);
-
-    let mut var_store = VarStore::default();
-
-    let module_ids = { (*module_ids).lock().clone() }.into_module_ids();
-
-    let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
-    let mut can_env =
-        roc_can::env::Env::new(module_id, &dep_idents, &module_ids, exposed_ident_ids);
-
-    let effect_symbol = scope
-        .introduce(
-            name.into(),
-            &can_env.exposed_ident_ids,
-            &mut can_env.ident_ids,
-            Region::zero(),
-        )
-        .unwrap();
-
-    let effect_tag_name = TagName::Private(effect_symbol);
-
-    let mut aliases = MutMap::default();
-    let alias = {
-        let a_var = var_store.fresh();
-
-        let actual = roc_can::effect_module::build_effect_actual(
-            effect_tag_name,
-            Type::Variable(a_var),
-            &mut var_store,
-        );
-
-        scope.add_alias(
-            effect_symbol,
-            Region::zero(),
-            vec![Loc::at_zero(("a".into(), a_var))],
-            actual,
-        );
-
-        scope.lookup_alias(effect_symbol).unwrap().clone()
-    };
-
-    aliases.insert(effect_symbol, alias);
-
-    let mut declarations = Vec::new();
-
-    let exposed_symbols: MutSet<Symbol> = {
-        let mut exposed_symbols = MutSet::default();
-
-        {
-            for (ident, ann) in effect_entries {
-                let symbol = {
-                    scope
-                        .introduce(
-                            ident.value.into(),
-                            &can_env.exposed_ident_ids,
-                            &mut can_env.ident_ids,
-                            Region::zero(),
-                        )
-                        .unwrap()
-                };
-
-                let annotation = roc_can::annotation::canonicalize_annotation(
-                    &mut can_env,
-                    &mut scope,
-                    &ann.value,
-                    Region::zero(),
-                    &mut var_store,
-                );
-
-                let def = roc_can::effect_module::build_host_exposed_def(
-                    &mut can_env,
-                    &mut scope,
-                    symbol,
-                    ident.value,
-                    TagName::Private(effect_symbol),
-                    &mut var_store,
-                    annotation,
-                );
-                exposed_symbols.insert(symbol);
-
-                declarations.push(Declaration::Declare(def));
-            }
-        }
-
-        // define Effect.after, Effect.map etc.
-        roc_can::effect_module::build_effect_builtins(
-            &mut can_env,
-            &mut scope,
-            effect_symbol,
-            &mut var_store,
-            &mut exposed_symbols,
-            &mut declarations,
-        );
-
-        exposed_symbols
-    };
-
-    use roc_can::module::ModuleOutput;
-    let module_output = ModuleOutput {
-        aliases,
-        rigid_variables: MutMap::default(),
-        declarations,
-        exposed_imports: MutMap::default(),
-        lookups: Vec::new(),
-        problems: can_env.problems,
-        ident_ids: can_env.ident_ids,
-        references: MutSet::default(),
-        scope,
-    };
-
-    let constraint = constrain_module(&module_output.declarations, module_id);
-
-    let module = Module {
-        module_id,
-        exposed_imports: module_output.exposed_imports,
-        exposed_symbols,
-        references: module_output.references,
-        aliases: module_output.aliases,
-        rigid_variables: module_output.rigid_variables,
-    };
-
-    let imported_modules = MutMap::default();
-
-    // Should a effect module ever have a ModuleDocumentation?
-    let module_docs = ModuleDocumentation {
-        name: String::from(name),
-        entries: Vec::new(),
-        scope: module_output.scope,
-    };
-
-    let constrained_module = ConstrainedModule {
-        module,
-        declarations: module_output.declarations,
-        imported_modules,
-        var_store,
-        constraint,
-        ident_ids: module_output.ident_ids,
-        dep_idents,
-        module_timing,
-    };
-
-    (
-        module_id,
-        Msg::MadeEffectModule {
-            type_shortname: effects.effect_shortname,
-            constrained_module,
-            canonicalization_problems: module_output.problems,
-            module_docs,
-        },
-    )
-}
-
-fn unpack_exposes_entries<'a>(
-    arena: &'a Bump,
-    entries: &'a [Loc<Spaced<'a, TypedIdent<'a>>>],
-) -> bumpalo::collections::Vec<'a, (Loc<&'a str>, Loc<TypeAnnotation<'a>>)> {
-    use bumpalo::collections::Vec;
-
-    let iter = entries.iter().map(|entry| {
-        let entry: TypedIdent<'a> = entry.value.extract_spaces().item;
-        (entry.ident, entry.ann)
-    });
-
-    Vec::from_iter_in(iter, arena)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -71,7 +71,6 @@ pub enum EHeader<'a> {
     Imports(EImports, Position),
     Requires(ERequires<'a>, Position),
     Packages(EPackages<'a>, Position),
-    Effects(EEffects<'a>, Position),
     Generates(EGenerates, Position),
     GeneratesWith(EGeneratesWith, Position),
 
@@ -165,22 +164,6 @@ pub enum EPackageEntry<'a> {
     Colon(Position),
     IndentPackage(Position),
     Space(BadInputError, Position),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EEffects<'a> {
-    Space(BadInputError, Position),
-    Effects(Position),
-    Open(Position),
-    IndentEffects(Position),
-    ListStart(Position),
-    ListEnd(Position),
-    IndentListStart(Position),
-    IndentListEnd(Position),
-    TypedIdent(ETypedIdent<'a>, Position),
-    ShorthandDot(Position),
-    Shorthand(Position),
-    TypeName(Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

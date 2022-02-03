@@ -6132,12 +6132,6 @@ I need all branches in an `if` to have the same type!
                     packages {}
                     imports [Task]
                     provides [ mainForHost ]
-                    effects fx.Unused
-                        {
-                            putChar : I64 -> Effect {},
-                            putLine : Str -> Effect {},
-                            getLine : Effect Str
-                        }
                 "#
             ),
             indoc!(

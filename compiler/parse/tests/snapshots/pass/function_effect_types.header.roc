@@ -4,9 +4,3 @@ platform "examples/cli"
     packages {}
     imports [ Task.{ Task } ]
     provides [ mainForHost ]
-    effects fx.Unused
-        {
-            getLine : Effect Str,
-            putLine : Str -> Effect {},
-            twoArguments : Int, Int -> Effect {}
-        }

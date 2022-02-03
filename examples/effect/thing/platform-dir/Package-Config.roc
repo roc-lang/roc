@@ -4,7 +4,6 @@ platform "folkertdev/foo"
     packages {}
     imports [ pf.Effect ]
     provides [ mainForHost ]
-    effects fx.Unused {}
 
 mainForHost : Effect.Effect {} as Fx
 mainForHost = main
