@@ -35,6 +35,8 @@ members = [
     "reporting",
     "repl_cli",
     "repl_eval",
+    "repl_test",
+    "repl_wasm",
     "roc_std",
     "test_utils",
     "utils",
