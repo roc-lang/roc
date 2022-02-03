@@ -2657,7 +2657,7 @@ mod test_fmt {
             packages {} \
             imports [ Task.{ Task } ] \
             provides [ mainForHost ] \
-            effects fx.Effect \
+            effects fx.Unused \
             { \
                 putLine : Str -> Effect {}, \
                 putInt : I64 -> Effect {}, \

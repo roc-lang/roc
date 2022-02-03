@@ -4,7 +4,7 @@ platform "examples/multi-dep-thunk"
     packages {}
     imports []
     provides [ mainForHost ]
-    effects fx.Effect {}
+    effects fx.Unused {}
 
 mainForHost : Str
 mainForHost = main

@@ -4,7 +4,7 @@ platform "test/types"
     packages {}
     imports []
     provides [ mainForHost ]
-    effects fx.Effect {}
+    effects fx.Unused {}
 
 mainForHost : App Flags Model
 mainForHost = main

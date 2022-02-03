@@ -4,7 +4,7 @@ platform "examples/add"
     packages {}
     imports []
     provides [ mainForHost ]
-    effects fx.Effect {}
+    effects fx.Unused {}
 
 mainForHost : I64 -> I64
 mainForHost = \a -> main a
