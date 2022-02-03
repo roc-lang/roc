@@ -771,10 +771,12 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                 env.context.bool_type().const_int(*int as u64, false).into()
             }
             Layout::Builtin(Builtin::Int(int_width)) => {
-                int_with_precision(env, *int as i128, *int_width).into()
+                int_with_precision(env, *int, *int_width).into()
             }
             _ => panic!("Invalid layout for int literal = {:?}", layout),
         },
+
+        U128(int) => const_u128(env, *int).into(),
 
         Float(float) => match layout {
             Layout::Builtin(Builtin::Float(float_width)) => {
@@ -3061,6 +3063,19 @@ struct SwitchArgsIr<'a, 'ctx> {
 }
 
 fn const_i128<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, value: i128) -> IntValue<'ctx> {
+    // truncate the lower 64 bits
+    let value = value as u128;
+    let a = value as u64;
+
+    // get the upper 64 bits
+    let b = (value >> 64) as u64;
+
+    env.context
+        .i128_type()
+        .const_int_arbitrary_precision(&[a, b])
+}
+
+fn const_u128<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, value: u128) -> IntValue<'ctx> {
     // truncate the lower 64 bits
     let value = value as u128;
     let a = value as u64;

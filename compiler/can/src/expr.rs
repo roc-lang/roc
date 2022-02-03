@@ -3,8 +3,8 @@ use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
-    finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
-    int_expr_from_result, num_expr_from_result,
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
+    int_expr_from_result, num_expr_from_result, FloatWidth, IntWidth, NumWidth, NumericBound,
 };
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
@@ -20,7 +20,7 @@ use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::{char, u32};
 
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -47,16 +47,37 @@ impl Output {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum IntValue {
+    I128(i128),
+    U128(u128),
+}
+
+impl Display for IntValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntValue::I128(n) => Display::fmt(&n, f),
+            IntValue::U128(n) => Display::fmt(&n, f),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, Box<str>, i64),
+    Num(Variable, Box<str>, IntValue, NumericBound<NumWidth>),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, Variable, Box<str>, i128),
-    Float(Variable, Variable, Box<str>, f64),
+    Int(
+        Variable,
+        Variable,
+        Box<str>,
+        IntValue,
+        NumericBound<IntWidth>,
+    ),
+    Float(Variable, Variable, Box<str>, f64, NumericBound<FloatWidth>),
     Str(Box<str>),
     List {
         elem_var: Variable,
@@ -208,20 +229,20 @@ pub fn canonicalize_expr<'a>(
     use Expr::*;
 
     let (expr, output) = match expr {
-        ast::Expr::Num(str) => {
+        &ast::Expr::Num(str) => {
             let answer = num_expr_from_result(
                 var_store,
-                finish_parsing_int(*str).map(|int| (*str, int)),
+                finish_parsing_num(str).map(|result| (str, result)),
                 region,
                 env,
             );
 
             (answer, Output::default())
         }
-        ast::Expr::Float(str) => {
+        &ast::Expr::Float(str) => {
             let answer = float_expr_from_result(
                 var_store,
-                finish_parsing_float(str).map(|f| (*str, f)),
+                finish_parsing_float(str).map(|(f, bound)| (str, f, bound)),
                 region,
                 env,
             );
@@ -790,21 +811,21 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::NonBase10Int {
+        &ast::Expr::NonBase10Int {
             string,
             base,
             is_negative,
         } => {
             // the minus sign is added before parsing, to get correct overflow/underflow behavior
-            let answer = match finish_parsing_base(string, *base, *is_negative) {
-                Ok(int) => {
+            let answer = match finish_parsing_base(string, base, is_negative) {
+                Ok((int, bound)) => {
                     // Done in this kinda round about way with intermediate variables
                     // to keep borrowed values around and make this compile
                     let int_string = int.to_string();
                     let int_str = int_string.as_str();
-                    int_expr_from_result(var_store, Ok((int_str, int as i128)), region, *base, env)
+                    int_expr_from_result(var_store, Ok((int_str, int, bound)), region, base, env)
                 }
-                Err(e) => int_expr_from_result(var_store, Err(e), region, *base, env),
+                Err(e) => int_expr_from_result(var_store, Err(e), region, base, env),
             };
 
             (answer, Output::default())
@@ -1226,9 +1247,9 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
     match expr {
         // Num stores the `a` variable in `Num a`. Not the same as the variable
         // stored in Int and Float below, which is strictly for better error messages
-        other @ Num(_, _, _)
-        | other @ Int(_, _, _, _)
-        | other @ Float(_, _, _, _)
+        other @ Num(..)
+        | other @ Int(..)
+        | other @ Float(..)
         | other @ Str { .. }
         | other @ RuntimeError(_)
         | other @ EmptyRecord

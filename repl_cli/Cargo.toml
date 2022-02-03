@@ -8,18 +8,21 @@ version = "0.1.0"
 [dependencies]
 bumpalo = {version = "3.8.0", features = ["collections"]}
 const_format = "0.2.22"
+inkwell = {path = "../vendor/inkwell"}
+libloading = {version = "0.7.1"}
 rustyline = {git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1"}
 rustyline-derive = {git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1"}
 target-lexicon = "0.12.2"
 
+roc_build = {path = "../compiler/build"}
+roc_collections = {path = "../compiler/collections"}
+roc_gen_llvm = {path = "../compiler/gen_llvm"}
+roc_load = {path = "../compiler/load"}
 roc_mono = {path = "../compiler/mono"}
 roc_parse = {path = "../compiler/parse"}
 roc_repl_eval = {path = "../repl_eval"}
-
-[dev-dependencies]
-indoc = "1.0.3"
-roc_test_utils = {path = "../test_utils"}
-strip-ansi-escapes = "0.1.1"
+roc_target = {path = "../compiler/roc_target"}
+roc_types = {path = "../compiler/types"}
 
 [lib]
 name = "roc_repl_cli"
