@@ -1,6 +1,6 @@
 app "hello-rust"
     packages { pf: "platform" }
-    imports [ Rbt.{ Rbt, Tool, tool, systemTool, Job, job, exec } ]
+    imports [ Rbt.{ Rbt, Job, job, exec } ]
     provides [ main ] to pf
 
 main = "Hello, World!"
@@ -14,8 +14,6 @@ bundle : Job
 bundle =
     job
         {
-            command:
-                exec (systemTool "esbuild")
-                    [],
+            command: exec 0 1,
             inputs: [],
         }
