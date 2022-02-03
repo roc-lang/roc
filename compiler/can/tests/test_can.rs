@@ -79,7 +79,7 @@ mod test_can {
     fn int_too_large() {
         use roc_parse::ast::Base;
 
-        let string = (i64::MAX as i128 + 1).to_string();
+        let string = "340_282_366_920_938_463_463_374_607_431_768_211_456".to_string();
 
         assert_can(
             &string.clone(),
@@ -96,7 +96,7 @@ mod test_can {
     fn int_too_small() {
         use roc_parse::ast::Base;
 
-        let string = (i64::MIN as i128 - 1).to_string();
+        let string = "-170_141_183_460_469_231_731_687_303_715_884_105_729".to_string();
 
         assert_can(
             &string.clone(),
