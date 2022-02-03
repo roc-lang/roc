@@ -7,6 +7,9 @@ version = "0.1.0"
 name = "repl_test"
 path = "src/tests.rs"
 
+[build-dependencies]
+roc_cli = {path = "../cli"}
+
 [dev-dependencies]
 indoc = "1.0.3"
 roc_test_utils = {path = "../test_utils"}

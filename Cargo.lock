@@ -3209,6 +3209,7 @@ name = "repl_test"
 version = "0.1.0"
 dependencies = [
  "indoc",
+ "roc_cli",
  "roc_repl_cli",
  "roc_test_utils",
  "strip-ansi-escapes",
@@ -3700,8 +3701,6 @@ name = "roc_repl_eval"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "inkwell 0.1.0",
- "libloading 0.7.1",
  "roc_build",
  "roc_builtins",
  "roc_can",
@@ -3716,7 +3715,6 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
- "target-lexicon",
 ]
 
 [[package]]

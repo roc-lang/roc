@@ -1,16 +1,21 @@
+use std::env;
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Command, ExitStatus, Stdio};
+
 use roc_repl_cli::{INSTRUCTIONS, WELCOME_MESSAGE};
 use roc_test_utils::assert_multiline_str_eq;
 
 const ERROR_MESSAGE_START: char = '─';
 
 #[derive(Debug)]
-pub struct Out {
-    pub stdout: String,
-    pub stderr: String,
-    pub status: ExitStatus,
+struct Out {
+    stdout: String,
+    stderr: String,
+    status: ExitStatus,
 }
 
-pub fn path_to_roc_binary() -> PathBuf {
+fn path_to_roc_binary() -> PathBuf {
     // Adapted from https://github.com/volta-cli/volta/blob/cefdf7436a15af3ce3a38b8fe53bb0cfdb37d3dd/tests/acceptance/support/sandbox.rs#L680
     // by the Volta Contributors - license information can be found in
     // the LEGAL_DETAILS file in the root directory of this distribution.
@@ -118,7 +123,7 @@ fn repl_eval(input: &str) -> Out {
     }
 }
 
-fn expect_success(input: &str, expected: &str) {
+pub fn expect_success(input: &str, expected: &str) {
     let out = repl_eval(input);
 
     assert_multiline_str_eq!("", out.stderr.as_str());
@@ -126,7 +131,7 @@ fn expect_success(input: &str, expected: &str) {
     assert!(out.status.success());
 }
 
-fn expect_failure(input: &str, expected: &str) {
+pub fn expect_failure(input: &str, expected: &str) {
     let out = repl_eval(input);
 
     // there may be some other stuff printed (e.g. unification errors)

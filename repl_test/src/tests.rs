@@ -1,13 +1,9 @@
 use indoc::indoc;
-use std::env;
-use std::io::Write;
-use std::path::PathBuf;
-use std::process::{Command, ExitStatus, Stdio};
 
 mod cli;
 
 #[cfg(feature = "cli")]
-use cli::{expect_failure, expect_success};
+use crate::cli::{expect_failure, expect_success};
 
 #[test]
 fn literal_0() {
