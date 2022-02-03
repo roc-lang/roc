@@ -2,11 +2,11 @@ interface Rbt
   exposes [ Rbt, init, Job, job, Command, exec ]
   imports []
 
-Command : [ @Command { tool : U8 } ]
+Command : [ @Command {} ]
 
 exec : Command
 exec =
-    @Command { tool: 0 }
+    @Command {}
 
 Job : [ @Job { command : Command, inputs : List Job } ]
 
