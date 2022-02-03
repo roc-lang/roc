@@ -192,7 +192,7 @@ fn create_llvm_module<'a>(
     for function in FunctionIterator::from_module(module) {
         let name = function.get_name().to_str().unwrap();
         if name.starts_with("roc_builtins") {
-            if name.starts_with("roc_builtins.utils") {
+            if name.starts_with("roc_builtins.expect") {
                 function.set_linkage(Linkage::External);
             } else {
                 function.set_linkage(Linkage::Internal);
