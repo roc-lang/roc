@@ -4,9 +4,9 @@ interface Rbt
 
 Command : [ @Command { tool : U8, args : U8 } ]
 
-exec : U8, U8 -> Command
-exec = \execTool, args ->
-    @Command { tool: execTool, args }
+exec : Command
+exec =
+    @Command { tool: 0, args: 1 }
 
 Job : [ @Job { command : Command, inputs : List Job } ]
 
