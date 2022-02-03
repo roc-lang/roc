@@ -12,8 +12,4 @@ init =
 
 bundle : Job
 bundle =
-    job
-        {
-            command: Command,
-            inputs: [],
-        }
+    job Command []
