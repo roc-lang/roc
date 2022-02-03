@@ -4,11 +4,7 @@ platform "examples/cli"
     packages {}
     imports [ Task.{ Task } ]
     provides [ mainForHost ]
-    effects fx.Effect
-    {
-    putLine : Str -> Effect {},
-    getLine : Effect Str
-     }
+    effects fx.Unused {}
 
 mainForHost : Task {} [] as Fx
 mainForHost = main
