@@ -31,7 +31,7 @@ pub trait ReplApp {
         transform: F,
     ) -> Expr<'a>;
 
-    fn call_function_dynamic_size<'a, T: Sized, F: Fn(usize) -> T>(
+    fn call_function_dynamic_size<T: Sized, F: Fn(usize) -> T>(
         &self,
         main_fn_name: &str,
         ret_bytes: usize,

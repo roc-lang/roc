@@ -40,7 +40,7 @@ pub enum ToAstProblem {
 /// we get to a struct or tag, we know what the labels are and can turn them
 /// back into the appropriate user-facing literals.
 #[allow(clippy::too_many_arguments)]
-pub unsafe fn jit_to_ast<'a, A: ReplApp>(
+pub fn jit_to_ast<'a, A: ReplApp>(
     arena: &'a Bump,
     app: &'a A,
     main_fn_name: &str,
@@ -385,7 +385,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
             env.app.call_function_dynamic_size(
                 main_fn_name,
                 result_stack_size as usize,
-                |bytes_addr: usize| struct_addr_to_ast(bytes_addr),
+                struct_addr_to_ast,
             )
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {

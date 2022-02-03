@@ -27,9 +27,6 @@ use roc_repl_eval::ReplApp;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
-#[cfg(test)]
-mod tests;
-
 const BLUE: &str = "\u{001b}[36m";
 const PINK: &str = "\u{001b}[35m";
 const END_COL: &str = "\u{001b}[0m";
@@ -213,7 +210,7 @@ impl ReplApp for CliReplApp {
     }
 
     /// Run user code that returns a struct or union, whose size is provided as an argument
-    fn call_function_dynamic_size<'a, T: Sized, F: Fn(usize) -> T>(
+    fn call_function_dynamic_size<T: Sized, F: Fn(usize) -> T>(
         &self,
         main_fn_name: &str,
         bytes: usize,
@@ -380,19 +377,17 @@ fn gen_and_eval_llvm<'a>(
 
     let app = CliReplApp { lib };
 
-    let res_answer = unsafe {
-        jit_to_ast(
-            &arena,
-            &app,
-            main_fn_name,
-            main_fn_layout,
-            content,
-            &env.interns,
-            home,
-            &subs,
-            target_info,
-        )
-    };
+    let res_answer = jit_to_ast(
+        &arena,
+        &app,
+        main_fn_name,
+        main_fn_layout,
+        content,
+        &env.interns,
+        home,
+        &subs,
+        target_info,
+    );
 
     let formatted = format_answer(&arena, res_answer, expr_type_str);
     Ok(formatted)
