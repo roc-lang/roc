@@ -4,7 +4,8 @@ use roc_parse::ast::Expr;
 use roc_repl_eval::ReplApp;
 
 pub struct WasmReplApp<'a> {
-    bytes: &'a [u8],
+    module: &'a [u8],
+    copied_memory: &'a [u8],
 }
 
 macro_rules! deref_number {
@@ -12,7 +13,7 @@ macro_rules! deref_number {
         fn $name(&self, address: usize) -> $t {
             const N: usize = size_of::<$t>();
             let mut array = [0; N];
-            array.copy_from_slice(&self.bytes[address..][..N]);
+            array.copy_from_slice(&self.copied_memory[address..][..N]);
             <$t>::from_le_bytes(array)
         }
     };
@@ -20,7 +21,7 @@ macro_rules! deref_number {
 
 impl<'a> ReplApp for WasmReplApp<'a> {
     fn deref_bool(&self, address: usize) -> bool {
-        self.bytes[address] != 0
+        self.copied_memory[address] != 0
     }
 
     deref_number!(deref_u8, u8);
@@ -43,7 +44,7 @@ impl<'a> ReplApp for WasmReplApp<'a> {
     fn deref_str(&self, addr: usize) -> &str {
         let elems_addr = self.deref_usize(addr);
         let len = self.deref_usize(addr + size_of::<usize>());
-        let bytes = &self.bytes[elems_addr..][..len];
+        let bytes = &self.copied_memory[elems_addr..][..len];
         std::str::from_utf8(bytes).unwrap()
     }
 

@@ -1,6 +1,6 @@
 // wasm_bindgen's JS code expects our imported functions to be global
-window.webrepl_execute = webrepl_execute;
-window.webrepl_read_result = webrepl_read_result;
+window.js_create_and_run_app = js_create_and_run_app;
+window.js_copy_app_memory = js_copy_app_memory;
 import * as mock_repl from "./mock_repl.js";
 
 // ----------------------------------------------------------------------------
@@ -71,8 +71,8 @@ async function processInputQueue() {
 
 // Transform the app bytes into a Wasm module and execute it
 // Cache the result but don't send it to Rust yet, as it needs to allocate space first.
-// Then it will immediately call webrepl_read_result.
-async function webrepl_execute(app_bytes, app_memory_size_ptr) {
+// Then it will immediately call js_copy_app_memory.
+async function js_create_and_run_app(app_bytes, app_memory_size_ptr) {
   const { instance: app } = await WebAssembly.instantiate(app_bytes);
 
   const addr = app.exports.run();
@@ -88,7 +88,7 @@ async function webrepl_execute(app_bytes, app_memory_size_ptr) {
 }
 
 // Now that the Rust app has allocated space for the app's memory buffer, we can copy it
-function webrepl_read_result(buffer_alloc_addr) {
+function js_copy_app_memory(buffer_alloc_addr) {
   const { addr, buffer } = repl.result;
   const appMemory = new Uint8Array(buffer);
   const compilerMemory = new Uint8Array(repl.compiler.memory.buffer);
