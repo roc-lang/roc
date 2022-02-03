@@ -3409,15 +3409,15 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x = 9_223_372_036_854_775_807_000
+                x = 170_141_183_460_469_231_731_687_303_715_884_105_728_000
 
-                y = -9_223_372_036_854_775_807_000
+                y = -170_141_183_460_469_231_731_687_303_715_884_105_728_000
 
-                h = 0x8FFF_FFFF_FFFF_FFFF
-                l = -0x8FFF_FFFF_FFFF_FFFF
+                h = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                l = -0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
 
-                minlit = -9_223_372_036_854_775_808
-                maxlit =  9_223_372_036_854_775_807
+                minlit = -170_141_183_460_469_231_731_687_303_715_884_105_728
+                maxlit =  340_282_366_920_938_463_463_374_607_431_768_211_455
 
                 x + y + h + l + minlit + maxlit
                 "#
@@ -3428,11 +3428,11 @@ mod test_reporting {
 
                 This integer literal is too big:
 
-                1│  x = 9_223_372_036_854_775_807_000
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                1│  x = 170_141_183_460_469_231_731_687_303_715_884_105_728_000
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The largest number representable in Roc is the maximum U128 value,
+                340_282_366_920_938_463_463_374_607_431_768_211_455.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3440,11 +3440,11 @@ mod test_reporting {
 
                 This integer literal is too small:
 
-                3│  y = -9_223_372_036_854_775_807_000
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                3│  y = -170_141_183_460_469_231_731_687_303_715_884_105_728_000
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The smallest number representable in Roc is the minimum I128 value,
+                -170_141_183_460_469_231_731_687_303_715_884_105_728.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3452,11 +3452,11 @@ mod test_reporting {
 
                 This integer literal is too big:
 
-                5│  h = 0x8FFF_FFFF_FFFF_FFFF
-                        ^^^^^^^^^^^^^^^^^^^^^
+                5│  h = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The largest number representable in Roc is the maximum U128 value,
+                340_282_366_920_938_463_463_374_607_431_768_211_455.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3464,11 +3464,11 @@ mod test_reporting {
 
                 This integer literal is too small:
 
-                6│  l = -0x8FFF_FFFF_FFFF_FFFF
-                        ^^^^^^^^^^^^^^^^^^^^^^
+                6│  l = -0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The smallest number representable in Roc is the minimum I128 value,
+                -170_141_183_460_469_231_731_687_303_715_884_105_728.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -7523,6 +7523,366 @@ I need all branches in an `if` to have the same type!
 
                 1│  1.0u8
                     ^^^^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u8_overflow() {
+        report_problem_as(
+            "256u8",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  256u8
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U8, whose maximum value is
+                255.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u8() {
+        report_problem_as(
+            "-1u8",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u8
+                    ^^^^
+
+                Tip: The suffix indicates this integer is a U8, whose minimum value is
+                0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u16_overflow() {
+        report_problem_as(
+            "65536u16",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  65536u16
+                    ^^^^^^^^
+
+                Tip: The suffix indicates this integer is a U16, whose maximum value
+                is 65535.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u16() {
+        report_problem_as(
+            "-1u16",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u16
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U16, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u32_overflow() {
+        report_problem_as(
+            "4_294_967_296u32",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  4_294_967_296u32
+                    ^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a U32, whose maximum value
+                is 4294967295.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u32() {
+        report_problem_as(
+            "-1u32",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u32
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U32, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u64_overflow() {
+        report_problem_as(
+            "18_446_744_073_709_551_616u64",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  18_446_744_073_709_551_616u64
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a U64, whose maximum value
+                is 18446744073709551615.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u64() {
+        report_problem_as(
+            "-1u64",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u64
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U64, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u128() {
+        report_problem_as(
+            "-1u128",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u128
+                    ^^^^^^
+
+                Tip: The suffix indicates this integer is a U128, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i8_overflow() {
+        report_problem_as(
+            "128i8",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  128i8
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a I8, whose maximum value is
+                127.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i8_underflow() {
+        report_problem_as(
+            "-129i8",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -129i8
+                    ^^^^^^
+
+                Tip: The suffix indicates this integer is a I8, whose minimum value is
+                -128.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i16_overflow() {
+        report_problem_as(
+            "32768i16",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  32768i16
+                    ^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I16, whose maximum value
+                is 32767.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i16_underflow() {
+        report_problem_as(
+            "-32769i16",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -32769i16
+                    ^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I16, whose minimum value
+                is -32768.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i32_overflow() {
+        report_problem_as(
+            "2_147_483_648i32",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  2_147_483_648i32
+                    ^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I32, whose maximum value
+                is 2147483647.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i32_underflow() {
+        report_problem_as(
+            "-2_147_483_649i32",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -2_147_483_649i32
+                    ^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I32, whose minimum value
+                is -2147483648.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i64_overflow() {
+        report_problem_as(
+            "9_223_372_036_854_775_808i64",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  9_223_372_036_854_775_808i64
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I64, whose maximum value
+                is 9223372036854775807.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i64_underflow() {
+        report_problem_as(
+            "-9_223_372_036_854_775_809i64",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -9_223_372_036_854_775_809i64
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I64, whose minimum value
+                is -9223372036854775808.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i128_overflow() {
+        report_problem_as(
+            "170_141_183_460_469_231_731_687_303_715_884_105_728i128",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  170_141_183_460_469_231_731_687_303_715_884_105_728i128
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I128, whose maximum value
+                is 170141183460469231731687303715884105727.
                 "#
             ),
         )

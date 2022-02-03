@@ -15,7 +15,7 @@ mod test_can {
     use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
-    use roc_can::expr::{ClosureData, Recursive};
+    use roc_can::expr::{ClosureData, IntValue, Recursive};
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::{Position, Region};
     use std::{f64, i64};
@@ -47,7 +47,7 @@ mod test_can {
 
         match actual_out.loc_expr.value {
             Expr::Int(_, _, _, actual, _) => {
-                assert_eq!(expected, actual);
+                assert_eq!(IntValue::I128(expected), actual);
             }
             actual => {
                 panic!("Expected an Int *, but got: {:?}", actual);
@@ -55,13 +55,13 @@ mod test_can {
         }
     }
 
-    fn assert_can_num(input: &str, expected: i64) {
+    fn assert_can_num(input: &str, expected: i128) {
         let arena = Bump::new();
         let actual_out = can_expr_with(&arena, test_home(), input);
 
         match actual_out.loc_expr.value {
             Expr::Num(_, _, actual, _) => {
-                assert_eq!(expected, actual);
+                assert_eq!(IntValue::I128(expected), actual);
             }
             actual => {
                 panic!("Expected a Num, but got: {:?}", actual);
@@ -186,12 +186,12 @@ mod test_can {
 
     #[test]
     fn num_max() {
-        assert_can_num(&(i64::MAX.to_string()), i64::MAX);
+        assert_can_num(&(i64::MAX.to_string()), i64::MAX.into());
     }
 
     #[test]
     fn num_min() {
-        assert_can_num(&(i64::MIN.to_string()), i64::MIN);
+        assert_can_num(&(i64::MIN.to_string()), i64::MIN.into());
     }
 
     #[test]

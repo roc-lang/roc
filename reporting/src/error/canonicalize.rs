@@ -26,6 +26,8 @@ const VALUE_NOT_EXPOSED: &str = "NOT EXPOSED";
 const MODULE_NOT_IMPORTED: &str = "MODULE NOT IMPORTED";
 const NESTED_DATATYPE: &str = "NESTED DATATYPE";
 const CONFLICTING_NUMBER_SUFFIX: &str = "CONFLICTING NUMBER SUFFIX";
+const NUMBER_OVERFLOWS_SUFFIX: &str = "NUMBER OVERFLOWS SUFFIX";
+const NUMBER_UNDERFLOWS_SUFFIX: &str = "NUMBER UNDERFLOWS SUFFIX";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -1136,10 +1138,20 @@ fn pretty_runtime_error<'b>(
         }
         RuntimeError::InvalidInt(error_kind @ IntErrorKind::Underflow, _base, region, _raw_str)
         | RuntimeError::InvalidInt(error_kind @ IntErrorKind::Overflow, _base, region, _raw_str) => {
-            let big_or_small = if let IntErrorKind::Underflow = error_kind {
-                "small"
+            let (big_or_small, info) = if let IntErrorKind::Underflow = error_kind {
+                (
+                    "small",
+                    alloc.reflow(
+                        "The smallest number representable in Roc is the minimum I128 value, -170_141_183_460_469_231_731_687_303_715_884_105_728.",
+                    ),
+                )
             } else {
-                "big"
+                (
+                    "big",
+                    alloc.reflow(
+                        "The largest number representable in Roc is the maximum U128 value, 340_282_366_920_938_463_463_374_607_431_768_211_455.",
+                    ),
+                )
             };
 
             let tip = alloc
@@ -1153,7 +1165,7 @@ fn pretty_runtime_error<'b>(
                     alloc.reflow(":"),
                 ]),
                 alloc.region(lines.convert_region(region)),
-                alloc.reflow("Roc uses signed 64-bit integers, allowing values between −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807."),
+                info,
                 tip,
             ]);
 
@@ -1168,6 +1180,54 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = CONFLICTING_NUMBER_SUFFIX;
+        }
+        RuntimeError::InvalidInt(
+            IntErrorKind::OverflowsSuffix {
+                suffix_type,
+                max_value,
+            },
+            _base,
+            region,
+            _raw_str,
+        ) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This integer literal overflows the type indicated by its suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+                alloc.tip().append(alloc.concat(vec![
+                    alloc.reflow("The suffix indicates this integer is a "),
+                    alloc.type_str(suffix_type),
+                    alloc.reflow(", whose maximum value is "),
+                    alloc.text(format!("{}.", max_value)),
+                ])),
+            ]);
+
+            title = NUMBER_OVERFLOWS_SUFFIX;
+        }
+        RuntimeError::InvalidInt(
+            IntErrorKind::UnderflowsSuffix {
+                suffix_type,
+                min_value,
+            },
+            _base,
+            region,
+            _raw_str,
+        ) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This integer literal underflows the type indicated by its suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+                alloc.tip().append(alloc.concat(vec![
+                    alloc.reflow("The suffix indicates this integer is a "),
+                    alloc.type_str(suffix_type),
+                    alloc.reflow(", whose minimum value is "),
+                    alloc.text(format!("{}.", min_value)),
+                ])),
+            ]);
+
+            title = NUMBER_UNDERFLOWS_SUFFIX;
         }
         RuntimeError::InvalidOptionalValue {
             field_name,

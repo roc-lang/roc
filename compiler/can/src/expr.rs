@@ -20,7 +20,7 @@ use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::{char, u32};
 
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -47,15 +47,36 @@ impl Output {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum IntValue {
+    I128(i128),
+    U128(u128),
+}
+
+impl Display for IntValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntValue::I128(n) => Display::fmt(&n, f),
+            IntValue::U128(n) => Display::fmt(&n, f),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, Box<str>, i64, NumericBound<NumWidth>),
+    Num(Variable, Box<str>, IntValue, NumericBound<NumWidth>),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, Variable, Box<str>, i128, NumericBound<IntWidth>),
+    Int(
+        Variable,
+        Variable,
+        Box<str>,
+        IntValue,
+        NumericBound<IntWidth>,
+    ),
     Float(Variable, Variable, Box<str>, f64, NumericBound<FloatWidth>),
     Str(Box<str>),
     List {
@@ -802,13 +823,7 @@ pub fn canonicalize_expr<'a>(
                     // to keep borrowed values around and make this compile
                     let int_string = int.to_string();
                     let int_str = int_string.as_str();
-                    int_expr_from_result(
-                        var_store,
-                        Ok((int_str, int as i128, bound)),
-                        region,
-                        base,
-                        env,
-                    )
+                    int_expr_from_result(var_store, Ok((int_str, int, bound)), region, base, env)
                 }
                 Err(e) => int_expr_from_result(var_store, Err(e), region, base, env),
             };

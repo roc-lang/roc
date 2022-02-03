@@ -1,5 +1,5 @@
 use crate::def::Def;
-use crate::expr::{self, ClosureData, Expr::*};
+use crate::expr::{self, ClosureData, Expr::*, IntValue};
 use crate::expr::{Expr, Field, Recursive};
 use crate::num::{FloatWidth, IntWidth, NumWidth, NumericBound};
 use crate::pattern::Pattern;
@@ -5197,7 +5197,7 @@ where
         num_var,
         precision_var,
         ii.to_string().into_boxed_str(),
-        ii,
+        IntValue::I128(ii),
         bound,
     )
 }
@@ -5219,6 +5219,12 @@ fn float(
 }
 
 #[inline(always)]
-fn num(num_var: Variable, i: i64, bound: NumericBound<NumWidth>) -> Expr {
-    Num(num_var, i.to_string().into_boxed_str(), i, bound)
+fn num<I: Into<i128>>(num_var: Variable, i: I, bound: NumericBound<NumWidth>) -> Expr {
+    let i = i.into();
+    Num(
+        num_var,
+        i.to_string().into_boxed_str(),
+        IntValue::I128(i),
+        bound,
+    )
 }
