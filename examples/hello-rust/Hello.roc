@@ -17,7 +17,5 @@ bundle =
             command:
                 exec (systemTool "esbuild")
                     [],
-            inputs: [ ],
-            inputFiles: [],
-            outputs: [],
+            inputs: [],
         }
