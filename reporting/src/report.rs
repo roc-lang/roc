@@ -639,7 +639,7 @@ impl<'a> RocDocAllocator<'a> {
     {
         let s = int.to_string();
 
-        let is_negative = s.starts_with("-");
+        let is_negative = s.starts_with('-');
 
         if s.len() < 7 + (is_negative as usize) {
             // If the number is not at least in the millions, return it as-is.
