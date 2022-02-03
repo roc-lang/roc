@@ -1,11 +1,11 @@
 use bumpalo::Bump;
-use roc_load::file::{LoadingProblem, MonomorphizedModule};
 use std::path::{Path, PathBuf};
 
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
+use roc_load::file::{LoadingProblem, MonomorphizedModule};
 use roc_parse::ast::Expr;
 use roc_region::all::LineInfo;
 use roc_target::TargetInfo;
