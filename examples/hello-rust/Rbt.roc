@@ -2,16 +2,10 @@ interface Rbt
   exposes [ Rbt, init, Job, job, Command, exec ]
   imports []
 
-Command : [ @Command ]
-
-exec : Command
-exec =
-    @Command
-
-Job : [ @Job { command : Command, inputs : List Job } ]
+Job : [ @Job { command : [Command], inputs : List Job } ]
 
 # TODO: these fields are all required until https://github.com/rtfeldman/roc/issues/1844 is fixed
-job : { command : Command, inputs : List Job } -> Job
+job : { command : [Command], inputs : List Job } -> Job
 job = \{ command, inputs } ->
     @Job { command, inputs }
 

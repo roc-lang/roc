@@ -14,6 +14,6 @@ bundle : Job
 bundle =
     job
         {
-            command: exec,
+            command: Command,
             inputs: [],
         }
