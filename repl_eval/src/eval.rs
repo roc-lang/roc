@@ -282,7 +282,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
 
             let result = match int_width {
                 U8 | I8 => {
-                    // NOTE: this is does not handle 8-bit numbers yet
+                    // NOTE: `helper!` does not handle 8-bit numbers yet
                     env.app
                         .call_function(main_fn_name, |num: u8| byte_to_ast(env, num, content))
                 }
