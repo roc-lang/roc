@@ -1,15 +1,13 @@
 use crate::ast::{Collection, CommentOrNewline, Def, Module, Spaced};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
-    package_entry, package_name, AppHeader, Effects, ExposedName, HostedHeader, ImportsEntry,
+    package_entry, package_name, AppHeader, ExposedName, HostedHeader, ImportsEntry,
     InterfaceHeader, ModuleName, PackageEntry, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
-use crate::ident::{
-    self, lowercase_ident, unqualified_ident, uppercase, uppercase_ident, UppercaseIdent,
-};
+use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, optional, specialize, specialize_region, word1, EEffects, EExposes, EGenerates,
+    backtrackable, optional, specialize, specialize_region, word1, EExposes, EGenerates,
     EGeneratesWith, EHeader, EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser,
     SourceError, SyntaxError,
 };
@@ -323,8 +321,6 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
         let (_, ((before_provides, after_provides), (provides, _provides_type)), state) =
             specialize(EHeader::Provides, provides_without_to()).parse(arena, state)?;
 
-        let (_, effects, state) = specialize(EHeader::Effects, effects()).parse(arena, state)?;
-
         let header = PlatformHeader {
             name,
             requires,
@@ -332,7 +328,6 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
             packages: packages.entries,
             imports,
             provides,
-            effects,
             before_header: &[] as &[_],
             after_platform_keyword,
             before_requires,
@@ -820,63 +815,6 @@ fn imports<'a>() -> impl Parser<
             Spaced::SpaceBefore
         )
     )
-}
-
-#[inline(always)]
-fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
-    move |arena, state| {
-        let min_indent = 1;
-
-        let (_, (spaces_before_effects_keyword, spaces_after_effects_keyword), state) =
-            spaces_around_keyword(
-                min_indent,
-                "effects",
-                EEffects::Effects,
-                EEffects::Space,
-                EEffects::IndentEffects,
-                EEffects::IndentListStart,
-            )
-            .parse(arena, state)?;
-
-        // e.g. `fx.`
-        let (_, type_shortname, state) = skip_second!(
-            specialize(|_, pos| EEffects::Shorthand(pos), lowercase_ident()),
-            word1(b'.', EEffects::ShorthandDot)
-        )
-        .parse(arena, state)?;
-
-        // the type name, e.g. Effects
-        let (_, (type_name, spaces_after_type_name), state) = and!(
-            specialize(|_, pos| EEffects::TypeName(pos), uppercase_ident()),
-            space0_e(min_indent, EEffects::Space, EEffects::IndentListStart)
-        )
-        .parse(arena, state)?;
-        let (_, entries, state) = collection_trailing_sep_e!(
-            word1(b'{', EEffects::ListStart),
-            specialize(EEffects::TypedIdent, loc!(typed_ident())),
-            word1(b',', EEffects::ListEnd),
-            word1(b'}', EEffects::ListEnd),
-            min_indent,
-            EEffects::Open,
-            EEffects::Space,
-            EEffects::IndentListEnd,
-            Spaced::SpaceBefore
-        )
-        .parse(arena, state)?;
-
-        Ok((
-            MadeProgress,
-            Effects {
-                spaces_before_effects_keyword,
-                spaces_after_effects_keyword,
-                spaces_after_type_name,
-                effect_shortname: type_shortname,
-                effect_type_name: type_name,
-                entries,
-            },
-            state,
-        ))
-    }
 }
 
 #[inline(always)]

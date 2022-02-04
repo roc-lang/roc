@@ -2656,13 +2656,7 @@ mod test_fmt {
             exposes [] \
             packages {} \
             imports [ Task.{ Task } ] \
-            provides [ mainForHost ] \
-            effects fx.Effect \
-            { \
-                putLine : Str -> Effect {}, \
-                putInt : I64 -> Effect {}, \
-                getInt : Effect { value : I64, errorCode : [ A, B ], isError : Bool } \
-            }",
+            provides [ mainForHost ]",
         );
     }
 

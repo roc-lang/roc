@@ -41,16 +41,6 @@ Platform {
                 "mainForHost",
             ),
         ],
-        effects: Effects {
-            spaces_before_effects_keyword: [
-                Newline,
-            ],
-            spaces_after_effects_keyword: [],
-            spaces_after_type_name: [],
-            effect_shortname: "fx",
-            effect_type_name: "Effect",
-            entries: [],
-        },
         before_header: [],
         after_platform_keyword: [],
         before_requires: [

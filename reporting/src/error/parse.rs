@@ -3009,8 +3009,6 @@ fn to_header_report<'a>(
             to_packages_report(alloc, lines, filename, packages, *pos)
         }
 
-        EHeader::Effects(effects, pos) => to_effects_report(alloc, lines, filename, effects, *pos),
-
         EHeader::IndentStart(pos) => {
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
@@ -3596,45 +3594,6 @@ fn to_packages_report<'a>(
         }
 
         EPackages::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
-
-        _ => todo!("unhandled parse error {:?}", parse_problem),
-    }
-}
-
-fn to_effects_report<'a>(
-    alloc: &'a RocDocAllocator<'a>,
-    lines: &LineInfo,
-    filename: PathBuf,
-    parse_problem: &roc_parse::parser::EEffects,
-    start: Position,
-) -> Report<'a> {
-    use roc_parse::parser::EEffects;
-
-    match *parse_problem {
-        EEffects::Effects(pos) => {
-            let surroundings = Region::new(start, pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-            let doc = alloc.stack(vec![
-                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat(vec![
-                    alloc.reflow("I am expecting the "),
-                    alloc.keyword("effects"),
-                    alloc.reflow(" keyword next, like "),
-                ]),
-                alloc.parser_suggestion("effects {}").indent(4),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "MISSING PACKAGES".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-
-        EEffects::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
