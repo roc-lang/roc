@@ -542,9 +542,6 @@ peg::parser!{
           / common_expr()
           // / access() // TODO prevent infinite loop
 
-      rule no_apply_expr() =
-          common_expr()
-
         pub rule closure() =
           [T::LambdaStart] args() [T::Arrow] closure_body()
 
@@ -614,6 +611,7 @@ peg::parser!{
 
         rule pattern() =
           [T::LowercaseIdent]
+          / tag()
           / [T::Underscore]
           / record_destructure()
 
@@ -798,37 +796,6 @@ peg::parser!{
             expr() {}
         }  // highest precedence
 
-        // TODO DRY?
-        rule no_apply_op_expr() = precedence!{ // lowest precedence
-          x:(@) _ [T::OpPizza] _ y:@ {}// |>
-          --
-          x:(@) _ [T::OpAnd] _ y:@ {}
-          x:(@) _ [T::OpOr] _ y:@ {}
-          --
-          x:(@) _ [T::OpEquals] _ y:@ {}
-          x:(@) _ [T::OpNotEquals] _ y:@ {}
-          x:(@) _ [T::OpLessThan] _ y:@ {}
-          x:(@) _ [T::OpGreaterThan] _ y:@ {}
-          x:(@) _ [T::OpLessThanOrEq] _ y:@ {}
-          x:(@) _ [T::OpGreaterThanOrEq] _ y:@ {}
-          --
-          x:(@) _ [T::OpPlus] _ y:@ {}
-          x:(@) _ [T::OpMinus] _ y:@ {}
-          --
-          x:(@) _ [T::Asterisk] _ y:@ {}
-          x:(@) _ [T::OpSlash] _ y:@ {}
-          x:(@) _ [T::OpDoubleSlash] _ y:@ {}
-          x:(@) _ [T::OpPercent] _ y:@ {}
-          x:(@) _ [T::OpDoublePercent] _ y:@ {}
-          --
-          x:@ _ [T::OpCaret] _ y:(@) {} // ^
-          --
-          [T::OpMinus] x:@ {}
-          [T::Bang] x:@ {} // !
-          --
-          no_apply_expr() {}
-      }  // highest precedence
-
         pub rule defs() =
           def() ([T::SameIndent]? def())* [T::SameIndent]? full_expr()
 
@@ -882,17 +849,15 @@ peg::parser!{
           module_name() [T::Dot] [T::LowercaseIdent]
 
         pub rule apply() =
-          apply_expr() apply_args()
+          pattern() apply_args()
 
         pub rule apply_args() =
-          [T::OpenIndent] op_expr() single_line_apply_args()? ([T::CloseIndent]/indented_end())
-          / no_apply_op_expr()+
+          [T::OpenIndent] pattern() single_line_apply_args()? ([T::CloseIndent]/indented_end())
+          / pattern()+
 
         rule single_line_apply_args() =
-          ([T::SameIndent] op_expr()) indented_end()
-          / ([T::OpenIndent] op_expr() indented_end())
-          / ([T::SameIndent] op_expr()) single_line_apply_args()*
-          / ([T::OpenIndent] op_expr() single_line_apply_args()* [T::CloseIndent])
+          [T::SameIndent] pattern() ( (single_line_apply_args()*) / indented_end() )
+          / ([T::OpenIndent] pattern() single_line_apply_args()* ([T::CloseIndent] / indented_end()))
 
         rule apply_expr() =
           var()
@@ -1331,7 +1296,7 @@ fn test_multi_defs() {
   assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
 
-// TODO fix slow execution; likely a problem with apply, adding ZeroIndent in module_defs rule might solve this
+// TODO fix slow execution; likely a problem with apply
 #[test]
 fn test_perf_issue() {
   let tokens = test_tokenize(r#"main =
@@ -1350,16 +1315,16 @@ RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), E
 
 Key k : Num k
 
-balance = \color, key, value, left, right ->
+balance = \color ->
   when right is
-      Node Red rK rV rLeft rRight ->
+      Node Red ->
           when left is
               _ ->
-                  Node color rK rV (Node Red key value left rLeft) rRight
+                  Node color rK rV (Node Red key value left)
 
       _ ->
           5"#);
-
+  dbg!(&tokens);
   assert_eq!(tokenparser::module_defs(&tokens), Ok(()));
 }
 
