@@ -689,6 +689,51 @@ fn solve(
                 }
             }
         }
+        EqBoundedRange(typ, expect_one_of, category, region) => {
+            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+
+            let mut it = expect_one_of.get_type_ref().iter().peekable();
+
+            while let Some(expected) = it.next() {
+                let expected = type_to_var(subs, rank, pools, cached_aliases, expected);
+                let snapshot = subs.snapshot();
+                match unify(subs, actual, expected, Mode::Eq) {
+                    Success(vars) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        return state;
+                    }
+                    Failure(..) if it.peek().is_some() => {
+                        subs.rollback_to(snapshot);
+
+                        continue;
+                    }
+                    Failure(vars, actual_type, expected_type) => {
+                        // This is the last type we could have tried and failed; record the error.
+                        introduce(subs, rank, pools, &vars);
+
+                        let problem = TypeError::BadExpr(
+                            *region,
+                            category.clone(),
+                            actual_type,
+                            expect_one_of.clone().replace(expected_type),
+                        );
+
+                        problems.push(problem);
+
+                        return state;
+                    }
+                    BadType(vars, problem) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        problems.push(TypeError::BadType(problem));
+
+                        return state;
+                    }
+                }
+            }
+            unreachable!()
+        }
     }
 }
 

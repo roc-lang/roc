@@ -862,9 +862,9 @@ mod test_reporting {
                 2│>      2 if 1 -> 0x0
                 3│       _ -> 0x1
 
-                Right now it’s a number of type:
+                Right now it’s an integer of type:
 
-                    Num a
+                    Int a
 
                 But I need every `if` guard condition to evaluate to a Bool—either
                 `True` or `False`.
@@ -896,7 +896,7 @@ mod test_reporting {
 
                 but the `then` branch has the type:
 
-                    Num a
+                    Int a
 
                 I need all branches in an `if` to have the same type!
                 "#
@@ -927,7 +927,7 @@ mod test_reporting {
 
                 But all the previous branches have type:
 
-                    Num a
+                    Int a
 
                 I need all branches in an `if` to have the same type!
                 "#
@@ -993,7 +993,7 @@ mod test_reporting {
 
                 However, the preceding elements in the list all have the type:
 
-                    Num a
+                    Int a
 
                 I need every element in a list to have the same type!
                 "#
@@ -1424,7 +1424,7 @@ mod test_reporting {
 
                 But the expression between `when` and `is` has the type:
 
-                    Num a
+                    Int a
                 "#
             ),
         )
@@ -1455,7 +1455,7 @@ mod test_reporting {
 
                 But all the previous branches match:
 
-                    Num a
+                    Int a
                 "#
             ),
         )
@@ -1485,7 +1485,7 @@ mod test_reporting {
 
                 But the expression between `when` and `is` has the type:
 
-                    { foo : Num a }
+                    { foo : Int a }
                 "#
             ),
         )
@@ -1605,13 +1605,13 @@ mod test_reporting {
                 2│      {} | 1 -> 3
                         ^^^^^^
 
-                The first pattern is trying to match numbers:
+                The first pattern is trying to match integers:
 
-                    Num a
+                    Int a
 
                 But the expression between `when` and `is` has the type:
 
-                    { foo : Num a }
+                    { foo : Int a }
                 "#
             ),
         )
@@ -1637,9 +1637,9 @@ mod test_reporting {
                 1│  (Foo x) = 42
                               ^^
 
-                It is a number of type:
+                It is an integer of type:
 
-                    Num a
+                    Int a
 
                 But you are trying to use it as:
 
@@ -2162,8 +2162,8 @@ mod test_reporting {
 
                 This is usually a typo. Here are the `x` fields that are most similar:
 
-                    { fo : Num b
-                    , bar : Num a
+                    { fo : Int b
+                    , bar : Int a
                     }
 
                 So maybe `.foo` should be `.fo`?
@@ -2229,10 +2229,10 @@ mod test_reporting {
 
                 This is usually a typo. Here are the `x` fields that are most similar:
 
-                    { fo : Num c
-                    , foobar : Num d
-                    , bar : Num a
-                    , baz : Num b
+                    { fo : Int c
+                    , foobar : Int d
+                    , bar : Int a
+                    , baz : Int b
                     , ...
                     }
 
@@ -2327,7 +2327,7 @@ mod test_reporting {
 
                 But `add` needs the 2nd argument to be:
 
-                    Num a
+                    Num (Integer a)
                 "#
             ),
         )
@@ -3360,8 +3360,8 @@ mod test_reporting {
 
                 This `ACons` global tag application has the type:
 
-                    [ ACons Num (Integer Signed64) [ BCons (Num a) [ ACons Str [ BNil
-                    ]b ]c ]d, ANil ]
+                    [ ACons Int Signed64 [ BCons (Int a) [ ACons Str [ BNil ]b ]c ]d,
+                    ANil ]
 
                 But the type annotation on `x` says it should be:
 
@@ -4973,7 +4973,7 @@ mod test_reporting {
 
                 This `insert` call produces:
 
-                    Dict Str (Num a)
+                    Dict Str (Int a)
 
                 But the type annotation on `myDict` says it should be:
 
@@ -5635,7 +5635,7 @@ mod test_reporting {
 
                 but the `then` branch has the type:
 
-                    Num a
+                    Int a
 
                 I need all branches in an `if` to have the same type!
                 "#
@@ -6276,7 +6276,7 @@ I need all branches in an `if` to have the same type!
 
                 This `map` call produces:
 
-                    List [ Foo Num a ]
+                    List [ Foo Int a ]
 
                 But the type annotation on `x` says it should be:
 
@@ -6526,11 +6526,11 @@ I need all branches in an `if` to have the same type!
 
                 This argument is an anonymous function of type:
 
-                    Num a -> Num a
+                    Num (Integer a) -> Num (Integer a)
 
                 But `map` needs the 2nd argument to be:
 
-                    Str -> Num a
+                    Str -> Num (Integer a)
             "#
             ),
         )
@@ -6632,6 +6632,21 @@ I need all branches in an `if` to have the same type!
                 But the type annotation on `mult` says it should be:
 
                     F64
+
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `mult` is not what I expect:
+
+                4│  mult 0 0
+                           ^
+
+                This argument is an integer of type:
+
+                    Int a
+
+                But `mult` needs the 2nd argument to be:
+
+                    F64
             "#
             ),
         )
@@ -6678,6 +6693,21 @@ I need all branches in an `if` to have the same type!
                     Num a
 
                 But the type annotation on `mult` says it should be:
+
+                    F64
+
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `mult` is not what I expect:
+
+                4│  mult 0 0
+                           ^
+
+                This argument is an integer of type:
+
+                    Int a
+
+                But `mult` needs the 2nd argument to be:
 
                     F64
             "#
@@ -7031,9 +7061,9 @@ I need all branches in an `if` to have the same type!
                 5│  f = \c -> c 6
                                 ^
 
-                This argument is a number of type:
+                This argument is an integer of type:
 
-                    Num a
+                    Int a
 
                 But `c` needs the 1st argument to be:
 
@@ -7041,7 +7071,7 @@ I need all branches in an `if` to have the same type!
 
                 Tip: The type annotation uses the type variable `a` to say that this
                 definition can produce any type of value. But in the body I see that
-                it will only produce a `Num` value of a single specific type. Maybe
+                it will only produce a `Int` value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
                 to be more general?
                 "#
@@ -7833,6 +7863,26 @@ I need all branches in an `if` to have the same type!
     fn i128_overflow() {
         report_problem_as(
             "170_141_183_460_469_231_731_687_303_715_884_105_728i128",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  170_141_183_460_469_231_731_687_303_715_884_105_728i128
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I128, whose maximum value
+                is 170_141_183_460_469_231_731_687_303_715_884_105_727.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_get_negative_number() {
+        report_problem_as(
+            "List.get [1, 2, 3] -1",
             indoc!(
                 r#"
                 ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────

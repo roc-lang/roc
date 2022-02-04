@@ -27,6 +27,14 @@ pub enum Constraint {
     Let(Box<LetConstraint>),
     And(Vec<Constraint>),
     Present(Type, PresenceConstraint),
+
+    /// `EqBoundedRange(Ts, U, ...)` means there must be at least one `T` in the *ordered* range `Ts`
+    /// that unifies (via `Eq`) with `U`.
+    ///
+    /// This is only used for integers, where we may see e.g. the number literal `-1` and know it
+    /// has the bounded range `[I8, I16, I32, I64, I128]`, at least one of which must unify with
+    /// the type the number literal is used as.
+    EqBoundedRange(Type, Expected<Vec<Type>>, Category, Region),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +95,7 @@ impl Constraint {
             }
             Constraint::And(cs) => cs.iter().any(|c| c.contains_save_the_environment()),
             Constraint::Present(_, _) => false,
+            Constraint::EqBoundedRange(_, _, _, _) => false,
         }
     }
 }
@@ -169,6 +178,12 @@ fn validate_help(constraint: &Constraint, declared: &Declared, accum: &mut Varia
                     subtract(declared, &typ.variables_detail(), accum);
                     subtract(declared, &expected.get_type_ref().variables_detail(), accum);
                 }
+            }
+        }
+        Constraint::EqBoundedRange(typ, one_of, _, _) => {
+            subtract(declared, &typ.variables_detail(), accum);
+            for typ in one_of.get_type_ref() {
+                subtract(declared, &typ.variables_detail(), accum);
             }
         }
     }

@@ -1,7 +1,7 @@
 use crate::env::Env;
 use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
 use crate::num::{
-    finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatWidth, IntWidth, NumWidth,
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatBound, IntBound,
     NumericBound, ParsedNumResult,
 };
 use crate::scope::Scope;
@@ -29,15 +29,9 @@ pub enum Pattern {
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
     },
-    NumLiteral(Variable, Box<str>, IntValue, NumericBound<NumWidth>),
-    IntLiteral(
-        Variable,
-        Variable,
-        Box<str>,
-        IntValue,
-        NumericBound<IntWidth>,
-    ),
-    FloatLiteral(Variable, Variable, Box<str>, f64, NumericBound<FloatWidth>),
+    NumLiteral(Variable, Box<str>, IntValue, NumericBound),
+    IntLiteral(Variable, Variable, Box<str>, IntValue, IntBound),
+    FloatLiteral(Variable, Variable, Box<str>, f64, FloatBound),
     StrLiteral(Box<str>),
     Underscore,
 
