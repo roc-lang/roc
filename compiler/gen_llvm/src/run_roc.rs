@@ -68,6 +68,22 @@ macro_rules! run_jit_function {
                 count: usize,
             }
 
+            impl Drop for Failures {
+                fn drop(&mut self) {
+                    use std::alloc::{dealloc, Layout};
+                    use std::mem;
+
+                    unsafe {
+                        let layout = Layout::from_size_align_unchecked(
+                            mem::size_of::<Failure>(),
+                            mem::align_of::<Failure>(),
+                        );
+
+                        dealloc(self.failures as *mut u8, layout);
+                    }
+                }
+            }
+
             let get_expect_failures: libloading::Symbol<unsafe extern "C" fn() -> Failures> = $lib
                 .get(bitcode::UTILS_GET_EXPECT_FAILURES.as_bytes())
                 .ok()
