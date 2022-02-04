@@ -41,7 +41,7 @@ pub enum ToAstProblem {
 #[allow(clippy::too_many_arguments)]
 pub fn jit_to_ast<'a, A: ReplApp>(
     arena: &'a Bump,
-    app: A,
+    app: &'a mut A,
     main_fn_name: &str,
     layout: ProcLayout<'a>,
     content: &'a Content,
@@ -180,7 +180,7 @@ fn get_tags_vars_and_variant<'a>(
 
 fn expr_of_tag<'a, A: ReplApp>(
     env: &Env<'a, 'a>,
-    app: &A,
+    app: &'a A,
     data_addr: usize,
     tag_name: &TagName,
     arg_layouts: &'a [Layout<'a>],
@@ -257,7 +257,7 @@ const OPAQUE_FUNCTION: Expr = Expr::Var {
 
 fn jit_to_ast_help<'a, A: ReplApp>(
     env: &Env<'a, 'a>,
-    mut app: A,
+    app: &'a mut A,
     main_fn_name: &str,
     layout: &Layout<'a>,
     content: &'a Content,
@@ -266,7 +266,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
     let content = unroll_aliases(env, content);
     let result = match layout {
         Layout::Builtin(Builtin::Bool) => Ok(app.call_function(main_fn_name, |num: bool| {
-            bool_to_ast(env, &app, num, content)
+            bool_to_ast(env, app, num, content)
         })),
         Layout::Builtin(Builtin::Int(int_width)) => {
             use IntWidth::*;
@@ -282,7 +282,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
             let result = match int_width {
                 U8 | I8 => {
                     // NOTE: `helper!` does not handle 8-bit numbers yet
-                    app.call_function(main_fn_name, |num: u8| byte_to_ast(env, &app, num, content))
+                    app.call_function(main_fn_name, |num: u8| byte_to_ast(env, app, num, content))
                 }
                 U16 => helper!(u16),
                 U32 => helper!(u32),
@@ -321,7 +321,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
             })),
         Layout::Builtin(Builtin::List(elem_layout)) => Ok(app
             .call_function(main_fn_name, |(addr, len): (usize, usize)| {
-                list_to_ast(env, &app, addr, len, elem_layout, content)
+                list_to_ast(env, app, addr, len, elem_layout, content)
             })),
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
@@ -329,11 +329,11 @@ fn jit_to_ast_help<'a, A: ReplApp>(
         Layout::Struct(field_layouts) => {
             let struct_addr_to_ast = |addr: usize| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
-                    Ok(struct_to_ast(env, &app, addr, field_layouts, *fields))
+                    Ok(struct_to_ast(env, app, addr, field_layouts, *fields))
                 }
                 Content::Structure(FlatType::EmptyRecord) => Ok(struct_to_ast(
                     env,
-                    &app,
+                    app,
                     addr,
                     field_layouts,
                     RecordFields::empty(),
@@ -345,7 +345,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
 
                     Ok(single_tag_union_to_ast(
                         env,
-                        &app,
+                        app,
                         addr,
                         field_layouts,
                         tag_name,
@@ -357,7 +357,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
 
                     Ok(single_tag_union_to_ast(
                         env,
-                        &app,
+                        app,
                         addr,
                         field_layouts,
                         tag_name,
@@ -391,7 +391,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
             let size = layout.stack_size(env.target_info);
             Ok(
                 app.call_function_dynamic_size(main_fn_name, size as usize, |addr: usize| {
-                    addr_to_ast(env, &app, addr, layout, WhenRecursive::Unreachable, content)
+                    addr_to_ast(env, app, addr, layout, WhenRecursive::Unreachable, content)
                 }),
             )
         }
@@ -404,7 +404,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
                 app.call_function_dynamic_size(main_fn_name, size as usize, |addr: usize| {
                     addr_to_ast(
                         env,
-                        &app,
+                        app,
                         addr,
                         layout,
                         WhenRecursive::Loop(*layout),
@@ -445,7 +445,7 @@ enum WhenRecursive<'a> {
 
 fn addr_to_ast<'a, A: ReplApp>(
     env: &Env<'a, 'a>,
-    app: &A,
+    app: &'a A,
     addr: usize,
     layout: &Layout<'a>,
     when_recursive: WhenRecursive<'a>,
@@ -715,7 +715,7 @@ fn addr_to_ast<'a, A: ReplApp>(
 
 fn list_to_ast<'a, A: ReplApp>(
     env: &Env<'a, 'a>,
-    app: &A,
+    app: &'a A,
     addr: usize,
     len: usize,
     elem_layout: &Layout<'a>,
@@ -766,7 +766,7 @@ fn list_to_ast<'a, A: ReplApp>(
 
 fn single_tag_union_to_ast<'a, A: ReplApp>(
     env: &Env<'a, 'a>,
-    app: &A,
+    app: &'a A,
     addr: usize,
     field_layouts: &'a [Layout<'a>],
     tag_name: &TagName,
@@ -793,7 +793,7 @@ fn single_tag_union_to_ast<'a, A: ReplApp>(
 
 fn sequence_of_expr<'a, I, A: ReplApp>(
     env: &Env<'a, 'a>,
-    app: &A,
+    app: &'a A,
     addr: usize,
     sequence: I,
     when_recursive: WhenRecursive<'a>,
@@ -825,7 +825,7 @@ where
 
 fn struct_to_ast<'a, A: ReplApp>(
     env: &Env<'a, 'a>,
-    app: &A,
+    app: &'a A,
     addr: usize,
     field_layouts: &'a [Layout<'a>],
     record_fields: RecordFields,
