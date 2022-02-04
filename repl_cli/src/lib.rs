@@ -1,7 +1,6 @@
 use bumpalo::Bump;
 use const_format::concatcp;
 use inkwell::context::Context;
-use inkwell::module::Linkage;
 use libloading::Library;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -11,7 +10,6 @@ use std::io;
 use target_lexicon::Triple;
 
 use roc_build::link::module_to_dylib;
-use roc_build::program::FunctionIterator;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
@@ -207,14 +205,6 @@ fn gen_and_eval_llvm<'a>(
     let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
         &target, &context, "",
     ));
-
-    // mark our zig-defined builtins as internal
-    for function in FunctionIterator::from_module(module) {
-        let name = function.get_name().to_str().unwrap();
-        if name.starts_with("roc_builtins") {
-            function.set_linkage(Linkage::Internal);
-        }
-    }
 
     debug_assert_eq!(exposed_to_host.values.len(), 1);
     let (main_fn_symbol, main_fn_var) = exposed_to_host.values.iter().next().unwrap();

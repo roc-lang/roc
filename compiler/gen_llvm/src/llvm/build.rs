@@ -5299,11 +5299,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     }
 }
 
-// TODO: Fix me! I should be different in tests vs. user code!
-fn expect_failed() {
-    panic!("An expectation failed!");
-}
-
 #[allow(clippy::too_many_arguments)]
 fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -5314,7 +5309,6 @@ fn run_low_level<'a, 'ctx, 'env>(
     op: LowLevel,
     args: &[Symbol],
     update_mode: UpdateMode,
-    // expect_failed: *const (),
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
 
@@ -6078,21 +6072,28 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                 match env.target_info.ptr_width() {
                     roc_target::PtrWidth::Bytes8 => {
-                        let fn_ptr_type = context
-                            .void_type()
-                            .fn_type(&[], false)
-                            .ptr_type(AddressSpace::Generic);
-                        let fn_addr = env
-                            .ptr_int()
-                            .const_int(expect_failed as *const () as u64, false);
-                        let func: PointerValue<'ctx> = bd.build_int_to_ptr(
-                            fn_addr,
-                            fn_ptr_type,
-                            "cast_expect_failed_addr_to_ptr",
-                        );
+                        let func = env
+                            .module
+                            .get_function(bitcode::UTILS_EXPECT_FAILED)
+                            .unwrap();
+                        // TODO get the actual line info instead of
+                        // hardcoding as zero!
                         let callable = CallableValue::try_from(func).unwrap();
+                        let start_line = context.i32_type().const_int(0, false);
+                        let end_line = context.i32_type().const_int(0, false);
+                        let start_col = context.i16_type().const_int(0, false);
+                        let end_col = context.i16_type().const_int(0, false);
 
-                        bd.build_call(callable, &[], "call_expect_failed");
+                        bd.build_call(
+                            callable,
+                            &[
+                                start_line.into(),
+                                end_line.into(),
+                                start_col.into(),
+                                end_col.into(),
+                            ],
+                            "call_expect_failed",
+                        );
 
                         bd.build_unconditional_branch(then_block);
                     }

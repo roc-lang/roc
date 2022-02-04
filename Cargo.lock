@@ -3683,6 +3683,7 @@ dependencies = [
  "inkwell 0.1.0",
  "libloading 0.7.1",
  "roc_build",
+ "roc_builtins",
  "roc_collections",
  "roc_gen_llvm",
  "roc_load",

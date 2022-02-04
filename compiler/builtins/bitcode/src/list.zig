@@ -550,7 +550,8 @@ pub fn listKeepResult(
         var output = RocList.allocate(alignment, list.len(), list.len() * after_width);
         const target_ptr = output.bytes orelse unreachable;
 
-        var temporary = @ptrCast([*]u8, utils.alloc(result_width, alignment));
+        // TODO handle alloc failing!
+        var temporary = utils.alloc(result_width, alignment) orelse unreachable;
 
         if (data_is_owned) {
             inc_n_data(data, size);
@@ -614,7 +615,8 @@ pub fn listWalk(
         inc_n_data(data, list.len());
     }
 
-    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment);
+    // TODO handle alloc failing!
+    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment) orelse unreachable;
     var b1 = output orelse unreachable;
     var b2 = bytes_ptr;
 
@@ -660,7 +662,8 @@ pub fn listWalkBackwards(
         inc_n_data(data, list.len());
     }
 
-    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment);
+    // TODO handle alloc failing!
+    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment) orelse unreachable;
     var b1 = output orelse unreachable;
     var b2 = bytes_ptr;
 
@@ -708,7 +711,8 @@ pub fn listWalkUntil(
         return;
     }
 
-    const bytes_ptr: [*]u8 = utils.alloc(continue_stop_width, alignment);
+    // TODO handle alloc failing!
+    const bytes_ptr: [*]u8 = utils.alloc(continue_stop_width, alignment) orelse unreachable;
 
     // NOTE: assumes data bytes are the first bytes in a tag
     @memcpy(bytes_ptr, accum orelse unreachable, accum_width);
