@@ -8,7 +8,7 @@ use crate::layout::{
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_can::expr::ClosureData;
+use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -1278,6 +1278,7 @@ impl ModifyRc {
 pub enum Literal<'a> {
     // Literals
     Int(i128),
+    U128(u128),
     Float(f64),
     Decimal(RocDec),
     Str(&'a str),
@@ -1524,6 +1525,7 @@ impl<'a> Literal<'a> {
 
         match self {
             Int(lit) => alloc.text(format!("{}i64", lit)),
+            U128(lit) => alloc.text(format!("{}u128", lit)),
             Float(lit) => alloc.text(format!("{}f64", lit)),
             // TODO: Add proper Dec.to_str
             Decimal(lit) => alloc.text(format!("{}Dec", lit.0)),
@@ -2020,7 +2022,7 @@ fn pattern_to_when<'a>(
             (symbol, Loc::at_zero(wrapped_body))
         }
 
-        IntLiteral(_, _, _) | NumLiteral(_, _, _) | FloatLiteral(_, _, _) | StrLiteral(_) => {
+        IntLiteral(..) | NumLiteral(..) | FloatLiteral(..) | StrLiteral(_) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -3009,14 +3011,17 @@ fn try_make_literal<'a>(
     use roc_can::expr::Expr::*;
 
     match can_expr {
-        Int(_, precision, _, int) => {
+        Int(_, precision, _, int, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *precision, false) {
-                IntOrFloat::Int(_) => Some(Literal::Int(*int)),
+                IntOrFloat::Int(_) => Some(match *int {
+                    IntValue::I128(n) => Literal::Int(n),
+                    IntValue::U128(n) => Literal::U128(n),
+                }),
                 _ => unreachable!("unexpected float precision for integer"),
             }
         }
 
-        Float(_, precision, float_str, float) => {
+        Float(_, precision, float_str, float, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *precision, true) {
                 IntOrFloat::Float(_) => Some(Literal::Float(*float)),
                 IntOrFloat::DecimalFloatType => {
@@ -3036,11 +3041,17 @@ fn try_make_literal<'a>(
 
         // TODO investigate lifetime trouble
         // Str(string) => Some(Literal::Str(env.arena.alloc(string))),
-        Num(var, num_str, num) => {
+        Num(var, num_str, num, _bound) => {
             // first figure out what kind of number this is
             match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
-                IntOrFloat::Int(_) => Some(Literal::Int((*num).into())),
-                IntOrFloat::Float(_) => Some(Literal::Float(*num as f64)),
+                IntOrFloat::Int(_) => Some(match *num {
+                    IntValue::I128(n) => Literal::Int(n),
+                    IntValue::U128(n) => Literal::U128(n),
+                }),
+                IntOrFloat::Float(_) => Some(match *num {
+                    IntValue::I128(n) => Literal::Float(n as f64),
+                    IntValue::U128(n) => Literal::Float(n as f64),
+                }),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
                         Some(d) => d,
@@ -3072,11 +3083,14 @@ pub fn with_hole<'a>(
     let arena = env.arena;
 
     match can_expr {
-        Int(_, precision, _, int) => {
+        Int(_, precision, _, int, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, precision, false) {
                 IntOrFloat::Int(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(int)),
+                    Expr::Literal(match int {
+                        IntValue::I128(n) => Literal::Int(n),
+                        IntValue::U128(n) => Literal::U128(n),
+                    }),
                     Layout::Builtin(Builtin::Int(precision)),
                     hole,
                 ),
@@ -3084,7 +3098,7 @@ pub fn with_hole<'a>(
             }
         }
 
-        Float(_, precision, float_str, float) => {
+        Float(_, precision, float_str, float, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, precision, true) {
                 IntOrFloat::Float(precision) => Stmt::Let(
                     assigned,
@@ -3115,18 +3129,24 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Num(var, num_str, num) => {
+        Num(var, num_str, num, _bound) => {
             // first figure out what kind of number this is
             match num_argument_to_int_or_float(env.subs, env.target_info, var, false) {
                 IntOrFloat::Int(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(num.into())),
+                    Expr::Literal(match num {
+                        IntValue::I128(n) => Literal::Int(n),
+                        IntValue::U128(n) => Literal::U128(n),
+                    }),
                     Layout::int_width(precision),
                     hole,
                 ),
                 IntOrFloat::Float(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Float(num as f64)),
+                    Expr::Literal(match num {
+                        IntValue::I128(n) => Literal::Float(n as f64),
+                        IntValue::U128(n) => Literal::Float(n as f64),
+                    }),
                     Layout::float_width(precision),
                     hole,
                 ),
@@ -6211,6 +6231,7 @@ fn store_pattern_help<'a>(
             return StorePattern::NotProductive(stmt);
         }
         IntLiteral(_, _)
+        | U128Literal(_)
         | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | EnumLiteral { .. }
@@ -7583,6 +7604,7 @@ fn call_specialized_proc<'a>(
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
+    U128Literal(u128),
     IntLiteral(i128, IntWidth),
     FloatLiteral(u64, FloatWidth),
     DecimalLiteral(RocDec),
@@ -7662,9 +7684,15 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        IntLiteral(var, _, int) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
-                IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*int as i128, precision)),
+        IntLiteral(_, precision_var, _, int, _bound) => {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, false) {
+                IntOrFloat::Int(precision) => {
+                    let int = match *int {
+                        IntValue::I128(n) => Pattern::IntLiteral(n, precision),
+                        IntValue::U128(n) => Pattern::U128Literal(n),
+                    };
+                    Ok(int)
+                }
                 other => {
                     panic!(
                         "Invalid precision for int pattern: {:?} has {:?}",
@@ -7673,11 +7701,11 @@ fn from_can_pattern_help<'a>(
                 }
             }
         }
-        FloatLiteral(var, float_str, float) => {
+        FloatLiteral(_, precision_var, float_str, float, _bound) => {
             // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
-            match num_argument_to_int_or_float(env.subs, env.target_info, *var, true) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, true) {
                 IntOrFloat::Int(_) => {
-                    panic!("Invalid precision for float pattern {:?}", var)
+                    panic!("Invalid precision for float pattern {:?}", precision_var)
                 }
                 IntOrFloat::Float(precision) => {
                     Ok(Pattern::FloatLiteral(f64::to_bits(*float), precision))
@@ -7704,10 +7732,20 @@ fn from_can_pattern_help<'a>(
             // TODO preserve malformed problem information here?
             Err(RuntimeError::UnsupportedPattern(*region))
         }
-        NumLiteral(var, num_str, num) => {
+        NumLiteral(var, num_str, num, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
-                IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*num as i128, precision)),
-                IntOrFloat::Float(precision) => Ok(Pattern::FloatLiteral(*num as u64, precision)),
+                IntOrFloat::Int(precision) => Ok(match num {
+                    IntValue::I128(num) => Pattern::IntLiteral(*num, precision),
+                    IntValue::U128(num) => Pattern::U128Literal(*num),
+                }),
+                IntOrFloat::Float(precision) => {
+                    // TODO: this may be lossy
+                    let num = match *num {
+                        IntValue::I128(n) => f64::to_bits(n as f64),
+                        IntValue::U128(n) => f64::to_bits(n as f64),
+                    };
+                    Ok(Pattern::FloatLiteral(num, precision))
+                }
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
                             Some(d) => d,

@@ -632,6 +632,39 @@ impl<'a> RocDocAllocator<'a> {
         self.text(format!("{}", ident.as_inline_str()))
             .annotate(Annotation::Symbol)
     }
+
+    pub fn int_literal<I>(&'a self, int: I) -> DocBuilder<'a, Self, Annotation>
+    where
+        I: ToString,
+    {
+        let s = int.to_string();
+
+        let is_negative = s.starts_with('-');
+
+        if s.len() < 7 + (is_negative as usize) {
+            // If the number is not at least in the millions, return it as-is.
+            return self.text(s);
+        }
+
+        // Otherwise, let's add numeric separators to make it easier to read.
+        let mut result = String::with_capacity(s.len() + s.len() / 3);
+        for (idx, c) in s
+            .get((is_negative as usize)..)
+            .unwrap()
+            .chars()
+            .rev()
+            .enumerate()
+        {
+            if idx != 0 && idx % 3 == 0 {
+                result.push('_');
+            }
+            result.push(c);
+        }
+        if is_negative {
+            result.push('-');
+        }
+        self.text(result.chars().rev().collect::<String>())
+    }
 }
 
 #[derive(Copy, Clone)]

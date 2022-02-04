@@ -182,6 +182,7 @@ mod test_parse {
         pass/newline_singleton_list.expr,
         pass/nonempty_platform_header.header,
         pass/not_docs.expr,
+        pass/number_literal_suffixes.expr,
         pass/one_backpassing.expr,
         pass/one_char_string.expr,
         pass/one_def.expr,

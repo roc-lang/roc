@@ -3205,6 +3205,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1382d1f0a252c4bf97dc20d979a2fdd05b024acd7c2ed0f7595d7817666a157"
 
 [[package]]
+name = "repl_test"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "roc_cli",
+ "roc_repl_cli",
+ "roc_test_utils",
+ "strip-ansi-escapes",
+]
+
+[[package]]
 name = "rkyv"
 version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3669,14 +3680,20 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "const_format",
- "indoc",
+ "inkwell 0.1.0",
+ "libloading 0.7.1",
+ "roc_build",
+ "roc_builtins",
+ "roc_collections",
+ "roc_gen_llvm",
+ "roc_load",
  "roc_mono",
  "roc_parse",
  "roc_repl_eval",
- "roc_test_utils",
+ "roc_target",
+ "roc_types",
  "rustyline",
  "rustyline-derive",
- "strip-ansi-escapes",
  "target-lexicon",
 ]
 
@@ -3685,14 +3702,10 @@ name = "roc_repl_eval"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "inkwell 0.1.0",
- "libloading 0.7.1",
- "roc_build",
  "roc_builtins",
  "roc_can",
  "roc_collections",
  "roc_fmt",
- "roc_gen_llvm",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3701,7 +3714,14 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
- "target-lexicon",
+]
+
+[[package]]
+name = "roc_repl_wasm"
+version = "0.1.0"
+dependencies = [
+ "roc_parse",
+ "roc_repl_eval",
 ]
 
 [[package]]

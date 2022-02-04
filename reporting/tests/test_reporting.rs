@@ -3409,15 +3409,15 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x = 9_223_372_036_854_775_807_000
+                x = 170_141_183_460_469_231_731_687_303_715_884_105_728_000
 
-                y = -9_223_372_036_854_775_807_000
+                y = -170_141_183_460_469_231_731_687_303_715_884_105_728_000
 
-                h = 0x8FFF_FFFF_FFFF_FFFF
-                l = -0x8FFF_FFFF_FFFF_FFFF
+                h = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                l = -0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
 
-                minlit = -9_223_372_036_854_775_808
-                maxlit =  9_223_372_036_854_775_807
+                minlit = -170_141_183_460_469_231_731_687_303_715_884_105_728
+                maxlit =  340_282_366_920_938_463_463_374_607_431_768_211_455
 
                 x + y + h + l + minlit + maxlit
                 "#
@@ -3428,11 +3428,11 @@ mod test_reporting {
 
                 This integer literal is too big:
 
-                1│  x = 9_223_372_036_854_775_807_000
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                1│  x = 170_141_183_460_469_231_731_687_303_715_884_105_728_000
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The largest number representable in Roc is the maximum U128 value,
+                340_282_366_920_938_463_463_374_607_431_768_211_455.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3440,11 +3440,11 @@ mod test_reporting {
 
                 This integer literal is too small:
 
-                3│  y = -9_223_372_036_854_775_807_000
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                3│  y = -170_141_183_460_469_231_731_687_303_715_884_105_728_000
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The smallest number representable in Roc is the minimum I128 value,
+                -170_141_183_460_469_231_731_687_303_715_884_105_728.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3452,11 +3452,11 @@ mod test_reporting {
 
                 This integer literal is too big:
 
-                5│  h = 0x8FFF_FFFF_FFFF_FFFF
-                        ^^^^^^^^^^^^^^^^^^^^^
+                5│  h = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The largest number representable in Roc is the maximum U128 value,
+                340_282_366_920_938_463_463_374_607_431_768_211_455.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3464,11 +3464,11 @@ mod test_reporting {
 
                 This integer literal is too small:
 
-                6│  l = -0x8FFF_FFFF_FFFF_FFFF
-                        ^^^^^^^^^^^^^^^^^^^^^^
+                6│  l = -0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The smallest number representable in Roc is the minimum I128 value,
+                -170_141_183_460_469_231_731_687_303_715_884_105_728.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -3546,7 +3546,8 @@ mod test_reporting {
                 1│  dec = 100A
                           ^^^^
 
-                Integer literals can only contain the digits 0-9.
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3558,7 +3559,7 @@ mod test_reporting {
                           ^^^^^
 
                 Hexadecimal (base-16) integer literals can only contain the digits
-                0-9, a-f and A-F.
+                0-9, a-f and A-F, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3569,7 +3570,8 @@ mod test_reporting {
                 5│  oct = 0o9
                           ^^^
 
-                Octal (base-8) integer literals can only contain the digits 0-7.
+                Octal (base-8) integer literals can only contain the digits
+                0-7, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3580,7 +3582,8 @@ mod test_reporting {
                 7│  bin = 0b2
                           ^^^
 
-                Binary (base-2) integer literals can only contain the digits 0 and 1.
+                Binary (base-2) integer literals can only contain the digits
+                0 and 1, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -3614,7 +3617,7 @@ mod test_reporting {
                           ^^
 
                 Hexadecimal (base-16) integer literals must contain at least one of
-                the digits 0-9, a-f and A-F.
+                the digits 0-9, a-f and A-F, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3626,7 +3629,7 @@ mod test_reporting {
                           ^^
 
                 Octal (base-8) integer literals must contain at least one of the
-                digits 0-7.
+                digits 0-7, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3638,7 +3641,7 @@ mod test_reporting {
                           ^^
 
                 Binary (base-2) integer literals must contain at least one of the
-                digits 0 and 1.
+                digits 0 and 1, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -3666,7 +3669,7 @@ mod test_reporting {
                         ^^^^
 
                 Floating point literals can only contain the digits 0-9, or use
-                scientific notation 10e4
+                scientific notation 10e4, or have a float suffix.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -5500,7 +5503,7 @@ mod test_reporting {
                     ^^^^^
 
                 Floating point literals can only contain the digits 0-9, or use
-                scientific notation 10e4
+                scientific notation 10e4, or have a float suffix.
 
                 Tip: Learn more about number literals at TODO
             "#
@@ -7300,6 +7303,586 @@ I need all branches in an `if` to have the same type!
                 Nested datatypes are not supported in Roc.
 
                 Hint: Consider rewriting the definition of `Nested` to use the recursive type with the same arguments.
+                "#
+            ),
+        )
+    }
+
+    macro_rules! mismatched_suffix_tests {
+        ($($number:expr, $suffix:expr, $name:ident)*) => {$(
+            #[test]
+            fn $name() {
+                let number = $number.to_string();
+                let mut typ = $suffix.to_string();
+                typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
+                let carets = "^".repeat(number.len() + $suffix.len());
+                let kind = match $suffix {
+                    "dec"|"f32"|"f64" => "a float",
+                    _ => "an integer",
+                };
+
+                report_problem_as(
+                    &format!(indoc!(
+                        r#"
+                        use : {} -> U8
+                        use {}{}
+                        "#
+                    ), bad_type, number, $suffix),
+                    &format!(indoc!(
+                        r#"
+                        ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                        The 1st argument to `use` is not what I expect:
+
+                        2│  use {}{}
+                                {}
+
+                        This argument is {} of type:
+
+                            {}
+
+                        But `use` needs the 1st argument to be:
+
+                            {}
+                        "#
+                    ), number, $suffix, carets, kind, typ, bad_type),
+                )
+            }
+        )*}
+    }
+
+    mismatched_suffix_tests! {
+        1, "u8",   mismatched_suffix_u8
+        1, "u16",  mismatched_suffix_u16
+        1, "u32",  mismatched_suffix_u32
+        1, "u64",  mismatched_suffix_u64
+        1, "u128", mismatched_suffix_u128
+        1, "i8",   mismatched_suffix_i8
+        1, "i16",  mismatched_suffix_i16
+        1, "i32",  mismatched_suffix_i32
+        1, "i64",  mismatched_suffix_i64
+        1, "i128", mismatched_suffix_i128
+        1, "nat",  mismatched_suffix_nat
+        1, "dec",  mismatched_suffix_dec
+        1, "f32",  mismatched_suffix_f32
+        1, "f64",  mismatched_suffix_f64
+    }
+
+    macro_rules! mismatched_suffix_tests_in_pattern {
+        ($($number:expr, $suffix:expr, $name:ident)*) => {$(
+            #[test]
+            fn $name() {
+                let number = $number.to_string();
+                let mut typ = $suffix.to_string();
+                typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                let bad_suffix = if $suffix == "u8" { "i8" } else { "u8" };
+                let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
+                let carets = "^".repeat(number.len() + $suffix.len());
+                let kind = match $suffix {
+                    "dec"|"f32"|"f64" => "floats",
+                    _ => "integers",
+                };
+
+                report_problem_as(
+                    &format!(indoc!(
+                        r#"
+                        when {}{} is
+                            {}{} -> 1
+                            _ -> 1
+                        "#
+                    ), number, bad_suffix, number, $suffix),
+                    &format!(indoc!(
+                        r#"
+                        ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                        The 1st pattern in this `when` is causing a mismatch:
+
+                        2│      {}{} -> 1
+                                {}
+
+                        The first pattern is trying to match {}:
+        
+                            {}
+        
+                        But the expression between `when` and `is` has the type:
+        
+                            {}
+                        "#
+                    ), number, $suffix, carets, kind, typ, bad_type),
+                )
+            }
+        )*}
+    }
+
+    mismatched_suffix_tests_in_pattern! {
+        1, "u8",   mismatched_suffix_u8_pattern
+        1, "u16",  mismatched_suffix_u16_pattern
+        1, "u32",  mismatched_suffix_u32_pattern
+        1, "u64",  mismatched_suffix_u64_pattern
+        1, "u128", mismatched_suffix_u128_pattern
+        1, "i8",   mismatched_suffix_i8_pattern
+        1, "i16",  mismatched_suffix_i16_pattern
+        1, "i32",  mismatched_suffix_i32_pattern
+        1, "i64",  mismatched_suffix_i64_pattern
+        1, "i128", mismatched_suffix_i128_pattern
+        1, "nat",  mismatched_suffix_nat_pattern
+        1, "dec",  mismatched_suffix_dec_pattern
+        1, "f32",  mismatched_suffix_f32_pattern
+        1, "f64",  mismatched_suffix_f64_pattern
+    }
+
+    #[test]
+    fn bad_numeric_literal_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1u256
+                "#
+            ),
+            // TODO: link to number suffixes
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This integer literal contains an invalid digit:
+
+                1│  1u256
+                    ^^^^^
+
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn numer_literal_multi_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1u8u8
+                "#
+            ),
+            // TODO: link to number suffixes
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This integer literal contains an invalid digit:
+
+                1│  1u8u8
+                    ^^^^^
+
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn int_literal_has_float_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                0b1f32
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CONFLICTING NUMBER SUFFIX ───────────────────────────────────────────────────
+
+                This number literal is an integer, but it has a float suffix:
+
+                1│  0b1f32
+                    ^^^^^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn float_literal_has_int_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1.0u8
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CONFLICTING NUMBER SUFFIX ───────────────────────────────────────────────────
+
+                This number literal is a float, but it has an integer suffix:
+
+                1│  1.0u8
+                    ^^^^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u8_overflow() {
+        report_problem_as(
+            "256u8",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  256u8
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U8, whose maximum value is
+                255.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u8() {
+        report_problem_as(
+            "-1u8",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u8
+                    ^^^^
+
+                Tip: The suffix indicates this integer is a U8, whose minimum value is
+                0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u16_overflow() {
+        report_problem_as(
+            "65536u16",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  65536u16
+                    ^^^^^^^^
+
+                Tip: The suffix indicates this integer is a U16, whose maximum value
+                is 65535.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u16() {
+        report_problem_as(
+            "-1u16",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u16
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U16, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u32_overflow() {
+        report_problem_as(
+            "4_294_967_296u32",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  4_294_967_296u32
+                    ^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a U32, whose maximum value
+                is 4_294_967_295.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u32() {
+        report_problem_as(
+            "-1u32",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u32
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U32, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u64_overflow() {
+        report_problem_as(
+            "18_446_744_073_709_551_616u64",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  18_446_744_073_709_551_616u64
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a U64, whose maximum value
+                is 18_446_744_073_709_551_615.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u64() {
+        report_problem_as(
+            "-1u64",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u64
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U64, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u128() {
+        report_problem_as(
+            "-1u128",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u128
+                    ^^^^^^
+
+                Tip: The suffix indicates this integer is a U128, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i8_overflow() {
+        report_problem_as(
+            "128i8",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  128i8
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a I8, whose maximum value is
+                127.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i8_underflow() {
+        report_problem_as(
+            "-129i8",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -129i8
+                    ^^^^^^
+
+                Tip: The suffix indicates this integer is a I8, whose minimum value is
+                -128.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i16_overflow() {
+        report_problem_as(
+            "32768i16",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  32768i16
+                    ^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I16, whose maximum value
+                is 32767.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i16_underflow() {
+        report_problem_as(
+            "-32769i16",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -32769i16
+                    ^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I16, whose minimum value
+                is -32768.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i32_overflow() {
+        report_problem_as(
+            "2_147_483_648i32",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  2_147_483_648i32
+                    ^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I32, whose maximum value
+                is 2_147_483_647.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i32_underflow() {
+        report_problem_as(
+            "-2_147_483_649i32",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -2_147_483_649i32
+                    ^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I32, whose minimum value
+                is -2_147_483_648.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i64_overflow() {
+        report_problem_as(
+            "9_223_372_036_854_775_808i64",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  9_223_372_036_854_775_808i64
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I64, whose maximum value
+                is 9_223_372_036_854_775_807.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i64_underflow() {
+        report_problem_as(
+            "-9_223_372_036_854_775_809i64",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -9_223_372_036_854_775_809i64
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I64, whose minimum value
+                is -9_223_372_036_854_775_808.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i128_overflow() {
+        report_problem_as(
+            "170_141_183_460_469_231_731_687_303_715_884_105_728i128",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  170_141_183_460_469_231_731_687_303_715_884_105_728i128
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I128, whose maximum value
+                is 170_141_183_460_469_231_731_687_303_715_884_105_727.
                 "#
             ),
         )
