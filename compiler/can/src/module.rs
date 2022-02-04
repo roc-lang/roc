@@ -242,32 +242,22 @@ where
     // symbols from this set
     let mut exposed_but_not_defined = exposed_symbols.clone();
 
-    let hosted_declarations = if let Some(effect_symbol) = effect_symbol {
-        let mut declarations = Vec::new();
-        let mut exposed_symbols = MutSet::default();
-
-        // NOTE this currently builds all functions, not just the ones that the user requested
-        crate::effect_module::build_effect_builtins(
-            &mut env,
-            &mut scope,
-            effect_symbol,
-            var_store,
-            &mut exposed_symbols,
-            &mut declarations,
-        );
-
-        declarations
-    } else {
-        Vec::new()
-    };
-
     match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(mut declarations), output) => {
             use crate::def::Declaration::*;
 
-            for x in hosted_declarations {
-                // TODO should this be `insert(0, x)`?
-                declarations.push(x);
+            if let Some(effect_symbol) = effect_symbol {
+                let mut exposed_symbols = MutSet::default();
+
+                // NOTE this currently builds all functions, not just the ones that the user requested
+                crate::effect_module::build_effect_builtins(
+                    &mut env,
+                    &mut scope,
+                    effect_symbol,
+                    var_store,
+                    &mut exposed_symbols,
+                    &mut declarations,
+                );
             }
 
             for decl in declarations.iter_mut() {
