@@ -1,5 +1,5 @@
 hosted Effect
-    exposes [ Effect, after, map, always, forever, loop, openFile, closeFile, withFileOpen, getFileLine, getFileBytes, putLine, putRaw, getChar ]
+    exposes [ Effect, after, map, always, forever, loop, openFile, closeFile, withFileOpen, getFileLine, getFileBytes, putLine, putRaw, getLine, getChar ]
     imports []
     generates Effect with [ after, map, always, forever, loop ]
 
@@ -17,6 +17,6 @@ putLine : Str -> Effect {}
 
 putRaw : Str -> Effect {}
 
-# getLine : Effect Str
+getLine : Effect Str
 
 getChar : Effect U8
