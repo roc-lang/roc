@@ -18,10 +18,9 @@ use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, Union
 
 use crate::ReplApp;
 
-struct Env<'a, 'env, A> {
+struct Env<'a, 'env> {
     arena: &'a Bump,
     subs: &'env Subs,
-    app: &'a A,
     target_info: TargetInfo,
     interns: &'env Interns,
     home: ModuleId,
@@ -42,7 +41,7 @@ pub enum ToAstProblem {
 #[allow(clippy::too_many_arguments)]
 pub fn jit_to_ast<'a, A: ReplApp>(
     arena: &'a Bump,
-    app: &'a A,
+    app: A,
     main_fn_name: &str,
     layout: ProcLayout<'a>,
     content: &'a Content,
@@ -54,7 +53,6 @@ pub fn jit_to_ast<'a, A: ReplApp>(
     let env = Env {
         arena,
         subs,
-        app,
         target_info,
         interns,
         home,
@@ -66,7 +64,7 @@ pub fn jit_to_ast<'a, A: ReplApp>(
             result,
         } => {
             // this is a thunk
-            jit_to_ast_help(&env, main_fn_name, &result, content)
+            jit_to_ast_help(&env, app, main_fn_name, &result, content)
         }
         _ => Err(ToAstProblem::FunctionLayout),
     }
@@ -86,8 +84,8 @@ enum NewtypeKind<'a> {
 ///
 /// The returned list of newtype containers is ordered by increasing depth. As an example,
 /// `A ({b : C 123})` will have the unrolled list `[Tag(A), RecordField(b), Tag(C)]`.
-fn unroll_newtypes<'a, A: ReplApp>(
-    env: &Env<'a, 'a, A>,
+fn unroll_newtypes<'a>(
+    env: &Env<'a, 'a>,
     mut content: &'a Content,
 ) -> (Vec<'a, NewtypeKind<'a>>, &'a Content) {
     let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
@@ -120,8 +118,8 @@ fn unroll_newtypes<'a, A: ReplApp>(
     }
 }
 
-fn apply_newtypes<'a, A: ReplApp>(
-    env: &Env<'a, '_, A>,
+fn apply_newtypes<'a>(
+    env: &Env<'a, '_>,
     newtype_containers: Vec<'a, NewtypeKind<'a>>,
     mut expr: Expr<'a>,
 ) -> Expr<'a> {
@@ -148,25 +146,22 @@ fn apply_newtypes<'a, A: ReplApp>(
     expr
 }
 
-fn unroll_aliases<'a, A: ReplApp>(env: &Env<'a, 'a, A>, mut content: &'a Content) -> &'a Content {
+fn unroll_aliases<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
     while let Content::Alias(_, _, real) = content {
         content = env.subs.get_content_without_compacting(*real);
     }
     content
 }
 
-fn unroll_recursion_var<'a, A: ReplApp>(
-    env: &Env<'a, 'a, A>,
-    mut content: &'a Content,
-) -> &'a Content {
+fn unroll_recursion_var<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
     while let Content::RecursionVar { structure, .. } = content {
         content = env.subs.get_content_without_compacting(*structure);
     }
     content
 }
 
-fn get_tags_vars_and_variant<'a, A: ReplApp>(
-    env: &Env<'a, '_, A>,
+fn get_tags_vars_and_variant<'a>(
+    env: &Env<'a, '_>,
     tags: &UnionTags,
     opt_rec_var: Option<Variable>,
 ) -> (MutMap<TagName, std::vec::Vec<Variable>>, UnionVariant<'a>) {
@@ -184,7 +179,8 @@ fn get_tags_vars_and_variant<'a, A: ReplApp>(
 }
 
 fn expr_of_tag<'a, A: ReplApp>(
-    env: &Env<'a, 'a, A>,
+    env: &Env<'a, 'a>,
+    app: &A,
     data_addr: usize,
     tag_name: &TagName,
     arg_layouts: &'a [Layout<'a>],
@@ -198,7 +194,7 @@ fn expr_of_tag<'a, A: ReplApp>(
 
     // NOTE assumes the data bytes are the first bytes
     let it = arg_vars.iter().copied().zip(arg_layouts.iter());
-    let output = sequence_of_expr(env, data_addr, it, when_recursive);
+    let output = sequence_of_expr(env, app, data_addr, it, when_recursive);
     let output = output.into_bump_slice();
 
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
@@ -207,7 +203,8 @@ fn expr_of_tag<'a, A: ReplApp>(
 /// Gets the tag ID of a union variant, assuming that the tag ID is stored alongside (after) the
 /// tag data. The caller is expected to check that the tag ID is indeed stored this way.
 fn tag_id_from_data<'a, A: ReplApp>(
-    env: &Env<'a, 'a, A>,
+    env: &Env<'a, 'a>,
+    app: &A,
     union_layout: UnionLayout,
     data_addr: usize,
 ) -> i64 {
@@ -217,13 +214,13 @@ fn tag_id_from_data<'a, A: ReplApp>(
     let tag_id_addr = data_addr + offset as usize;
 
     match union_layout.tag_id_builtin() {
-        Builtin::Bool => env.app.deref_bool(tag_id_addr) as i64,
-        Builtin::Int(IntWidth::U8) => env.app.deref_u8(tag_id_addr) as i64,
-        Builtin::Int(IntWidth::U16) => env.app.deref_u16(tag_id_addr) as i64,
+        Builtin::Bool => app.deref_bool(tag_id_addr) as i64,
+        Builtin::Int(IntWidth::U8) => app.deref_u8(tag_id_addr) as i64,
+        Builtin::Int(IntWidth::U16) => app.deref_u16(tag_id_addr) as i64,
         Builtin::Int(IntWidth::U64) => {
             // used by non-recursive unions at the
             // moment, remove if that is no longer the case
-            env.app.deref_i64(tag_id_addr)
+            app.deref_i64(tag_id_addr)
         }
         _ => unreachable!("invalid tag id layout"),
     }
@@ -234,12 +231,13 @@ fn tag_id_from_data<'a, A: ReplApp>(
 ///   - the tag ID
 ///   - the address of the data of the union variant, unmasked if the pointer held the tag ID
 fn tag_id_from_recursive_ptr<'a, A: ReplApp>(
-    env: &Env<'a, 'a, A>,
+    env: &Env<'a, 'a>,
+    app: &A,
     union_layout: UnionLayout,
     rec_addr: usize,
 ) -> (i64, usize) {
     let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.target_info);
-    let addr_with_id = env.app.deref_usize(rec_addr);
+    let addr_with_id = app.deref_usize(rec_addr);
 
     if tag_in_ptr {
         let (_, tag_id_mask) = UnionLayout::tag_id_pointer_bits_and_mask(env.target_info);
@@ -247,7 +245,7 @@ fn tag_id_from_recursive_ptr<'a, A: ReplApp>(
         let data_addr = addr_with_id & !tag_id_mask;
         (tag_id as i64, data_addr)
     } else {
-        let tag_id = tag_id_from_data(env, union_layout, addr_with_id);
+        let tag_id = tag_id_from_data(env, app, union_layout, addr_with_id);
         (tag_id, addr_with_id)
     }
 }
@@ -258,7 +256,8 @@ const OPAQUE_FUNCTION: Expr = Expr::Var {
 };
 
 fn jit_to_ast_help<'a, A: ReplApp>(
-    env: &Env<'a, 'a, A>,
+    env: &Env<'a, 'a>,
+    mut app: A,
     main_fn_name: &str,
     layout: &Layout<'a>,
     content: &'a Content,
@@ -266,15 +265,15 @@ fn jit_to_ast_help<'a, A: ReplApp>(
     let (newtype_containers, content) = unroll_newtypes(env, content);
     let content = unroll_aliases(env, content);
     let result = match layout {
-        Layout::Builtin(Builtin::Bool) => Ok(env
-            .app
-            .call_function(main_fn_name, |num: bool| bool_to_ast(env, num, content))),
+        Layout::Builtin(Builtin::Bool) => Ok(app.call_function(main_fn_name, |num: bool| {
+            bool_to_ast(env, &app, num, content)
+        })),
         Layout::Builtin(Builtin::Int(int_width)) => {
             use IntWidth::*;
 
             macro_rules! helper {
                 ($ty:ty) => {
-                    env.app.call_function(main_fn_name, |num: $ty| {
+                    app.call_function(main_fn_name, |num: $ty| {
                         num_to_ast(env, number_literal_to_ast(env.arena, num), content)
                     })
                 };
@@ -283,8 +282,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
             let result = match int_width {
                 U8 | I8 => {
                     // NOTE: `helper!` does not handle 8-bit numbers yet
-                    env.app
-                        .call_function(main_fn_name, |num: u8| byte_to_ast(env, num, content))
+                    app.call_function(main_fn_name, |num: u8| byte_to_ast(env, &app, num, content))
                 }
                 U16 => helper!(u16),
                 U32 => helper!(u32),
@@ -303,7 +301,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
 
             macro_rules! helper {
                 ($ty:ty) => {
-                    env.app.call_function(main_fn_name, |num: $ty| {
+                    app.call_function(main_fn_name, |num: $ty| {
                         num_to_ast(env, number_literal_to_ast(env.arena, num), content)
                     })
                 };
@@ -317,15 +315,13 @@ fn jit_to_ast_help<'a, A: ReplApp>(
 
             Ok(result)
         }
-        Layout::Builtin(Builtin::Str) => {
-            Ok(env.app.call_function(main_fn_name, |string: &'static str| {
+        Layout::Builtin(Builtin::Str) => Ok(app
+            .call_function(main_fn_name, |string: &'static str| {
                 str_to_ast(env.arena, env.arena.alloc(string))
-            }))
-        }
-        Layout::Builtin(Builtin::List(elem_layout)) => Ok(env
-            .app
+            })),
+        Layout::Builtin(Builtin::List(elem_layout)) => Ok(app
             .call_function(main_fn_name, |(addr, len): (usize, usize)| {
-                list_to_ast(env, addr, len, elem_layout, content)
+                list_to_ast(env, &app, addr, len, elem_layout, content)
             })),
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
@@ -333,10 +329,11 @@ fn jit_to_ast_help<'a, A: ReplApp>(
         Layout::Struct(field_layouts) => {
             let struct_addr_to_ast = |addr: usize| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
-                    Ok(struct_to_ast(env, addr, field_layouts, *fields))
+                    Ok(struct_to_ast(env, &app, addr, field_layouts, *fields))
                 }
                 Content::Structure(FlatType::EmptyRecord) => Ok(struct_to_ast(
                     env,
+                    &app,
                     addr,
                     field_layouts,
                     RecordFields::empty(),
@@ -348,6 +345,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
 
                     Ok(single_tag_union_to_ast(
                         env,
+                        &app,
                         addr,
                         field_layouts,
                         tag_name,
@@ -359,6 +357,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
 
                     Ok(single_tag_union_to_ast(
                         env,
+                        &app,
                         addr,
                         field_layouts,
                         tag_name,
@@ -382,7 +381,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
 
             let result_stack_size = layout.stack_size(env.target_info);
 
-            env.app.call_function_dynamic_size(
+            app.call_function_dynamic_size(
                 main_fn_name,
                 result_stack_size as usize,
                 struct_addr_to_ast,
@@ -390,22 +389,29 @@ fn jit_to_ast_help<'a, A: ReplApp>(
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
             let size = layout.stack_size(env.target_info);
-            Ok(env
-                .app
-                .call_function_dynamic_size(main_fn_name, size as usize, |addr: usize| {
-                    addr_to_ast(env, addr, layout, WhenRecursive::Unreachable, content)
-                }))
+            Ok(
+                app.call_function_dynamic_size(main_fn_name, size as usize, |addr: usize| {
+                    addr_to_ast(env, &app, addr, layout, WhenRecursive::Unreachable, content)
+                }),
+            )
         }
         Layout::Union(UnionLayout::Recursive(_))
         | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
             let size = layout.stack_size(env.target_info);
-            Ok(env
-                .app
-                .call_function_dynamic_size(main_fn_name, size as usize, |addr: usize| {
-                    addr_to_ast(env, addr, layout, WhenRecursive::Loop(*layout), content)
-                }))
+            Ok(
+                app.call_function_dynamic_size(main_fn_name, size as usize, |addr: usize| {
+                    addr_to_ast(
+                        env,
+                        &app,
+                        addr,
+                        layout,
+                        WhenRecursive::Loop(*layout),
+                        content,
+                    )
+                }),
+            )
         }
         Layout::RecursivePointer => {
             unreachable!("RecursivePointers can only be inside structures")
@@ -415,7 +421,7 @@ fn jit_to_ast_help<'a, A: ReplApp>(
     result.map(|e| apply_newtypes(env, newtype_containers, e))
 }
 
-fn tag_name_to_expr<'a, A: ReplApp>(env: &Env<'a, '_, A>, tag_name: &TagName) -> Expr<'a> {
+fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
     match tag_name {
         TagName::Global(_) => Expr::GlobalTag(
             env.arena
@@ -438,7 +444,8 @@ enum WhenRecursive<'a> {
 }
 
 fn addr_to_ast<'a, A: ReplApp>(
-    env: &Env<'a, 'a, A>,
+    env: &Env<'a, 'a>,
+    app: &A,
     addr: usize,
     layout: &Layout<'a>,
     when_recursive: WhenRecursive<'a>,
@@ -446,7 +453,7 @@ fn addr_to_ast<'a, A: ReplApp>(
 ) -> Expr<'a> {
     macro_rules! helper {
         ($method: ident, $ty: ty) => {{
-            let num: $ty = env.app.$method(addr);
+            let num: $ty = app.$method(addr);
 
             num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }};
@@ -460,9 +467,9 @@ fn addr_to_ast<'a, A: ReplApp>(
         (_, Layout::Builtin(Builtin::Bool)) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
-            let num: bool = env.app.deref_bool(addr);
+            let num: bool = app.deref_bool(addr);
 
-            bool_to_ast(env, num, content)
+            bool_to_ast(env, app, num, content)
         }
         (_, Layout::Builtin(Builtin::Int(int_width))) => {
             use IntWidth::*;
@@ -490,32 +497,32 @@ fn addr_to_ast<'a, A: ReplApp>(
             }
         }
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {
-            let elem_addr = env.app.deref_usize(addr);
-            let len = env.app.deref_usize(addr + env.target_info.ptr_width() as usize);
+            let elem_addr = app.deref_usize(addr);
+            let len = app.deref_usize(addr + env.target_info.ptr_width() as usize);
 
-            list_to_ast(env, elem_addr, len, elem_layout, content)
+            list_to_ast(env, app, elem_addr, len, elem_layout, content)
         }
         (_, Layout::Builtin(Builtin::Str)) => {
-            let arena_str = env.app.deref_str(addr);
+            let arena_str = app.deref_str(addr);
 
             str_to_ast(env.arena, arena_str)
         }
         (_, Layout::Struct(field_layouts)) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
-                struct_to_ast(env, addr, field_layouts, *fields)
+                struct_to_ast(env, app, addr, field_layouts, *fields)
             }
             Content::Structure(FlatType::TagUnion(tags, _)) => {
                 debug_assert_eq!(tags.len(), 1);
 
                 let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
-                single_tag_union_to_ast(env, addr, field_layouts, tag_name, payload_vars)
+                single_tag_union_to_ast(env, app, addr, field_layouts, tag_name, payload_vars)
             }
             Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
                 let tag_name = &env.subs[*tag_name];
-                single_tag_union_to_ast(env, addr, field_layouts, tag_name, &[])
+                single_tag_union_to_ast(env, app, addr, field_layouts, tag_name, &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
-                struct_to_ast(env, addr, &[], RecordFields::empty())
+                struct_to_ast(env, app, addr, &[], RecordFields::empty())
             }
             other => {
                 unreachable!(
@@ -531,7 +538,7 @@ fn addr_to_ast<'a, A: ReplApp>(
                     opt_name: _,
                 }, WhenRecursive::Loop(union_layout)) => {
                     let content = env.subs.get_content_without_compacting(*structure);
-                    addr_to_ast(env, addr, &union_layout, when_recursive, content)
+                    addr_to_ast(env, app, addr, &union_layout, when_recursive, content)
                 }
                 other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
             }
@@ -556,14 +563,14 @@ fn addr_to_ast<'a, A: ReplApp>(
             };
 
             // Because this is a `NonRecursive`, the tag ID is definitely after the data.
-            let tag_id = tag_id_from_data(env, union_layout, addr);
+            let tag_id = tag_id_from_data(env, app, union_layout, addr);
 
             // use the tag ID as an index, to get its name and layout of any arguments
             let (tag_name, arg_layouts) =
                 &tags_and_layouts[tag_id as usize];
 
             expr_of_tag(
-                env,
+                env, app,
                 addr,
                 tag_name,
                 arg_layouts,
@@ -588,11 +595,11 @@ fn addr_to_ast<'a, A: ReplApp>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(env, *union_layout, addr);
+            let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(env, app, *union_layout, addr);
 
             let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
             expr_of_tag(
-                env,
+                env, app,
                 ptr_to_data,
                 tag_name,
                 arg_layouts,
@@ -616,10 +623,10 @@ fn addr_to_ast<'a, A: ReplApp>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let data_addr = env.app.deref_usize(addr);
+            let data_addr = app.deref_usize(addr);
 
             expr_of_tag(
-                env,
+                env, app,
                 data_addr,
                 &tag_name,
                 arg_layouts,
@@ -646,12 +653,12 @@ fn addr_to_ast<'a, A: ReplApp>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let data_addr = env.app.deref_usize(addr);
+            let data_addr = app.deref_usize(addr);
             if data_addr == 0 {
                 tag_name_to_expr(env, &nullable_name)
             } else {
                 expr_of_tag(
-                    env,
+                    env, app,
                     data_addr,
                     &other_name,
                     other_arg_layouts,
@@ -677,17 +684,17 @@ fn addr_to_ast<'a, A: ReplApp>(
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
-            let data_addr = env.app.deref_usize(addr);
+            let data_addr = app.deref_usize(addr);
             if data_addr == 0 {
                 tag_name_to_expr(env, &nullable_name)
             } else {
-                let (tag_id, data_addr) = tag_id_from_recursive_ptr(env, *union_layout, addr);
+                let (tag_id, data_addr) = tag_id_from_recursive_ptr(env, app, *union_layout, addr);
 
                 let tag_id = if tag_id > nullable_id.into() { tag_id - 1 } else { tag_id };
 
                 let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
                 expr_of_tag(
-                    env,
+                    env, app,
                     data_addr,
                     tag_name,
                     arg_layouts,
@@ -707,7 +714,8 @@ fn addr_to_ast<'a, A: ReplApp>(
 }
 
 fn list_to_ast<'a, A: ReplApp>(
-    env: &Env<'a, 'a, A>,
+    env: &Env<'a, 'a>,
+    app: &A,
     addr: usize,
     len: usize,
     elem_layout: &Layout<'a>,
@@ -740,6 +748,7 @@ fn list_to_ast<'a, A: ReplApp>(
         let (newtype_containers, elem_content) = unroll_newtypes(env, elem_content);
         let expr = addr_to_ast(
             env,
+            app,
             elem_addr,
             elem_layout,
             WhenRecursive::Unreachable,
@@ -756,7 +765,8 @@ fn list_to_ast<'a, A: ReplApp>(
 }
 
 fn single_tag_union_to_ast<'a, A: ReplApp>(
-    env: &Env<'a, 'a, A>,
+    env: &Env<'a, 'a>,
+    app: &A,
     addr: usize,
     field_layouts: &'a [Layout<'a>],
     tag_name: &TagName,
@@ -769,11 +779,11 @@ fn single_tag_union_to_ast<'a, A: ReplApp>(
 
     let output = if field_layouts.len() == payload_vars.len() {
         let it = payload_vars.iter().copied().zip(field_layouts);
-        sequence_of_expr(env, addr, it, WhenRecursive::Unreachable).into_bump_slice()
+        sequence_of_expr(env, app, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else if field_layouts.is_empty() && !payload_vars.is_empty() {
         // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
         let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
-        sequence_of_expr(env, addr, it, WhenRecursive::Unreachable).into_bump_slice()
+        sequence_of_expr(env, app, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else {
         unreachable!()
     };
@@ -782,7 +792,8 @@ fn single_tag_union_to_ast<'a, A: ReplApp>(
 }
 
 fn sequence_of_expr<'a, I, A: ReplApp>(
-    env: &Env<'a, 'a, A>,
+    env: &Env<'a, 'a>,
+    app: &A,
     addr: usize,
     sequence: I,
     when_recursive: WhenRecursive<'a>,
@@ -800,7 +811,7 @@ where
 
     for (var, layout) in sequence {
         let content = subs.get_content_without_compacting(var);
-        let expr = addr_to_ast(env, field_addr, layout, when_recursive, content);
+        let expr = addr_to_ast(env, app, field_addr, layout, when_recursive, content);
         let loc_expr = Loc::at_zero(expr);
 
         output.push(&*arena.alloc(loc_expr));
@@ -813,7 +824,8 @@ where
 }
 
 fn struct_to_ast<'a, A: ReplApp>(
-    env: &Env<'a, 'a, A>,
+    env: &Env<'a, 'a>,
+    app: &A,
     addr: usize,
     field_layouts: &'a [Layout<'a>],
     record_fields: RecordFields,
@@ -836,6 +848,7 @@ fn struct_to_ast<'a, A: ReplApp>(
         let loc_expr = &*arena.alloc(Loc {
             value: addr_to_ast(
                 env,
+                app,
                 addr,
                 &Layout::Struct(field_layouts),
                 WhenRecursive::Unreachable,
@@ -870,6 +883,7 @@ fn struct_to_ast<'a, A: ReplApp>(
             let loc_expr = &*arena.alloc(Loc {
                 value: addr_to_ast(
                     env,
+                    app,
                     field_addr,
                     field_layout,
                     WhenRecursive::Unreachable,
@@ -929,7 +943,12 @@ fn unpack_two_element_tag_union(
     (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }
 
-fn bool_to_ast<'a, A: ReplApp>(env: &Env<'a, '_, A>, value: bool, content: &Content) -> Expr<'a> {
+fn bool_to_ast<'a, A: ReplApp>(
+    env: &Env<'a, '_>,
+    app: &A,
+    value: bool,
+    content: &Content,
+) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -963,7 +982,7 @@ fn bool_to_ast<'a, A: ReplApp>(env: &Env<'a, '_, A>, value: bool, content: &Cont
                         let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Loc {
-                            value: bool_to_ast(env, value, content),
+                            value: bool_to_ast(env, app, value, content),
                             region: Region::zero(),
                         });
 
@@ -999,7 +1018,7 @@ fn bool_to_ast<'a, A: ReplApp>(env: &Env<'a, '_, A>, value: bool, content: &Cont
         Alias(_, _, var) => {
             let content = env.subs.get_content_without_compacting(*var);
 
-            bool_to_ast(env, value, content)
+            bool_to_ast(env, app, value, content)
         }
         other => {
             unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
@@ -1007,7 +1026,12 @@ fn bool_to_ast<'a, A: ReplApp>(env: &Env<'a, '_, A>, value: bool, content: &Cont
     }
 }
 
-fn byte_to_ast<'a, A: ReplApp>(env: &Env<'a, '_, A>, value: u8, content: &Content) -> Expr<'a> {
+fn byte_to_ast<'a, A: ReplApp>(
+    env: &Env<'a, '_>,
+    app: &A,
+    value: u8,
+    content: &Content,
+) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1047,7 +1071,7 @@ fn byte_to_ast<'a, A: ReplApp>(env: &Env<'a, '_, A>, value: u8, content: &Conten
                         let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Loc {
-                            value: byte_to_ast(env, value, content),
+                            value: byte_to_ast(env, app, value, content),
                             region: Region::zero(),
                         });
 
@@ -1091,7 +1115,7 @@ fn byte_to_ast<'a, A: ReplApp>(env: &Env<'a, '_, A>, value: u8, content: &Conten
         Alias(_, _, var) => {
             let content = env.subs.get_content_without_compacting(*var);
 
-            byte_to_ast(env, value, content)
+            byte_to_ast(env, app, value, content)
         }
         other => {
             unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
@@ -1099,11 +1123,7 @@ fn byte_to_ast<'a, A: ReplApp>(env: &Env<'a, '_, A>, value: u8, content: &Conten
     }
 }
 
-fn num_to_ast<'a, A: ReplApp>(
-    env: &Env<'a, '_, A>,
-    num_expr: Expr<'a>,
-    content: &Content,
-) -> Expr<'a> {
+fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
