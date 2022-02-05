@@ -5,8 +5,8 @@ use crate::spaces::{fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{Collection, Module, Spaced};
 use roc_parse::header::{
-    AppHeader, Effects, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
-    PackageEntry, PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
+    AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
+    PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -170,8 +170,6 @@ pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHe
     buf.push_str("provides");
     fmt_default_spaces(buf, header.after_provides, indent);
     fmt_provides(buf, header.provides, None, indent);
-
-    fmt_effects(buf, &header.effects, indent);
 }
 
 fn fmt_requires<'a, 'buf>(buf: &mut Buf<'buf>, requires: &PlatformRequires<'a>, indent: u16) {
@@ -181,29 +179,6 @@ fn fmt_requires<'a, 'buf>(buf: &mut Buf<'buf>, requires: &PlatformRequires<'a>, 
     buf.spaces(1);
     requires.signature.value.format(buf, indent);
     buf.push_str(" }");
-}
-
-fn fmt_effects<'a, 'buf>(buf: &mut Buf<'buf>, effects: &Effects<'a>, indent: u16) {
-    fmt_default_spaces(buf, effects.spaces_before_effects_keyword, indent);
-    buf.indent(indent);
-    buf.push_str("effects");
-    fmt_default_spaces(buf, effects.spaces_after_effects_keyword, indent);
-
-    buf.indent(indent);
-    buf.push_str(effects.effect_shortname);
-    buf.push('.');
-    buf.push_str(effects.effect_type_name);
-
-    fmt_default_spaces(buf, effects.spaces_after_type_name, indent);
-
-    fmt_collection(
-        buf,
-        indent + INDENT,
-        '{',
-        '}',
-        effects.entries,
-        Newlines::No,
-    )
 }
 
 impl<'a> Formattable for TypedIdent<'a> {

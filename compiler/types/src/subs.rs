@@ -1626,6 +1626,25 @@ pub enum FlatType {
     EmptyTagUnion,
 }
 
+impl FlatType {
+    pub fn get_singleton_tag_union<'a>(&'a self, subs: &'a Subs) -> Option<&'a TagName> {
+        match self {
+            Self::TagUnion(tags, ext) => {
+                let tags = tags.unsorted_tags_and_ext(subs, *ext).0.tags;
+                if tags.len() != 1 {
+                    return None;
+                }
+                let (tag_name, vars) = tags[0];
+                if !vars.is_empty() {
+                    return None;
+                }
+                Some(tag_name)
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Builtin {
     Str,

@@ -4,4 +4,3 @@ platform "foo/barbaz"
     packages { foo: "./foo" }
     imports []
     provides [ mainForHost ]
-    effects fx.Effect {}

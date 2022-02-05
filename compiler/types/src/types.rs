@@ -1186,6 +1186,7 @@ pub enum Reason {
     RecordUpdateValue(Lowercase),
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Region>),
     RecordDefaultField(Lowercase),
+    NumericLiteralSuffix,
 }
 
 #[derive(PartialEq, Debug, Clone)]
