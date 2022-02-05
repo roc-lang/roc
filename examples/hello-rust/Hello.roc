@@ -1,6 +1,6 @@
 app "hello-rust"
     packages { pf: "platform" }
-    imports []
+    imports [ Action.{ Action }, Elem.{ button, text, row, col } ]
     provides [ main ] to pf
 
 greeting =
@@ -9,4 +9,7 @@ greeting =
 
     "\(hi), \(name)!\n"
 
-main = greeting
+main =
+    btn = Button { onPress : \_ -> Action.none } (text "Hello, button!")
+
+    greeting
