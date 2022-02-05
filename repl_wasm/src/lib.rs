@@ -1,11 +1,44 @@
 use std::mem::size_of;
 
 use roc_parse::ast::Expr;
-use roc_repl_eval::ReplApp;
+use roc_repl_eval::{ReplApp, ReplAppMemory};
 
 pub struct WasmReplApp<'a> {
-    module: &'a [u8],
-    copied_memory: &'a [u8],
+    _module: &'a [u8],
+}
+
+pub struct WasmMemory<'a> {
+    copied_bytes: &'a [u8],
+}
+
+impl<'a> ReplApp<'a> for WasmReplApp<'a> {
+    type Memory = WasmMemory<'a>;
+
+    /// Run user code that returns a type with a `Builtin` layout
+    /// Size of the return value is statically determined from its Rust type
+    /// The `transform` callback takes the app's memory and the returned value
+    fn call_function<Return, F>(&self, _main_fn_name: &str, _transform: F) -> Expr<'a>
+    where
+        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
+        Self::Memory: 'a,
+    {
+        todo!()
+    }
+
+    /// Run user code that returns a struct or union, whose size is provided as an argument
+    /// The `transform` callback takes the app's memory and the address of the returned value
+    fn call_function_dynamic_size<T, F>(
+        &self,
+        _main_fn_name: &str,
+        _ret_bytes: usize,
+        _transform: F,
+    ) -> T
+    where
+        F: Fn(&'a Self::Memory, usize) -> T,
+        Self::Memory: 'a,
+    {
+        todo!()
+    }
 }
 
 macro_rules! deref_number {
@@ -13,15 +46,15 @@ macro_rules! deref_number {
         fn $name(&self, address: usize) -> $t {
             const N: usize = size_of::<$t>();
             let mut array = [0; N];
-            array.copy_from_slice(&self.copied_memory[address..][..N]);
+            array.copy_from_slice(&self.copied_bytes[address..][..N]);
             <$t>::from_le_bytes(array)
         }
     };
 }
 
-impl<'a> ReplApp for WasmReplApp<'a> {
+impl<'a> ReplAppMemory for WasmMemory<'a> {
     fn deref_bool(&self, address: usize) -> bool {
-        self.copied_memory[address] != 0
+        self.copied_bytes[address] != 0
     }
 
     deref_number!(deref_u8, u8);
@@ -44,24 +77,7 @@ impl<'a> ReplApp for WasmReplApp<'a> {
     fn deref_str(&self, addr: usize) -> &str {
         let elems_addr = self.deref_usize(addr);
         let len = self.deref_usize(addr + size_of::<usize>());
-        let bytes = &self.copied_memory[elems_addr..][..len];
+        let bytes = &self.copied_bytes[elems_addr..][..len];
         std::str::from_utf8(bytes).unwrap()
-    }
-
-    fn call_function<'e, Return: Sized, F: Fn(Return) -> Expr<'e>>(
-        &self,
-        _main_fn_name: &str,
-        _transform: F,
-    ) -> Expr<'e> {
-        todo!()
-    }
-
-    fn call_function_dynamic_size<T: Sized, F: Fn(usize) -> T>(
-        &self,
-        _main_fn_name: &str,
-        _ret_bytes: usize,
-        _transform: F,
-    ) -> T {
-        todo!()
     }
 }
