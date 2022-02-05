@@ -204,8 +204,14 @@ fn fmt_package_name<'buf>(buf: &mut Buf<'buf>, name: PackageName, _indent: u16) 
 
 impl<'a, T: Formattable> Formattable for Spaced<'a, T> {
     fn is_multiline(&self) -> bool {
-        // TODO
-        false
+        use Spaced::*;
+
+        match self {
+            Item(formattable) => formattable.is_multiline(),
+            SpaceBefore(formattable, spaces) | SpaceAfter(formattable, spaces) => {
+                !spaces.is_empty() || formattable.is_multiline()
+            }
+        }
     }
 
     fn format_with_options<'buf>(
@@ -236,7 +242,7 @@ fn fmt_imports<'a, 'buf>(
     loc_entries: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     indent: u16,
 ) {
-    fmt_collection(buf, indent, '[', ']', loc_entries, Newlines::No)
+    fmt_collection(buf, indent + INDENT, '[', ']', loc_entries, Newlines::No)
 }
 
 fn fmt_provides<'a, 'buf>(
@@ -246,9 +252,9 @@ fn fmt_provides<'a, 'buf>(
     indent: u16,
 ) {
     fmt_collection(buf, indent, '[', ']', loc_exposed_names, Newlines::No);
-    if let Some(loc_provided_types) = loc_provided_types {
+    if let Some(loc_provided) = loc_provided_types {
         fmt_default_spaces(buf, &[], indent);
-        fmt_collection(buf, indent, '{', '}', loc_provided_types, Newlines::No);
+        fmt_collection(buf, indent + INDENT, '{', '}', loc_provided, Newlines::No);
     }
 }
 
@@ -266,7 +272,7 @@ fn fmt_exposes<'buf, N: Formattable + Copy>(
     loc_entries: Collection<'_, Loc<Spaced<'_, N>>>,
     indent: u16,
 ) {
-    fmt_collection(buf, indent, '[', ']', loc_entries, Newlines::No)
+    fmt_collection(buf, indent + INDENT, '[', ']', loc_entries, Newlines::No)
 }
 
 pub trait FormatName {
@@ -300,7 +306,8 @@ impl<'a> Formattable for ExposedName<'a> {
         false
     }
 
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, _indent: u16) {
+    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+        buf.indent(indent);
         buf.push_str(self.as_str());
     }
 }
@@ -347,6 +354,8 @@ fn fmt_packages_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &PackageEntry<'a>, i
 
 fn fmt_imports_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &ImportsEntry<'a>, indent: u16) {
     use roc_parse::header::ImportsEntry::*;
+
+    buf.indent(indent);
 
     match entry {
         Module(module, loc_exposes_entries) => {

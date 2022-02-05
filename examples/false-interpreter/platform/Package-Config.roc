@@ -1,5 +1,5 @@
 platform "examples/cli"
-    requires {} { main : Str -> Task {} [] }# TODO FIXME
+    requires {} { main : Str -> Task {} [] }
     exposes []
     packages {}
     imports [ Task.{ Task } ]
