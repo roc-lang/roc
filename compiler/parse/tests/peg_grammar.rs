@@ -607,13 +607,44 @@ peg::parser!{
         rule expect() = [T::KeywordExpect] expr()
 
         pub rule backpass() =
-          __ pattern() [T::OpBackpassing] expr()
+          __ backpass_pattern() [T::OpBackpassing] expr()
 
-        rule pattern() =
+        rule common_pattern() =
           [T::LowercaseIdent]
+          / module_var()
+          / concrete_type()
+          / parens_around()
           / tag()
+
+        rule backpass_pattern() =
+          common_pattern()
           / [T::Underscore]
           / record_destructure()
+          / [T::Number]
+          / [T::NumberBase]
+          / [T::String]
+          / list()
+
+        // for applies without line breaks between args: Node color rK rV  
+        rule apply_arg_pattern() =
+          record()
+          / common_pattern()
+          / [T::Number]
+          / [T::NumberBase]
+          / [T::String]
+          / list()
+
+        // for applies where the arg is on its own line:
+        // Effect.after
+        //    transform a  
+        rule apply_arg_line_pattern() =
+          record()
+          / closure()
+          / apply()
+          / common_pattern()
+
+        rule apply_start_pattern() =
+          common_pattern()
 
         rule record_destructure() =
           empty_record()
@@ -849,15 +880,15 @@ peg::parser!{
           module_name() [T::Dot] [T::LowercaseIdent]
 
         pub rule apply() =
-          pattern() apply_args()
+          apply_start_pattern() apply_args()
 
         pub rule apply_args() =
-          [T::OpenIndent] pattern() single_line_apply_args()? ([T::CloseIndent]/indented_end())
-          / pattern()+
+        [T::OpenIndent] apply_arg_line_pattern() single_line_apply_args()? ([T::CloseIndent]/indented_end())
+          / apply_arg_pattern()+
 
         rule single_line_apply_args() =
-          [T::SameIndent] pattern() ( (single_line_apply_args()*) / indented_end() )
-          / ([T::OpenIndent] pattern() single_line_apply_args()* ([T::CloseIndent] / indented_end()))
+          [T::SameIndent] apply_arg_line_pattern() ( (single_line_apply_args()*) / indented_end() )
+          / ([T::OpenIndent] apply_arg_line_pattern() single_line_apply_args()* ([T::CloseIndent] / indented_end()))
 
         rule apply_expr() =
           var()
@@ -1144,7 +1175,7 @@ fn test_when_2() {
 #[test]
 fn test_cons_list() {
   let tokens = test_tokenize(&example_path("effect/ConsList.roc"));
-
+  dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
@@ -1196,7 +1227,7 @@ fn test_astar_test() {
 #[test]
 fn test_cli_echo() {
   let tokens = test_tokenize(&example_path("cli/Echo.roc"));
-  dbg!(&tokens);
+
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
@@ -1205,7 +1236,7 @@ fn test_pizza() {
   let tokens = test_tokenize(r#"closure = \_ ->
   Task.succeed {}
       |> Task.map (\_ -> x)"#);
-  
+
   assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
 
