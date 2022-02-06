@@ -17,6 +17,7 @@ const UNUSED_IMPORT: &str = "UNUSED IMPORT";
 const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
 const MISSING_DEFINITION: &str = "MISSING DEFINITION";
+const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
 const DUPLICATE_FIELD_NAME: &str = "DUPLICATE FIELD NAME";
 const DUPLICATE_TAG_NAME: &str = "DUPLICATE TAG NAME";
 const INVALID_UNICODE: &str = "INVALID UNICODE";
@@ -97,14 +98,14 @@ pub fn can_problem<'b>(
                 alloc
                     .reflow("I don't know how to generate the ")
                     .append(alloc.ident(loc_ident.value))
-                    .append(alloc.reflow("function.")),
+                    .append(alloc.reflow(" function.")),
                 alloc.region(lines.convert_region(loc_ident.region)),
                 alloc
                     .reflow("Only specific functions like `after` and `map` can be generated.")
                     .append(alloc.reflow("Learn more about hosted modules at TODO.")),
             ]);
 
-            title = MISSING_DEFINITION.to_string();
+            title = UNKNOWN_GENERATES_WITH.to_string();
             severity = Severity::RuntimeError;
         }
         Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {

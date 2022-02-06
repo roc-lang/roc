@@ -836,6 +836,29 @@ mod cli_run {
                                   ^^^^^^^^^^^^^^^^
 
                 Since Symbol isn't used, you don't need to import it.
+
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
+        );
+    }
+
+    #[test]
+    fn unknown_generates_with() {
+        check_compile_error(
+            &known_bad_file("UnknownGeneratesWith.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNKNOWN GENERATES FUNCTION ──────────────────────────────────────────────────
+
+                I don't know how to generate the foobar function.
+
+                4│      generates Effect with [ after, map, always, foobar ]
+                                                                    ^^^^^^
+
+                Only specific functions like `after` and `map` can be generated.Learn
+                more about hosted modules at TODO.
+
                 ────────────────────────────────────────────────────────────────────────────────"#
             ),
         );
