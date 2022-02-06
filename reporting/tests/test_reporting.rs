@@ -1242,20 +1242,6 @@ mod test_reporting {
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
-
-                ── TYPE NOT IN RANGE ───────────────────────────────────────────────────────────
-
-                This expression is used in an unexpected way:
-
-                2│  x = if True then 3.14 else 4
-                                               ^
-
-                It can only be used as a `I8`, `U8`, `I16`, `U16`, `I32`, `U32`, `I64`, `Nat`, `U64`,
-                `I128`, `U128`, `F32`, `F64`, or `Dec`
-
-                But it is being used as:
-
-                `Int` `*`
                 "#
             ),
         )

@@ -1,3 +1,4 @@
+use bitflags::bitflags;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
@@ -56,17 +57,37 @@ macro_rules! mismatch {
 
 type Pool = Vec<Variable>;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum Mode {
-    /// Instructs the unifier to solve two types for equality.
-    ///
-    /// For example, { n : Str }a ~ { n: Str, m : Str } will solve "a" to "{ m : Str }".
-    Eq,
-    /// Instructs the unifier to treat the right-hand-side of a constraint as
-    /// present in the left-hand-side, rather than strictly equal.
-    ///
-    /// For example, t1 += [A Str] says we should "add" the tag "A Str" to the type of "t1".
-    Present,
+bitflags! {
+    pub struct Mode : u8 {
+        /// Instructs the unifier to solve two types for equality.
+        ///
+        /// For example, { n : Str }a ~ { n: Str, m : Str } will solve "a" to "{ m : Str }".
+        const EQ = 1 << 0;
+        /// Instructs the unifier to treat the right-hand-side of a constraint as
+        /// present in the left-hand-side, rather than strictly equal.
+        ///
+        /// For example, t1 += [A Str] says we should "add" the tag "A Str" to the type of "t1".
+        const PRESENT = 1 << 1;
+        /// Instructs the unifier to treat rigids exactly like flex vars.
+        /// Usually rigids can only unify with flex vars, because rigids are named and bound
+        /// explicitly.
+        /// However, when checking type ranges, as we do for `RangedNumber` types, we must loosen
+        /// this restriction because otherwise an admissable range will appear inadmissable.
+        /// For example, Int * is in the range <I8, U8, ...>.
+        const RIGID_AS_FLEX = 1 << 2;
+    }
+}
+
+impl Mode {
+    fn is_eq(&self) -> bool {
+        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
+        self.contains(Mode::EQ)
+    }
+
+    fn is_present(&self) -> bool {
+        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
+        self.contains(Mode::PRESENT)
+    }
 }
 
 #[derive(Debug)]
@@ -245,7 +266,7 @@ fn check_valid_range(
     while let Some(&possible_var) = it.next() {
         let snapshot = subs.snapshot();
         let old_pool = pool.clone();
-        let outcome = unify_pool(subs, pool, var, possible_var, mode);
+        let outcome = unify_pool(subs, pool, var, possible_var, mode | Mode::RIGID_AS_FLEX);
         if outcome.is_empty() {
             // Okay, we matched some type in the range.
             subs.rollback_to(snapshot);
@@ -334,14 +355,14 @@ fn unify_structure(
 
             // And if we see a flex variable on the right hand side of a presence
             // constraint, we know we need to open up the structure we're trying to unify with.
-            match (ctx.mode, flat_type) {
-                (Mode::Present, FlatType::TagUnion(tags, _ext)) => {
+            match (ctx.mode.is_present(), flat_type) {
+                (true, FlatType::TagUnion(tags, _ext)) => {
                     let new_ext = subs.fresh_unnamed_flex_var();
                     let mut new_desc = ctx.first_desc.clone();
                     new_desc.content = Structure(FlatType::TagUnion(*tags, new_ext));
                     subs.set(ctx.first, new_desc);
                 }
-                (Mode::Present, FlatType::FunctionOrTagUnion(tn, sym, _ext)) => {
+                (true, FlatType::FunctionOrTagUnion(tn, sym, _ext)) => {
                     let new_ext = subs.fresh_unnamed_flex_var();
                     let mut new_desc = ctx.first_desc.clone();
                     new_desc.content = Structure(FlatType::FunctionOrTagUnion(*tn, *sym, new_ext));
@@ -384,7 +405,7 @@ fn unify_structure(
         Alias(_, _, real_var) => {
             // NB: not treating this as a presence constraint seems pivotal! I
             // can't quite figure out why, but it doesn't seem to impact other types.
-            unify_pool(subs, pool, ctx.first, *real_var, Mode::Eq)
+            unify_pool(subs, pool, ctx.first, *real_var, Mode::EQ)
         }
         RangedNumber(real_var, _) => unify_pool(subs, pool, ctx.first, *real_var, ctx.mode),
         Error => merge(subs, ctx, Error),
@@ -759,8 +780,8 @@ fn unify_tag_union_new(
 
     let shared_tags = separate.in_both;
 
-    if let (Mode::Present, Content::Structure(FlatType::EmptyTagUnion)) =
-        (ctx.mode, subs.get(ext1).content)
+    if let (true, Content::Structure(FlatType::EmptyTagUnion)) =
+        (ctx.mode.is_present(), subs.get(ext1).content)
     {
         if !separate.only_in_2.is_empty() {
             // Create a new extension variable that we'll fill in with the
@@ -789,7 +810,7 @@ fn unify_tag_union_new(
 
     if separate.only_in_1.is_empty() {
         if separate.only_in_2.is_empty() {
-            let ext_problems = if ctx.mode == Mode::Eq {
+            let ext_problems = if ctx.mode.is_eq() {
                 unify_pool(subs, pool, ext1, ext2, ctx.mode)
             } else {
                 // In a presence context, we don't care about ext2 being equal to ext1
@@ -843,7 +864,7 @@ fn unify_tag_union_new(
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
 
         // In a presence context, we don't care about ext2 being equal to tags1
-        if ctx.mode == Mode::Eq {
+        if ctx.mode.is_eq() {
             let ext_problems = unify_pool(subs, pool, sub_record, ext2, ctx.mode);
 
             if !ext_problems.is_empty() {
@@ -866,7 +887,7 @@ fn unify_tag_union_new(
         let unique_tags1 = UnionTags::insert_slices_into_subs(subs, separate.only_in_1);
         let unique_tags2 = UnionTags::insert_slices_into_subs(subs, separate.only_in_2);
 
-        let ext_content = if ctx.mode == Mode::Present {
+        let ext_content = if ctx.mode.is_present() {
             Content::Structure(FlatType::EmptyTagUnion)
         } else {
             Content::FlexVar(None)
@@ -900,7 +921,7 @@ fn unify_tag_union_new(
             return ext1_problems;
         }
 
-        if ctx.mode == Mode::Eq {
+        if ctx.mode.is_eq() {
             let ext2_problems = unify_pool(subs, pool, sub1, ext2, ctx.mode);
             if !ext2_problems.is_empty() {
                 subs.rollback_to(snapshot);
@@ -1295,7 +1316,7 @@ fn unify_zip_slices(
         let l_var = subs[l_index];
         let r_var = subs[r_index];
 
-        problems.extend(unify_pool(subs, pool, l_var, r_var, Mode::Eq));
+        problems.extend(unify_pool(subs, pool, l_var, r_var, Mode::EQ));
     }
 
     problems
@@ -1309,9 +1330,14 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
             merge(subs, ctx, RigidVar(name.clone()))
         }
         RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _) | RangedNumber(..) => {
-            // Type mismatch! Rigid can only unify with flex, even if the
-            // rigid names are the same.
-            mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
+            if !ctx.mode.contains(Mode::RIGID_AS_FLEX) {
+                // Type mismatch! Rigid can only unify with flex, even if the
+                // rigid names are the same.
+                mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
+            } else {
+                // We are treating rigid vars as flex vars; admit this
+                merge(subs, ctx, other.clone())
+            }
         }
         Error => {
             // Error propagates.

@@ -207,7 +207,7 @@ fn solve(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected, Mode::Eq) {
+            match unify(subs, actual, expected, Mode::EQ) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -253,7 +253,7 @@ fn solve(
             let actual = type_to_var(subs, rank, pools, cached_aliases, source);
             let target = *target;
 
-            match unify(subs, actual, target, Mode::Eq) {
+            match unify(subs, actual, target, Mode::EQ) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -307,7 +307,7 @@ fn solve(
                         cached_aliases,
                         expectation.get_type_ref(),
                     );
-                    match unify(subs, actual, expected, Mode::Eq) {
+                    match unify(subs, actual, expected, Mode::EQ) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);
 
@@ -385,8 +385,8 @@ fn solve(
             );
 
             let mode = match constraint {
-                Present(_, _) => Mode::Present,
-                _ => Mode::Eq,
+                Present(_, _) => Mode::PRESENT,
+                _ => Mode::EQ,
             };
 
             match unify(subs, actual, expected, mode) {
@@ -694,7 +694,7 @@ fn solve(
             );
             let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
 
-            match unify(subs, actual, includes, Mode::Present) {
+            match unify(subs, actual, includes, Mode::PRESENT) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
