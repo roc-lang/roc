@@ -44,11 +44,17 @@ impl fmt::Debug for Mark {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ErrorTypeContext {
+    None,
+    ExpandRanges,
+}
+
 struct ErrorTypeState {
     taken: MutSet<Lowercase>,
     normals: u32,
     problems: Vec<crate::types::Problem>,
+    context: ErrorTypeContext,
 }
 
 #[derive(Clone)]
@@ -1458,7 +1464,15 @@ impl Subs {
         explicit_substitute(self, x, y, z, &mut seen)
     }
 
-    pub fn var_to_error_type(&mut self, var: Variable) -> (ErrorType, Vec<crate::types::Problem>) {
+    pub fn var_to_error_type(&mut self, var: Variable) -> (ErrorType, Vec<Problem>) {
+        self.var_to_error_type_contextual(var, ErrorTypeContext::None)
+    }
+
+    pub fn var_to_error_type_contextual(
+        &mut self,
+        var: Variable,
+        context: ErrorTypeContext,
+    ) -> (ErrorType, Vec<Problem>) {
         let names = get_var_names(self, var, ImMap::default());
         let mut taken = MutSet::default();
 
@@ -1470,6 +1484,7 @@ impl Subs {
             taken,
             normals: 0,
             problems: Vec::new(),
+            context,
         };
 
         (var_to_err_type(self, &mut state, var), state.problems)
@@ -2864,7 +2879,21 @@ fn content_to_err_type(
             ErrorType::Alias(symbol, err_args, Box::new(err_type))
         }
 
-        RangedNumber(typ, _) => var_to_err_type(subs, state, typ),
+        RangedNumber(typ, range) => {
+            let err_type = var_to_err_type(subs, state, typ);
+
+            if state.context == ErrorTypeContext::ExpandRanges {
+                let mut types = Vec::with_capacity(range.len());
+                for var_index in range {
+                    let var = subs[var_index];
+
+                    types.push(var_to_err_type(subs, state, var));
+                }
+                ErrorType::Range(Box::new(err_type), types)
+            } else {
+                err_type
+            }
+        }
 
         Error => ErrorType::Error,
     }

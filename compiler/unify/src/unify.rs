@@ -3,8 +3,8 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
-    AliasVariables, Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, RecordFields, Subs,
-    SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
+    RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{ErrorType, Mismatch, RecordField};
 
@@ -108,7 +108,6 @@ pub enum Unified {
     Success(Pool),
     Failure(Pool, ErrorType, ErrorType),
     BadType(Pool, roc_types::types::Problem),
-    NotInRange(Pool, ErrorType, Vec<ErrorType>),
 }
 
 type Outcome = Vec<Mismatch>;
@@ -120,16 +119,15 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Uni
 
     if mismatches.is_empty() {
         Unified::Success(vars)
-    } else if let Some((typ, range)) = mismatches.iter().find_map(|mis| match mis {
-        Mismatch::TypeNotInRange(typ, range) => Some((typ, range)),
-        _ => None,
-    }) {
-        let (target_type, _) = subs.var_to_error_type(*typ);
-        let range_types = range.iter().map(|&v| subs.var_to_error_type(v).0).collect();
-        Unified::NotInRange(vars, target_type, range_types)
     } else {
-        let (type1, mut problems) = subs.var_to_error_type(var1);
-        let (type2, problems2) = subs.var_to_error_type(var2);
+        let error_context = if mismatches.contains(&Mismatch::TypeNotInRange) {
+            ErrorTypeContext::ExpandRanges
+        } else {
+            ErrorTypeContext::None
+        };
+
+        let (type1, mut problems) = subs.var_to_error_type_contextual(var1, error_context);
+        let (type2, problems2) = subs.var_to_error_type_contextual(var2, error_context);
 
         problems.extend(problems2);
 
@@ -285,7 +283,7 @@ fn check_valid_range(
         }
     }
 
-    return vec![Mismatch::TypeNotInRange(var, slice)];
+    return vec![Mismatch::TypeNotInRange];
 }
 
 #[inline(always)]
@@ -337,8 +335,13 @@ fn unify_alias(
             }
         }
         Structure(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
-        RangedNumber(other_real_var, _) => {
-            unify_pool(subs, pool, real_var, *other_real_var, ctx.mode)
+        RangedNumber(other_real_var, other_range_vars) => {
+            let outcome = unify_pool(subs, pool, real_var, *other_real_var, ctx.mode);
+            if outcome.is_empty() {
+                check_valid_range(subs, pool, real_var, *other_range_vars, ctx.mode)
+            } else {
+                outcome
+            }
         }
         Error => merge(subs, ctx, Error),
     }
@@ -411,7 +414,14 @@ fn unify_structure(
             // can't quite figure out why, but it doesn't seem to impact other types.
             unify_pool(subs, pool, ctx.first, *real_var, ctx.mode.as_eq())
         }
-        RangedNumber(real_var, _) => unify_pool(subs, pool, ctx.first, *real_var, ctx.mode),
+        RangedNumber(other_real_var, other_range_vars) => {
+            let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
+            if outcome.is_empty() {
+                check_valid_range(subs, pool, ctx.first, *other_range_vars, ctx.mode)
+            } else {
+                outcome
+            }
+        }
         Error => merge(subs, ctx, Error),
     }
 }

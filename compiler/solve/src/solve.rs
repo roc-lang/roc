@@ -72,7 +72,6 @@ pub enum TypeError {
     CircularType(Region, Symbol, ErrorType),
     BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
-    NotInRange(Region, ErrorType, Expected<Vec<ErrorType>>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -234,17 +233,6 @@ fn solve(
 
                     state
                 }
-                NotInRange(vars, typ, range) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    problems.push(TypeError::NotInRange(
-                        *region,
-                        typ,
-                        expectation.clone().replace(range),
-                    ));
-
-                    state
-                }
             }
         }
         Store(source, target, _filename, _linenr) => {
@@ -266,7 +254,7 @@ fn solve(
 
                     state
                 }
-                BadType(vars, _) | NotInRange(vars, _, _) => {
+                BadType(vars, _) => {
                     introduce(subs, rank, pools, &vars);
 
                     // ERROR NOT REPORTED
@@ -332,17 +320,6 @@ fn solve(
                             introduce(subs, rank, pools, &vars);
 
                             problems.push(TypeError::BadType(problem));
-
-                            state
-                        }
-                        NotInRange(vars, typ, range) => {
-                            introduce(subs, rank, pools, &vars);
-
-                            problems.push(TypeError::NotInRange(
-                                *region,
-                                typ,
-                                expectation.clone().replace(range),
-                            ));
 
                             state
                         }
@@ -413,18 +390,6 @@ fn solve(
                     introduce(subs, rank, pools, &vars);
 
                     problems.push(TypeError::BadType(problem));
-
-                    state
-                }
-                NotInRange(vars, typ, range) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    problems.push(TypeError::NotInRange(
-                        *region,
-                        typ,
-                        // TODO expectation.clone().replace(range),
-                        Expected::NoExpectation(range),
-                    ));
 
                     state
                 }
@@ -719,17 +684,6 @@ fn solve(
                     introduce(subs, rank, pools, &vars);
 
                     problems.push(TypeError::BadType(problem));
-
-                    state
-                }
-                NotInRange(vars, typ, range) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    problems.push(TypeError::NotInRange(
-                        Region::zero(),
-                        typ,
-                        Expected::NoExpectation(range),
-                    ));
 
                     state
                 }

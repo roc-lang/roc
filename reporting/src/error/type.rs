@@ -14,7 +14,6 @@ use ven_pretty::DocAllocator;
 
 const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
-const TYPE_NOT_IN_RANGE: &str = r#"TYPE NOT IN RANGE"#;
 
 pub fn type_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -59,31 +58,6 @@ pub fn type_problem<'b>(
                 .append(alloc.reflow("."));
 
             report(title, doc, filename)
-        }
-        NotInRange(region, found, expected_range) => {
-            let mut range_choices = vec![alloc.reflow("It can only be used as a ")];
-            let range = expected_range.get_type();
-            let last = range.len() - 1;
-            for (i, choice) in range.into_iter().enumerate() {
-                if i == last && i == 1 {
-                    range_choices.push(alloc.reflow(" or "));
-                } else if i == last && i > 1 {
-                    range_choices.push(alloc.reflow(", or "));
-                } else if i > 0 {
-                    range_choices.push(alloc.reflow(", "));
-                }
-
-                range_choices.push(to_doc(alloc, Parens::Unnecessary, choice));
-            }
-            let doc = alloc.stack(vec![
-                alloc.reflow("This expression is used in an unexpected way:"),
-                alloc.region(lines.convert_region(region)),
-                alloc.concat(range_choices),
-                alloc.text("But it is being used as:"),
-                to_doc(alloc, Parens::Unnecessary, found),
-            ]);
-
-            report(TYPE_NOT_IN_RANGE.into(), doc, filename)
         }
         BadType(type_problem) => {
             use roc_types::types::Problem::*;
@@ -1806,6 +1780,15 @@ pub fn to_doc<'b>(
                 ext_to_doc(alloc, ext),
             )
         }
+
+        Range(typ, range_types) => {
+            let typ = to_doc(alloc, parens, *typ);
+            let range_types = range_types
+                .into_iter()
+                .map(|arg| to_doc(alloc, Parens::Unnecessary, arg))
+                .collect();
+            report_text::range(alloc, typ, range_types)
+        }
     }
 }
 
@@ -2660,6 +2643,29 @@ mod report_text {
                 .append(rec_var)
         }
     }
+
+    pub fn range<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        _encompassing_type: RocDocBuilder<'b>,
+        ranged_types: Vec<RocDocBuilder<'b>>,
+    ) -> RocDocBuilder<'b> {
+        let mut doc = Vec::with_capacity(ranged_types.len() * 2);
+
+        let last = ranged_types.len() - 1;
+        for (i, choice) in ranged_types.into_iter().enumerate() {
+            if i == last && i == 1 {
+                doc.push(alloc.reflow(" or "));
+            } else if i == last && i > 1 {
+                doc.push(alloc.reflow(", or "));
+            } else if i > 0 {
+                doc.push(alloc.reflow(", "));
+            }
+
+            doc.push(choice);
+        }
+
+        alloc.concat(doc)
+    }
 }
 
 fn type_problem_to_pretty<'b>(
@@ -2827,6 +2833,7 @@ fn type_problem_to_pretty<'b>(
                         alloc.reflow(" value"),
                     ]),
                 ),
+                Range(..) => bad_rigid_var(x, alloc.reflow("a range")),
             }
         }
 

@@ -1314,7 +1314,7 @@ pub enum Mismatch {
     InconsistentIfElse,
     InconsistentWhenBranches,
     CanonicalizationProblem,
-    TypeNotInRange(Variable, Vec<Variable>),
+    TypeNotInRange,
 }
 
 #[derive(PartialEq, Eq, Clone, Hash)]
@@ -1328,6 +1328,7 @@ pub enum ErrorType {
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
     Alias(Symbol, Vec<ErrorType>, Box<ErrorType>),
+    Range(Box<ErrorType>, Vec<ErrorType>),
     Error,
 }
 
@@ -1385,6 +1386,12 @@ impl ErrorType {
                     t.add_names(taken);
                 });
                 t.add_names(taken);
+            }
+            Range(typ, ts) => {
+                typ.add_names(taken);
+                ts.iter().for_each(|t| {
+                    t.add_names(taken);
+                });
             }
             Error => {}
         }
@@ -1696,6 +1703,21 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             buf.push_str(" as ");
 
             write_debug_error_type_help(*rec, buf, Parens::Unnecessary);
+        }
+        Range(typ, types) => {
+            write_debug_error_type_help(*typ, buf, parens);
+            buf.push('<');
+
+            let mut it = types.into_iter().peekable();
+            while let Some(typ) = it.next() {
+                write_debug_error_type_help(typ, buf, Parens::Unnecessary);
+
+                if it.peek().is_some() {
+                    buf.push_str(", ");
+                }
+            }
+
+            buf.push('>');
         }
     }
 }
