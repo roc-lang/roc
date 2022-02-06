@@ -24,6 +24,10 @@ const CIRCULAR_DEF: &str = "CIRCULAR DEFINITION";
 const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const VALUE_NOT_EXPOSED: &str = "NOT EXPOSED";
 const MODULE_NOT_IMPORTED: &str = "MODULE NOT IMPORTED";
+const NESTED_DATATYPE: &str = "NESTED DATATYPE";
+const CONFLICTING_NUMBER_SUFFIX: &str = "CONFLICTING NUMBER SUFFIX";
+const NUMBER_OVERFLOWS_SUFFIX: &str = "NUMBER OVERFLOWS SUFFIX";
+const NUMBER_UNDERFLOWS_SUFFIX: &str = "NUMBER UNDERFLOWS SUFFIX";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -435,6 +439,34 @@ pub fn can_problem<'b>(
 
             doc = answer.0;
             title = answer.1.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::NestedDatatype {
+            alias,
+            def_region,
+            differing_recursion_region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" is a nested datatype. Here is one recursive usage of it:"),
+                ]),
+                alloc.region(lines.convert_region(differing_recursion_region)),
+                alloc.concat(vec![
+                    alloc.reflow("But recursive usages of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" must match its definition:"),
+                ]),
+                alloc.region(lines.convert_region(def_region)),
+                alloc.reflow("Nested datatypes are not supported in Roc."),
+                alloc.concat(vec![
+                    alloc.hint("Consider rewriting the definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.text(" to use the recursive type with the same arguments."),
+                ]),
+            ]);
+
+            title = NESTED_DATATYPE.to_string();
             severity = Severity::RuntimeError;
         }
     };
@@ -1026,12 +1058,22 @@ fn pretty_runtime_error<'b>(
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat(vec![
-                    alloc.reflow("Floating point literals can only contain the digits 0-9, or use scientific notation 10e4"),
+                    alloc.reflow("Floating point literals can only contain the digits 0-9, or use scientific notation 10e4, or have a float suffix."),
                 ]),
                 tip,
             ]);
 
             title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::InvalidFloat(FloatErrorKind::IntSuffix, region, _raw_str) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This number literal is a float, but it has an integer suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+            ]);
+
+            title = CONFLICTING_NUMBER_SUFFIX;
         }
         RuntimeError::InvalidInt(error @ IntErrorKind::InvalidDigit, base, region, _raw_str)
         | RuntimeError::InvalidInt(error @ IntErrorKind::Empty, base, region, _raw_str) => {
@@ -1087,7 +1129,7 @@ fn pretty_runtime_error<'b>(
                     alloc.text(plurals),
                     contains,
                     alloc.text(charset),
-                    alloc.text("."),
+                    alloc.text(", or have an integer suffix."),
                 ]),
                 tip,
             ]);
@@ -1096,10 +1138,28 @@ fn pretty_runtime_error<'b>(
         }
         RuntimeError::InvalidInt(error_kind @ IntErrorKind::Underflow, _base, region, _raw_str)
         | RuntimeError::InvalidInt(error_kind @ IntErrorKind::Overflow, _base, region, _raw_str) => {
-            let big_or_small = if let IntErrorKind::Underflow = error_kind {
-                "small"
+            let (big_or_small, info) = if let IntErrorKind::Underflow = error_kind {
+                (
+                    "small",
+                    alloc.concat(vec![
+                        alloc.reflow(
+                            "The smallest number representable in Roc is the minimum I128 value, ",
+                        ),
+                        alloc.int_literal(i128::MIN),
+                        alloc.text("."),
+                    ]),
+                )
             } else {
-                "big"
+                (
+                    "big",
+                    alloc.concat(vec![
+                        alloc.reflow(
+                            "The largest number representable in Roc is the maximum U128 value, ",
+                        ),
+                        alloc.int_literal(u128::MAX),
+                        alloc.text("."),
+                    ]),
+                )
             };
 
             let tip = alloc
@@ -1113,11 +1173,71 @@ fn pretty_runtime_error<'b>(
                     alloc.reflow(":"),
                 ]),
                 alloc.region(lines.convert_region(region)),
-                alloc.reflow("Roc uses signed 64-bit integers, allowing values between −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807."),
+                info,
                 tip,
             ]);
 
             title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::InvalidInt(IntErrorKind::FloatSuffix, _base, region, _raw_str) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This number literal is an integer, but it has a float suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+            ]);
+
+            title = CONFLICTING_NUMBER_SUFFIX;
+        }
+        RuntimeError::InvalidInt(
+            IntErrorKind::OverflowsSuffix {
+                suffix_type,
+                max_value,
+            },
+            _base,
+            region,
+            _raw_str,
+        ) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This integer literal overflows the type indicated by its suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+                alloc.tip().append(alloc.concat(vec![
+                    alloc.reflow("The suffix indicates this integer is a "),
+                    alloc.type_str(suffix_type),
+                    alloc.reflow(", whose maximum value is "),
+                    alloc.int_literal(max_value),
+                    alloc.reflow("."),
+                ])),
+            ]);
+
+            title = NUMBER_OVERFLOWS_SUFFIX;
+        }
+        RuntimeError::InvalidInt(
+            IntErrorKind::UnderflowsSuffix {
+                suffix_type,
+                min_value,
+            },
+            _base,
+            region,
+            _raw_str,
+        ) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This integer literal underflows the type indicated by its suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+                alloc.tip().append(alloc.concat(vec![
+                    alloc.reflow("The suffix indicates this integer is a "),
+                    alloc.type_str(suffix_type),
+                    alloc.reflow(", whose minimum value is "),
+                    alloc.int_literal(min_value),
+                    alloc.reflow("."),
+                ])),
+            ]);
+
+            title = NUMBER_UNDERFLOWS_SUFFIX;
         }
         RuntimeError::InvalidOptionalValue {
             field_name,

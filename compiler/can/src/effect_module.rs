@@ -1,9 +1,9 @@
-use roc_can::annotation::IntroducedVariables;
-use roc_can::def::{Declaration, Def};
-use roc_can::env::Env;
-use roc_can::expr::{ClosureData, Expr, Recursive};
-use roc_can::pattern::Pattern;
-use roc_can::scope::Scope;
+use crate::annotation::IntroducedVariables;
+use crate::def::{Declaration, Def};
+use crate::env::Env;
+use crate::expr::{ClosureData, Expr, Recursive};
+use crate::pattern::Pattern;
+use crate::scope::Scope;
 use roc_collections::all::{MutSet, SendMap};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
@@ -220,7 +220,7 @@ fn build_effect_always(
         )
     };
 
-    let def_annotation = roc_can::def::Annotation {
+    let def_annotation = crate::def::Annotation {
         signature,
         introduced_variables,
         aliases: SendMap::default(),
@@ -432,7 +432,7 @@ fn build_effect_map(
         )
     };
 
-    let def_annotation = roc_can::def::Annotation {
+    let def_annotation = crate::def::Annotation {
         signature,
         introduced_variables,
         aliases: SendMap::default(),
@@ -599,7 +599,7 @@ fn build_effect_after(
         )
     };
 
-    let def_annotation = roc_can::def::Annotation {
+    let def_annotation = crate::def::Annotation {
         signature,
         introduced_variables,
         aliases: SendMap::default(),
@@ -852,7 +852,7 @@ fn build_effect_forever(
         )
     };
 
-    let def_annotation = roc_can::def::Annotation {
+    let def_annotation = crate::def::Annotation {
         signature,
         introduced_variables,
         aliases: SendMap::default(),
@@ -1150,7 +1150,7 @@ fn build_effect_loop(
         )
     };
 
-    let def_annotation = roc_can::def::Annotation {
+    let def_annotation = crate::def::Annotation {
         signature,
         introduced_variables,
         aliases: SendMap::default(),
@@ -1334,7 +1334,7 @@ fn build_effect_loop_inner_body(
 
         let step_pattern = applied_tag_pattern(step_tag_name, &[new_state_symbol], var_store);
 
-        roc_can::expr::WhenBranch {
+        crate::expr::WhenBranch {
             patterns: vec![Loc::at_zero(step_pattern)],
             value: Loc::at_zero(force_thunk2),
             guard: None,
@@ -1345,7 +1345,7 @@ fn build_effect_loop_inner_body(
         let done_tag_name = TagName::Global("Done".into());
         let done_pattern = applied_tag_pattern(done_tag_name, &[done_symbol], var_store);
 
-        roc_can::expr::WhenBranch {
+        crate::expr::WhenBranch {
             patterns: vec![Loc::at_zero(done_pattern)],
             value: Loc::at_zero(Expr::Var(done_symbol)),
             guard: None,
@@ -1376,7 +1376,7 @@ pub fn build_host_exposed_def(
     ident: &str,
     effect_tag_name: TagName,
     var_store: &mut VarStore,
-    annotation: roc_can::annotation::Annotation,
+    annotation: crate::annotation::Annotation,
 ) -> Def {
     let expr_var = var_store.fresh();
     let pattern = Pattern::Identifier(symbol);
@@ -1520,7 +1520,7 @@ pub fn build_host_exposed_def(
         }
     };
 
-    let def_annotation = roc_can::def::Annotation {
+    let def_annotation = crate::def::Annotation {
         signature: annotation.typ,
         introduced_variables: annotation.introduced_variables,
         aliases: annotation.aliases,

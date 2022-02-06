@@ -1,4 +1,4 @@
-FROM rust:1.57.0-slim-bullseye
+FROM rust:1.57.0-slim-bullseye # make sure to update nixpkgs-unstable in sources.json too so that it uses the same rust version > search for cargo on unstable here: https://search.nixos.org/packages
 WORKDIR /earthbuild
 
 prep-debian:
@@ -47,7 +47,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros utils test_utils reporting roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
+    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros utils test_utils reporting repl_cli repl_eval repl_test repl_wasm roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt

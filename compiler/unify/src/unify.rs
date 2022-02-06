@@ -285,7 +285,12 @@ fn unify_structure(
                 // unify the structure with this unrecursive tag union
                 unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
             }
-            _ => todo!("rec structure {:?}", &flat_type),
+            // Only tag unions can be recursive; everything else is an error.
+            _ => mismatch!(
+                "trying to unify {:?} with recursive type var {:?}",
+                &flat_type,
+                structure
+            ),
         },
 
         Structure(ref other_flat_type) => {

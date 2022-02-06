@@ -357,7 +357,7 @@ fn can_annotation_help(
                         actual: Box::new(actual),
                     }
                 }
-                None => Type::Apply(symbol, args),
+                None => Type::Apply(symbol, args, region),
             }
         }
         BoundVariable(v) => {
@@ -377,7 +377,8 @@ fn can_annotation_help(
         As(
             loc_inner,
             _spaces,
-            AliasHeader {
+            alias_header
+            @ AliasHeader {
                 name,
                 vars: loc_vars,
             },
@@ -439,20 +440,43 @@ fn can_annotation_help(
                 }
             }
 
+            let alias_args = vars.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>();
+
             let alias_actual = if let Type::TagUnion(tags, ext) = inner_type {
                 let rec_var = var_store.fresh();
 
                 let mut new_tags = Vec::with_capacity(tags.len());
+                let mut is_nested_datatype = false;
                 for (tag_name, args) in tags {
                     let mut new_args = Vec::with_capacity(args.len());
                     for arg in args {
                         let mut new_arg = arg.clone();
-                        new_arg.substitute_alias(symbol, &Type::Variable(rec_var));
+                        let substitution_result =
+                            new_arg.substitute_alias(symbol, &alias_args, &Type::Variable(rec_var));
+
+                        if let Err(differing_recursion_region) = substitution_result {
+                            env.problems
+                                .push(roc_problem::can::Problem::NestedDatatype {
+                                    alias: symbol,
+                                    def_region: alias_header.region(),
+                                    differing_recursion_region,
+                                });
+                            is_nested_datatype = true;
+                        }
+
+                        // Either way, add the argument; not doing so would only result in more
+                        // confusing error messages later on.
                         new_args.push(new_arg);
                     }
                     new_tags.push((tag_name.clone(), new_args));
                 }
-                Type::RecursiveTagUnion(rec_var, new_tags, ext)
+                if is_nested_datatype {
+                    // We don't have a way to represent nested data types; hence, we don't actually
+                    // use the recursion var in them, and should avoid marking them as such.
+                    Type::TagUnion(new_tags, ext)
+                } else {
+                    Type::RecursiveTagUnion(rec_var, new_tags, ext)
+                }
             } else {
                 inner_type
             };

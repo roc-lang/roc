@@ -8,6 +8,28 @@ use crate::string_literal;
 use bumpalo::collections::Vec;
 use roc_region::all::Loc;
 
+#[derive(Debug)]
+pub enum HeaderFor<'a> {
+    App {
+        to_platform: To<'a>,
+    },
+    Hosted {
+        generates: UppercaseIdent<'a>,
+        generates_with: &'a [Loc<ExposedName<'a>>],
+    },
+    PkgConfig {
+        /// usually `pf`
+        config_shorthand: &'a str,
+        /// the type scheme of the main function (required by the platform)
+        /// (currently unused)
+        #[allow(dead_code)]
+        platform_main_type: TypedIdent<'a>,
+        /// provided symbol to host (commonly `mainForHost`)
+        main_for_host: roc_module::symbol::Symbol,
+    },
+    Interface,
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum Version<'a> {
     Exact(&'a str),
@@ -47,6 +69,15 @@ impl<'a> ModuleName<'a> {
     }
 }
 
+#[derive(Debug)]
+pub enum ModuleNameEnum<'a> {
+    /// A filename
+    App(StrLiteral<'a>),
+    Interface(ModuleName<'a>),
+    Hosted(ModuleName<'a>),
+    PkgConfig,
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct ExposedName<'a>(&'a str);
 
@@ -79,6 +110,27 @@ pub struct InterfaceHeader<'a> {
     pub after_exposes: &'a [CommentOrNewline<'a>],
     pub before_imports: &'a [CommentOrNewline<'a>],
     pub after_imports: &'a [CommentOrNewline<'a>],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostedHeader<'a> {
+    pub name: Loc<ModuleName<'a>>,
+    pub exposes: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
+    pub generates: UppercaseIdent<'a>,
+    pub generates_with: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+
+    // Potential comments and newlines - these will typically all be empty.
+    pub before_header: &'a [CommentOrNewline<'a>],
+    pub after_hosted_keyword: &'a [CommentOrNewline<'a>],
+    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub after_exposes: &'a [CommentOrNewline<'a>],
+    pub before_imports: &'a [CommentOrNewline<'a>],
+    pub after_imports: &'a [CommentOrNewline<'a>],
+    pub before_generates: &'a [CommentOrNewline<'a>],
+    pub after_generates: &'a [CommentOrNewline<'a>],
+    pub before_with: &'a [CommentOrNewline<'a>],
+    pub after_with: &'a [CommentOrNewline<'a>],
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -141,7 +193,6 @@ pub struct PlatformHeader<'a> {
     pub packages: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
     pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     pub provides: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
-    pub effects: Effects<'a>,
 
     // Potential comments and newlines - these will typically all be empty.
     pub before_header: &'a [CommentOrNewline<'a>],
@@ -156,17 +207,6 @@ pub struct PlatformHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
     pub before_provides: &'a [CommentOrNewline<'a>],
     pub after_provides: &'a [CommentOrNewline<'a>],
-}
-
-/// e.g. fx.Effects
-#[derive(Clone, Debug, PartialEq)]
-pub struct Effects<'a> {
-    pub spaces_before_effects_keyword: &'a [CommentOrNewline<'a>],
-    pub spaces_after_effects_keyword: &'a [CommentOrNewline<'a>],
-    pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
-    pub effect_shortname: &'a str,
-    pub effect_type_name: &'a str,
-    pub entries: Collection<'a, Loc<Spaced<'a, TypedIdent<'a>>>>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]

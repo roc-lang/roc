@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::header::{AppHeader, InterfaceHeader, PlatformHeader};
+use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PlatformHeader};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
@@ -70,6 +70,7 @@ pub enum Module<'a> {
     Interface { header: InterfaceHeader<'a> },
     App { header: AppHeader<'a> },
     Platform { header: PlatformHeader<'a> },
+    Hosted { header: HostedHeader<'a> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -229,6 +230,16 @@ pub struct PrecedenceConflict<'a> {
 pub struct AliasHeader<'a> {
     pub name: Loc<&'a str>,
     pub vars: &'a [Loc<Pattern<'a>>],
+}
+
+impl<'a> AliasHeader<'a> {
+    pub fn region(&self) -> Region {
+        Region::across_all(
+            [self.name.region]
+                .iter()
+                .chain(self.vars.iter().map(|v| &v.region)),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

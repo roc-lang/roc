@@ -2641,6 +2641,25 @@ mod test_fmt {
     }
 
     #[test]
+    fn multi_line_interface() {
+        module_formats_same(indoc!(
+            r#"
+                interface Foo
+                    exposes
+                        [
+                            Stuff,
+                            Things,
+                            somethingElse,
+                        ]
+                    imports
+                        [
+                            Blah,
+                            Baz.{ stuff, things },
+                        ]"#
+        ));
+    }
+
+    #[test]
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
@@ -2656,14 +2675,41 @@ mod test_fmt {
             exposes [] \
             packages {} \
             imports [ Task.{ Task } ] \
-            provides [ mainForHost ] \
-            effects fx.Effect \
-            { \
-                putLine : Str -> Effect {}, \
-                putInt : I64 -> Effect {}, \
-                getInt : Effect { value : I64, errorCode : [ A, B ], isError : Bool } \
-            }",
+            provides [ mainForHost ]",
         );
+    }
+
+    #[test]
+    fn single_line_hosted() {
+        module_formats_same(indoc!(
+            r#"
+                hosted Foo exposes [] imports [] generates Bar with []"#
+        ));
+    }
+
+    #[test]
+    fn multi_line_hosted() {
+        module_formats_same(indoc!(
+            r#"
+                hosted Foo
+                    exposes
+                        [
+                            Stuff,
+                            Things,
+                            somethingElse,
+                        ]
+                    imports
+                        [
+                            Blah,
+                            Baz.{ stuff, things },
+                        ]
+                    generates Bar with
+                        [
+                            map,
+                            after,
+                            loop,
+                        ]"#
+        ));
     }
 
     /// Annotations and aliases

@@ -22,6 +22,12 @@ impl<'a> From<UppercaseIdent<'a>> for &'a str {
     }
 }
 
+impl<'a> From<&'a UppercaseIdent<'a>> for &'a str {
+    fn from(ident: &'a UppercaseIdent<'a>) -> Self {
+        ident.0
+    }
+}
+
 /// The parser accepts all of these in any position where any one of them could
 /// appear. This way, canonicalization can give more helpful error messages like
 /// "you can't redefine this tag!" if you wrote `Foo = ...` or

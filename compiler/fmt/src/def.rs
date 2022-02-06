@@ -46,7 +46,9 @@ impl<'a> Formattable for Def<'a> {
                         indent + INDENT,
                     );
                 } else {
-                    buf.push_str(" : ");
+                    buf.spaces(1);
+                    buf.push_str(":");
+                    buf.spaces(1);
                     loc_annotation.format_with_options(
                         buf,
                         Parens::NotNeeded,

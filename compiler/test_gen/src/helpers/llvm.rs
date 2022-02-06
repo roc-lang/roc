@@ -192,7 +192,11 @@ fn create_llvm_module<'a>(
     for function in FunctionIterator::from_module(module) {
         let name = function.get_name().to_str().unwrap();
         if name.starts_with("roc_builtins") {
-            function.set_linkage(Linkage::Internal);
+            if name.starts_with("roc_builtins.expect") {
+                function.set_linkage(Linkage::External);
+            } else {
+                function.set_linkage(Linkage::Internal);
+            }
         }
 
         if name.starts_with("roc_builtins.dict") {
@@ -601,6 +605,46 @@ macro_rules! assert_evals_to {
     };
 }
 
+#[allow(unused_macros)]
+macro_rules! assert_expect_failed {
+    ($src:expr, $expected:expr, $ty:ty) => {
+        use bumpalo::Bump;
+        use inkwell::context::Context;
+        use roc_gen_llvm::run_jit_function;
+
+        let arena = Bump::new();
+        let context = Context::create();
+
+        // NOTE the stdlib must be in the arena; just taking a reference will segfault
+        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
+
+        let is_gen_test = true;
+        let (main_fn_name, errors, lib) =
+            $crate::helpers::llvm::helper(&arena, $src, stdlib, is_gen_test, false, &context);
+
+        let transform = |success| {
+            let expected = $expected;
+            assert_eq!(&success, &expected, "LLVM test failed");
+        };
+
+        run_jit_function!(lib, main_fn_name, $ty, transform, errors)
+    };
+
+    ($src:expr, $expected:expr, $ty:ty) => {
+        $crate::helpers::llvm::assert_llvm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $crate::helpers::llvm::identity,
+            false
+        );
+    };
+
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+    };
+}
+
 macro_rules! expect_runtime_error_panic {
     ($src:expr) => {{
         #[cfg(feature = "wasm-cli-run")]
@@ -650,6 +694,8 @@ macro_rules! assert_non_opt_evals_to {
 
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
+#[allow(unused_imports)]
+pub(crate) use assert_expect_failed;
 #[allow(unused_imports)]
 pub(crate) use assert_llvm_evals_to;
 #[allow(unused_imports)]

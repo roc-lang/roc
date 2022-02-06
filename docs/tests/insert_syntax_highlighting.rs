@@ -56,11 +56,7 @@ mod insert_doc_syntax_highlighting {
         }
     }
 
-    pub const HELLO_WORLD: &str = r#"
-app "test-app"
-    packages { pf: "platform" }
-    imports []
-    provides [ main ] to pf
+    pub const HELLO_WORLD: &str = r#"interface Test exposes [ ] imports [ ]
 
 main = "Hello, world!"
 

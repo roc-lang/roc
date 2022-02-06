@@ -1,7 +1,7 @@
 use roc_cli::build::check_file;
 use roc_cli::{
-    build_app, docs, format, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
-    CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
+    build_app, docs, format, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_FORMAT,
+    CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
 };
 use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
@@ -63,7 +63,7 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_REPL, _)) => {
-            repl::main()?;
+            roc_repl_cli::main()?;
 
             // Exit 0 if the repl exited normally
             Ok(0)

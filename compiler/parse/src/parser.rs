@@ -71,7 +71,8 @@ pub enum EHeader<'a> {
     Imports(EImports, Position),
     Requires(ERequires<'a>, Position),
     Packages(EPackages<'a>, Position),
-    Effects(EEffects<'a>, Position),
+    Generates(EGenerates, Position),
+    GeneratesWith(EGeneratesWith, Position),
 
     Space(BadInputError, Position),
     Start(Position),
@@ -165,22 +166,6 @@ pub enum EPackageEntry<'a> {
     Space(BadInputError, Position),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EEffects<'a> {
-    Space(BadInputError, Position),
-    Effects(Position),
-    Open(Position),
-    IndentEffects(Position),
-    ListStart(Position),
-    ListEnd(Position),
-    IndentListStart(Position),
-    IndentListEnd(Position),
-    TypedIdent(ETypedIdent<'a>, Position),
-    ShorthandDot(Position),
-    Shorthand(Position),
-    TypeName(Position),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EImports {
     Open(Position),
@@ -200,6 +185,30 @@ pub enum EImports {
     IndentSetEnd(Position),
     SetStart(Position),
     SetEnd(Position),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EGenerates {
+    Open(Position),
+    Generates(Position),
+    IndentGenerates(Position),
+    Identifier(Position),
+    Space(BadInputError, Position),
+    IndentTypeStart(Position),
+    IndentTypeEnd(Position),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EGeneratesWith {
+    Open(Position),
+    With(Position),
+    IndentWith(Position),
+    IndentListStart(Position),
+    IndentListEnd(Position),
+    ListStart(Position),
+    ListEnd(Position),
+    Identifier(Position),
+    Space(BadInputError, Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
