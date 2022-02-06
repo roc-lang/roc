@@ -9,7 +9,7 @@ use roc_types::types::{ErrorType, Mismatch, RecordField};
 
 macro_rules! mismatch {
     () => {{
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_some() {
             println!(
                 "Mismatch in {} Line {} Column {}",
                 file!(),
@@ -21,7 +21,7 @@ macro_rules! mismatch {
         vec![Mismatch::TypeMismatch]
     }};
     ($msg:expr) => {{
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
             println!(
                 "Mismatch in {} Line {} Column {}",
                 file!(),
@@ -39,7 +39,7 @@ macro_rules! mismatch {
         mismatch!($msg)
     }};
     ($msg:expr, $($arg:tt)*) => {{
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
             println!(
                 "Mismatch in {} Line {} Column {}",
                 file!(),
