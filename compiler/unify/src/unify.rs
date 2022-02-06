@@ -88,6 +88,10 @@ impl Mode {
         debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
         self.contains(Mode::PRESENT)
     }
+
+    fn as_eq(self) -> Self {
+        (self - Mode::PRESENT) | Mode::EQ
+    }
 }
 
 #[derive(Debug)]
@@ -405,7 +409,7 @@ fn unify_structure(
         Alias(_, _, real_var) => {
             // NB: not treating this as a presence constraint seems pivotal! I
             // can't quite figure out why, but it doesn't seem to impact other types.
-            unify_pool(subs, pool, ctx.first, *real_var, Mode::EQ)
+            unify_pool(subs, pool, ctx.first, *real_var, ctx.mode.as_eq())
         }
         RangedNumber(real_var, _) => unify_pool(subs, pool, ctx.first, *real_var, ctx.mode),
         Error => merge(subs, ctx, Error),
