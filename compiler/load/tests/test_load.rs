@@ -66,7 +66,7 @@ mod test_load {
         arena: &'a Bump,
         mut files: Vec<(&str, &str)>,
     ) -> Result<Result<LoadedModule, roc_load::file::LoadingProblem<'a>>, std::io::Error> {
-        use std::fs::File;
+        use std::fs::{self, File};
         use std::io::Write;
         use std::path::PathBuf;
         use tempfile::tempdir;
@@ -80,12 +80,15 @@ mod test_load {
         let dir = tempdir()?;
 
         let app_module = files.pop().unwrap();
-        let interfaces = files;
 
-        for (name, source) in interfaces {
+        for (name, source) in files {
             let mut filename = PathBuf::from(name);
             filename.set_extension("roc");
             let file_path = dir.path().join(filename.clone());
+
+            // Create any necessary intermediate directories (e.g. /platform)
+            fs::create_dir_all(file_path.parent().unwrap())?;
+
             let mut file = File::create(file_path)?;
             writeln!(file, "{}", source)?;
             file_handles.push(file);
@@ -598,6 +601,49 @@ mod test_load {
             Err(report) => {
                 assert!(report.contains("FILE NOT FOUND"));
                 assert!(report.contains("zzz-does-not-exist/Package-Config.roc"));
+            }
+            Ok(_) => unreachable!("we expect failure here"),
+        }
+    }
+
+    #[test]
+    fn platform_parse_error() {
+        let modules = vec![
+            (
+                "platform/Package-Config.roc",
+                indoc!(
+                    r#"
+                        platform "examples/hello-world"
+                            requires {} { main : Str }
+                            exposes []
+                            packages {}
+                            imports []
+                            provides [ mainForHost ]
+                            blah 1 2 3 # causing a parse error on purpose
+
+                        mainForHost : Str
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                        app "hello-world"
+                            packages { pf: "platform" }
+                            imports []
+                            provides [ main ] to pf
+
+                        main = "Hello, World!\n"
+                    "#
+                ),
+            ),
+        ];
+
+        match multiple_modules(modules) {
+            Err(report) => {
+                assert!(report.contains("NOT END OF FILE"));
+                assert!(report.contains("blah 1 2 3 # causing a parse error on purpose"));
             }
             Ok(_) => unreachable!("we expect failure here"),
         }
