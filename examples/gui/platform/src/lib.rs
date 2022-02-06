@@ -6,7 +6,7 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 
 mod graphics;
-mod tea;
+mod gui;
 
 extern "C" {
     #[link_name = "roc__renderForHost_1_exposed"]
@@ -164,7 +164,7 @@ pub extern "C" fn rust_main() -> i32 {
 
     draw_elem(render(0));
 
-    // tea::render(roc_str);
+    gui::render(roc_str);
 
     // Exit code
     0
