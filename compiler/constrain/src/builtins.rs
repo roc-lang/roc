@@ -35,7 +35,7 @@ pub fn add_numeric_bound_constr(
             ));
             total_num_type
         }
-        _ => RangedNumber(Box::new(total_num_type.clone()), range),
+        _ => RangedNumber(Box::new(total_num_type), range),
     }
 }
 
@@ -66,7 +66,7 @@ pub fn int_literal(
             Category::Int,
             region,
         ),
-        Eq(num_type, expected.clone(), Category::Int, region),
+        Eq(num_type, expected, Category::Int, region),
     ]);
 
     exists(vec![num_var], And(constrs))

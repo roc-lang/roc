@@ -252,6 +252,7 @@ fn solve<'a>(
 
                     state
                 }
+                NotInRange(_vars, _typ, _range) => todo!(),
             }
         }
         //        Store(source, target, _filename, _linenr) => {
@@ -346,6 +347,7 @@ fn solve<'a>(
 
                             state
                         }
+                        NotInRange(_vars, _typ, _range) => todo!(),
                     }
                 }
                 None => {
@@ -416,6 +418,7 @@ fn solve<'a>(
 
                     state
                 }
+                NotInRange(_vars, _typ, _range) => todo!(),
             }
         }
         Let(let_con) => {
@@ -725,6 +728,7 @@ fn solve<'a>(
 
                     state
                 }
+                NotInRange(_vars, _typ, _range) => todo!(),
             }
         }
     }
@@ -1400,6 +1404,8 @@ fn adjust_rank_content(
 
             rank
         }
+
+        RangedNumber(typ, _vars) => adjust_rank(subs, young_mark, visit_mark, group_rank, *typ),
     }
 }
 
@@ -1549,6 +1555,10 @@ fn instantiate_rigids_help(
             }
 
             instantiate_rigids_help(subs, max_rank, pools, real_type_var);
+        }
+
+        RangedNumber(typ, _vars) => {
+            instantiate_rigids_help(subs, max_rank, pools, typ);
         }
     }
 
@@ -1801,6 +1811,25 @@ fn deep_copy_var_help(
 
             let new_real_type_var = deep_copy_var_help(subs, max_rank, pools, real_type_var);
             let new_content = Alias(symbol, args, new_real_type_var);
+
+            subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+
+        RangedNumber(typ, vars) => {
+            let mut new_vars = Vec::with_capacity(vars.len());
+
+            for var_index in vars {
+                let var = subs[var_index];
+                let new_var = deep_copy_var_help(subs, max_rank, pools, var);
+                new_vars.push(new_var);
+            }
+
+            let new_slice = VariableSubsSlice::insert_into_subs(subs, new_vars.drain(..));
+
+            let new_real_type = deep_copy_var_help(subs, max_rank, pools, typ);
+            let new_content = RangedNumber(new_real_type, new_slice);
 
             subs.set(copy, make_descriptor(new_content));
 

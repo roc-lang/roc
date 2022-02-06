@@ -185,7 +185,7 @@ pub fn constrain_pattern(
 
             let num_type = builtins::add_numeric_bound_constr(
                 &mut state.constraints,
-                num_type.clone(),
+                num_type,
                 bound,
                 region,
                 Category::Num,

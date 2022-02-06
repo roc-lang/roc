@@ -231,7 +231,7 @@ impl SolvedType {
                 }
             }
             Variable(var) => Self::from_var(solved_subs.inner(), *var),
-            RangedNumber(typ, _) => Self::from_type(solved_subs, &typ),
+            RangedNumber(typ, _) => Self::from_type(solved_subs, typ),
         }
     }
 

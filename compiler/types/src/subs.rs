@@ -1058,6 +1058,7 @@ fn define_integer_types(subs: &mut Subs) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn float_type(
     subs: &mut Subs,
 
