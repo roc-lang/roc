@@ -9,7 +9,7 @@ use wasmer::{Memory, WasmPtr};
 use crate::helpers::from_wasmer_memory::FromWasmerMemory;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
-use roc_gen_wasm::wasm32_test_result::Wasm32TestResult;
+use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
 
 // Should manually match build.rs
@@ -40,7 +40,7 @@ pub enum TestType {
 }
 
 #[allow(dead_code)]
-pub fn compile_and_load<'a, T: Wasm32TestResult>(
+pub fn compile_and_load<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
@@ -72,7 +72,7 @@ fn src_hash(src: &str) -> u64 {
     hash_state.finish()
 }
 
-fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
+fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     stdlib: &'a roc_builtins::std::StdLib,
     preload_bytes: &[u8],
@@ -138,7 +138,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
             procedures,
         );
 
-    T::insert_test_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
+    T::insert_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
 
     // Export the initialiser function for refcount tests
     let init_refcount_bytes = INIT_REFCOUNT_NAME.as_bytes();
@@ -193,7 +193,7 @@ fn load_bytes_into_runtime(bytes: Vec<u8>) -> wasmer::Instance {
 #[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
 where
-    T: FromWasmerMemory + Wasm32TestResult,
+    T: FromWasmerMemory + Wasm32Result,
 {
     let arena = bumpalo::Bump::new();
 
@@ -239,7 +239,7 @@ pub fn assert_wasm_refcounts_help<T>(
     num_refcounts: usize,
 ) -> Result<Vec<u32>, String>
 where
-    T: FromWasmerMemory + Wasm32TestResult,
+    T: FromWasmerMemory + Wasm32Result,
 {
     let arena = bumpalo::Bump::new();
 

@@ -7,8 +7,8 @@ use crate::wasm_module::{
 };
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
-pub trait Wasm32TestResult {
-    fn insert_test_wrapper<'a>(
+pub trait Wasm32Result {
+    fn insert_wrapper<'a>(
         arena: &'a bumpalo::Bump,
         module: &mut WasmModule<'a>,
         wrapper_name: &str,
@@ -64,9 +64,9 @@ macro_rules! build_wrapper_body_primitive {
     };
 }
 
-macro_rules! wasm_test_result_primitive {
+macro_rules! wasm_result_primitive {
     ($type_name: ident, $store_instruction: ident, $align: expr) => {
-        impl Wasm32TestResult for $type_name {
+        impl Wasm32Result for $type_name {
             build_wrapper_body_primitive!($store_instruction, $align);
         }
     };
@@ -89,9 +89,9 @@ fn build_wrapper_body_stack_memory(
     code_builder.build_fn_header_and_footer(local_types, size as i32, frame_pointer);
 }
 
-macro_rules! wasm_test_result_stack_memory {
+macro_rules! wasm_result_stack_memory {
     ($type_name: ident) => {
-        impl Wasm32TestResult for $type_name {
+        impl Wasm32Result for $type_name {
             fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
                 build_wrapper_body_stack_memory(
                     code_builder,
@@ -103,47 +103,47 @@ macro_rules! wasm_test_result_stack_memory {
     };
 }
 
-wasm_test_result_primitive!(bool, i32_store8, Align::Bytes1);
-wasm_test_result_primitive!(RocOrder, i32_store8, Align::Bytes1);
+wasm_result_primitive!(bool, i32_store8, Align::Bytes1);
+wasm_result_primitive!(RocOrder, i32_store8, Align::Bytes1);
 
-wasm_test_result_primitive!(u8, i32_store8, Align::Bytes1);
-wasm_test_result_primitive!(i8, i32_store8, Align::Bytes1);
-wasm_test_result_primitive!(u16, i32_store16, Align::Bytes2);
-wasm_test_result_primitive!(i16, i32_store16, Align::Bytes2);
-wasm_test_result_primitive!(u32, i32_store, Align::Bytes4);
-wasm_test_result_primitive!(i32, i32_store, Align::Bytes4);
-wasm_test_result_primitive!(u64, i64_store, Align::Bytes8);
-wasm_test_result_primitive!(i64, i64_store, Align::Bytes8);
-wasm_test_result_primitive!(usize, i32_store, Align::Bytes4);
+wasm_result_primitive!(u8, i32_store8, Align::Bytes1);
+wasm_result_primitive!(i8, i32_store8, Align::Bytes1);
+wasm_result_primitive!(u16, i32_store16, Align::Bytes2);
+wasm_result_primitive!(i16, i32_store16, Align::Bytes2);
+wasm_result_primitive!(u32, i32_store, Align::Bytes4);
+wasm_result_primitive!(i32, i32_store, Align::Bytes4);
+wasm_result_primitive!(u64, i64_store, Align::Bytes8);
+wasm_result_primitive!(i64, i64_store, Align::Bytes8);
+wasm_result_primitive!(usize, i32_store, Align::Bytes4);
 
-wasm_test_result_primitive!(f32, f32_store, Align::Bytes4);
-wasm_test_result_primitive!(f64, f64_store, Align::Bytes8);
+wasm_result_primitive!(f32, f32_store, Align::Bytes4);
+wasm_result_primitive!(f64, f64_store, Align::Bytes8);
 
-wasm_test_result_stack_memory!(u128);
-wasm_test_result_stack_memory!(i128);
-wasm_test_result_stack_memory!(RocDec);
-wasm_test_result_stack_memory!(RocStr);
+wasm_result_stack_memory!(u128);
+wasm_result_stack_memory!(i128);
+wasm_result_stack_memory!(RocDec);
+wasm_result_stack_memory!(RocStr);
 
-impl<T: Wasm32TestResult> Wasm32TestResult for RocList<T> {
+impl<T: Wasm32Result> Wasm32Result for RocList<T> {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(code_builder, main_function_index, 12)
     }
 }
 
-impl<T: Wasm32TestResult> Wasm32TestResult for &'_ T {
+impl<T: Wasm32Result> Wasm32Result for &'_ T {
     build_wrapper_body_primitive!(i32_store, Align::Bytes4);
 }
 
-impl<T, const N: usize> Wasm32TestResult for [T; N]
+impl<T, const N: usize> Wasm32Result for [T; N]
 where
-    T: Wasm32TestResult + Wasm32Sized,
+    T: Wasm32Result + Wasm32Sized,
 {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(code_builder, main_function_index, N * T::ACTUAL_WIDTH)
     }
 }
 
-impl Wasm32TestResult for () {
+impl Wasm32Result for () {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         // Main's symbol index is the same as its function index, since the first symbols we created were for procs
         let main_symbol_index = main_function_index;
@@ -153,10 +153,10 @@ impl Wasm32TestResult for () {
     }
 }
 
-impl<T, U> Wasm32TestResult for (T, U)
+impl<T, U> Wasm32Result for (T, U)
 where
-    T: Wasm32TestResult + Wasm32Sized,
-    U: Wasm32TestResult + Wasm32Sized,
+    T: Wasm32Result + Wasm32Sized,
+    U: Wasm32Result + Wasm32Sized,
 {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(
@@ -167,11 +167,11 @@ where
     }
 }
 
-impl<T, U, V> Wasm32TestResult for (T, U, V)
+impl<T, U, V> Wasm32Result for (T, U, V)
 where
-    T: Wasm32TestResult + Wasm32Sized,
-    U: Wasm32TestResult + Wasm32Sized,
-    V: Wasm32TestResult + Wasm32Sized,
+    T: Wasm32Result + Wasm32Sized,
+    U: Wasm32Result + Wasm32Sized,
+    V: Wasm32Result + Wasm32Sized,
 {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(
