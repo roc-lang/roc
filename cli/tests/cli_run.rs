@@ -820,6 +820,26 @@ mod cli_run {
             ),
         );
     }
+
+    #[test]
+    fn unused_import() {
+        check_compile_error(
+            &known_bad_file("UnusedImport.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNUSED IMPORT ───────────────────────────────────────────────────────────────
+
+                Nothing from Symbol is used in this module.
+
+                3│      imports [ Symbol.{ Ident } ]
+                                  ^^^^^^^^^^^^^^^^
+
+                Since Symbol isn't used, you don't need to import it.
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
+        );
+    }
 }
 
 #[allow(dead_code)]
