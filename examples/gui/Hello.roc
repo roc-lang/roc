@@ -1,6 +1,9 @@
 app "hello-gui"
     packages { pf: "platform" }
-    imports []
+    imports [ pf.Action.{ Action }, pf.Elem.{ button, text, row, col } ]
     provides [ render ] to pf
 
-render = \{} -> { content: "Hello, World!", title: "Roc GUI" }
+render =
+    btn = Button { onPress : \_ -> Action.none } (text "Hello, button!")
+
+    \{} -> { content: "Hello, World!" }
