@@ -1,7 +1,7 @@
 use crate::def::Def;
 use crate::expr::{self, ClosureData, Expr::*, IntValue};
 use crate::expr::{Expr, Field, Recursive};
-use crate::num::{FloatWidth, IntWidth, NumWidth, NumericBound};
+use crate::num::{FloatBound, IntBound, IntWidth, NumericBound};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
 use roc_module::called_via::CalledVia;
@@ -867,7 +867,7 @@ fn num_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
         args: vec![
             (
                 arg_var,
-                int::<i128>(var_store.fresh(), var_store.fresh(), 1, num_no_bound()),
+                int::<i128>(var_store.fresh(), var_store.fresh(), 1, int_no_bound()),
             ),
             (
                 arg_var,
@@ -965,7 +965,7 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     (float_var, Var(Symbol::ARG_1)),
                     (
                         float_var,
-                        float(unbound_zero_var, precision_var, 0.0, num_no_bound()),
+                        float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
                     ),
                 ],
                 ret_var: bool_var,
@@ -1014,7 +1014,7 @@ fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     (float_var, Var(Symbol::ARG_1)),
                     (
                         float_var,
-                        float(unbound_zero_var, precision_var, 0.0, num_no_bound()),
+                        float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
                     ),
                 ],
                 ret_var: bool_var,
@@ -1253,162 +1253,82 @@ fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.minI8: I8
 fn num_min_i8(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i8>(
-        symbol,
-        var_store,
-        i8::MIN,
-        NumericBound::Exact(IntWidth::I8),
-    )
+    int_min_or_max::<i8>(symbol, var_store, i8::MIN, IntBound::Exact(IntWidth::I8))
 }
 
 /// Num.maxI8: I8
 fn num_max_i8(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i8>(
-        symbol,
-        var_store,
-        i8::MAX,
-        NumericBound::Exact(IntWidth::I8),
-    )
+    int_min_or_max::<i8>(symbol, var_store, i8::MAX, IntBound::Exact(IntWidth::I8))
 }
 
 /// Num.minU8: U8
 fn num_min_u8(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u8>(
-        symbol,
-        var_store,
-        u8::MIN,
-        NumericBound::Exact(IntWidth::U8),
-    )
+    int_min_or_max::<u8>(symbol, var_store, u8::MIN, IntBound::Exact(IntWidth::U8))
 }
 
 /// Num.maxU8: U8
 fn num_max_u8(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u8>(
-        symbol,
-        var_store,
-        u8::MAX,
-        NumericBound::Exact(IntWidth::U8),
-    )
+    int_min_or_max::<u8>(symbol, var_store, u8::MAX, IntBound::Exact(IntWidth::U8))
 }
 
 /// Num.minI16: I16
 fn num_min_i16(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i16>(
-        symbol,
-        var_store,
-        i16::MIN,
-        NumericBound::Exact(IntWidth::I16),
-    )
+    int_min_or_max::<i16>(symbol, var_store, i16::MIN, IntBound::Exact(IntWidth::I16))
 }
 
 /// Num.maxI16: I16
 fn num_max_i16(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i16>(
-        symbol,
-        var_store,
-        i16::MAX,
-        NumericBound::Exact(IntWidth::I16),
-    )
+    int_min_or_max::<i16>(symbol, var_store, i16::MAX, IntBound::Exact(IntWidth::I16))
 }
 
 /// Num.minU16: U16
 fn num_min_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u16>(
-        symbol,
-        var_store,
-        u16::MIN,
-        NumericBound::Exact(IntWidth::U16),
-    )
+    int_min_or_max::<u16>(symbol, var_store, u16::MIN, IntBound::Exact(IntWidth::U16))
 }
 
 /// Num.maxU16: U16
 fn num_max_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u16>(
-        symbol,
-        var_store,
-        u16::MAX,
-        NumericBound::Exact(IntWidth::U16),
-    )
+    int_min_or_max::<u16>(symbol, var_store, u16::MAX, IntBound::Exact(IntWidth::U16))
 }
 
 /// Num.minI32: I32
 fn num_min_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i32>(
-        symbol,
-        var_store,
-        i32::MIN,
-        NumericBound::Exact(IntWidth::I32),
-    )
+    int_min_or_max::<i32>(symbol, var_store, i32::MIN, IntBound::Exact(IntWidth::I32))
 }
 
 /// Num.maxI32: I32
 fn num_max_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i32>(
-        symbol,
-        var_store,
-        i32::MAX,
-        NumericBound::Exact(IntWidth::I32),
-    )
+    int_min_or_max::<i32>(symbol, var_store, i32::MAX, IntBound::Exact(IntWidth::I32))
 }
 
 /// Num.minU32: U32
 fn num_min_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u32>(
-        symbol,
-        var_store,
-        u32::MIN,
-        NumericBound::Exact(IntWidth::U32),
-    )
+    int_min_or_max::<u32>(symbol, var_store, u32::MIN, IntBound::Exact(IntWidth::U32))
 }
 
 /// Num.maxU32: U32
 fn num_max_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u32>(
-        symbol,
-        var_store,
-        u32::MAX,
-        NumericBound::Exact(IntWidth::U32),
-    )
+    int_min_or_max::<u32>(symbol, var_store, u32::MAX, IntBound::Exact(IntWidth::U32))
 }
 
 /// Num.minI64: I64
 fn num_min_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i64>(
-        symbol,
-        var_store,
-        i64::MIN,
-        NumericBound::Exact(IntWidth::I64),
-    )
+    int_min_or_max::<i64>(symbol, var_store, i64::MIN, IntBound::Exact(IntWidth::I64))
 }
 
 /// Num.maxI64: I64
 fn num_max_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i64>(
-        symbol,
-        var_store,
-        i64::MAX,
-        NumericBound::Exact(IntWidth::I64),
-    )
+    int_min_or_max::<i64>(symbol, var_store, i64::MAX, IntBound::Exact(IntWidth::I64))
 }
 
 /// Num.minU64: U64
 fn num_min_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u64>(
-        symbol,
-        var_store,
-        u64::MIN,
-        NumericBound::Exact(IntWidth::U64),
-    )
+    int_min_or_max::<u64>(symbol, var_store, u64::MIN, IntBound::Exact(IntWidth::U64))
 }
 
 /// Num.maxU64: U64
 fn num_max_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u64>(
-        symbol,
-        var_store,
-        u64::MAX,
-        NumericBound::Exact(IntWidth::U64),
-    )
+    int_min_or_max::<u64>(symbol, var_store, u64::MAX, IntBound::Exact(IntWidth::U64))
 }
 
 /// Num.minI128: I128
@@ -1417,7 +1337,7 @@ fn num_min_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
         symbol,
         var_store,
         i128::MIN,
-        NumericBound::Exact(IntWidth::I128),
+        IntBound::Exact(IntWidth::I128),
     )
 }
 
@@ -1427,7 +1347,7 @@ fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
         symbol,
         var_store,
         i128::MAX,
-        NumericBound::Exact(IntWidth::I128),
+        IntBound::Exact(IntWidth::I128),
     )
 }
 
@@ -1559,7 +1479,7 @@ fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
                             errorcode_var,
                             Variable::UNSIGNED8,
                             0,
-                            NumericBound::Exact(IntWidth::U8),
+                            IntBound::Exact(IntWidth::U8),
                         ),
                     ),
                 ],
@@ -2307,7 +2227,7 @@ fn list_take_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
         len_var,
         Variable::NATURAL,
         0,
-        NumericBound::Exact(IntWidth::Nat),
+        IntBound::Exact(IntWidth::Nat),
     );
 
     let body = RunLowLevel {
@@ -2338,7 +2258,7 @@ fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
         len_var,
         Variable::NATURAL,
         0,
-        NumericBound::Exact(IntWidth::Nat),
+        IntBound::Exact(IntWidth::Nat),
     );
     let bool_var = var_store.fresh();
 
@@ -2453,7 +2373,7 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
         int_var,
         Variable::NATURAL,
         0,
-        NumericBound::Exact(IntWidth::Nat),
+        IntBound::Exact(IntWidth::Nat),
     );
 
     // \acc, elem -> acc |> List.append sep |> List.append elem
@@ -2538,7 +2458,7 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
         index_var,
         Variable::NATURAL,
         0,
-        NumericBound::Exact(IntWidth::Nat),
+        IntBound::Exact(IntWidth::Nat),
     );
 
     let clos = Closure(ClosureData {
@@ -2703,7 +2623,7 @@ fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
             (list_var, Var(Symbol::ARG_1)),
             (
                 index_var,
-                int::<i128>(num_var, num_precision_var, 0, num_no_bound()),
+                int::<i128>(num_var, num_precision_var, 0, int_no_bound()),
             ),
         ],
         ret_var: list_var,
@@ -2803,7 +2723,7 @@ fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         ),
                         (
                             arg_var,
-                            int::<i128>(num_var, num_precision_var, 1, num_no_bound()),
+                            int::<i128>(num_var, num_precision_var, 1, int_no_bound()),
                         ),
                     ],
                     ret_var: len_var,
@@ -3004,7 +2924,7 @@ fn list_min(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     args: vec![
                         (
                             len_var,
-                            int::<i128>(num_var, num_precision_var, 0, num_no_bound()),
+                            int::<i128>(num_var, num_precision_var, 0, int_no_bound()),
                         ),
                         (
                             len_var,
@@ -3042,7 +2962,7 @@ fn list_min(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     num_var,
                                                     num_precision_var,
                                                     0,
-                                                    num_no_bound(),
+                                                    int_no_bound(),
                                                 ),
                                             ),
                                         ],
@@ -3145,7 +3065,7 @@ fn list_max(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     args: vec![
                         (
                             len_var,
-                            int::<i128>(num_var, num_precision_var, 0, num_no_bound()),
+                            int::<i128>(num_var, num_precision_var, 0, int_no_bound()),
                         ),
                         (
                             len_var,
@@ -3183,7 +3103,7 @@ fn list_max(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     num_var,
                                                     num_precision_var,
                                                     0,
-                                                    num_no_bound(),
+                                                    int_no_bound(),
                                                 ),
                                             ),
                                         ],
@@ -4076,7 +3996,7 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         (num_var, Var(Symbol::ARG_2)),
                         (
                             num_var,
-                            float(unbound_zero_var, precision_var, 0.0, num_no_bound()),
+                            float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
                         ),
                     ],
                     ret_var: bool_var,
@@ -4146,7 +4066,7 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                 unbound_zero_var,
                                 unbound_zero_precision_var,
                                 0,
-                                num_no_bound(),
+                                int_no_bound(),
                             ),
                         ),
                     ],
@@ -4217,7 +4137,7 @@ fn num_div_ceil(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                 unbound_zero_var,
                                 unbound_zero_precision_var,
                                 0,
-                                num_no_bound(),
+                                int_no_bound(),
                             ),
                         ),
                     ],
@@ -4290,7 +4210,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     args: vec![
                         (
                             len_var,
-                            int::<i128>(zero_var, zero_precision_var, 0, num_no_bound()),
+                            int::<i128>(zero_var, zero_precision_var, 0, int_no_bound()),
                         ),
                         (
                             len_var,
@@ -4317,7 +4237,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                 (list_var, Var(Symbol::ARG_1)),
                                 (
                                     len_var,
-                                    int::<i128>(zero_var, zero_precision_var, 0, num_no_bound()),
+                                    int::<i128>(zero_var, zero_precision_var, 0, int_no_bound()),
                                 ),
                             ],
                             ret_var: list_elem_var,
@@ -4377,7 +4297,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     args: vec![
                         (
                             len_var,
-                            int::<i128>(num_var, num_precision_var, 0, num_no_bound()),
+                            int::<i128>(num_var, num_precision_var, 0, int_no_bound()),
                         ),
                         (
                             len_var,
@@ -4423,7 +4343,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     num_var,
                                                     num_precision_var,
                                                     1,
-                                                    num_no_bound(),
+                                                    int_no_bound(),
                                                 ),
                                             ),
                                         ],
@@ -5144,12 +5064,7 @@ fn defn_help(
 }
 
 #[inline(always)]
-fn int_min_or_max<I128>(
-    symbol: Symbol,
-    var_store: &mut VarStore,
-    i: I128,
-    bound: NumericBound<IntWidth>,
-) -> Def
+fn int_min_or_max<I128>(symbol: Symbol, var_store: &mut VarStore, i: I128, bound: IntBound) -> Def
 where
     I128: Into<i128>,
 {
@@ -5178,17 +5093,20 @@ where
     }
 }
 
-fn num_no_bound<W: Copy>() -> NumericBound<W> {
+fn num_no_bound() -> NumericBound {
     NumericBound::None
 }
 
+fn int_no_bound() -> IntBound {
+    IntBound::None
+}
+
+fn float_no_bound() -> FloatBound {
+    FloatBound::None
+}
+
 #[inline(always)]
-fn int<I128>(
-    num_var: Variable,
-    precision_var: Variable,
-    i: I128,
-    bound: NumericBound<IntWidth>,
-) -> Expr
+fn int<I128>(num_var: Variable, precision_var: Variable, i: I128, bound: IntBound) -> Expr
 where
     I128: Into<i128>,
 {
@@ -5203,12 +5121,7 @@ where
 }
 
 #[inline(always)]
-fn float(
-    num_var: Variable,
-    precision_var: Variable,
-    f: f64,
-    bound: NumericBound<FloatWidth>,
-) -> Expr {
+fn float(num_var: Variable, precision_var: Variable, f: f64, bound: FloatBound) -> Expr {
     Float(
         num_var,
         precision_var,
@@ -5219,7 +5132,7 @@ fn float(
 }
 
 #[inline(always)]
-fn num<I: Into<i128>>(num_var: Variable, i: I, bound: NumericBound<NumWidth>) -> Expr {
+fn num<I: Into<i128>>(num_var: Variable, i: I, bound: NumericBound) -> Expr {
     let i = i.into();
     Num(
         num_var,

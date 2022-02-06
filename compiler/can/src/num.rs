@@ -17,8 +17,8 @@ pub fn num_expr_from_result(
     env: &mut Env,
 ) -> Expr {
     match result {
-        Ok((str, ParsedNumResult::UnknownNum(num))) => {
-            Expr::Num(var_store.fresh(), (*str).into(), num, NumericBound::None)
+        Ok((str, ParsedNumResult::UnknownNum(num, bound))) => {
+            Expr::Num(var_store.fresh(), (*str).into(), num, bound)
         }
         Ok((str, ParsedNumResult::Int(num, bound))) => Expr::Int(
             var_store.fresh(),
@@ -50,7 +50,7 @@ pub fn num_expr_from_result(
 #[inline(always)]
 pub fn int_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<(&str, IntValue, NumericBound<IntWidth>), (&str, IntErrorKind)>,
+    result: Result<(&str, IntValue, IntBound), (&str, IntErrorKind)>,
     region: Region,
     base: Base,
     env: &mut Env,
@@ -77,7 +77,7 @@ pub fn int_expr_from_result(
 #[inline(always)]
 pub fn float_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<(&str, f64, NumericBound<FloatWidth>), (&str, FloatErrorKind)>,
+    result: Result<(&str, f64, FloatBound), (&str, FloatErrorKind)>,
     region: Region,
     env: &mut Env,
 ) -> Expr {
@@ -101,31 +101,16 @@ pub fn float_expr_from_result(
 }
 
 pub enum ParsedNumResult {
-    Int(IntValue, NumericBound<IntWidth>),
-    Float(f64, NumericBound<FloatWidth>),
-    UnknownNum(IntValue),
+    Int(IntValue, IntBound),
+    Float(f64, FloatBound),
+    UnknownNum(IntValue, NumericBound),
 }
 
 #[inline(always)]
 pub fn finish_parsing_num(raw: &str) -> Result<ParsedNumResult, (&str, IntErrorKind)> {
     // Ignore underscores.
     let radix = 10;
-    let (num, bound) =
-        from_str_radix(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e))?;
-    // Let's try to specialize the number
-    Ok(match bound {
-        NumericBound::None => ParsedNumResult::UnknownNum(num),
-        NumericBound::Exact(NumWidth::Int(iw)) => {
-            ParsedNumResult::Int(num, NumericBound::Exact(iw))
-        }
-        NumericBound::Exact(NumWidth::Float(fw)) => {
-            let num = match num {
-                IntValue::I128(n) => n as f64,
-                IntValue::U128(n) => n as f64,
-            };
-            ParsedNumResult::Float(num, NumericBound::Exact(fw))
-        }
-    })
+    from_str_radix(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e))
 }
 
 #[inline(always)]
@@ -133,7 +118,7 @@ pub fn finish_parsing_base(
     raw: &str,
     base: Base,
     is_negative: bool,
-) -> Result<(IntValue, NumericBound<IntWidth>), (&str, IntErrorKind)> {
+) -> Result<(IntValue, IntBound), (&str, IntErrorKind)> {
     let radix = match base {
         Base::Hex => 16,
         Base::Decimal => 10,
@@ -147,27 +132,25 @@ pub fn finish_parsing_base(
     } else {
         from_str_radix(raw.replace("_", "").as_str(), radix)
     })
-    .and_then(|(n, bound)| {
-        let bound = match bound {
-            NumericBound::None => NumericBound::None,
-            NumericBound::Exact(NumWidth::Int(iw)) => NumericBound::Exact(iw),
-            NumericBound::Exact(NumWidth::Float(_)) => return Err(IntErrorKind::FloatSuffix),
-        };
-        Ok((n, bound))
+    .and_then(|parsed| match parsed {
+        ParsedNumResult::Float(..) => Err(IntErrorKind::FloatSuffix),
+        ParsedNumResult::Int(val, bound) => Ok((val, bound)),
+        ParsedNumResult::UnknownNum(val, NumericBound::None) => Ok((val, IntBound::None)),
+        ParsedNumResult::UnknownNum(val, NumericBound::AtLeastIntOrFloat { sign, width }) => {
+            Ok((val, IntBound::AtLeast { sign, width }))
+        }
     })
     .map_err(|e| (raw, e))
 }
 
 #[inline(always)]
-pub fn finish_parsing_float(
-    raw: &str,
-) -> Result<(f64, NumericBound<FloatWidth>), (&str, FloatErrorKind)> {
+pub fn finish_parsing_float(raw: &str) -> Result<(f64, FloatBound), (&str, FloatErrorKind)> {
     let (opt_bound, raw_without_suffix) = parse_literal_suffix(raw);
 
     let bound = match opt_bound {
-        None => NumericBound::None,
-        Some(NumWidth::Float(fw)) => NumericBound::Exact(fw),
-        Some(NumWidth::Int(_)) => return Err((raw, FloatErrorKind::IntSuffix)),
+        None => FloatBound::None,
+        Some(ParsedWidth::Float(fw)) => FloatBound::Exact(fw),
+        Some(ParsedWidth::Int(_)) => return Err((raw, FloatErrorKind::IntSuffix)),
     };
 
     // Ignore underscores.
@@ -184,7 +167,13 @@ pub fn finish_parsing_float(
     }
 }
 
-fn parse_literal_suffix(num_str: &str) -> (Option<NumWidth>, &str) {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ParsedWidth {
+    Int(IntWidth),
+    Float(FloatWidth),
+}
+
+fn parse_literal_suffix(num_str: &str) -> (Option<ParsedWidth>, &str) {
     macro_rules! parse_num_suffix {
         ($($suffix:expr, $width:expr)*) => {$(
             if num_str.ends_with($suffix) {
@@ -194,20 +183,20 @@ fn parse_literal_suffix(num_str: &str) -> (Option<NumWidth>, &str) {
     }
 
     parse_num_suffix! {
-        "u8",   NumWidth::Int(IntWidth::U8)
-        "u16",  NumWidth::Int(IntWidth::U16)
-        "u32",  NumWidth::Int(IntWidth::U32)
-        "u64",  NumWidth::Int(IntWidth::U64)
-        "u128", NumWidth::Int(IntWidth::U128)
-        "i8",   NumWidth::Int(IntWidth::I8)
-        "i16",  NumWidth::Int(IntWidth::I16)
-        "i32",  NumWidth::Int(IntWidth::I32)
-        "i64",  NumWidth::Int(IntWidth::I64)
-        "i128", NumWidth::Int(IntWidth::I128)
-        "nat",  NumWidth::Int(IntWidth::Nat)
-        "dec",  NumWidth::Float(FloatWidth::Dec)
-        "f32",  NumWidth::Float(FloatWidth::F32)
-        "f64",  NumWidth::Float(FloatWidth::F64)
+        "u8",   ParsedWidth::Int(IntWidth::U8)
+        "u16",  ParsedWidth::Int(IntWidth::U16)
+        "u32",  ParsedWidth::Int(IntWidth::U32)
+        "u64",  ParsedWidth::Int(IntWidth::U64)
+        "u128", ParsedWidth::Int(IntWidth::U128)
+        "i8",   ParsedWidth::Int(IntWidth::I8)
+        "i16",  ParsedWidth::Int(IntWidth::I16)
+        "i32",  ParsedWidth::Int(IntWidth::I32)
+        "i64",  ParsedWidth::Int(IntWidth::I64)
+        "i128", ParsedWidth::Int(IntWidth::I128)
+        "nat",  ParsedWidth::Int(IntWidth::Nat)
+        "dec",  ParsedWidth::Float(FloatWidth::Dec)
+        "f32",  ParsedWidth::Float(FloatWidth::F32)
+        "f64",  ParsedWidth::Float(FloatWidth::F64)
     }
 
     (None, num_str)
@@ -221,10 +210,7 @@ fn parse_literal_suffix(num_str: &str) -> (Option<NumWidth>, &str) {
 /// the LEGAL_DETAILS file in the root directory of this distribution.
 ///
 /// Thanks to the Rust project and its contributors!
-fn from_str_radix(
-    src: &str,
-    radix: u32,
-) -> Result<(IntValue, NumericBound<NumWidth>), IntErrorKind> {
+fn from_str_radix(src: &str, radix: u32) -> Result<ParsedNumResult, IntErrorKind> {
     use self::IntErrorKind::*;
 
     assert!(
@@ -262,25 +248,42 @@ fn from_str_radix(
     };
 
     let (lower_bound, is_negative) = match result {
-        IntValue::I128(num) => (lower_bound_of_int(num), num <= 0),
+        IntValue::I128(num) => (lower_bound_of_int(num), num < 0),
         IntValue::U128(_) => (IntWidth::U128, false),
     };
 
     match opt_exact_bound {
         None => {
-            // TODO: use the lower bound
-            Ok((result, NumericBound::None))
+            // There's no exact bound, but we do have a lower bound.
+            let sign_demand = if is_negative {
+                SignDemand::Signed
+            } else {
+                SignDemand::NoDemand
+            };
+            Ok(ParsedNumResult::UnknownNum(
+                result,
+                NumericBound::AtLeastIntOrFloat {
+                    sign: sign_demand,
+                    width: lower_bound,
+                },
+            ))
         }
-        Some(bound @ NumWidth::Float(_)) => {
+        Some(ParsedWidth::Float(fw)) => {
             // For now, assume floats can represent all integers
             // TODO: this is somewhat incorrect, revisit
-            Ok((result, NumericBound::Exact(bound)))
+            Ok(ParsedNumResult::Float(
+                match result {
+                    IntValue::I128(n) => n as f64,
+                    IntValue::U128(n) => n as f64,
+                },
+                FloatBound::Exact(fw),
+            ))
         }
-        Some(NumWidth::Int(exact_width)) => {
+        Some(ParsedWidth::Int(exact_width)) => {
             // We need to check if the exact bound >= lower bound.
             if exact_width.is_superset(&lower_bound, is_negative) {
                 // Great! Use the exact bound.
-                Ok((result, NumericBound::Exact(NumWidth::Int(exact_width))))
+                Ok(ParsedNumResult::Int(result, IntBound::Exact(exact_width)))
             } else {
                 // This is something like 200i8; the lower bound is u8, which holds strictly more
                 // ints on the positive side than i8 does. Report an error depending on which side
@@ -474,19 +477,36 @@ pub enum FloatWidth {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum NumWidth {
-    Int(IntWidth),
-    Float(FloatWidth),
+pub enum SignDemand {
+    /// Can be signed or unsigned.
+    NoDemand,
+    /// Must be signed.
+    Signed,
 }
 
-/// Describes a bound on the width of a numeric literal.
+/// Describes a bound on the width of an integer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum NumericBound<W>
-where
-    W: Copy,
-{
+pub enum IntBound {
     /// There is no bound on the width.
     None,
-    /// Must have exactly the width `W`.
-    Exact(W),
+    /// Must have an exact width.
+    Exact(IntWidth),
+    /// Must have a certain sign and a minimum width.
+    AtLeast { sign: SignDemand, width: IntWidth },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FloatBound {
+    None,
+    Exact(FloatWidth),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NumericBound {
+    None,
+    /// Must be an integer of a certain size, or any float.
+    AtLeastIntOrFloat {
+        sign: SignDemand,
+        width: IntWidth,
+    },
 }

@@ -6102,6 +6102,12 @@ I need all branches in an `if` to have the same type!
                     packages {}
                     imports [Task]
                     provides [ mainForHost ]
+                    effects fx.Effect
+                         {
+                             putChar : I64 -> Effect {},
+                             putLine : Str -> Effect {},
+                             getLine : Effect Str
+                         }
                 "#
             ),
             indoc!(
@@ -7844,6 +7850,129 @@ I need all branches in an `if` to have the same type!
 
                 Tip: The suffix indicates this integer is a I128, whose maximum value
                 is 170_141_183_460_469_231_731_687_303_715_884_105_727.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_get_negative_number() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 List.get [1,2,3] -1
+                 "#
+            ),
+            // TODO: this error message could be improved, e.g. something like "This argument can
+            // be used as ... because of its literal value"
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `get` is not what I expect:
+
+                1│  List.get [1,2,3] -1
+                                     ^^
+
+                This argument is a number of type:
+
+                    I8, I16, I32, I64, I128, F32, F64, or Dec
+
+                But `get` needs the 2nd argument to be:
+
+                    Nat
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_get_negative_number_indirect() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 a = -9_223_372_036_854
+                 List.get [1,2,3] a
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `get` is not what I expect:
+
+                2│  List.get [1,2,3] a
+                                     ^
+
+                This `a` value is a:
+
+                    I64, I128, F32, F64, or Dec
+
+                But `get` needs the 2nd argument to be:
+
+                    Nat
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_get_negative_number_double_indirect() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 a = -9_223_372_036_854
+                 b = a
+                 List.get [1,2,3] b
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `get` is not what I expect:
+
+                3│  List.get [1,2,3] b
+                                     ^
+
+                This `b` value is a:
+
+                    I64, I128, F32, F64, or Dec
+
+                But `get` needs the 2nd argument to be:
+
+                    Nat
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn compare_unsigned_to_signed() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when -1 is
+                   1u8 -> 1
+                   _ -> 1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st pattern in this `when` is causing a mismatch:
+
+                2│     1u8 -> 1
+                       ^^^
+
+                The first pattern is trying to match integers:
+
+                    U8
+
+                But the expression between `when` and `is` has the type:
+
+                    I8, I16, I32, I64, I128, F32, F64, or Dec
                 "#
             ),
         )

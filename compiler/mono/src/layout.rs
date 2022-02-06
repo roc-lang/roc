@@ -66,6 +66,7 @@ impl<'a> RawFunctionLayout<'a> {
                 Self::new_help(env, structure, structure_content.clone())
             }
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
+            RangedNumber(typ, _) => Self::from_var(env, typ),
 
             // Ints
             Alias(Symbol::NUM_I128, args, _) => {
@@ -901,6 +902,8 @@ impl<'a> Layout<'a> {
                     _ => Self::from_var(env, actual_var),
                 }
             }
+
+            RangedNumber(typ, _) => Self::from_var(env, typ),
 
             Error => Err(LayoutProblem::Erroneous),
         }
@@ -2562,7 +2565,7 @@ fn layout_from_num_content<'a>(
         Alias(_, _, _) => {
             todo!("TODO recursively resolve type aliases in num_from_content");
         }
-        Structure(_) => {
+        Structure(_) | RangedNumber(..) => {
             panic!("Invalid Num.Num type application: {:?}", content);
         }
         Error => Err(LayoutProblem::Erroneous),

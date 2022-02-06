@@ -2292,7 +2292,7 @@ fn specialize_external<'a>(
         env.subs,
         partial_proc.annotation,
         fn_var,
-        roc_unify::unify::Mode::Eq,
+        roc_unify::unify::Mode::EQ,
     );
 
     // This will not hold for programs with type errors
@@ -4281,7 +4281,7 @@ pub fn with_hole<'a>(
                                     env.subs,
                                     fn_var,
                                     lambda_expr_var,
-                                    roc_unify::unify::Mode::Eq,
+                                    roc_unify::unify::Mode::EQ,
                                 );
 
                                 result = with_hole(
@@ -6691,7 +6691,7 @@ fn reuse_function_symbol<'a>(
             env.subs,
             arg_var.unwrap(),
             expr_var,
-            roc_unify::unify::Mode::Eq,
+            roc_unify::unify::Mode::EQ,
         );
 
         let result = with_hole(

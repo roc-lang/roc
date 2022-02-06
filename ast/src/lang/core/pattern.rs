@@ -196,7 +196,7 @@ pub fn to_pattern2<'a>(
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(ParsedNumResult::UnknownNum(int)) => {
+                Ok(ParsedNumResult::UnknownNum(int, _bound)) => {
                     Pattern2::NumLiteral(
                         env.var_store.fresh(),
                         match int {

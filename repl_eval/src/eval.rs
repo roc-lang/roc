@@ -1166,6 +1166,9 @@ fn num_to_ast<'a, A: ReplApp>(
 
             num_to_ast(env, num_expr, content)
         }
+        RangedNumber(typ, _) => {
+            num_to_ast(env, num_expr, env.subs.get_content_without_compacting(*typ))
+        }
         other => {
             panic!("Unexpected FlatType {:?} in num_to_ast", other);
         }

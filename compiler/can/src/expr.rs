@@ -4,7 +4,7 @@ use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
-    int_expr_from_result, num_expr_from_result, FloatWidth, IntWidth, NumWidth, NumericBound,
+    int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumericBound,
 };
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
@@ -67,17 +67,11 @@ pub enum Expr {
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, Box<str>, IntValue, NumericBound<NumWidth>),
+    Num(Variable, Box<str>, IntValue, NumericBound),
 
     // Int and Float store a variable to generate better error messages
-    Int(
-        Variable,
-        Variable,
-        Box<str>,
-        IntValue,
-        NumericBound<IntWidth>,
-    ),
-    Float(Variable, Variable, Box<str>, f64, NumericBound<FloatWidth>),
+    Int(Variable, Variable, Box<str>, IntValue, IntBound),
+    Float(Variable, Variable, Box<str>, f64, FloatBound),
     Str(Box<str>),
     List {
         elem_var: Variable,

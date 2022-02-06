@@ -231,6 +231,7 @@ impl SolvedType {
                 }
             }
             Variable(var) => Self::from_var(solved_subs.inner(), *var),
+            RangedNumber(typ, _) => Self::from_type(solved_subs, typ),
         }
     }
 
@@ -284,6 +285,7 @@ impl SolvedType {
 
                 SolvedType::Alias(*symbol, new_args, solved_lambda_sets, Box::new(aliased_to))
             }
+            RangedNumber(typ, _range_vars) => Self::from_var_help(subs, recursion_vars, *typ),
             Error => SolvedType::Error,
         }
     }
