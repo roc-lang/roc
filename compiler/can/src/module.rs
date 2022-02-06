@@ -1,4 +1,5 @@
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
+use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{ClosureData, Expr, Output};
 use crate::operator::desugar_def;
@@ -40,6 +41,30 @@ pub struct ModuleOutput {
     pub scope: Scope,
 }
 
+fn validate_generate_with<'a>(
+    generate_with: &'a [Loc<roc_parse::header::ExposedName<'a>>],
+) -> (HostedGeneratedFunctions, Vec<Loc<Ident>>) {
+    let mut functions = HostedGeneratedFunctions::default();
+    let mut unknown = Vec::new();
+
+    for generated in generate_with {
+        match generated.value.as_str() {
+            "after" => functions.after = true,
+            "map" => functions.map = true,
+            "always" => functions.always = true,
+            "loop" => functions.loop_ = true,
+            "forever" => functions.forever = true,
+            other => {
+                // we don't know how to generate this function
+                let ident = Ident::from(other);
+                unknown.push(Loc::at(generated.region, ident));
+            }
+        }
+    }
+
+    (functions, unknown)
+}
+
 // TODO trim these down
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a, F>(
@@ -68,9 +93,23 @@ where
         scope.add_alias(name, alias.region, alias.type_variables, alias.typ);
     }
 
-    let effect_symbol = if let HeaderFor::Hosted { generates, .. } = header_for {
-        // TODO extract effect name from the header
+    struct Hosted {
+        effect_symbol: Symbol,
+        generated_functions: HostedGeneratedFunctions,
+    }
+
+    let hosted_info = if let HeaderFor::Hosted {
+        generates,
+        generates_with,
+    } = header_for
+    {
         let name: &str = generates.into();
+        let (generated_functions, unknown_generated) = validate_generate_with(generates_with);
+
+        for unknown in unknown_generated {
+            env.problem(Problem::UnknownGeneratesWith(unknown));
+        }
+
         let effect_symbol = scope
             .introduce(
                 name.into(),
@@ -99,7 +138,10 @@ where
             );
         }
 
-        Some(effect_symbol)
+        Some(Hosted {
+            effect_symbol,
+            generated_functions,
+        })
     } else {
         None
     };
@@ -246,7 +288,11 @@ where
         (Ok(mut declarations), output) => {
             use crate::def::Declaration::*;
 
-            if let Some(effect_symbol) = effect_symbol {
+            if let Some(Hosted {
+                effect_symbol,
+                generated_functions,
+            }) = hosted_info
+            {
                 let mut exposed_symbols = MutSet::default();
 
                 // NOTE this currently builds all functions, not just the ones that the user requested
@@ -257,6 +303,7 @@ where
                     var_store,
                     &mut exposed_symbols,
                     &mut declarations,
+                    generated_functions,
                 );
             }
 
@@ -277,7 +324,7 @@ where
                         // Temporary hack: we don't know exactly what symbols are hosted symbols,
                         // and which are meant to be normal definitions without a body. So for now
                         // we just assume they are hosted functions (meant to be provided by the platform)
-                        if let Some(effect_symbol) = effect_symbol {
+                        if let Some(Hosted { effect_symbol, .. }) = hosted_info {
                             macro_rules! make_hosted_def {
                                 () => {
                                     let symbol = def.pattern_vars.iter().next().unwrap().0;
@@ -358,7 +405,7 @@ where
 
             let mut aliases = MutMap::default();
 
-            if let Some(effect_symbol) = effect_symbol {
+            if let Some(Hosted { effect_symbol, .. }) = hosted_info {
                 // Remove this from exposed_symbols,
                 // so that at the end of the process,
                 // we can see if there were any
