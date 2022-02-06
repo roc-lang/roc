@@ -32,20 +32,12 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-pub enum TestType {
-    /// Test that some Roc code evaluates to the right result
-    Evaluate,
-    /// Test that some Roc values have the right refcount
-    Refcount,
-}
-
 #[allow(dead_code)]
 pub fn compile_and_load<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
     _test_wrapper_type_info: PhantomData<T>,
-    _test_type: TestType,
 ) -> wasmer::Instance {
     let platform_bytes = load_platform_and_builtins();
 
@@ -200,8 +192,7 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance =
-        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, TestType::Evaluate);
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -246,8 +237,7 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance =
-        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, TestType::Refcount);
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
