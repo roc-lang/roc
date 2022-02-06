@@ -4,10 +4,14 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
 use roc_collections::all::MutSet;
-use roc_gen_wasm::wasm32_result::insert_wrapper_for_layout;
+use roc_gen_wasm::wasm32_result;
 use roc_load::file::MonomorphizedModule;
 use roc_parse::ast::Expr;
-use roc_repl_eval::{gen::compile_to_mono, ReplApp, ReplAppMemory};
+use roc_repl_eval::{
+    eval::jit_to_ast,
+    gen::{compile_to_mono, format_answer, ReplOutput},
+    ReplApp, ReplAppMemory,
+};
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
@@ -25,7 +29,6 @@ extern "C" {
 
 pub struct WasmReplApp<'a> {
     arena: &'a Bump,
-    _module: &'a [u8],
 }
 
 /// A copy of the app's memory, made after running the main function
@@ -146,7 +149,8 @@ pub async fn repl_wasm_entrypoint_from_js(src: String) -> Result<String, String>
     let pre_linked_binary: &'static [u8] = include_bytes!("../data/pre_linked_binary.o");
 
     // Compile the app
-    let mono = match compile_to_mono(arena, &src, TargetInfo::default_wasm32()) {
+    let target_info = TargetInfo::default_wasm32();
+    let mono = match compile_to_mono(arena, &src, target_info) {
         Ok(m) => m,
         Err(messages) => return Err(messages.join("\n\n")),
     };
@@ -175,54 +179,67 @@ pub async fn repl_wasm_entrypoint_from_js(src: String) -> Result<String, String>
         None => return Ok(format!("<function> : {}", expr_type_str)),
     };
 
-    let env = roc_gen_wasm::Env {
-        arena,
-        module_id,
-        exposed_to_host: exposed_to_host
-            .values
-            .keys()
-            .copied()
-            .collect::<MutSet<_>>(),
-    };
+    let app_module_bytes = {
+        let env = roc_gen_wasm::Env {
+            arena,
+            module_id,
+            exposed_to_host: exposed_to_host
+                .values
+                .keys()
+                .copied()
+                .collect::<MutSet<_>>(),
+        };
 
-    let (mut module, called_preload_fns, main_fn_index) =
-        roc_gen_wasm::build_module_without_wrapper(
-            &env,
-            &mut interns,
-            pre_linked_binary,
-            procedures,
+        let (mut module, called_preload_fns, main_fn_index) = {
+            roc_gen_wasm::build_module_without_wrapper(
+                &env,
+                &mut interns, // NOTE: must drop this mutable ref before jit_to_ast
+                pre_linked_binary,
+                procedures,
+            )
+        };
+
+        wasm32_result::insert_wrapper_for_layout(
+            arena,
+            &mut module,
+            WRAPPER_NAME,
+            main_fn_index,
+            &main_fn_layout.result,
         );
 
-    insert_wrapper_for_layout(
-        arena,
-        &mut module,
-        WRAPPER_NAME,
-        main_fn_index,
-        &main_fn_layout.result,
-    );
+        module.remove_dead_preloads(env.arena, called_preload_fns);
 
-    module.remove_dead_preloads(env.arena, called_preload_fns);
+        let mut buffer = Vec::with_capacity_in(module.size(), arena);
+        module.serialize(&mut buffer);
 
-    let mut app_module_bytes = Vec::with_capacity_in(module.size(), arena);
-    module.serialize(&mut app_module_bytes);
+        buffer
+    };
 
+    // Send the compiled binary out to JS and create an executable instance from it
     js_create_app(&app_module_bytes)
         .await
         .map_err(|js| format!("{:?}", js))?;
 
-    let app_final_memory_size: usize = js_run_app();
+    let mut app = WasmReplApp { arena };
 
-    // Copy the app's memory and get the result address
-    let app_memory_copy: &mut [u8] = arena.alloc_slice_fill_default(app_final_memory_size);
-    let app_result_addr = js_get_result_and_memory(app_memory_copy.as_mut_ptr());
+    // Run the app and transform the result value to an AST `Expr`
+    // Restore type constructor names, and other user-facing info that was erased during compilation.
+    let res_answer = jit_to_ast(
+        arena,
+        &mut app,
+        "", // main_fn_name is ignored (only passed to WasmReplApp methods)
+        main_fn_layout,
+        content,
+        &interns,
+        module_id,
+        &subs,
+        target_info,
+    );
 
-    /*
-        TODO
-        - gen_and_eval_wasm
-    */
-
-    // Create a String representation of the result value
-    let output_text = format!("{}", app_result_addr);
-
-    Ok(output_text)
+    // Transform the Expr to a string
+    // `Result::Err` becomes a JS exception that will be caught and displayed
+    match format_answer(&arena, res_answer, expr_type_str) {
+        ReplOutput::NoProblems { expr, expr_type } => Ok(format!("\n{}: {}", expr, expr_type)),
+        ReplOutput::Problems(lines) => Err(format!("\n{}\n", lines.join("\n\n"))),
+    }
 }
