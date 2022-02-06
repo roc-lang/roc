@@ -862,9 +862,9 @@ mod test_reporting {
                 2│>      2 if 1 -> 0x0
                 3│       _ -> 0x1
 
-                Right now it’s an integer of type:
+                Right now it’s a number of type:
 
-                    Int a
+                    Num a
 
                 But I need every `if` guard condition to evaluate to a Bool—either
                 `True` or `False`.
@@ -896,7 +896,7 @@ mod test_reporting {
 
                 but the `then` branch has the type:
 
-                    Int a
+                    Num a
 
                 I need all branches in an `if` to have the same type!
                 "#
@@ -927,7 +927,7 @@ mod test_reporting {
 
                 But all the previous branches have type:
 
-                    Int a
+                    Num a
 
                 I need all branches in an `if` to have the same type!
                 "#
@@ -993,7 +993,7 @@ mod test_reporting {
 
                 However, the preceding elements in the list all have the type:
 
-                    Int a
+                    Num a
 
                 I need every element in a list to have the same type!
                 "#
@@ -1250,8 +1250,8 @@ mod test_reporting {
                 2│  x = if True then 3.14 else 4
                                                ^
 
-                It can only be used as a
-                `I8``U8`, `I16`, `U16`, `I32`, `U32`, `I64`, `Nat`, `U64`, `I128`, or `U128`
+                It can only be used as a `I8`, `U8`, `I16`, `U16`, `I32`, `U32`, `I64`, `Nat`, `U64`,
+                `I128`, `U128`, `F32`, `F64`, or `Dec`
 
                 But it is being used as:
 
@@ -1439,7 +1439,7 @@ mod test_reporting {
 
                 But the expression between `when` and `is` has the type:
 
-                    Int a
+                    Num a
                 "#
             ),
         )
@@ -1470,7 +1470,7 @@ mod test_reporting {
 
                 But all the previous branches match:
 
-                    Int a
+                    Num a
                 "#
             ),
         )
@@ -1500,7 +1500,7 @@ mod test_reporting {
 
                 But the expression between `when` and `is` has the type:
 
-                    { foo : Int a }
+                    { foo : Num a }
                 "#
             ),
         )
@@ -1620,13 +1620,13 @@ mod test_reporting {
                 2│      {} | 1 -> 3
                         ^^^^^^
 
-                The first pattern is trying to match integers:
+                The first pattern is trying to match numbers:
 
-                    Int a
+                    Num a
 
                 But the expression between `when` and `is` has the type:
 
-                    { foo : Int a }
+                    { foo : Num a }
                 "#
             ),
         )
@@ -1652,9 +1652,9 @@ mod test_reporting {
                 1│  (Foo x) = 42
                               ^^
 
-                It is an integer of type:
+                It is a number of type:
 
-                    Int a
+                    Num a
 
                 But you are trying to use it as:
 
@@ -2177,8 +2177,8 @@ mod test_reporting {
 
                 This is usually a typo. Here are the `x` fields that are most similar:
 
-                    { fo : Int b
-                    , bar : Int a
+                    { fo : Num b
+                    , bar : Num a
                     }
 
                 So maybe `.foo` should be `.fo`?
@@ -2244,10 +2244,10 @@ mod test_reporting {
 
                 This is usually a typo. Here are the `x` fields that are most similar:
 
-                    { fo : Int c
-                    , foobar : Int d
-                    , bar : Int a
-                    , baz : Int b
+                    { fo : Num c
+                    , foobar : Num d
+                    , bar : Num a
+                    , baz : Num b
                     , ...
                     }
 
@@ -2342,7 +2342,7 @@ mod test_reporting {
 
                 But `add` needs the 2nd argument to be:
 
-                    Num (Integer a)
+                    Num a
                 "#
             ),
         )
@@ -3375,8 +3375,8 @@ mod test_reporting {
 
                 This `ACons` global tag application has the type:
 
-                    [ ACons Int Signed64 [ BCons (Int a) [ ACons Str [ BNil ]b ]c ]d,
-                    ANil ]
+                    [ ACons Num (Integer Signed64) [ BCons (Num a) [ ACons Str [ BNil
+                    ]b ]c ]d, ANil ]
 
                 But the type annotation on `x` says it should be:
 
@@ -3401,9 +3401,7 @@ mod test_reporting {
                 minlit = -170_141_183_460_469_231_731_687_303_715_884_105_728
                 maxlit =  340_282_366_920_938_463_463_374_607_431_768_211_455
 
-                getI128 = \_ -> 1i128
-
-                x + y + h + l + minlit + (getI128 maxlit)
+                x + y + h + l + minlit + maxlit
                 "#
             ),
             indoc!(
@@ -4990,7 +4988,7 @@ mod test_reporting {
 
                 This `insert` call produces:
 
-                    Dict Str (Int a)
+                    Dict Str (Num a)
 
                 But the type annotation on `myDict` says it should be:
 
@@ -5652,7 +5650,7 @@ mod test_reporting {
 
                 but the `then` branch has the type:
 
-                    Int a
+                    Num a
 
                 I need all branches in an `if` to have the same type!
                 "#
@@ -6293,7 +6291,7 @@ I need all branches in an `if` to have the same type!
 
                 This `map` call produces:
 
-                    List [ Foo Int a ]
+                    List [ Foo Num a ]
 
                 But the type annotation on `x` says it should be:
 
@@ -6543,11 +6541,11 @@ I need all branches in an `if` to have the same type!
 
                 This argument is an anonymous function of type:
 
-                    Num (Integer a) -> Num (Integer a)
+                    Num a -> Num a
 
                 But `map` needs the 2nd argument to be:
 
-                    Str -> Num (Integer a)
+                    Str -> Num a
             "#
             ),
         )
@@ -6649,21 +6647,6 @@ I need all branches in an `if` to have the same type!
                 But the type annotation on `mult` says it should be:
 
                     F64
-
-                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-
-                The 2nd argument to `mult` is not what I expect:
-
-                4│  mult 0 0
-                           ^
-
-                This argument is an integer of type:
-
-                    Int a
-
-                But `mult` needs the 2nd argument to be:
-
-                    F64
             "#
             ),
         )
@@ -6710,21 +6693,6 @@ I need all branches in an `if` to have the same type!
                     Num a
 
                 But the type annotation on `mult` says it should be:
-
-                    F64
-
-                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-
-                The 2nd argument to `mult` is not what I expect:
-
-                4│  mult 0 0
-                           ^
-
-                This argument is an integer of type:
-
-                    Int a
-
-                But `mult` needs the 2nd argument to be:
 
                     F64
             "#
@@ -7078,9 +7046,9 @@ I need all branches in an `if` to have the same type!
                 5│  f = \c -> c 6
                                 ^
 
-                This argument is an integer of type:
+                This argument is a number of type:
 
-                    Int a
+                    Num a
 
                 But `c` needs the 1st argument to be:
 
@@ -7088,7 +7056,7 @@ I need all branches in an `if` to have the same type!
 
                 Tip: The type annotation uses the type variable `a` to say that this
                 definition can produce any type of value. But in the body I see that
-                it will only produce a `Int` value of a single specific type. Maybe
+                it will only produce a `Num` value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
                 to be more general?
                 "#
@@ -7901,9 +7869,9 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                a = -9_223_372_036_854
-                List.get [1,2,3] a
-                "#
+                 a = -9_223_372_036_854
+                 List.get [1,2,3] a
+                 "#
             ),
             indoc!(
                 r#"
@@ -7914,7 +7882,7 @@ I need all branches in an `if` to have the same type!
                 2│  List.get [1,2,3] a
                                      ^
 
-                It can only be used as a `I64` or `I128`
+                It can only be used as a `I64`, `I128`, `F32`, `F64`, or `Dec`
 
                 But it is being used as:
 

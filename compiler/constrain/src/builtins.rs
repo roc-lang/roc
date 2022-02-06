@@ -324,8 +324,11 @@ impl TypedNumericBound for NumericBound {
     fn bounded_range(&self) -> Vec<Variable> {
         match self {
             NumericBound::None => vec![],
-            NumericBound::Int(ib) => ib.bounded_range(),
-            NumericBound::Float(fb) => fb.bounded_range(),
+            &NumericBound::AtLeastIntOrFloat { sign, width } => {
+                let mut range = IntBound::AtLeast { sign, width }.bounded_range();
+                range.extend_from_slice(&[Variable::F32, Variable::F64, Variable::DEC]);
+                range
+            }
         }
     }
 }

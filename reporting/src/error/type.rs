@@ -66,11 +66,11 @@ pub fn type_problem<'b>(
             let last = range.len() - 1;
             for (i, choice) in range.into_iter().enumerate() {
                 if i == last && i == 1 {
-                    range_choices.push(alloc.text(" or "));
+                    range_choices.push(alloc.reflow(" or "));
                 } else if i == last && i > 1 {
-                    range_choices.push(alloc.text(", or "));
-                } else if i > 1 {
-                    range_choices.push(alloc.text(", "));
+                    range_choices.push(alloc.reflow(", or "));
+                } else if i > 0 {
+                    range_choices.push(alloc.reflow(", "));
                 }
 
                 range_choices.push(to_doc(alloc, Parens::Unnecessary, choice));

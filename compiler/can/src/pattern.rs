@@ -216,8 +216,8 @@ pub fn canonicalize_pattern<'a>(
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(ParsedNumResult::UnknownNum(int)) => {
-                    Pattern::NumLiteral(var_store.fresh(), (str).into(), int, NumericBound::None)
+                Ok(ParsedNumResult::UnknownNum(int, bound)) => {
+                    Pattern::NumLiteral(var_store.fresh(), (str).into(), int, bound)
                 }
                 Ok(ParsedNumResult::Int(int, bound)) => Pattern::IntLiteral(
                     var_store.fresh(),
