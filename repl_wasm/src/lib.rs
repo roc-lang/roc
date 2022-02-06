@@ -153,6 +153,8 @@ pub async fn repl_wasm_entrypoint_from_js(src: String) -> Result<String, String>
         ..
     } = mono;
 
+    let pre_linked_binary: &'static [u8] = include_bytes!("../data/pre_linked_binary.o");
+
     /*
         TODO
         - reuse code from test_gen/src/wasm.rs

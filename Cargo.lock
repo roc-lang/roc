@@ -3722,6 +3722,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "js-sys",
+ "roc_builtins",
  "roc_load",
  "roc_parse",
  "roc_repl_eval",

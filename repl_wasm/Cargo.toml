@@ -6,6 +6,9 @@ version = "0.1.0"
 [lib]
 crate-type = ["cdylib"]
 
+[build-dependencies]
+roc_builtins = {path = "../compiler/builtins"}
+
 [dependencies]
 bumpalo = {version = "3.8.0", features = ["collections"]}
 js-sys = "0.3.56"

@@ -2,5 +2,8 @@
 /dist
 /notes.md
 
+# Binary data folder
+/data
+
 # wasm-pack
 /pkg
