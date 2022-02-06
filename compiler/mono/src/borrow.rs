@@ -972,11 +972,13 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),
 
-        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumSub | NumSubWrap | NumSubChecked
-        | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare
-        | NumDivUnchecked | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf | NumPow
-        | NumPowInt | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy
-        | NumShiftRightBy | NumShiftRightZfBy => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
+        | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulChecked | NumGt
+        | NumGte | NumLt | NumLte | NumCompare | NumDivUnchecked | NumDivCeilUnchecked
+        | NumRemUnchecked | NumIsMultipleOf | NumPow | NumPowInt | NumBitwiseAnd
+        | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy | NumShiftRightBy | NumShiftRightZfBy => {
+            arena.alloc_slice_copy(&[irrelevant, irrelevant])
+        }
 
         NumToStr | NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumLogUnchecked
         | NumRound | NumCeiling | NumFloor | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos

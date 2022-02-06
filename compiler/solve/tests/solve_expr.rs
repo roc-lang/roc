@@ -63,7 +63,7 @@ mod solve_expr {
                 &stdlib,
                 dir.path(),
                 exposed_types,
-                8,
+                roc_target::TargetInfo::default_x86_64(),
                 builtin_defs_map,
             );
 
@@ -1327,7 +1327,7 @@ mod solve_expr {
                     \Foo -> 42
                 "#
             ),
-            "[ Foo ]* -> Num *",
+            "[ Foo ] -> Num *",
         );
     }
 
@@ -1339,7 +1339,7 @@ mod solve_expr {
                     \@Foo -> 42
                 "#
             ),
-            "[ @Foo ]* -> Num *",
+            "[ @Foo ] -> Num *",
         );
     }
 
@@ -1354,7 +1354,7 @@ mod solve_expr {
                             False -> 0
                 "#
             ),
-            "[ False, True ]* -> Num *",
+            "[ False, True ] -> Num *",
         );
     }
 
@@ -1419,7 +1419,7 @@ mod solve_expr {
                     \Foo x -> Foo x
                 "#
             ),
-            "[ Foo a ]* -> [ Foo a ]*",
+            "[ Foo a ] -> [ Foo a ]*",
         );
     }
 
@@ -1431,7 +1431,7 @@ mod solve_expr {
                     \Foo x _ -> Foo x "y"
                 "#
             ),
-            "[ Foo a * ]* -> [ Foo a Str ]*",
+            "[ Foo a * ] -> [ Foo a Str ]*",
         );
     }
 
@@ -2416,7 +2416,7 @@ mod solve_expr {
                    toBit
                 "#
             ),
-            "[ False, True ]* -> Num *",
+            "[ False, True ] -> Num *",
         );
     }
 
@@ -2680,7 +2680,7 @@ mod solve_expr {
                     map
                        "#
             ),
-            "(a -> b), [ Cons a c, Nil ]* as c -> [ Cons b d, Nil ]* as d",
+            "(a -> b), [ Cons a c, Nil ] as c -> [ Cons b d, Nil ]* as d",
         );
     }
 
@@ -2941,7 +2941,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ]* as a -> [ S b, Z ]* as b",
+            "[ S a, Z ] as a -> [ S b, Z ]* as b",
         );
     }
 
@@ -2960,7 +2960,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ]* as a -> [ S b, Z ]* as b",
+            "[ S a, Z ] as a -> [ S b, Z ]* as b",
         );
     }
 
@@ -2981,20 +2981,20 @@ mod solve_expr {
         );
     }
 
-    // #[test]
-    // fn let_tag_pattern_with_annotation() {
-    //     infer_eq_without_problem(
-    //         indoc!(
-    //             r#"
-    //                 UserId x : [ UserId I64 ]
-    //                 UserId x = UserId 42
+    #[test]
+    fn let_tag_pattern_with_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                     UserId x : [ UserId I64 ]
+                     UserId x = UserId 42
 
-    //                 x
-    //             "#
-    //         ),
-    //         "I64",
-    //     );
-    // }
+                     x
+                 "#
+            ),
+            "I64",
+        );
+    }
 
     #[test]
     fn typecheck_record_linked_list_map() {
@@ -3031,7 +3031,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "(a -> b), [ Cons { x : a, xs : c }*, Nil ]* as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
+            "(a -> b), [ Cons { x : a, xs : c }*, Nil ] as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
         );
     }
 
@@ -3100,7 +3100,7 @@ mod solve_expr {
                    toAs
                 "#
             ),
-            "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
+            "(a -> b), [ Cons c [ Cons a d, Nil ], Nil ] as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
         );
     }
 
@@ -3342,6 +3342,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn min_i128() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minI128
+                "#
+            ),
+            "I128",
+        );
+    }
+
+    #[test]
     fn max_i128() {
         infer_eq_without_problem(
             indoc!(
@@ -3350,6 +3362,102 @@ mod solve_expr {
                 "#
             ),
             "I128",
+        );
+    }
+
+    #[test]
+    fn min_i64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minI64
+                "#
+            ),
+            "I64",
+        );
+    }
+
+    #[test]
+    fn max_i64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxI64
+                "#
+            ),
+            "I64",
+        );
+    }
+
+    #[test]
+    fn min_u64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minU64
+                "#
+            ),
+            "U64",
+        );
+    }
+
+    #[test]
+    fn max_u64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxU64
+                "#
+            ),
+            "U64",
+        );
+    }
+
+    #[test]
+    fn min_i32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minI32
+                "#
+            ),
+            "I32",
+        );
+    }
+
+    #[test]
+    fn max_i32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxI32
+                "#
+            ),
+            "I32",
+        );
+    }
+
+    #[test]
+    fn min_u32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minU32
+                "#
+            ),
+            "U32",
+        );
+    }
+
+    #[test]
+    fn max_u32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxU32
+                "#
+            ),
+            "U32",
         );
     }
 
@@ -3905,7 +4013,7 @@ mod solve_expr {
                             x
                 "#
             ),
-            "[ Empty, Foo [ Bar ] I64 ]",
+            "[ Empty, Foo Bar I64 ]",
         );
     }
 
@@ -4715,6 +4823,377 @@ mod solve_expr {
                 "#
             ),
             "{ email : Str, name : Str }a -> { email : Str, name : Str }a",
+        )
+    }
+
+    #[test]
+    fn issue_2217() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                LinkedList elem : [Empty, Prepend (LinkedList elem) elem]
+
+                fromList : List elem -> LinkedList elem
+                fromList = \elems -> List.walk elems Empty Prepend
+
+                fromList
+                "#
+            ),
+            "List elem -> LinkedList elem",
+        )
+    }
+
+    #[test]
+    fn issue_2217_inlined() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                fromList : List elem -> [ Empty, Prepend (LinkedList elem) elem ] as LinkedList elem
+                fromList = \elems -> List.walk elems Empty Prepend
+
+                fromList
+                "#
+            ),
+            "List elem -> LinkedList elem",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position1() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A -> X
+                       B -> Y
+                 "#
+            ),
+            "[ A, B ] -> [ X, Y ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position2() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A -> X
+                       B -> Y
+                       _ -> Z
+                 "#
+            ),
+            "[ A, B ]* -> [ X, Y, Z ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position3() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       A N -> Y
+                 "#
+            ),
+            "[ A [ M, N ] ] -> [ X, Y ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position4() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       A N -> Y
+                       A _ -> Z
+                 "#
+            ),
+            "[ A [ M, N ]* ] -> [ X, Y, Z ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position5() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A (M J) -> X
+                       A (N K) -> X
+                 "#
+            ),
+            "[ A [ M [ J ], N [ K ] ] ] -> [ X ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position6() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                       A M -> X
+                       B   -> X
+                       A N -> X
+                 "#
+            ),
+            "[ A [ M, N ], B ] -> [ X ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position7() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \tag ->
+                     when tag is
+                         A -> X
+                         t -> t
+                 "#
+            ),
+            // TODO: we could be a bit smarter by subtracting "A" as a possible
+            // tag in the union known by t, which would yield the principal type
+            // [ A, ]a -> [ X ]a
+            "[ A, X ]a -> [ A, X ]a",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position8() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \opt ->
+                     when opt is
+                         Some ({tag: A}) -> 1
+                         Some ({tag: B}) -> 1
+                         None -> 0
+                 "#
+            ),
+            "[ None, Some { tag : [ A, B ] }* ] -> Num *",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position9() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 opt : [ Some Str, None ]
+                 opt = Some ""
+                 rcd = { opt }
+
+                 when rcd is
+                     { opt: Some s } -> s
+                     { opt: None } -> "?"
+                 "#
+            ),
+            "Str",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position10() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \r ->
+                     when r is
+                         { x: Blue, y ? 3 } -> y
+                         { x: Red, y ? 5 } -> y
+                 "#
+            ),
+            "{ x : [ Blue, Red ], y ? Num a }* -> Num a",
+        )
+    }
+
+    #[test]
+    // Issue #2299
+    fn infer_union_argument_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \UserId id -> id + 1
+                 "#
+            ),
+            "[ UserId (Num a) ] -> Num a",
+        )
+    }
+
+    #[test]
+    fn infer_union_def_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                 \email ->
+                    Email str = email
+                    Str.isEmpty str
+                 "#
+            ),
+            "[ Email Str ] -> Bool",
+        )
+    }
+
+    #[test]
+    fn numeric_literal_suffixes() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                {
+                    u8:   123u8,
+                    u16:  123u16,
+                    u32:  123u32,
+                    u64:  123u64,
+                    u128: 123u128,
+
+                    i8:   123i8,
+                    i16:  123i16,
+                    i32:  123i32,
+                    i64:  123i64,
+                    i128: 123i128,
+
+                    nat:  123nat,
+
+                    bu8:   0b11u8,
+                    bu16:  0b11u16,
+                    bu32:  0b11u32,
+                    bu64:  0b11u64,
+                    bu128: 0b11u128,
+
+                    bi8:   0b11i8,
+                    bi16:  0b11i16,
+                    bi32:  0b11i32,
+                    bi64:  0b11i64,
+                    bi128: 0b11i128,
+
+                    bnat:  0b11nat,
+
+                    dec:  123.0dec,
+                    f32:  123.0f32,
+                    f64:  123.0f64,
+
+                    fdec: 123dec,
+                    ff32: 123f32,
+                    ff64: 123f64,
+                }
+                "#
+            ),
+            r#"{ bi128 : I128, bi16 : I16, bi32 : I32, bi64 : I64, bi8 : I8, bnat : Nat, bu128 : U128, bu16 : U16, bu32 : U32, bu64 : U64, bu8 : U8, dec : Dec, f32 : F32, f64 : F64, fdec : Dec, ff32 : F32, ff64 : F64, i128 : I128, i16 : I16, i32 : I32, i64 : I64, i8 : I8, nat : Nat, u128 : U128, u16 : U16, u32 : U32, u64 : U64, u8 : U8 }"#,
+        )
+    }
+
+    #[test]
+    fn numeric_literal_suffixes_in_pattern() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                {
+                    u8:   (\n ->
+                            when n is
+                              123u8 -> n),
+                    u16:  (\n ->
+                            when n is
+                              123u16 -> n),
+                    u32:  (\n ->
+                            when n is
+                              123u32 -> n),
+                    u64:  (\n ->
+                            when n is
+                              123u64 -> n),
+                    u128: (\n ->
+                            when n is
+                              123u128 -> n),
+
+                    i8:   (\n ->
+                            when n is
+                              123i8 -> n),
+                    i16:  (\n ->
+                            when n is
+                              123i16 -> n),
+                    i32:  (\n ->
+                            when n is
+                              123i32 -> n),
+                    i64:  (\n ->
+                            when n is
+                              123i64 -> n),
+                    i128: (\n ->
+                            when n is
+                              123i128 -> n),
+
+                    nat:  (\n ->
+                            when n is
+                              123nat -> n),
+
+                    bu8:   (\n ->
+                            when n is
+                              0b11u8 -> n),
+                    bu16:  (\n ->
+                            when n is
+                              0b11u16 -> n),
+                    bu32:  (\n ->
+                            when n is
+                              0b11u32 -> n),
+                    bu64:  (\n ->
+                            when n is
+                              0b11u64 -> n),
+                    bu128: (\n ->
+                            when n is
+                              0b11u128 -> n),
+
+                    bi8:   (\n ->
+                            when n is
+                              0b11i8 -> n),
+                    bi16:  (\n ->
+                            when n is
+                              0b11i16 -> n),
+                    bi32:  (\n ->
+                            when n is
+                              0b11i32 -> n),
+                    bi64:  (\n ->
+                            when n is
+                              0b11i64 -> n),
+                    bi128: (\n ->
+                            when n is
+                              0b11i128 -> n),
+
+                    bnat:  (\n ->
+                            when n is
+                              0b11nat -> n),
+
+                    dec:  (\n ->
+                            when n is
+                              123.0dec -> n),
+                    f32:  (\n ->
+                            when n is
+                              123.0f32 -> n),
+                    f64:  (\n ->
+                            when n is
+                              123.0f64 -> n),
+
+                    fdec: (\n ->
+                            when n is
+                              123dec -> n),
+                    ff32: (\n ->
+                            when n is
+                              123f32 -> n),
+                    ff64: (\n ->
+                            when n is
+                              123f64 -> n),
+                }
+                "#
+            ),
+            r#"{ bi128 : I128 -> I128, bi16 : I16 -> I16, bi32 : I32 -> I32, bi64 : I64 -> I64, bi8 : I8 -> I8, bnat : Nat -> Nat, bu128 : U128 -> U128, bu16 : U16 -> U16, bu32 : U32 -> U32, bu64 : U64 -> U64, bu8 : U8 -> U8, dec : Dec -> Dec, f32 : F32 -> F32, f64 : F64 -> F64, fdec : Dec -> Dec, ff32 : F32 -> F32, ff64 : F64 -> F64, i128 : I128 -> I128, i16 : I16 -> I16, i32 : I32 -> I32, i64 : I64 -> I64, i8 : I8 -> I8, nat : Nat -> Nat, u128 : U128 -> U128, u16 : U16 -> U16, u32 : U32 -> U32, u64 : U64 -> U64, u8 : U8 -> U8 }"#,
         )
     }
 }

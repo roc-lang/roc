@@ -87,6 +87,7 @@ enum Test<'a> {
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
     IsInt(i128, IntWidth),
+    IsU128(u128),
     IsFloat(u64, FloatWidth),
     IsDecimal(RocDec),
     IsStr(Box<str>),
@@ -135,6 +136,10 @@ impl<'a> Hash for Test<'a> {
                 // TODO: Is this okay?
                 state.write_u8(6);
                 v.0.hash(state);
+            }
+            IsU128(v) => {
+                state.write_u8(7);
+                v.hash(state);
             }
         }
     }
@@ -311,6 +316,7 @@ fn tests_are_complete_help(last_test: &Test, number_of_tests: usize) -> bool {
         Test::IsByte { num_alts, .. } => number_of_tests == *num_alts,
         Test::IsBit(_) => number_of_tests == 2,
         Test::IsInt(_, _) => false,
+        Test::IsU128(_) => false,
         Test::IsFloat(_, _) => false,
         Test::IsDecimal(_) => false,
         Test::IsStr(_) => false,
@@ -565,6 +571,7 @@ fn test_at_path<'a>(
                     num_alts: union.alternatives.len(),
                 },
                 IntLiteral(v, precision) => IsInt(*v, *precision),
+                U128Literal(v) => IsU128(*v),
                 FloatLiteral(v, precision) => IsFloat(*v, *precision),
                 DecimalLiteral(v) => IsDecimal(*v),
                 StrLiteral(v) => IsStr(v.clone()),
@@ -823,6 +830,18 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
+        U128Literal(int) => match test {
+            IsU128(is_int) if int == *is_int => {
+                start.extend(end);
+                Some(Branch {
+                    goal: branch.goal,
+                    guard: branch.guard.clone(),
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
         FloatLiteral(float, p1) => match test {
             IsFloat(test_float, p2) if float == *test_float => {
                 debug_assert_eq!(p1, *p2);
@@ -934,6 +953,7 @@ fn needs_tests(pattern: &Pattern) -> bool {
         | BitLiteral { .. }
         | EnumLiteral { .. }
         | IntLiteral(_, _)
+        | U128Literal(_)
         | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | StrLiteral(_) => true,
@@ -1301,6 +1321,14 @@ fn test_to_equality<'a>(
             let lhs = Expr::Literal(Literal::Int(test_int as i128));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::int_width(precision), lhs));
+
+            (stores, lhs_symbol, rhs_symbol, None)
+        }
+
+        Test::IsU128(test_int) => {
+            let lhs = Expr::Literal(Literal::U128(test_int));
+            let lhs_symbol = env.unique_symbol();
+            stores.push((lhs_symbol, Layout::int_width(IntWidth::U128), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }

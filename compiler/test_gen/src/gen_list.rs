@@ -1,6 +1,9 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::expect_runtime_error_panic;
+
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to;
 
@@ -362,6 +365,99 @@ fn list_drop_at_shared() {
             RocList::from_slice(&[4, 5, 6]),
         ),
         (RocList<i64>, RocList<i64>,)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_empty_list_of_int() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            empty : List I64
+            empty = []
+
+            List.dropIf empty \_ -> True
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            alwaysTrue : I64 -> Bool
+            alwaysTrue = \_ -> True
+
+            List.dropIf [] alwaysTrue
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_always_false_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> False)
+            "#
+        ),
+        RocList::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_always_true_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> True)
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_geq3() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\n -> n >= 3)
+            "#
+        ),
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_string_eq() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             List.dropIf ["x", "y", "x"] (\s -> s == "y")
+             "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from_slice("x".as_bytes()),
+            RocStr::from_slice("x".as_bytes())
+        ]),
+        RocList<RocStr>
     );
 }
 
@@ -1223,7 +1319,7 @@ fn list_reverse_empty_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn foobarbaz() {
+fn list_concat() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1807,98 +1903,6 @@ fn gen_swap() {
     );
 }
 
-//    #[test]
-#[cfg(any(feature = "gen-llvm"))]
-//    fn gen_partition() {
-//        assert_evals_to!(
-//            indoc!(
-//                r#"
-//                    swap : I64, I64, List a -> List a
-//                    swap = \i, j, list ->
-//                        when Pair (List.get list i) (List.get list j) is
-//                            Pair (Ok atI) (Ok atJ) ->
-//                                list
-//                                    |> List.set i atJ
-//                                    |> List.set j atI
-//
-//                            _ ->
-//                                []
-//                    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
-//                    partition = \low, high, initialList ->
-//                        when List.get initialList high is
-//                            Ok pivot ->
-//                                when partitionHelp (low - 1) low initialList high pivot is
-//                                    Pair newI newList ->
-//                                        Pair (newI + 1) (swap (newI + 1) high newList)
-//
-//                            Err _ ->
-//                                Pair (low - 1) initialList
-//
-//
-//                    partitionHelp : I64, I64, List (Num a), I64, I64 -> [ Pair I64 (List (Num a)) ]
-//                    partitionHelp = \i, j, list, high, pivot ->
-//                        if j < high then
-//                            when List.get list j is
-//                                Ok value ->
-//                                    if value <= pivot then
-//                                        partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
-//                                    else
-//                                        partitionHelp i (j + 1) list high pivot
-//
-//                                Err _ ->
-//                                    Pair i list
-//                        else
-//                            Pair i list
-//
-//                    # when partition 0 0 [ 1,2,3,4,5 ] is
-//                    # Pair list _ -> list
-//                    [ 1,3 ]
-//                "#
-//            ),
-//            RocList::from_slice(&[2, 1]),
-//            RocList<i64>
-//        );
-//    }
-
-//    #[test]
-#[cfg(any(feature = "gen-llvm"))]
-//    fn gen_partition() {
-//        assert_evals_to!(
-//            indoc!(
-//                r#"
-//                    swap : I64, I64, List a -> List a
-//                    swap = \i, j, list ->
-//                        when Pair (List.get list i) (List.get list j) is
-//                            Pair (Ok atI) (Ok atJ) ->
-//                                list
-//                                    |> List.set i atJ
-//                                    |> List.set j atI
-//
-//                            _ ->
-//                                []
-//                    partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
-//                    partition = \low, high, initialList ->
-//                        when List.get initialList high is
-//                            Ok pivot ->
-//                                when partitionHelp (low - 1) low initialList high pivot is
-//                                    Pair newI newList ->
-//                                        Pair (newI + 1) (swap (newI + 1) high newList)
-//
-//                            Err _ ->
-//                                Pair (low - 1) initialList
-//
-//
-//                    partitionHelp : I64, I64, List (Num a), I64, I64 -> [ Pair I64 (List (Num a)) ]
-//
-//                    # when partition 0 0 [ 1,2,3,4,5 ] is
-//                    # Pair list _ -> list
-//                    [ 1,3 ]
-//                "#
-//            ),
-//            RocList::from_slice(&[2, 1]),
-//            RocList<i64>
-//        );
-//    }
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_quicksort() {
@@ -1918,7 +1922,7 @@ fn gen_quicksort() {
                         when partition low high list is
                             Pair partitionIndex partitioned ->
                                 partitioned
-                                    |> quicksortHelp low (partitionIndex - 1)
+                                    |> quicksortHelp low (Num.subSaturated partitionIndex 1)
                                     |> quicksortHelp (partitionIndex + 1) high
                     else
                         list
@@ -1939,12 +1943,12 @@ fn gen_quicksort() {
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
-                            when partitionHelp (low - 1) low initialList high pivot is
+                            when partitionHelp low low initialList high pivot is
                                 Pair newI newList ->
-                                    Pair (newI + 1) (swap (newI + 1) high newList)
+                                    Pair newI (swap newI high newList)
 
                         Err _ ->
-                            Pair (low - 1) initialList
+                            Pair low initialList
 
 
                 partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [ Pair Nat (List (Num a)) ]
@@ -1953,7 +1957,7 @@ fn gen_quicksort() {
                         when List.get list j is
                             Ok value ->
                                 if value <= pivot then
-                                    partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                    partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
                                 else
                                     partitionHelp i (j + 1) list high pivot
 
@@ -1973,7 +1977,7 @@ fn gen_quicksort() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn foobar2() {
+fn quicksort() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
@@ -1989,7 +1993,7 @@ fn foobar2() {
                            when partition low high list is
                                Pair partitionIndex partitioned ->
                                    partitioned
-                                       |> quicksortHelp low (partitionIndex - 1)
+                                       |> quicksortHelp low (Num.subSaturated partitionIndex 1)
                                        |> quicksortHelp (partitionIndex + 1) high
                        else
                            list
@@ -2010,12 +2014,12 @@ fn foobar2() {
                    partition = \low, high, initialList ->
                        when List.get initialList high is
                            Ok pivot ->
-                               when partitionHelp (low - 1) low initialList high pivot is
+                               when partitionHelp low low initialList high pivot is
                                    Pair newI newList ->
-                                       Pair (newI + 1) (swap (newI + 1) high newList)
+                                       Pair newI (swap newI high newList)
 
                            Err _ ->
-                               Pair (low - 1) initialList
+                               Pair low initialList
 
 
                    partitionHelp : Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]
@@ -2025,7 +2029,7 @@ fn foobar2() {
                            when List.get list j is
                                Ok value ->
                                    if value <= pivot then
-                                       partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                       partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
                                    else
                                        partitionHelp i (j + 1) list high pivot
 
@@ -2047,7 +2051,7 @@ fn foobar2() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn foobar() {
+fn quicksort_singleton() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
@@ -2063,7 +2067,7 @@ fn foobar() {
                            when partition low high list is
                                Pair partitionIndex partitioned ->
                                    partitioned
-                                       |> quicksortHelp low (partitionIndex - 1)
+                                       |> quicksortHelp low (Num.subSaturated partitionIndex 1)
                                        |> quicksortHelp (partitionIndex + 1) high
                        else
                            list
@@ -2084,12 +2088,12 @@ fn foobar() {
                    partition = \low, high, initialList ->
                        when List.get initialList high is
                            Ok pivot ->
-                               when partitionHelp (low - 1) low initialList high pivot is
+                               when partitionHelp low low initialList high pivot is
                                    Pair newI newList ->
-                                       Pair (newI + 1) (swap (newI + 1) high newList)
+                                       Pair newI (swap newI high newList)
 
                            Err _ ->
-                               Pair (low - 1) initialList
+                               Pair low initialList
 
 
                    partitionHelp : Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]
@@ -2098,7 +2102,7 @@ fn foobar() {
                            when List.get list j is
                                Ok value ->
                                    if value <= pivot then
-                                       partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                       partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
                                    else
                                        partitionHelp i (j + 1) list high pivot
 
@@ -2377,7 +2381,7 @@ fn cleanup_because_exception() {
             five : I64
             five = 5
 
-            five + Num.maxInt + 3 + (Num.intCast (List.len x))
+            five + Num.maxI64 + 3 + (Num.intCast (List.len x))
                "#
         ),
         9,
@@ -2419,6 +2423,28 @@ fn list_sort_with() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_sort_asc() {
+    assert_evals_to!("List.sortAsc []", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.sortAsc [ 4,3,2,1 ]",
+        RocList::from_slice(&[1, 2, 3, 4]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_sort_desc() {
+    assert_evals_to!("List.sortDesc []", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.sortDesc [ 1,2,3,4 ]",
+        RocList::from_slice(&[4, 3, 2, 1]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_any() {
     assert_evals_to!("List.any [] (\\e -> e > 3)", false, bool);
     assert_evals_to!("List.any [ 1, 2, 3 ] (\\e -> e > 3)", false, bool);
@@ -2435,7 +2461,10 @@ fn list_any_empty_with_unknown_element_type() {
     //     Application crashed with message
     //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
     //     Shutting down
-    assert_evals_to!("List.any [] (\\_ -> True)", false, bool);
+    //
+    // TODO: eventually we should insert the empty type for unresolved type
+    // variables, since that means they're unbound.
+    expect_runtime_error_panic!("List.any [] (\\_ -> True)");
 }
 
 #[test]
@@ -2457,7 +2486,10 @@ fn list_all_empty_with_unknown_element_type() {
     //     Application crashed with message
     //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
     //     Shutting down
-    assert_evals_to!("List.all [] (\\_ -> True)", false, bool);
+    //
+    // TODO: eventually we should insert the empty type for unresolved type
+    // variables, since that means they're unbound.
+    expect_runtime_error_panic!("List.all [] (\\_ -> True)");
 }
 
 #[test]
@@ -2620,4 +2652,23 @@ fn list_find_empty_layout() {
         0,
         i64
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_lists() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            l = [1, 2, 3]
+
+            f : List U8, List U16 -> Nat
+            f = \_, _ -> 18
+
+            f l l
+            "#
+        ),
+        18,
+        u64
+    )
 }

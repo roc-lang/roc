@@ -3,8 +3,8 @@ use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
-    finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
-    int_expr_from_result, num_expr_from_result,
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
+    int_expr_from_result, num_expr_from_result, FloatWidth, IntWidth, NumWidth, NumericBound,
 };
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
@@ -17,10 +17,10 @@ use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::{char, u32};
 
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -47,20 +47,41 @@ impl Output {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum IntValue {
+    I128(i128),
+    U128(u128),
+}
+
+impl Display for IntValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntValue::I128(n) => Display::fmt(&n, f),
+            IntValue::U128(n) => Display::fmt(&n, f),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, Box<str>, i64),
+    Num(Variable, Box<str>, IntValue, NumericBound<NumWidth>),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, Variable, Box<str>, i128),
-    Float(Variable, Variable, Box<str>, f64),
+    Int(
+        Variable,
+        Variable,
+        Box<str>,
+        IntValue,
+        NumericBound<IntWidth>,
+    ),
+    Float(Variable, Variable, Box<str>, f64, NumericBound<FloatWidth>),
     Str(Box<str>),
     List {
         elem_var: Variable,
-        loc_elems: Vec<Located<Expr>>,
+        loc_elems: Vec<Loc<Expr>>,
     },
 
     // Lookups
@@ -70,25 +91,25 @@ pub enum Expr {
         cond_var: Variable,
         expr_var: Variable,
         region: Region,
-        loc_cond: Box<Located<Expr>>,
+        loc_cond: Box<Loc<Expr>>,
         branches: Vec<WhenBranch>,
     },
     If {
         cond_var: Variable,
         branch_var: Variable,
-        branches: Vec<(Located<Expr>, Located<Expr>)>,
-        final_else: Box<Located<Expr>>,
+        branches: Vec<(Loc<Expr>, Loc<Expr>)>,
+        final_else: Box<Loc<Expr>>,
     },
 
     // Let
-    LetRec(Vec<Def>, Box<Located<Expr>>, Variable),
-    LetNonRec(Box<Def>, Box<Located<Expr>>, Variable),
+    LetRec(Vec<Def>, Box<Loc<Expr>>, Variable),
+    LetNonRec(Box<Def>, Box<Loc<Expr>>, Variable),
 
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     Call(
-        Box<(Variable, Located<Expr>, Variable, Variable)>,
-        Vec<(Variable, Located<Expr>)>,
+        Box<(Variable, Loc<Expr>, Variable, Variable)>,
+        Vec<(Variable, Loc<Expr>)>,
         CalledVia,
     ),
     RunLowLevel {
@@ -118,7 +139,7 @@ pub enum Expr {
         record_var: Variable,
         ext_var: Variable,
         field_var: Variable,
-        loc_expr: Box<Located<Expr>>,
+        loc_expr: Box<Loc<Expr>>,
         field: Lowercase,
     },
     /// field accessor as a function, e.g. (.foo) expr
@@ -146,7 +167,7 @@ pub enum Expr {
         variant_var: Variable,
         ext_var: Variable,
         name: TagName,
-        arguments: Vec<(Variable, Located<Expr>)>,
+        arguments: Vec<(Variable, Loc<Expr>)>,
     },
 
     ZeroArgumentTag {
@@ -154,11 +175,11 @@ pub enum Expr {
         variant_var: Variable,
         ext_var: Variable,
         name: TagName,
-        arguments: Vec<(Variable, Located<Expr>)>,
+        arguments: Vec<(Variable, Loc<Expr>)>,
     },
 
     // Test
-    Expect(Box<Located<Expr>>, Box<Located<Expr>>),
+    Expect(Box<Loc<Expr>>, Box<Loc<Expr>>),
 
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
@@ -172,8 +193,8 @@ pub struct ClosureData {
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub recursive: Recursive,
-    pub arguments: Vec<(Variable, Located<Pattern>)>,
-    pub loc_body: Box<Located<Expr>>,
+    pub arguments: Vec<(Variable, Loc<Pattern>)>,
+    pub loc_body: Box<Loc<Expr>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -181,7 +202,7 @@ pub struct Field {
     pub var: Variable,
     // The region of the full `foo: f bar`, rather than just `f bar`
     pub region: Region,
-    pub loc_expr: Box<Located<Expr>>,
+    pub loc_expr: Box<Loc<Expr>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -193,9 +214,9 @@ pub enum Recursive {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranch {
-    pub patterns: Vec<Located<Pattern>>,
-    pub value: Located<Expr>,
-    pub guard: Option<Located<Expr>>,
+    pub patterns: Vec<Loc<Pattern>>,
+    pub value: Loc<Expr>,
+    pub guard: Option<Loc<Expr>>,
 }
 
 pub fn canonicalize_expr<'a>(
@@ -204,24 +225,24 @@ pub fn canonicalize_expr<'a>(
     scope: &mut Scope,
     region: Region,
     expr: &'a ast::Expr<'a>,
-) -> (Located<Expr>, Output) {
+) -> (Loc<Expr>, Output) {
     use Expr::*;
 
     let (expr, output) = match expr {
-        ast::Expr::Num(str) => {
+        &ast::Expr::Num(str) => {
             let answer = num_expr_from_result(
                 var_store,
-                finish_parsing_int(*str).map(|int| (*str, int)),
+                finish_parsing_num(str).map(|result| (str, result)),
                 region,
                 env,
             );
 
             (answer, Output::default())
         }
-        ast::Expr::Float(str) => {
+        &ast::Expr::Float(str) => {
             let answer = float_expr_from_result(
                 var_store,
-                finish_parsing_float(str).map(|f| (*str, f)),
+                finish_parsing_float(str).map(|(f, bound)| (str, f, bound)),
                 region,
                 env,
             );
@@ -439,7 +460,7 @@ pub fn canonicalize_expr<'a>(
             // we parse underscores, but they are not valid expression syntax
             let problem = roc_problem::can::RuntimeError::MalformedIdentifier(
                 (*name).into(),
-                roc_parse::ident::BadIdent::Underscore(region.start_line, region.start_col),
+                roc_parse::ident::BadIdent::Underscore(region.start()),
                 region,
             );
 
@@ -757,20 +778,16 @@ pub fn canonicalize_expr<'a>(
             use roc_problem::can::RuntimeError::*;
 
             let region1 = Region::new(
-                binop1_position.row,
-                binop1_position.row,
-                binop1_position.col,
-                binop1_position.col + binop1.width(),
+                *binop1_position,
+                binop1_position.bump_column(binop1.width() as u32),
             );
-            let loc_binop1 = Located::at(region1, *binop1);
+            let loc_binop1 = Loc::at(region1, *binop1);
 
             let region2 = Region::new(
-                binop2_position.row,
-                binop2_position.row,
-                binop2_position.col,
-                binop2_position.col + binop2.width(),
+                *binop2_position,
+                binop2_position.bump_column(binop2.width() as u32),
             );
-            let loc_binop2 = Located::at(region2, *binop2);
+            let loc_binop2 = Loc::at(region2, *binop2);
 
             let problem =
                 PrecedenceProblem::BothNonAssociative(*whole_region, loc_binop1, loc_binop2);
@@ -794,21 +811,21 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::NonBase10Int {
+        &ast::Expr::NonBase10Int {
             string,
             base,
             is_negative,
         } => {
             // the minus sign is added before parsing, to get correct overflow/underflow behavior
-            let answer = match finish_parsing_base(string, *base, *is_negative) {
-                Ok(int) => {
+            let answer = match finish_parsing_base(string, base, is_negative) {
+                Ok((int, bound)) => {
                     // Done in this kinda round about way with intermediate variables
                     // to keep borrowed values around and make this compile
                     let int_string = int.to_string();
                     let int_str = int_string.as_str();
-                    int_expr_from_result(var_store, Ok((int_str, int as i128)), region, *base, env)
+                    int_expr_from_result(var_store, Ok((int_str, int, bound)), region, base, env)
                 }
-                Err(e) => int_expr_from_result(var_store, Err(e), region, *base, env),
+                Err(e) => int_expr_from_result(var_store, Err(e), region, base, env),
             };
 
             (answer, Output::default())
@@ -859,7 +876,7 @@ pub fn canonicalize_expr<'a>(
     // a rounding error anyway (especially given that they'll be surfaced as warnings), LLVM will
     // DCE them in optimized builds, and it's not worth the bookkeeping for dev builds.
     (
-        Located {
+        Loc {
             region,
             value: expr,
         },
@@ -1076,7 +1093,7 @@ fn canonicalize_fields<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     region: Region,
-    fields: &'a [Located<ast::AssignedField<'a, ast::Expr<'a>>>],
+    fields: &'a [Loc<ast::AssignedField<'a, ast::Expr<'a>>>],
 ) -> Result<(SendMap<Lowercase, Field>, Output), CanonicalizeRecordProblem> {
     let mut can_fields = SendMap::default();
     let mut output = Output::default();
@@ -1136,7 +1153,7 @@ fn canonicalize_field<'a>(
     scope: &mut Scope,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
     region: Region,
-) -> Result<(Lowercase, Located<Expr>, Output, Variable), CanonicalizeFieldProblem> {
+) -> Result<(Lowercase, Loc<Expr>, Output, Variable), CanonicalizeFieldProblem> {
     use roc_parse::ast::AssignedField::*;
 
     match field {
@@ -1230,9 +1247,9 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
     match expr {
         // Num stores the `a` variable in `Num a`. Not the same as the variable
         // stored in Int and Float below, which is strictly for better error messages
-        other @ Num(_, _, _)
-        | other @ Int(_, _, _, _)
-        | other @ Float(_, _, _, _)
+        other @ Num(..)
+        | other @ Int(..)
+        | other @ Float(..)
         | other @ Str { .. }
         | other @ RuntimeError(_)
         | other @ EmptyRecord
@@ -1251,7 +1268,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             for loc_elem in loc_elems {
                 let value = inline_calls(var_store, scope, loc_elem.value);
 
-                new_elems.push(Located {
+                new_elems.push(Loc {
                     value,
                     region: loc_elem.region,
                 });
@@ -1270,7 +1287,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             loc_cond,
             branches,
         } => {
-            let loc_cond = Box::new(Located {
+            let loc_cond = Box::new(Loc {
                 region: loc_cond.region,
                 value: inline_calls(var_store, scope, loc_cond.value),
             });
@@ -1278,12 +1295,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             let mut new_branches = Vec::with_capacity(branches.len());
 
             for branch in branches {
-                let value = Located {
+                let value = Loc {
                     value: inline_calls(var_store, scope, branch.value.value),
                     region: branch.value.region,
                 };
                 let guard = match branch.guard {
-                    Some(loc_expr) => Some(Located {
+                    Some(loc_expr) => Some(Loc {
                         region: loc_expr.region,
                         value: inline_calls(var_store, scope, loc_expr.value),
                     }),
@@ -1315,12 +1332,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             let mut new_branches = Vec::with_capacity(branches.len());
 
             for (loc_cond, loc_expr) in branches {
-                let loc_cond = Located {
+                let loc_cond = Loc {
                     value: inline_calls(var_store, scope, loc_cond.value),
                     region: loc_cond.region,
                 };
 
-                let loc_expr = Located {
+                let loc_expr = Loc {
                     value: inline_calls(var_store, scope, loc_expr.value),
                     region: loc_expr.region,
                 };
@@ -1328,7 +1345,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 new_branches.push((loc_cond, loc_expr));
             }
 
-            let final_else = Box::new(Located {
+            let final_else = Box::new(Loc {
                 region: final_else.region,
                 value: inline_calls(var_store, scope, final_else.value),
             });
@@ -1342,12 +1359,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         }
 
         Expect(loc_condition, loc_expr) => {
-            let loc_condition = Located {
+            let loc_condition = Loc {
                 region: loc_condition.region,
                 value: inline_calls(var_store, scope, loc_condition.value),
             };
 
-            let loc_expr = Located {
+            let loc_expr = Loc {
                 region: loc_expr.region,
                 value: inline_calls(var_store, scope, loc_expr.value),
             };
@@ -1361,7 +1378,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             for def in defs {
                 new_defs.push(Def {
                     loc_pattern: def.loc_pattern,
-                    loc_expr: Located {
+                    loc_expr: Loc {
                         region: def.loc_expr.region,
                         value: inline_calls(var_store, scope, def.loc_expr.value),
                     },
@@ -1371,7 +1388,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 });
             }
 
-            let loc_expr = Located {
+            let loc_expr = Loc {
                 region: loc_expr.region,
                 value: inline_calls(var_store, scope, loc_expr.value),
             };
@@ -1382,7 +1399,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         LetNonRec(def, loc_expr, var) => {
             let def = Def {
                 loc_pattern: def.loc_pattern,
-                loc_expr: Located {
+                loc_expr: Loc {
                     region: def.loc_expr.region,
                     value: inline_calls(var_store, scope, def.loc_expr.value),
                 },
@@ -1391,7 +1408,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 annotation: def.annotation,
             };
 
-            let loc_expr = Located {
+            let loc_expr = Loc {
                 region: loc_expr.region,
                 value: inline_calls(var_store, scope, loc_expr.value),
             };
@@ -1411,7 +1428,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             loc_body,
         }) => {
             let loc_expr = *loc_body;
-            let loc_expr = Located {
+            let loc_expr = Loc {
                 value: inline_calls(var_store, scope, loc_expr.value),
                 region: loc_expr.region,
             };
@@ -1486,7 +1503,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 Var(symbol) if symbol.is_builtin() => match builtin_defs_map(symbol, var_store) {
                     Some(Def {
                         loc_expr:
-                            Located {
+                            Loc {
                                 value:
                                     Closure(ClosureData {
                                         recursive,
@@ -1526,7 +1543,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                                 annotation: None,
                             };
 
-                            loc_answer = Located {
+                            loc_answer = Loc {
                                 region: Region::zero(),
                                 value: LetNonRec(
                                     Box::new(def),
@@ -1585,7 +1602,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
 }
 
 enum StrSegment {
-    Interpolation(Located<Expr>),
+    Interpolation(Loc<Expr>),
     Plaintext(Box<str>),
 }
 
@@ -1684,22 +1701,22 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
 
     let mut iter = segments.into_iter().rev();
     let mut loc_expr = match iter.next() {
-        Some(Plaintext(string)) => Located::new(0, 0, 0, 0, Expr::Str(string)),
+        Some(Plaintext(string)) => Loc::at(Region::zero(), Expr::Str(string)),
         Some(Interpolation(loc_expr)) => loc_expr,
         None => {
             // No segments? Empty string!
 
-            Located::new(0, 0, 0, 0, Expr::Str("".into()))
+            Loc::at(Region::zero(), Expr::Str("".into()))
         }
     };
 
     for seg in iter {
         let loc_new_expr = match seg {
-            Plaintext(string) => Located::new(0, 0, 0, 0, Expr::Str(string)),
+            Plaintext(string) => Loc::at(Region::zero(), Expr::Str(string)),
             Interpolation(loc_interpolated_expr) => loc_interpolated_expr,
         };
 
-        let fn_expr = Located::new(0, 0, 0, 0, Expr::Var(Symbol::STR_CONCAT));
+        let fn_expr = Loc::at(Region::zero(), Expr::Var(Symbol::STR_CONCAT));
         let expr = Expr::Call(
             Box::new((
                 var_store.fresh(),
@@ -1714,7 +1731,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
             CalledVia::StringInterpolation,
         );
 
-        loc_expr = Located::new(0, 0, 0, 0, expr);
+        loc_expr = Loc::at(Region::zero(), expr);
     }
 
     loc_expr.value

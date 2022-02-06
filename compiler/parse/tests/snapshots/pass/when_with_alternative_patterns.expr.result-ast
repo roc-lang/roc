@@ -1,12 +1,12 @@
 When(
-    |L 0-0, C 5-6| Var {
+    @5-6 Var {
         module_name: "",
         ident: "x",
     },
     [
         WhenBranch {
             patterns: [
-                |L 1-1, C 1-7| SpaceBefore(
+                @11-17 SpaceBefore(
                     StrLiteral(
                         PlainLine(
                             "blah",
@@ -16,20 +16,20 @@ When(
                         Newline,
                     ],
                 ),
-                |L 1-1, C 10-16| StrLiteral(
+                @20-26 StrLiteral(
                     PlainLine(
                         "blop",
                     ),
                 ),
             ],
-            value: |L 1-1, C 20-21| Num(
+            value: @30-31 Num(
                 "1",
             ),
             guard: None,
         },
         WhenBranch {
             patterns: [
-                |L 2-2, C 1-6| SpaceBefore(
+                @33-38 SpaceBefore(
                     StrLiteral(
                         PlainLine(
                             "foo",
@@ -39,7 +39,7 @@ When(
                         Newline,
                     ],
                 ),
-                |L 3-3, C 2-7| SpaceBefore(
+                @43-48 SpaceBefore(
                     StrLiteral(
                         PlainLine(
                             "bar",
@@ -50,7 +50,7 @@ When(
                     ],
                 ),
             ],
-            value: |L 3-3, C 11-12| Num(
+            value: @52-53 Num(
                 "2",
             ),
             guard: None,

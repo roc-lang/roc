@@ -1,17 +1,33 @@
 use crate::ast::{Collection, CommentOrNewline, Spaced, StrLiteral, TypeAnnotation};
 use crate::blankspace::space0_e;
-use crate::ident::lowercase_ident;
-use crate::parser::Progress::{self, *};
-use crate::parser::{specialize, word1, EPackageEntry, EPackageName, EPackageOrPath, Parser};
+use crate::ident::{lowercase_ident, UppercaseIdent};
+use crate::parser::Progress::*;
+use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
 use crate::state::State;
 use crate::string_literal;
 use bumpalo::collections::Vec;
 use roc_region::all::Loc;
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
-pub struct PackageName<'a> {
-    pub account: &'a str,
-    pub pkg: &'a str,
+#[derive(Debug)]
+pub enum HeaderFor<'a> {
+    App {
+        to_platform: To<'a>,
+    },
+    Hosted {
+        generates: UppercaseIdent<'a>,
+        generates_with: &'a [Loc<ExposedName<'a>>],
+    },
+    PkgConfig {
+        /// usually `pf`
+        config_shorthand: &'a str,
+        /// the type scheme of the main function (required by the platform)
+        /// (currently unused)
+        #[allow(dead_code)]
+        platform_main_type: TypedIdent<'a>,
+        /// provided symbol to host (commonly `mainForHost`)
+        main_for_host: roc_module::symbol::Symbol,
+    },
+    Interface,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -32,10 +48,7 @@ pub enum VersionComparison {
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
-pub enum PackageOrPath<'a> {
-    Package(PackageName<'a>, Version<'a>),
-    Path(StrLiteral<'a>),
-}
+pub struct PackageName<'a>(pub &'a str);
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct ModuleName<'a>(&'a str);
@@ -54,6 +67,15 @@ impl<'a> ModuleName<'a> {
     pub fn as_str(&'a self) -> &'a str {
         self.0
     }
+}
+
+#[derive(Debug)]
+pub enum ModuleNameEnum<'a> {
+    /// A filename
+    App(StrLiteral<'a>),
+    Interface(ModuleName<'a>),
+    Hosted(ModuleName<'a>),
+    PkgConfig,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -90,10 +112,31 @@ pub struct InterfaceHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostedHeader<'a> {
+    pub name: Loc<ModuleName<'a>>,
+    pub exposes: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
+    pub generates: UppercaseIdent<'a>,
+    pub generates_with: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+
+    // Potential comments and newlines - these will typically all be empty.
+    pub before_header: &'a [CommentOrNewline<'a>],
+    pub after_hosted_keyword: &'a [CommentOrNewline<'a>],
+    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub after_exposes: &'a [CommentOrNewline<'a>],
+    pub before_imports: &'a [CommentOrNewline<'a>],
+    pub after_imports: &'a [CommentOrNewline<'a>],
+    pub before_generates: &'a [CommentOrNewline<'a>],
+    pub after_generates: &'a [CommentOrNewline<'a>],
+    pub before_with: &'a [CommentOrNewline<'a>],
+    pub after_with: &'a [CommentOrNewline<'a>],
+}
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum To<'a> {
     ExistingPackage(&'a str),
-    NewPackage(PackageOrPath<'a>),
+    NewPackage(PackageName<'a>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -102,6 +145,7 @@ pub struct AppHeader<'a> {
     pub packages: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
     pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     pub provides: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    pub provides_types: Option<Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>>,
     pub to: Loc<To<'a>>,
 
     // Potential comments and newlines - these will typically all be empty.
@@ -121,7 +165,7 @@ pub struct AppHeader<'a> {
 pub struct PackageHeader<'a> {
     pub name: Loc<PackageName<'a>>,
     pub exposes: Vec<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
-    pub packages: Vec<'a, (Loc<&'a str>, Loc<PackageOrPath<'a>>)>,
+    pub packages: Vec<'a, (Loc<&'a str>, Loc<PackageName<'a>>)>,
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
@@ -135,15 +179,9 @@ pub struct PackageHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct PlatformRigid<'a> {
-    pub rigid: &'a str,
-    pub alias: &'a str,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlatformRequires<'a> {
-    pub rigids: Collection<'a, Loc<Spaced<'a, PlatformRigid<'a>>>>,
+    pub rigids: Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>,
     pub signature: Loc<Spaced<'a, TypedIdent<'a>>>,
 }
 
@@ -155,7 +193,6 @@ pub struct PlatformHeader<'a> {
     pub packages: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
     pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     pub provides: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
-    pub effects: Effects<'a>,
 
     // Potential comments and newlines - these will typically all be empty.
     pub before_header: &'a [CommentOrNewline<'a>],
@@ -170,17 +207,6 @@ pub struct PlatformHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
     pub before_provides: &'a [CommentOrNewline<'a>],
     pub after_provides: &'a [CommentOrNewline<'a>],
-}
-
-/// e.g. fx.Effects
-#[derive(Clone, Debug, PartialEq)]
-pub struct Effects<'a> {
-    pub spaces_before_effects_keyword: &'a [CommentOrNewline<'a>],
-    pub spaces_after_effects_keyword: &'a [CommentOrNewline<'a>],
-    pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
-    pub effect_shortname: &'a str,
-    pub effect_type_name: &'a str,
-    pub entries: Collection<'a, Loc<Spaced<'a, TypedIdent<'a>>>>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -213,7 +239,7 @@ pub struct TypedIdent<'a> {
 pub struct PackageEntry<'a> {
     pub shorthand: &'a str,
     pub spaces_after_shorthand: &'a [CommentOrNewline<'a>],
-    pub package_or_path: Loc<PackageOrPath<'a>>,
+    pub package_name: Loc<PackageName<'a>>,
 }
 
 pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPackageEntry<'a>> {
@@ -226,33 +252,30 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
 
         let (_, opt_shorthand, state) = maybe!(and!(
             skip_second!(
-                specialize(|_, r, c| EPackageEntry::Shorthand(r, c), lowercase_ident()),
+                specialize(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
                 word1(b':', EPackageEntry::Colon)
             ),
             space0_e(
                 min_indent,
                 EPackageEntry::Space,
-                EPackageEntry::IndentPackageOrPath
+                EPackageEntry::IndentPackage
             )
         ))
         .parse(arena, state)?;
 
-        let (_, package_or_path, state) = loc!(specialize(
-            EPackageEntry::BadPackageOrPath,
-            package_or_path()
-        ))
-        .parse(arena, state)?;
+        let (_, package_or_path, state) =
+            loc!(specialize(EPackageEntry::BadPackage, package_name())).parse(arena, state)?;
 
         let entry = match opt_shorthand {
             Some((shorthand, spaces_after_shorthand)) => PackageEntry {
                 shorthand,
                 spaces_after_shorthand,
-                package_or_path,
+                package_name: package_or_path,
             },
             None => PackageEntry {
                 shorthand: "",
                 spaces_after_shorthand: &[],
-                package_or_path,
+                package_name: package_or_path,
             },
         };
 
@@ -260,117 +283,15 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
     }
 }
 
-pub fn package_or_path<'a>() -> impl Parser<'a, PackageOrPath<'a>, EPackageOrPath<'a>> {
-    one_of![
-        map!(
-            specialize(EPackageOrPath::BadPath, string_literal::parse()),
-            PackageOrPath::Path
-        ),
-        map!(
-            and!(
-                specialize(EPackageOrPath::BadPackage, package_name()),
-                skip_first!(skip_spaces(), package_version())
-            ),
-            |(name, version)| { PackageOrPath::Package(name, version) }
-        )
-    ]
-}
-
-fn skip_spaces<'a, T>() -> impl Parser<'a, (), T>
-where
-    T: 'a,
-{
-    |_, mut state: State<'a>| {
-        let mut chomped = 0usize;
-        let mut it = state.bytes().iter();
-
-        while let Some(b' ') = it.next() {
-            chomped += 1;
-        }
-
-        if chomped == 0 {
-            Ok((NoProgress, (), state))
-        } else {
-            state.column += chomped as u16;
-            state = state.advance(chomped);
-
-            Ok((MadeProgress, (), state))
-        }
-    }
-}
-
-fn package_version<'a, T>() -> impl Parser<'a, Version<'a>, T>
-where
-    T: 'a,
-{
-    move |_, _| todo!("TODO parse package version")
-}
-
-#[inline(always)]
-pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
-    use encode_unicode::CharExt;
-    // e.g. rtfeldman/blah
-    //
-    // Package names and accounts can be capitalized and can contain dashes.
-    // They cannot contain underscores or other special characters.
-    // They must be ASCII.
-
-    |_, mut state: State<'a>| match chomp_package_part(state.bytes()) {
-        Err(progress) => Err((
-            progress,
-            EPackageName::Account(state.line, state.column),
-            state,
-        )),
-        Ok(account) => {
-            let mut chomped = account.len();
-            if let Ok(('/', width)) = char::from_utf8_slice_start(&state.bytes()[chomped..]) {
-                chomped += width;
-                match chomp_package_part(&state.bytes()[chomped..]) {
-                    Err(progress) => Err((
-                        progress,
-                        EPackageName::Pkg(state.line, state.column + chomped as u16),
-                        state,
-                    )),
-                    Ok(pkg) => {
-                        chomped += pkg.len();
-
-                        state.column += chomped as u16;
-                        state = state.advance(chomped);
-
-                        let value = PackageName { account, pkg };
-                        Ok((MadeProgress, value, state))
-                    }
-                }
-            } else {
-                Err((
-                    MadeProgress,
-                    EPackageName::MissingSlash(state.line, state.column + chomped as u16),
-                    state,
-                ))
-            }
-        }
-    }
-}
-
-fn chomp_package_part(buffer: &[u8]) -> Result<&str, Progress> {
-    use encode_unicode::CharExt;
-
-    let mut chomped = 0;
-
-    while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        if ch == '-' || ch.is_ascii_alphanumeric() {
-            chomped += width;
-        } else {
-            // we're done
-            break;
-        }
-    }
-
-    if chomped == 0 {
-        Err(Progress::NoProgress)
-    } else {
-        let name = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
-
-        Ok(name)
+pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
+    move |arena, state: State<'a>| {
+        let pos = state.pos();
+        specialize(EPackageName::BadPath, string_literal::parse())
+            .parse(arena, state)
+            .and_then(|(progress, text, next_state)| match text {
+                StrLiteral::PlainLine(text) => Ok((progress, PackageName(text), next_state)),
+                StrLiteral::Line(_) => Err((progress, EPackageName::Escapes(pos), next_state)),
+                StrLiteral::Block(_) => Err((progress, EPackageName::Multiline(pos), next_state)),
+            })
     }
 }

@@ -19,6 +19,7 @@ roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_load = { path = "../load" }
+roc_target = { path = "../roc_target" }
 roc_gen_llvm = { path = "../gen_llvm", optional = true }
 roc_gen_wasm = { path = "../gen_wasm", optional = true }
 roc_gen_dev = { path = "../gen_dev", default-features = false }

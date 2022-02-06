@@ -8,11 +8,11 @@ use object::{
     SymbolFlags, SymbolKind, SymbolScope,
 };
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_module::symbol;
 use roc_module::symbol::Interns;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
-use roc_reporting::internal_error;
 use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
 
 // This is used by some code below which is currently commented out.
@@ -247,7 +247,7 @@ fn build_object<'a, B: Backend<'a>>(
         let (env, interns, helper_proc_gen) = backend.env_interns_helpers_mut();
 
         let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
-        let helper_procs = helper_proc_gen.generate_procs(arena, ident_ids);
+        let helper_procs = helper_proc_gen.take_procs();
         env.module_id.register_debug_idents(ident_ids);
 
         helper_procs

@@ -23,7 +23,7 @@ mod test_parse {
     use roc_parse::parser::{Parser, SyntaxError};
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
-    use roc_region::all::{Located, Region};
+    use roc_region::all::{Loc, Region};
     use roc_test_utils::assert_multiline_str_eq;
     use std::{f64, i64};
 
@@ -110,6 +110,8 @@ mod test_parse {
         fail/type_double_comma.expr,
         pass/add_var_with_spaces.expr,
         pass/add_with_spaces.expr,
+        pass/annotated_record_destructure.expr,
+        pass/annotated_tag_destructure.expr,
         pass/apply_global_tag.expr,
         pass/apply_parenthetical_global_tag_args.expr,
         pass/apply_private_tag.expr,
@@ -128,8 +130,11 @@ mod test_parse {
         pass/comment_before_op.expr,
         pass/comment_inside_empty_list.expr,
         pass/comment_with_non_ascii.expr,
+        pass/destructure_tag_assignment.expr,
         pass/empty_app_header.header,
         pass/empty_interface_header.header,
+        pass/empty_hosted_header.header,
+        pass/nonempty_hosted_header.header,
         pass/empty_list.expr,
         pass/empty_platform_header.header,
         pass/empty_record.expr,
@@ -145,6 +150,7 @@ mod test_parse {
         pass/highest_int.expr,
         pass/if_def.expr,
         pass/int_with_underscore.expr,
+        pass/interface_with_newline.header,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
         pass/malformed_ident_due_to_underscore.expr,
@@ -164,6 +170,7 @@ mod test_parse {
         pass/negative_float.expr,
         pass/negative_int.expr,
         pass/nested_def_annotation.module,
+        pass/nested_if.expr,
         pass/nested_module.header,
         pass/newline_after_equals.expr, // Regression test for https://github.com/rtfeldman/roc/issues/51
         pass/newline_after_mul.expr,
@@ -175,6 +182,7 @@ mod test_parse {
         pass/newline_singleton_list.expr,
         pass/nonempty_platform_header.header,
         pass/not_docs.expr,
+        pass/number_literal_suffixes.expr,
         pass/one_backpassing.expr,
         pass/one_char_string.expr,
         pass/one_def.expr,
@@ -194,6 +202,7 @@ mod test_parse {
         pass/positive_float.expr,
         pass/positive_int.expr,
         pass/private_qualified_tag.expr,
+        pass/provides_type.header,
         pass/qualified_field.expr,
         pass/qualified_global_tag.expr,
         pass/qualified_var.expr,
@@ -201,6 +210,7 @@ mod test_parse {
         pass/record_func_type_decl.expr,
         pass/record_update.expr,
         pass/record_with_if.expr,
+        pass/requires_type.header,
         pass/single_arg_closure.expr,
         pass/single_underscore_closure.expr,
         pass/space_only_after_minus.expr,
@@ -260,8 +270,14 @@ mod test_parse {
         let result = func(&input);
 
         let actual_result = if should_pass {
+            eprintln!("The source code for this test did not successfully parse!\n");
+
             result.unwrap()
         } else {
+            eprintln!(
+                "The source code for this test successfully parsed, but it was not expected to!\n"
+            );
+
             result.unwrap_err()
         };
 
@@ -362,7 +378,7 @@ mod test_parse {
         assert_segments(r#""Hi, \u(123)!""#, |arena| {
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Unicode(Located::new(0, 0, 8, 11, "123")),
+                Unicode(Loc::new(8, 11, "123")),
                 Plaintext("!")
             ]
         });
@@ -372,7 +388,7 @@ mod test_parse {
     fn unicode_escape_in_front() {
         assert_segments(r#""\u(1234) is a unicode char""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Located::new(0, 0, 4, 8, "1234")),
+                Unicode(Loc::new(4, 8, "1234")),
                 Plaintext(" is a unicode char")
             ]
         });
@@ -383,7 +399,7 @@ mod test_parse {
         assert_segments(r#""this is unicode: \u(1)""#, |arena| {
             bumpalo::vec![in arena;
                 Plaintext("this is unicode: "),
-                Unicode(Located::new(0, 0, 21, 22, "1"))
+                Unicode(Loc::new(21, 22, "1"))
             ]
         });
     }
@@ -392,11 +408,11 @@ mod test_parse {
     fn unicode_escape_multiple() {
         assert_segments(r#""\u(a1) this is \u(2Bcd) unicode \u(ef97)""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Located::new(0, 0, 4, 6, "a1")),
+                Unicode(Loc::new(4, 6, "a1")),
                 Plaintext(" this is "),
-                Unicode(Located::new(0, 0, 19, 23, "2Bcd")),
+                Unicode(Loc::new(19, 23, "2Bcd")),
                 Plaintext(" unicode "),
-                Unicode(Located::new(0, 0, 36, 40, "ef97"))
+                Unicode(Loc::new(36, 40, "ef97"))
             ]
         });
     }
@@ -413,7 +429,7 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Interpolated(Located::new(0, 0, 7, 11, expr)),
+                Interpolated(Loc::new(7, 11, expr)),
                 Plaintext("!")
             ]
         });
@@ -428,7 +444,7 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Interpolated(Located::new(0, 0, 3, 7, expr)),
+                Interpolated(Loc::new(3, 7, expr)),
                 Plaintext(", hi!")
             ]
         });
@@ -444,7 +460,7 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hello "),
-                Interpolated(Located::new(0, 0, 9, 13, expr))
+                Interpolated(Loc::new(9, 13, expr))
             ]
         });
     }
@@ -464,9 +480,9 @@ mod test_parse {
 
             bumpalo::vec![in arena;
                 Plaintext("Hi, "),
-                Interpolated(Located::new(0, 0, 7, 11, expr1)),
+                Interpolated(Loc::new(7, 11, expr1)),
                 Plaintext("! How is "),
-                Interpolated(Located::new(0, 0, 23, 30, expr2)),
+                Interpolated(Loc::new(23, 30, expr2)),
                 Plaintext(" going?")
             ]
         });
@@ -475,23 +491,6 @@ mod test_parse {
     #[test]
     fn empty_source_file() {
         assert_parsing_fails("", SyntaxError::Eof(Region::zero()));
-    }
-
-    #[test]
-    fn first_line_too_long() {
-        let max_line_length = u16::MAX as usize;
-
-        // the string literal "ZZZZZZZZZ" but with way more Zs
-        let too_long_str_body: String = (1..max_line_length)
-            .into_iter()
-            .map(|_| "Z".to_string())
-            .collect();
-        let too_long_str = format!("\"{}\"", too_long_str_body);
-
-        // Make sure it's longer than our maximum line length
-        assert_eq!(too_long_str.len(), max_line_length + 1);
-
-        assert_parsing_fails(&too_long_str, SyntaxError::LineTooLong(0));
     }
 
     #[quickcheck]

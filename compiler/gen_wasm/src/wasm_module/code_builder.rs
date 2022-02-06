@@ -1,19 +1,20 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use core::panic;
-use roc_reporting::internal_error;
+use roc_error_macros::internal_error;
 
 use roc_module::symbol::Symbol;
 
 use super::linking::{IndexRelocType, OffsetRelocType, RelocationEntry};
 use super::opcodes::{OpCode, OpCode::*};
 use super::serialize::{SerialBuffer, Serialize};
-use crate::{round_up_to_alignment, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
+use crate::{
+    round_up_to_alignment, DEBUG_LOG_SETTINGS, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
+};
 
-const ENABLE_DEBUG_LOG: bool = false;
 macro_rules! log_instruction {
     ($($x: expr),+) => {
-        if ENABLE_DEBUG_LOG { println!($($x,)*); }
+        if DEBUG_LOG_SETTINGS.instructions { println!($($x,)*); }
     };
 }
 
@@ -36,29 +37,19 @@ impl Serialize for ValueType {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum BlockType {
-    NoResult,
-    Value(ValueType),
-}
-
-impl BlockType {
-    pub fn as_byte(&self) -> u8 {
-        match self {
-            Self::NoResult => 0x40,
-            Self::Value(t) => *t as u8,
+impl From<u8> for ValueType {
+    fn from(x: u8) -> Self {
+        match x {
+            0x7f => Self::I32,
+            0x7e => Self::I64,
+            0x7d => Self::F32,
+            0x7c => Self::F64,
+            _ => internal_error!("Invalid ValueType 0x{:02x}", x),
         }
     }
 }
 
-impl From<Option<ValueType>> for BlockType {
-    fn from(opt: Option<ValueType>) -> Self {
-        match opt {
-            Some(ty) => BlockType::Value(ty),
-            None => BlockType::NoResult,
-        }
-    }
-}
+const BLOCK_NO_RESULT: u8 = 0x40;
 
 /// A control block in our model of the VM
 /// Child blocks cannot "see" values from their parent block
@@ -175,6 +166,12 @@ pub struct CodeBuilder<'a> {
     /// Linker info to help combine the Roc module with builtin & platform modules,
     /// e.g. to modify call instructions when function indices change
     relocations: Vec<'a, RelocationEntry>,
+}
+
+impl<'a> Serialize for CodeBuilder<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        self.serialize_without_relocs(buffer);
+    }
 }
 
 #[allow(clippy::new_without_default)]
@@ -378,7 +375,7 @@ impl<'a> CodeBuilder<'a> {
         if found {
             self.add_insertion(pushed_at, SETLOCAL, local_id.0);
         } else {
-            if ENABLE_DEBUG_LOG {
+            if DEBUG_LOG_SETTINGS.instructions {
                 println!(
                     "{:?} has been popped implicitly. Leaving it on the stack.",
                     symbol
@@ -491,6 +488,26 @@ impl<'a> CodeBuilder<'a> {
 
     ***********************************************************/
 
+    pub fn size(&self) -> usize {
+        self.inner_length.len() + self.preamble.len() + self.code.len() + self.insert_bytes.len()
+    }
+
+    /// Serialize all byte vectors in the right order
+    /// Also update relocation offsets relative to the base offset (code section body start)
+    pub fn serialize_without_relocs<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_slice(&self.inner_length);
+        buffer.append_slice(&self.preamble);
+
+        let mut code_pos = 0;
+        for Insertion { at, start, end } in self.insertions.iter() {
+            buffer.append_slice(&self.code[code_pos..(*at)]);
+            buffer.append_slice(&self.insert_bytes[*start..*end]);
+            code_pos = *at;
+        }
+
+        buffer.append_slice(&self.code[code_pos..self.code.len()]);
+    }
+
     /// Serialize all byte vectors in the right order
     /// Also update relocation offsets relative to the base offset (code section body start)
     pub fn serialize_with_relocs<T: SerialBuffer>(
@@ -551,7 +568,16 @@ impl<'a> CodeBuilder<'a> {
     /// Emits the opcode and simulates VM stack push/pop
     fn inst_base(&mut self, opcode: OpCode, pops: usize, push: bool) {
         let current_stack = self.current_stack_mut();
-        let new_len = current_stack.len() - pops as usize;
+        let stack_size = current_stack.len();
+
+        debug_assert!(
+            stack_size >= pops,
+            "Wasm value stack underflow. Tried to pop {} but only {} available",
+            pops,
+            stack_size
+        );
+
+        let new_len = stack_size - pops as usize;
         current_stack.truncate(new_len);
         if push {
             current_stack.push(Symbol::WASM_TMP);
@@ -570,14 +596,11 @@ impl<'a> CodeBuilder<'a> {
     }
 
     /// Block instruction
-    fn inst_block(&mut self, opcode: OpCode, pops: usize, block_type: BlockType) {
-        if block_type != BlockType::NoResult {
-            // Returning from nested blocks is too complicated if we use result types
-            internal_error!("Block results are not supported.");
-        }
-
+    fn inst_block(&mut self, opcode: OpCode, pops: usize) {
         self.inst_base(opcode, pops, false);
-        self.code.push(block_type.as_byte());
+
+        // We don't support block result types. Too hard to track types through arbitrary control flow.
+        self.code.push(BLOCK_NO_RESULT);
 
         // Start a new block with a fresh value stack
         self.vm_block_stack.push(VmBlock {
@@ -585,12 +608,7 @@ impl<'a> CodeBuilder<'a> {
             value_stack: Vec::with_capacity_in(8, self.arena),
         });
 
-        log_instruction!(
-            "{:10} {:?}\t{:?}",
-            format!("{:?}", opcode),
-            block_type,
-            &self.vm_block_stack
-        );
+        log_instruction!("{:10}\t{:?}", format!("{:?}", opcode), &self.vm_block_stack);
     }
 
     fn inst_imm32(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u32) {
@@ -643,14 +661,14 @@ impl<'a> CodeBuilder<'a> {
     instruction_no_args!(unreachable_, UNREACHABLE, 0, false);
     instruction_no_args!(nop, NOP, 0, false);
 
-    pub fn block(&mut self, ty: BlockType) {
-        self.inst_block(BLOCK, 0, ty);
+    pub fn block(&mut self) {
+        self.inst_block(BLOCK, 0);
     }
-    pub fn loop_(&mut self, ty: BlockType) {
-        self.inst_block(LOOP, 0, ty);
+    pub fn loop_(&mut self) {
+        self.inst_block(LOOP, 0);
     }
-    pub fn if_(&mut self, ty: BlockType) {
-        self.inst_block(IF, 1, ty);
+    pub fn if_(&mut self) {
+        self.inst_block(IF, 1);
     }
     pub fn else_(&mut self) {
         // Reuse the 'then' block but clear its value stack
@@ -937,17 +955,4 @@ impl<'a> CodeBuilder<'a> {
     instruction_no_args!(i64_reinterpret_f64, I64REINTERPRETF64, 1, true);
     instruction_no_args!(f32_reinterpret_i32, F32REINTERPRETI32, 1, true);
     instruction_no_args!(f64_reinterpret_i64, F64REINTERPRETI64, 1, true);
-
-    /// Generate a debug assertion for an expected i32 value
-    pub fn _debug_assert_i32(&mut self, expected: i32) {
-        self.i32_const(expected);
-        self.i32_eq();
-        self.i32_eqz();
-        self.if_(BlockType::NoResult);
-        self.unreachable_(); // Tell Wasm runtime to throw an exception
-        self.end();
-        // It matches. Restore the original value to the VM stack and continue the program.
-        // We know it matched the expected value, so just use that!
-        self.i32_const(expected);
-    }
 }

@@ -1,30 +1,32 @@
 Defs(
     [
-        |L 0-0, C 0-26| Alias {
-            name: |L 0-0, C 0-4| "Blah",
-            vars: [
-                |L 0-0, C 5-6| Identifier(
-                    "a",
-                ),
-                |L 0-0, C 7-8| Identifier(
-                    "b",
-                ),
-            ],
-            ann: |L 0-0, C 11-26| Apply(
+        @0-26 Alias {
+            header: AliasHeader {
+                name: @0-4 "Blah",
+                vars: [
+                    @5-6 Identifier(
+                        "a",
+                    ),
+                    @7-8 Identifier(
+                        "b",
+                    ),
+                ],
+            },
+            ann: @11-26 Apply(
                 "Foo.Bar",
                 "Baz",
                 [
-                    |L 0-0, C 23-24| BoundVariable(
+                    @23-24 BoundVariable(
                         "x",
                     ),
-                    |L 0-0, C 25-26| BoundVariable(
+                    @25-26 BoundVariable(
                         "y",
                     ),
                 ],
             ),
         },
     ],
-    |L 2-2, C 0-2| SpaceBefore(
+    @28-30 SpaceBefore(
         Num(
             "42",
         ),

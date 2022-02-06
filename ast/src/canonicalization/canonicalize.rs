@@ -1,6 +1,6 @@
 use roc_collections::all::MutMap;
 use roc_problem::can::Problem;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 
 use crate::{
@@ -38,7 +38,7 @@ enum FieldVar {
 pub(crate) fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    fields: &'a [Located<roc_parse::ast::AssignedField<'a, roc_parse::ast::Expr<'a>>>],
+    fields: &'a [Loc<roc_parse::ast::AssignedField<'a, roc_parse::ast::Expr<'a>>>],
 ) -> Result<(PoolVec<RecordField>, Output), CanonicalizeRecordProblem> {
     let mut can_fields: MutMap<&'a str, FieldVar> = MutMap::default();
     let mut output = Output::default();

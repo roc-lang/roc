@@ -3,7 +3,7 @@ use crate::types::{Problem, RecordField, Type};
 use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
@@ -85,7 +85,7 @@ impl SolvedType {
         match typ {
             EmptyRec => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Apply(symbol, types) => {
+            Apply(symbol, types, _) => {
                 let mut solved_types = Vec::with_capacity(types.len());
 
                 for typ in types {
@@ -399,7 +399,7 @@ impl SolvedType {
 #[derive(Clone, Debug)]
 pub struct BuiltinAlias {
     pub region: Region,
-    pub vars: Vec<Located<Lowercase>>,
+    pub vars: Vec<Loc<Lowercase>>,
     pub typ: SolvedType,
 }
 
@@ -454,7 +454,7 @@ pub fn to_type(
                 new_args.push(to_type(arg, free_vars, var_store));
             }
 
-            Type::Apply(*symbol, new_args)
+            Type::Apply(*symbol, new_args, Region::zero())
         }
         Rigid(lowercase) => {
             if let Some(var) = free_vars.named_vars.get(lowercase) {

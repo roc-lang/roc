@@ -7,7 +7,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use std::fmt;
 
 pub const TYPE_NUM: &str = "Num";
@@ -94,13 +94,18 @@ impl RecordField<Type> {
         }
     }
 
-    pub fn substitute_alias(&mut self, rep_symbol: Symbol, actual: &Type) {
+    pub fn substitute_alias(
+        &mut self,
+        rep_symbol: Symbol,
+        rep_args: &[Type],
+        actual: &Type,
+    ) -> Result<(), Region> {
         use RecordField::*;
 
         match self {
-            Optional(typ) => typ.substitute_alias(rep_symbol, actual),
-            Required(typ) => typ.substitute_alias(rep_symbol, actual),
-            Demanded(typ) => typ.substitute_alias(rep_symbol, actual),
+            Optional(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
+            Required(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
+            Demanded(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
         }
     }
 
@@ -189,7 +194,7 @@ pub enum Type {
     },
     RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
-    Apply(Symbol, Vec<Type>),
+    Apply(Symbol, Vec<Type>, Region),
     Variable(Variable),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
@@ -220,7 +225,7 @@ impl fmt::Debug for Type {
             }
             Type::Variable(var) => write!(f, "<{:?}>", var),
 
-            Type::Apply(symbol, args) => {
+            Type::Apply(symbol, args, _) => {
                 write!(f, "({:?}", symbol)?;
 
                 for arg in args {
@@ -539,7 +544,7 @@ impl Type {
                 }
                 actual_type.substitute(substitutions);
             }
-            Apply(_, args) => {
+            Apply(_, args, _) => {
                 for arg in args {
                     arg.substitute(substitutions);
                 }
@@ -549,62 +554,69 @@ impl Type {
         }
     }
 
-    // swap Apply with Alias if their module and tag match
-    pub fn substitute_alias(&mut self, rep_symbol: Symbol, actual: &Type) {
+    /// Swap Apply(rep_symbol, rep_args) with `actual`. Returns `Err` if there is an
+    /// `Apply(rep_symbol, _)`, but the args don't match.
+    pub fn substitute_alias(
+        &mut self,
+        rep_symbol: Symbol,
+        rep_args: &[Type],
+        actual: &Type,
+    ) -> Result<(), Region> {
         use Type::*;
 
         match self {
             Function(args, closure, ret) => {
                 for arg in args {
-                    arg.substitute_alias(rep_symbol, actual);
+                    arg.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
-                closure.substitute_alias(rep_symbol, actual);
-                ret.substitute_alias(rep_symbol, actual);
+                closure.substitute_alias(rep_symbol, rep_args, actual)?;
+                ret.substitute_alias(rep_symbol, rep_args, actual)
             }
-            FunctionOrTagUnion(_, _, ext) => {
-                ext.substitute_alias(rep_symbol, actual);
-            }
+            FunctionOrTagUnion(_, _, ext) => ext.substitute_alias(rep_symbol, rep_args, actual),
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
-                        x.substitute_alias(rep_symbol, actual);
+                        x.substitute_alias(rep_symbol, rep_args, actual)?;
                     }
                 }
-                ext.substitute_alias(rep_symbol, actual);
+                ext.substitute_alias(rep_symbol, rep_args, actual)
             }
             Record(fields, ext) => {
                 for (_, x) in fields.iter_mut() {
-                    x.substitute_alias(rep_symbol, actual);
+                    x.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
-                ext.substitute_alias(rep_symbol, actual);
+                ext.substitute_alias(rep_symbol, rep_args, actual)
             }
             Alias {
                 actual: alias_actual,
                 ..
-            } => {
-                alias_actual.substitute_alias(rep_symbol, actual);
-            }
+            } => alias_actual.substitute_alias(rep_symbol, rep_args, actual),
             HostExposedAlias {
                 actual: actual_type,
                 ..
-            } => {
-                actual_type.substitute_alias(rep_symbol, actual);
-            }
-            Apply(symbol, _) if *symbol == rep_symbol => {
-                *self = actual.clone();
+            } => actual_type.substitute_alias(rep_symbol, rep_args, actual),
+            Apply(symbol, args, region) if *symbol == rep_symbol => {
+                if args.len() == rep_args.len()
+                    && args.iter().zip(rep_args.iter()).all(|(t1, t2)| t1 == t2)
+                {
+                    *self = actual.clone();
 
-                if let Apply(_, args) = self {
-                    for arg in args {
-                        arg.substitute_alias(rep_symbol, actual);
+                    if let Apply(_, args, _) = self {
+                        for arg in args {
+                            arg.substitute_alias(rep_symbol, rep_args, actual)?;
+                        }
                     }
+                    return Ok(());
                 }
+                Err(*region)
             }
-            Apply(_, args) => {
+            Apply(_, args, _) => {
                 for arg in args {
-                    arg.substitute_alias(rep_symbol, actual);
+                    arg.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
+                Ok(())
             }
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => Ok(()),
         }
     }
 
@@ -639,8 +651,8 @@ impl Type {
             HostExposedAlias { name, actual, .. } => {
                 name == &rep_symbol || actual.contains_symbol(rep_symbol)
             }
-            Apply(symbol, _) if *symbol == rep_symbol => true,
-            Apply(_, args) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
+            Apply(symbol, _, _) if *symbol == rep_symbol => true,
+            Apply(_, args, _) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
         }
     }
@@ -676,7 +688,7 @@ impl Type {
                 ..
             } => actual_type.contains_variable(rep_variable),
             HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
-            Apply(_, args) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
+            Apply(_, args, _) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
             EmptyRec | EmptyTagUnion | Erroneous(_) => false,
         }
     }
@@ -753,7 +765,7 @@ impl Type {
 
                 actual_type.instantiate_aliases(region, aliases, var_store, introduced);
             }
-            Apply(symbol, args) => {
+            Apply(symbol, args, _) => {
                 if let Some(alias) = aliases.get(symbol) {
                     if args.len() != alias.type_variables.len() {
                         *self = Type::Erroneous(Problem::BadTypeArguments {
@@ -772,7 +784,7 @@ impl Type {
 
                     // TODO substitute further in args
                     for (
-                        Located {
+                        Loc {
                             value: (lowercase, placeholder),
                             ..
                         },
@@ -882,9 +894,12 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
             accum.insert(*name);
             symbols_help(actual, accum);
         }
-        Apply(symbol, args) => {
+        Apply(symbol, args, _) => {
             accum.insert(*symbol);
             args.iter().for_each(|arg| symbols_help(arg, accum));
+        }
+        Erroneous(Problem::CyclicAlias(alias, _, _)) => {
+            accum.insert(*alias);
         }
         EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
     }
@@ -964,7 +979,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             }
             variables_help(actual, accum);
         }
-        Apply(_, args) => {
+        Apply(_, args, _) => {
             for x in args {
                 variables_help(x, accum);
             }
@@ -1068,7 +1083,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             }
             variables_help_detailed(actual, accum);
         }
-        Apply(_, args) => {
+        Apply(_, args, _) => {
             for x in args {
                 variables_help_detailed(x, accum);
             }
@@ -1171,6 +1186,7 @@ pub enum Reason {
     RecordUpdateValue(Lowercase),
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Region>),
     RecordDefaultField(Lowercase),
+    NumericLiteralSuffix,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -1227,7 +1243,7 @@ pub enum PatternCategory {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Alias {
     pub region: Region,
-    pub type_variables: Vec<Located<(Lowercase, Variable)>>,
+    pub type_variables: Vec<Loc<(Lowercase, Variable)>>,
 
     /// lambda set variables, e.g. the one annotating the arrow in
     /// a |c|-> b
@@ -1238,13 +1254,23 @@ pub struct Alias {
     pub typ: Type,
 }
 
+impl Alias {
+    pub fn header_region(&self) -> Region {
+        Region::across_all(
+            [self.region]
+                .iter()
+                .chain(self.type_variables.iter().map(|tv| &tv.region)),
+        )
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum Problem {
     CanonicalizationProblem,
     CircularType(Symbol, Box<ErrorType>, Region),
     CyclicAlias(Symbol, Region, Vec<Symbol>),
     UnrecognizedIdent(Ident),
-    Shadowed(Region, Located<Ident>),
+    Shadowed(Region, Loc<Ident>),
     BadTypeArguments {
         symbol: Symbol,
         region: Region,
@@ -1701,14 +1727,20 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct RecordFieldsError;
+
 pub fn gather_fields_unsorted_iter(
     subs: &Subs,
     other_fields: RecordFields,
     mut var: Variable,
-) -> (
-    impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + '_,
-    Variable,
-) {
+) -> Result<
+    (
+        impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + '_,
+        Variable,
+    ),
+    RecordFieldsError,
+> {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
@@ -1733,7 +1765,7 @@ pub fn gather_fields_unsorted_iter(
             // TODO investigate apparently this one pops up in the reporting tests!
             RigidVar(_) => break,
 
-            other => unreachable!("something weird ended up in a record type: {:?}", other),
+            _ => return Err(RecordFieldsError),
         }
     }
 
@@ -1749,11 +1781,15 @@ pub fn gather_fields_unsorted_iter(
             (field_name, record_field)
         });
 
-    (it, var)
+    Ok((it, var))
 }
 
-pub fn gather_fields(subs: &Subs, other_fields: RecordFields, var: Variable) -> RecordStructure {
-    let (it, ext) = gather_fields_unsorted_iter(subs, other_fields, var);
+pub fn gather_fields(
+    subs: &Subs,
+    other_fields: RecordFields,
+    var: Variable,
+) -> Result<RecordStructure, RecordFieldsError> {
+    let (it, ext) = gather_fields_unsorted_iter(subs, other_fields, var)?;
 
     let mut result: Vec<_> = it
         .map(|(ref_label, field)| (ref_label.clone(), field))
@@ -1761,10 +1797,10 @@ pub fn gather_fields(subs: &Subs, other_fields: RecordFields, var: Variable) -> 
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    RecordStructure {
+    Ok(RecordStructure {
         fields: result,
         ext,
-    }
+    })
 }
 
 pub fn gather_tags_unsorted_iter(

@@ -2,9 +2,9 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::Layout;
-use roc_reporting::internal_error;
 
 use crate::layout::{
     CallConv, ReturnMethod, StackMemoryFormat, WasmLayout, ZigVersion, BUILTINS_ZIG_VERSION,
@@ -519,6 +519,10 @@ impl<'a> Storage<'a> {
                 alignment_bytes,
                 ..
             } => {
+                if self.stack_frame_pointer.is_none() {
+                    self.stack_frame_pointer = Some(self.get_next_local_id());
+                }
+
                 let (to_ptr, to_offset) = location.local_and_offset(self.stack_frame_pointer);
                 copy_memory(
                     code_builder,

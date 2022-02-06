@@ -1,6 +1,9 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::expect_runtime_error_panic;
+
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
 
@@ -584,9 +587,7 @@ fn optional_field_function_use_default() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
 fn optional_field_function_no_use_default() {
-    // blocked on https://github.com/rtfeldman/roc/issues/786
     assert_evals_to!(
         indoc!(
             r#"
@@ -605,9 +606,7 @@ fn optional_field_function_no_use_default() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
 fn optional_field_function_no_use_default_nested() {
-    // blocked on https://github.com/rtfeldman/roc/issues/786
     assert_evals_to!(
         indoc!(
             r#"
@@ -998,7 +997,7 @@ fn both_have_unique_fields() {
             b = { x: 42, z: 44 }
 
             f : { x : I64 }a, { x : I64 }b -> I64
-            f = \{ x: x1}, { x: x2 } -> x1 + x2 
+            f = \{ x: x1}, { x: x2 } -> x1 + x2
 
             f a b
             "#
@@ -1006,4 +1005,23 @@ fn both_have_unique_fields() {
         84,
         i64
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+#[should_panic(
+    // TODO: something upstream is escaping the '
+    expected = r#"Roc failed with message: "Can\'t create record with improper layout""#
+)]
+fn call_with_bad_record_runtime_error() {
+    expect_runtime_error_panic!(indoc!(
+        r#"
+            app "test" provides [ main ] to "./platform"
+
+            main =
+                get : {a: Bool} -> Bool
+                get = \{a} -> a
+                get {b: ""}
+            "#
+    ))
 }

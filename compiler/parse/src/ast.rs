@@ -1,11 +1,11 @@
 use std::fmt::Debug;
 
-use crate::header::{AppHeader, InterfaceHeader, PlatformHeader};
+use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PlatformHeader};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
-use roc_region::all::{Loc, Located, Position, Region};
+use roc_region::all::{Loc, Position, Region};
 
 #[derive(Debug)]
 pub struct Spaces<'a, T> {
@@ -53,7 +53,7 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for &'a T {
     }
 }
 
-impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Located<T> {
+impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
     type Item = T::Item;
     fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
         let spaces = self.value.extract_spaces();
@@ -70,6 +70,7 @@ pub enum Module<'a> {
     Interface { header: InterfaceHeader<'a> },
     App { header: AppHeader<'a> },
     Platform { header: PlatformHeader<'a> },
+    Hosted { header: HostedHeader<'a> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -226,6 +227,22 @@ pub struct PrecedenceConflict<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AliasHeader<'a> {
+    pub name: Loc<&'a str>,
+    pub vars: &'a [Loc<Pattern<'a>>],
+}
+
+impl<'a> AliasHeader<'a> {
+    pub fn region(&self) -> Region {
+        Region::across_all(
+            [self.name.region]
+                .iter()
+                .chain(self.vars.iter().map(|v| &v.region)),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns
     // are allowed in annotations.
@@ -236,8 +253,7 @@ pub enum Def<'a> {
     ///
     /// Foo : Bar Baz
     Alias {
-        name: Loc<&'a str>,
-        vars: &'a [Loc<Pattern<'a>>],
+        header: AliasHeader<'a>,
         ann: Loc<TypeAnnotation<'a>>,
     },
 
@@ -265,6 +281,17 @@ pub enum Def<'a> {
     NotYetImplemented(&'static str),
 }
 
+impl<'a> Def<'a> {
+    pub fn unroll_spaces_before(&self) -> (&'a [CommentOrNewline<'a>], &Def) {
+        let (spaces, def): (&'a [_], &Def) = match self {
+            Def::SpaceBefore(def, spaces) => (spaces, def),
+            def => (&[], def),
+        };
+        debug_assert!(!matches!(def, Def::SpaceBefore(_, _)));
+        (spaces, def)
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
     /// A function. The types of its arguments, then the type of its return value.
@@ -280,7 +307,7 @@ pub enum TypeAnnotation<'a> {
     As(
         &'a Loc<TypeAnnotation<'a>>,
         &'a [CommentOrNewline<'a>],
-        &'a Loc<TypeAnnotation<'a>>,
+        AliasHeader<'a>,
     ),
 
     Record {
@@ -390,7 +417,7 @@ pub enum Pattern<'a> {
     PrivateTag(&'a str),
     Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
 
-    /// This is Loc<Pattern> rather than Loc<str> so we can record comments
+    /// This is Located<Pattern> rather than Located<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
     RecordDestructure(Collection<'a, Loc<Pattern<'a>>>),
@@ -775,6 +802,10 @@ impl<'a> Expr<'a> {
             value: self,
         }
     }
+
+    pub fn is_tag(&self) -> bool {
+        matches!(self, Expr::GlobalTag(_) | Expr::PrivateTag(_))
+    }
 }
 
 macro_rules! impl_extract_spaces {
@@ -836,6 +867,7 @@ macro_rules! impl_extract_spaces {
 }
 
 impl_extract_spaces!(Expr);
+impl_extract_spaces!(Pattern);
 impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 

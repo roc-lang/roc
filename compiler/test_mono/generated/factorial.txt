@@ -1,27 +1,27 @@
-procedure Num.25 (#Attr.2, #Attr.3):
-    let Test.14 = lowlevel NumSub #Attr.2 #Attr.3;
+procedure Num.23 (#Attr.2, #Attr.3):
+    let Test.14 : Builtin(Int(I64)) = lowlevel NumSub #Attr.2 #Attr.3;
     ret Test.14;
 
-procedure Num.26 (#Attr.2, #Attr.3):
-    let Test.12 = lowlevel NumMul #Attr.2 #Attr.3;
+procedure Num.24 (#Attr.2, #Attr.3):
+    let Test.12 : Builtin(Int(I64)) = lowlevel NumMul #Attr.2 #Attr.3;
     ret Test.12;
 
 procedure Test.1 (Test.17, Test.18):
     joinpoint Test.7 Test.2 Test.3:
-        let Test.15 = 0i64;
-        let Test.16 = lowlevel Eq Test.15 Test.2;
+        let Test.15 : Builtin(Int(I64)) = 0i64;
+        let Test.16 : Builtin(Bool) = lowlevel Eq Test.15 Test.2;
         if Test.16 then
             ret Test.3;
         else
-            let Test.13 = 1i64;
-            let Test.10 = CallByName Num.25 Test.2 Test.13;
-            let Test.11 = CallByName Num.26 Test.2 Test.3;
+            let Test.13 : Builtin(Int(I64)) = 1i64;
+            let Test.10 : Builtin(Int(I64)) = CallByName Num.23 Test.2 Test.13;
+            let Test.11 : Builtin(Int(I64)) = CallByName Num.24 Test.2 Test.3;
             jump Test.7 Test.10 Test.11;
     in
     jump Test.7 Test.17 Test.18;
 
 procedure Test.0 ():
-    let Test.5 = 10i64;
-    let Test.6 = 1i64;
-    let Test.4 = CallByName Test.1 Test.5 Test.6;
+    let Test.5 : Builtin(Int(I64)) = 10i64;
+    let Test.6 : Builtin(Int(I64)) = 1i64;
+    let Test.4 : Builtin(Int(I64)) = CallByName Test.1 Test.5 Test.6;
     ret Test.4;

@@ -11,6 +11,9 @@ use crate::helpers::llvm::assert_evals_to;
 
 use indoc::indoc;
 
+#[allow(unused_imports)]
+use roc_std::{RocResult, RocStr};
+
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn with_default() {
@@ -31,7 +34,7 @@ fn with_default() {
         indoc!(
             r#"
             result : Result I64 {}
-            result = Err {} 
+            result = Err {}
 
             Result.withDefault result 0
             "#
@@ -63,7 +66,7 @@ fn result_map() {
         indoc!(
             r#"
             result : Result I64 {}
-            result = Err {} 
+            result = Err {}
 
             result
                 |> Result.map (\x -> x + 1)
@@ -217,5 +220,39 @@ fn is_err() {
         ),
         true,
         bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn roc_result_ok() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result I64 {}
+            result = Ok 42
+
+            result
+            "#
+        ),
+        RocResult::ok(42),
+        RocResult<i64, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn roc_result_err() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result I64 Str
+            result = Err "foo"
+
+            result
+            "#
+        ),
+        RocResult::err(RocStr::from_slice(b"foo")),
+        RocResult<i64, RocStr>
     );
 }

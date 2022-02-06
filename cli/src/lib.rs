@@ -18,7 +18,6 @@ use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
 
 pub mod build;
 mod format;
-pub mod repl;
 pub use format::format;
 
 pub const CMD_BUILD: &str = "build";

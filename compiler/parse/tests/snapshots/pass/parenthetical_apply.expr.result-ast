@@ -1,12 +1,12 @@
 Apply(
-    |L 0-0, C 1-5| ParensAround(
+    @1-5 ParensAround(
         Var {
             module_name: "",
             ident: "whee",
         },
     ),
     [
-        |L 0-0, C 7-8| Num(
+        @7-8 Num(
             "1",
         ),
     ],

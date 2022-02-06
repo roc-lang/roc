@@ -1,14 +1,13 @@
 Closure(
     [
-        |L 0-0, C 1-11| MalformedIdent(
+        @1-11 MalformedIdent(
             "the_answer",
             Underscore(
-                0,
-                5,
+                @5,
             ),
         ),
     ],
-    |L 0-0, C 15-17| Num(
+    @15-17 Num(
         "42",
     ),
 )

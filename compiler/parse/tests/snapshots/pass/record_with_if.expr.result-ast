@@ -1,28 +1,28 @@
 Record(
     [
-        |L 0-0, C 1-26| RequiredValue(
-            |L 0-0, C 1-2| "x",
+        @1-26 RequiredValue(
+            @1-2 "x",
             [],
-            |L 0-0, C 5-26| If(
+            @5-26 If(
                 [
                     (
-                        |L 0-0, C 8-12| GlobalTag(
+                        @8-12 GlobalTag(
                             "True",
                         ),
-                        |L 0-0, C 18-19| Num(
+                        @18-19 Num(
                             "1",
                         ),
                     ),
                 ],
-                |L 0-0, C 25-26| Num(
+                @25-26 Num(
                     "2",
                 ),
             ),
         ),
-        |L 0-0, C 28-32| RequiredValue(
-            |L 0-0, C 28-29| "y",
+        @28-32 RequiredValue(
+            @28-29 "y",
             [],
-            |L 0-0, C 31-32| Num(
+            @31-32 Num(
                 "3",
             ),
         ),

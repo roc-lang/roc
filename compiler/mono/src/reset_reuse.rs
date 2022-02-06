@@ -1,3 +1,18 @@
+//! This module inserts reset/reuse statements into the mono IR. These statements provide an
+//! opportunity to reduce memory pressure by reusing memory slots of non-shared values. From the
+//! introduction of the relevant paper:
+//!
+//! > [We] have added two additional instructions to our IR: `let y = reset x` and
+//! > `let z = (reuse y in ctor_i w)`. The two instructions are used together; if `x`
+//! > is a shared value, then `y` is set to a special reference, and the reuse instruction
+//! > just allocates a new constructor value `ctor_i w`. If `x` is not shared, then reset
+//! > decrements the reference counters of the components of `x`, and `y` is set to `x`.
+//! > Then, reuse reuses the memory cell used by `x` to store the constructor value `ctor_i w`.
+//!
+//! See also
+//! - [Counting Immutable Beans](https://arxiv.org/pdf/1908.05647.pdf) (Ullrich and Moura, 2020)
+//! - [The lean implementation](https://github.com/leanprover/lean4/blob/master/src/Lean/Compiler/IR/ResetReuse.lean)
+
 use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveVarSet};
 use crate::ir::{
     BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt, UpdateModeId, UpdateModeIds,

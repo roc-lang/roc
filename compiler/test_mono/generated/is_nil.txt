@@ -1,18 +1,18 @@
 procedure Test.2 (Test.3):
-    let Test.12 = 1i64;
-    let Test.13 = GetTagId Test.3;
-    let Test.14 = lowlevel Eq Test.12 Test.13;
+    let Test.12 : Builtin(Bool) = 1i64;
+    let Test.13 : Builtin(Bool) = GetTagId Test.3;
+    let Test.14 : Builtin(Bool) = lowlevel Eq Test.12 Test.13;
     if Test.14 then
-        let Test.10 = true;
+        let Test.10 : Builtin(Bool) = true;
         ret Test.10;
     else
-        let Test.11 = false;
+        let Test.11 : Builtin(Bool) = false;
         ret Test.11;
 
 procedure Test.0 ():
-    let Test.15 = 2i64;
-    let Test.16 = Nil ;
-    let Test.9 = Cons Test.15 Test.16;
-    let Test.8 = CallByName Test.2 Test.9;
+    let Test.15 : Builtin(Int(I64)) = 2i64;
+    let Test.16 : Union(NullableUnwrapped { nullable_id: true, other_fields: [Builtin(Int(I64)), RecursivePointer] }) = Nil ;
+    let Test.9 : Union(NullableUnwrapped { nullable_id: true, other_fields: [Builtin(Int(I64)), RecursivePointer] }) = Cons Test.15 Test.16;
+    let Test.8 : Builtin(Bool) = CallByName Test.2 Test.9;
     dec Test.9;
     ret Test.8;

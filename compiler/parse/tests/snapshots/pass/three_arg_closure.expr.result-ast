@@ -1,16 +1,16 @@
 Closure(
     [
-        |L 0-0, C 1-2| Identifier(
+        @1-2 Identifier(
             "a",
         ),
-        |L 0-0, C 4-5| Identifier(
+        @4-5 Identifier(
             "b",
         ),
-        |L 0-0, C 7-8| Identifier(
+        @7-8 Identifier(
             "c",
         ),
     ],
-    |L 0-0, C 12-14| Num(
+    @12-14 Num(
         "42",
     ),
 )

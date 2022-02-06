@@ -25,7 +25,7 @@ extension RocStr {
     var isSmallString: Bool {
         len < 0
     }
-    
+
     var length: Int {
         if isSmallString {
             var len = len
@@ -37,7 +37,7 @@ extension RocStr {
             return len
         }
     }
-    
+
     var string: String {
         if isSmallString {
             let data: Data = withUnsafePointer(to: self) { ptr in

@@ -4,6 +4,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_target::TargetInfo;
 
 fn basic_type_from_record<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
@@ -36,7 +37,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
 
             match union_layout {
                 NonRecursive(tags) => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+                    let data = block_of_memory_slices(env.context, tags, env.target_info);
 
                     env.context.struct_type(&[data, tag_id_type], false).into()
                 }
@@ -44,9 +45,9 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
                 | NullableWrapped {
                     other_tags: tags, ..
                 } => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+                    let data = block_of_memory_slices(env.context, tags, env.target_info);
 
-                    if union_layout.stores_tag_id_as_data(env.ptr_bytes) {
+                    if union_layout.stores_tag_id_as_data(env.target_info) {
                         env.context
                             .struct_type(&[data, tag_id_type], false)
                             .ptr_type(AddressSpace::Generic)
@@ -56,11 +57,12 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
                     }
                 }
                 NullableUnwrapped { other_fields, .. } => {
-                    let block = block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
+                    let block =
+                        block_of_memory_slices(env.context, &[other_fields], env.target_info);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
                 NonNullableUnwrapped(fields) => {
-                    let block = block_of_memory_slices(env.context, &[fields], env.ptr_bytes);
+                    let block = block_of_memory_slices(env.context, &[fields], env.target_info);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
             }
@@ -95,7 +97,7 @@ pub fn basic_type_from_layout_1<'a, 'ctx, 'env>(
 
             match union_layout {
                 NonRecursive(tags) => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+                    let data = block_of_memory_slices(env.context, tags, env.target_info);
                     let struct_type = env.context.struct_type(&[data, tag_id_type], false);
 
                     struct_type.ptr_type(AddressSpace::Generic).into()
@@ -104,9 +106,9 @@ pub fn basic_type_from_layout_1<'a, 'ctx, 'env>(
                 | NullableWrapped {
                     other_tags: tags, ..
                 } => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+                    let data = block_of_memory_slices(env.context, tags, env.target_info);
 
-                    if union_layout.stores_tag_id_as_data(env.ptr_bytes) {
+                    if union_layout.stores_tag_id_as_data(env.target_info) {
                         env.context
                             .struct_type(&[data, tag_id_type], false)
                             .ptr_type(AddressSpace::Generic)
@@ -116,11 +118,12 @@ pub fn basic_type_from_layout_1<'a, 'ctx, 'env>(
                     }
                 }
                 NullableUnwrapped { other_fields, .. } => {
-                    let block = block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
+                    let block =
+                        block_of_memory_slices(env.context, &[other_fields], env.target_info);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
                 NonNullableUnwrapped(fields) => {
-                    let block = block_of_memory_slices(env.context, &[fields], env.ptr_bytes);
+                    let block = block_of_memory_slices(env.context, &[fields], env.target_info);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
             }
@@ -188,13 +191,13 @@ pub fn float_type_from_float_width<'a, 'ctx, 'env>(
 pub fn block_of_memory_slices<'ctx>(
     context: &'ctx Context,
     layouts: &[&[Layout<'_>]],
-    ptr_bytes: u32,
+    target_info: TargetInfo,
 ) -> BasicTypeEnum<'ctx> {
     let mut union_size = 0;
     for tag in layouts {
         let mut total = 0;
         for layout in tag.iter() {
-            total += layout.stack_size(ptr_bytes as u32);
+            total += layout.stack_size(target_info);
         }
 
         union_size = union_size.max(total);
@@ -203,32 +206,16 @@ pub fn block_of_memory_slices<'ctx>(
     block_of_memory_help(context, union_size)
 }
 
-pub fn union_data_is_struct<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-    layouts: &[Layout<'_>],
-) -> StructType<'ctx> {
-    let data_type = basic_type_from_record(env, layouts);
-    union_data_is_struct_type(env.context, data_type.into_struct_type())
-}
-
-pub fn union_data_is_struct_type<'ctx>(
-    context: &'ctx Context,
-    struct_type: StructType<'ctx>,
-) -> StructType<'ctx> {
-    let tag_id_type = context.i64_type();
-    context.struct_type(&[struct_type.into(), tag_id_type.into()], false)
-}
-
 pub fn block_of_memory<'ctx>(
     context: &'ctx Context,
     layout: &Layout<'_>,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
 ) -> BasicTypeEnum<'ctx> {
     // TODO make this dynamic
-    let mut union_size = layout.stack_size(ptr_bytes as u32);
+    let mut union_size = layout.stack_size(target_info);
 
     if let Layout::Union(UnionLayout::NonRecursive { .. }) = layout {
-        union_size -= ptr_bytes;
+        union_size -= target_info.ptr_width() as u32;
     }
 
     block_of_memory_help(context, union_size)
@@ -246,14 +233,18 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
     let num_i64 = union_size / 8;
     let num_i8 = union_size % 8;
 
+    let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
     let i64_array_type = context.i64_type().array_type(num_i64).as_basic_type_enum();
 
-    if num_i8 == 0 {
-        // the object fits perfectly in some number of i64's
+    if num_i64 == 0 {
+        // The object fits perfectly in some number of i8s
+        context.struct_type(&[i8_array_type], false).into()
+    } else if num_i8 == 0 {
+        // The object fits perfectly in some number of i64s
         // (i.e. the size is a multiple of 8 bytes)
         context.struct_type(&[i64_array_type], false).into()
     } else {
-        // there are some trailing bytes at the end
+        // There are some trailing bytes at the end
         let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
 
         context
@@ -263,16 +254,10 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
 }
 
 /// The int type that the C ABI turns our RocList/RocStr into
-pub fn str_list_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
-    match ptr_bytes {
-        1 => ctx.i16_type(),
-        2 => ctx.i32_type(),
-        4 => ctx.i64_type(),
-        8 => ctx.i128_type(),
-        _ => panic!(
-            "Invalid target: Roc does't support compiling to {}-bit systems.",
-            ptr_bytes * 8
-        ),
+pub fn str_list_int(ctx: &Context, target_info: TargetInfo) -> IntType<'_> {
+    match target_info.ptr_width() {
+        roc_target::PtrWidth::Bytes4 => ctx.i64_type(),
+        roc_target::PtrWidth::Bytes8 => ctx.i128_type(),
     }
 }
 

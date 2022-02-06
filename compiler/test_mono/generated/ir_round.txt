@@ -1,8 +1,8 @@
-procedure Num.47 (#Attr.2):
-    let Test.3 = lowlevel NumRound #Attr.2;
+procedure Num.45 (#Attr.2):
+    let Test.3 : Builtin(Int(I64)) = lowlevel NumRound #Attr.2;
     ret Test.3;
 
 procedure Test.0 ():
-    let Test.2 = 3.6f64;
-    let Test.1 = CallByName Num.47 Test.2;
+    let Test.2 : Builtin(Float(F64)) = 3.6f64;
+    let Test.1 : Builtin(Int(I64)) = CallByName Num.45 Test.2;
     ret Test.1;

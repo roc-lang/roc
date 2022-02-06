@@ -9,7 +9,7 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed"]
+    #[link_name = "roc__mainForHost_1_exposed_generic"]
     fn roc_main(output: *mut u8) -> ();
 
     #[link_name = "roc__mainForHost_size"]
