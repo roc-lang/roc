@@ -2,9 +2,10 @@
 #![no_std]
 use core::convert::From;
 use core::ffi::c_void;
+use core::fmt::{self, Display, Formatter};
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
-use core::{fmt, mem, ptr, slice};
+use core::{mem, ptr, slice};
 
 // A list of C functions that are being imported
 extern "C" {
@@ -671,6 +672,12 @@ impl Default for RocStr {
 impl From<&str> for RocStr {
     fn from(str: &str) -> Self {
         Self::from_slice(str.as_bytes())
+    }
+}
+
+impl Display for RocStr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.as_str().fmt(f)
     }
 }
 
