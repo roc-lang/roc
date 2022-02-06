@@ -801,6 +801,68 @@ mod cli_run {
             ),
         );
     }
+
+    #[test]
+    fn exposed_not_defined() {
+        check_compile_error(
+            &known_bad_file("ExposedNotDefined.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── MISSING DEFINITION ──────────────────────────────────────────────────────────
+
+                bar is listed as exposed, but it isn't defined in this module.
+
+                You can fix this by adding a definition for bar, or by removing it
+                from exposes.
+
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
+        );
+    }
+
+    #[test]
+    fn unused_import() {
+        check_compile_error(
+            &known_bad_file("UnusedImport.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNUSED IMPORT ───────────────────────────────────────────────────────────────
+
+                Nothing from Symbol is used in this module.
+
+                3│      imports [ Symbol.{ Ident } ]
+                                  ^^^^^^^^^^^^^^^^
+
+                Since Symbol isn't used, you don't need to import it.
+
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
+        );
+    }
+
+    #[test]
+    fn unknown_generates_with() {
+        check_compile_error(
+            &known_bad_file("UnknownGeneratesWith.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNKNOWN GENERATES FUNCTION ──────────────────────────────────────────────────
+
+                I don't know how to generate the foobar function.
+
+                4│      generates Effect with [ after, map, always, foobar ]
+                                                                    ^^^^^^
+
+                Only specific functions like `after` and `map` can be generated.Learn
+                more about hosted modules at TODO.
+
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
+        );
+    }
 }
 
 #[allow(dead_code)]

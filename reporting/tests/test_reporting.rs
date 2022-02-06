@@ -678,39 +678,6 @@ mod test_reporting {
         );
     }
 
-    // #[test]
-    // fn report_unused_import() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //              interface Report
-    //                  exposes [
-    //                      plainText,
-    //                      emText
-    //                  ]
-    //                  imports [
-    //                      Symbol.{ Interns }
-    //                  ]
-
-    //              plainText = \str -> PlainText str
-
-    //              emText = \str -> EmText str
-    //          "#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //              Nothing from Symbol is used in this module.
-
-    //              6│ imports [
-    //              7│     Symbol.{ Interns }
-    //                      ^^^^^^
-    //              8│ ]
-
-    //              Since Symbol isn't used, you don't need to import it."#
-    //         ),
-    //     );
-    // }
-
     #[test]
     fn report_value_color() {
         let src: &str = indoc!(

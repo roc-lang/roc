@@ -25,6 +25,7 @@ pub enum Problem {
     UnusedDef(Symbol, Region),
     UnusedImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
+    UnknownGeneratesWith(Loc<Ident>),
     /// First symbol is the name of the closure with that argument
     /// Second symbol is the name of the argument that is unused
     UnusedArgument(Symbol, Symbol, Region),
