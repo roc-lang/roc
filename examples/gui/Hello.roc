@@ -6,4 +6,4 @@ app "hello-gui"
 render =
     btn = Button { onPress : \_ -> Action.none } (text "Hello, button!")
 
-    \{} -> { content: "Hello, World!" }
+    "Hello, World!"

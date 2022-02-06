@@ -1,10 +1,10 @@
 platform "examples/hello-world"
-    requires {} { render : {} -> { content : Str} }
+    requires {} { render : Str }
     exposes []
     packages {}
     imports []
     provides [ renderForHost ]
     effects fx.Effect {}
 
-renderForHost : {} -> { content : Str }
+renderForHost : Str
 renderForHost = render
