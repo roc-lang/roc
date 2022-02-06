@@ -152,6 +152,13 @@ pub extern "C" fn rust_main() -> i32 {
                     draw_elem(elem);
                 }
             }
+            TextInput {
+                key: _,
+                text,
+                on_change: _,
+            } => {
+                println!("Drawing text input with current text \"{}\"", text);
+            }
         }
     }
 
