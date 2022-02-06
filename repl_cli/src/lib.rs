@@ -302,11 +302,11 @@ fn gen_and_eval_llvm<'a>(
 
     // The app is `mut` only because Wasm needs it.
     // It has no public fields, and its "mutating" methods don't actually mutate.
-    let mut app = CliApp { lib };
+    let app = CliApp { lib };
 
     let res_answer = jit_to_ast(
         &arena,
-        &mut app,
+        &app,
         main_fn_name,
         main_fn_layout,
         content,

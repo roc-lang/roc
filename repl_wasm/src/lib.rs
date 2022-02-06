@@ -220,13 +220,13 @@ pub async fn repl_wasm_entrypoint_from_js(src: String) -> Result<String, String>
         .await
         .map_err(|js| format!("{:?}", js))?;
 
-    let mut app = WasmReplApp { arena };
+    let app = WasmReplApp { arena };
 
     // Run the app and transform the result value to an AST `Expr`
     // Restore type constructor names, and other user-facing info that was erased during compilation.
     let res_answer = jit_to_ast(
         arena,
-        &mut app,
+        &app,
         "", // main_fn_name is ignored (only passed to WasmReplApp methods)
         main_fn_layout,
         content,
@@ -238,7 +238,7 @@ pub async fn repl_wasm_entrypoint_from_js(src: String) -> Result<String, String>
 
     // Transform the Expr to a string
     // `Result::Err` becomes a JS exception that will be caught and displayed
-    match format_answer(&arena, res_answer, expr_type_str) {
+    match format_answer(arena, res_answer, expr_type_str) {
         ReplOutput::NoProblems { expr, expr_type } => Ok(format!("\n{}: {}", expr, expr_type)),
         ReplOutput::Problems(lines) => Err(format!("\n{}\n", lines.join("\n\n"))),
     }
