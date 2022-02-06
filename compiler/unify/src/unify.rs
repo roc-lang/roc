@@ -209,9 +209,14 @@ fn unify_ranged_number(
         RecursionVar { .. } | RigidVar(..) | Alias(..) | Structure(..) => {
             unify_pool(subs, pool, real_var, ctx.second, ctx.mode)
         }
-        &RangedNumber(other_real_var, _other_range_vars) => {
-            unify_pool(subs, pool, real_var, other_real_var, ctx.mode)
-            // TODO: check and intersect "other_range_vars"
+        &RangedNumber(other_real_var, other_range_vars) => {
+            let outcome = unify_pool(subs, pool, real_var, other_real_var, ctx.mode);
+            if outcome.is_empty() {
+                check_valid_range(subs, pool, ctx.first, other_range_vars, ctx.mode)
+            } else {
+                outcome
+            }
+            // TODO: We should probably check that "range_vars" and "other_range_vars" intersect
         }
         Error => merge(subs, ctx, Error),
     };

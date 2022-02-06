@@ -133,7 +133,7 @@ pub fn finish_parsing_base(
         from_str_radix(raw.replace("_", "").as_str(), radix)
     })
     .and_then(|parsed| match parsed {
-        ParsedNumResult::Float(..) => return Err(IntErrorKind::FloatSuffix),
+        ParsedNumResult::Float(..) => Err(IntErrorKind::FloatSuffix),
         ParsedNumResult::Int(val, bound) => Ok((val, bound)),
         ParsedNumResult::UnknownNum(val, NumericBound::None) => Ok((val, IntBound::None)),
         ParsedNumResult::UnknownNum(val, NumericBound::AtLeastIntOrFloat { sign, width }) => {
