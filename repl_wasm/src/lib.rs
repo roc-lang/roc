@@ -157,7 +157,7 @@ pub async fn repl_wasm_entrypoint_from_js(src: String) -> Result<String, String>
         TODO
         - reuse code from test_gen/src/wasm.rs
         - use return type to create test_wrapper
-
+        - preload builtins and libc platform
     */
 
     let app_module_bytes: &[u8] = &[];
@@ -175,7 +175,6 @@ pub async fn repl_wasm_entrypoint_from_js(src: String) -> Result<String, String>
     /*
         TODO
         - gen_and_eval_wasm
-
     */
 
     // Create a String representation of the result value

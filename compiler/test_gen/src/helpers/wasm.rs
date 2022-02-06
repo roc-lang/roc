@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 use wasmer::{Memory, WasmPtr};
 
 use crate::helpers::from_wasm32_memory::FromWasm32Memory;
-use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
+use roc_gen_wasm::wasm32_test_result::Wasm32TestResult;
 use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
 
 // Should manually match build.rs

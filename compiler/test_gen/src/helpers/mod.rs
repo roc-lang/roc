@@ -7,8 +7,6 @@ pub mod from_wasm32_memory;
 pub mod llvm;
 #[cfg(feature = "gen-wasm")]
 pub mod wasm;
-#[cfg(feature = "gen-wasm")]
-pub mod wasm32_test_result;
 
 #[allow(dead_code)]
 pub fn zig_executable() -> String {

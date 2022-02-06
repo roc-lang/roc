@@ -1,7 +1,7 @@
 use bumpalo::collections::Vec;
 
-use crate::helpers::from_wasm32_memory::FromWasm32Memory;
-use roc_gen_wasm::wasm_module::{
+use crate::wasm32_sized::Wasm32Sized;
+use crate::wasm_module::{
     linking::SymInfo, linking::WasmObjectSymbol, Align, CodeBuilder, Export, ExportType, LocalId,
     Signature, ValueType, WasmModule,
 };
@@ -136,7 +136,7 @@ impl<T: Wasm32TestResult> Wasm32TestResult for &'_ T {
 
 impl<T, const N: usize> Wasm32TestResult for [T; N]
 where
-    T: Wasm32TestResult + FromWasm32Memory,
+    T: Wasm32TestResult + Wasm32Sized,
 {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(code_builder, main_function_index, N * T::ACTUAL_WIDTH)
@@ -155,8 +155,8 @@ impl Wasm32TestResult for () {
 
 impl<T, U> Wasm32TestResult for (T, U)
 where
-    T: Wasm32TestResult + FromWasm32Memory,
-    U: Wasm32TestResult + FromWasm32Memory,
+    T: Wasm32TestResult + Wasm32Sized,
+    U: Wasm32TestResult + Wasm32Sized,
 {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(
@@ -169,9 +169,9 @@ where
 
 impl<T, U, V> Wasm32TestResult for (T, U, V)
 where
-    T: Wasm32TestResult + FromWasm32Memory,
-    U: Wasm32TestResult + FromWasm32Memory,
-    V: Wasm32TestResult + FromWasm32Memory,
+    T: Wasm32TestResult + Wasm32Sized,
+    U: Wasm32TestResult + Wasm32Sized,
+    V: Wasm32TestResult + Wasm32Sized,
 {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(

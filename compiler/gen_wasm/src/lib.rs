@@ -4,6 +4,10 @@ mod low_level;
 mod storage;
 pub mod wasm_module;
 
+// Helpers for interfacing to a Wasm module from outside
+pub mod wasm32_sized;
+pub mod wasm32_test_result;
+
 use bumpalo::{self, collections::Vec, Bump};
 
 use roc_collections::all::{MutMap, MutSet};
