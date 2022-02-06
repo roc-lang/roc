@@ -261,7 +261,7 @@ fn from_str_radix(src: &str, radix: u32) -> Result<(IntValue, NumericBound), Int
     };
 
     let (lower_bound, is_negative) = match result {
-        IntValue::I128(num) => (lower_bound_of_int(num), num <= 0),
+        IntValue::I128(num) => (lower_bound_of_int(num), num < 0),
         IntValue::U128(_) => (IntWidth::U128, false),
     };
 

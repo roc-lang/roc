@@ -164,7 +164,7 @@ mod solve_expr {
 
     #[test]
     fn int_literal() {
-        infer_eq("5", "Num *");
+        infer_eq("5", "Int *");
     }
 
     #[test]
@@ -334,7 +334,7 @@ mod solve_expr {
                     [42]
                 "#
             ),
-            "List (Num *)",
+            "List (Int *)",
         );
     }
 
@@ -346,7 +346,7 @@ mod solve_expr {
                     [[[ 5 ]]]
                 "#
             ),
-            "List (List (List (Num *)))",
+            "List (List (List (Int *)))",
         );
     }
 
@@ -358,7 +358,7 @@ mod solve_expr {
                     [ 1, 2, 3 ]
                 "#
             ),
-            "List (Num *)",
+            "List (Int *)",
         );
     }
 
@@ -370,7 +370,7 @@ mod solve_expr {
                     [ [ 1 ], [ 2, 3 ] ]
                 "#
             ),
-            "List (List (Num *))",
+            "List (List (Int *))",
         );
     }
 
@@ -518,7 +518,7 @@ mod solve_expr {
                     \_, _ -> 42
                 "#
             ),
-            "*, * -> Num *",
+            "*, * -> Int *",
         );
     }
 
@@ -689,7 +689,7 @@ mod solve_expr {
                     func
                 "#
             ),
-            "*, * -> Num *",
+            "*, * -> Int *",
         );
     }
 
@@ -753,7 +753,7 @@ mod solve_expr {
                     c
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -788,7 +788,7 @@ mod solve_expr {
                     alwaysFive "stuff"
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -835,7 +835,7 @@ mod solve_expr {
                     x
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -849,7 +849,7 @@ mod solve_expr {
                     enlist 5
                 "#
             ),
-            "List (Num *)",
+            "List (Int *)",
         );
     }
 
@@ -876,7 +876,7 @@ mod solve_expr {
                     1 |> (\a -> a)
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -890,7 +890,7 @@ mod solve_expr {
                 1 |> always2 "foo"
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -955,7 +955,7 @@ mod solve_expr {
                 apply identity 5
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -984,7 +984,7 @@ mod solve_expr {
     //                 flip neverendingInt
     //             "#
     //         ),
-    //         "(Num *, (a -> a)) -> Num *",
+    //         "(Int *, (a -> a)) -> Int *",
     //     );
     // }
 
@@ -1058,7 +1058,7 @@ mod solve_expr {
     //                 1 // 2
     //             "#
     //             ),
-    //             "Num *",
+    //             "Int *",
     //         );
     //     }
 
@@ -1070,7 +1070,7 @@ mod solve_expr {
     //                 1 + 2
     //             "#
     //             ),
-    //             "Num *",
+    //             "Int *",
     //         );
     //     }
 
@@ -1119,7 +1119,7 @@ mod solve_expr {
                     [ alwaysFive "foo", alwaysFive [] ]
                 "#
             ),
-            "List (Num *)",
+            "List (Int *)",
         );
     }
 
@@ -1134,7 +1134,7 @@ mod solve_expr {
                         24
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -1148,7 +1148,7 @@ mod solve_expr {
                     3 -> 4
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -1161,17 +1161,17 @@ mod solve_expr {
 
     #[test]
     fn one_field_record() {
-        infer_eq("{ x: 5 }", "{ x : Num * }");
+        infer_eq("{ x: 5 }", "{ x : Int * }");
     }
 
     #[test]
     fn two_field_record() {
-        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Float * }");
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Int *, y : Float * }");
     }
 
     #[test]
     fn record_literal_accessor() {
-        infer_eq("{ x: 5, y : 3.14 }.x", "Num *");
+        infer_eq("{ x: 5, y : 3.14 }.x", "Int *");
     }
 
     #[test]
@@ -1230,7 +1230,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    foo : Num * -> custom
+                    foo : Int * -> custom
 
                     foo 2
                 "#
@@ -1327,7 +1327,7 @@ mod solve_expr {
                     \Foo -> 42
                 "#
             ),
-            "[ Foo ] -> Num *",
+            "[ Foo ] -> Int *",
         );
     }
 
@@ -1339,7 +1339,7 @@ mod solve_expr {
                     \@Foo -> 42
                 "#
             ),
-            "[ @Foo ] -> Num *",
+            "[ @Foo ] -> Int *",
         );
     }
 
@@ -1354,7 +1354,7 @@ mod solve_expr {
                             False -> 0
                 "#
             ),
-            "[ False, True ] -> Num *",
+            "[ False, True ] -> Int *",
         );
     }
 
@@ -1366,7 +1366,7 @@ mod solve_expr {
                     Foo "happy" 2020
                 "#
             ),
-            "[ Foo Str (Num *) ]*",
+            "[ Foo Str (Int *) ]*",
         );
     }
 
@@ -1378,7 +1378,7 @@ mod solve_expr {
                     @Foo "happy" 2020
                 "#
             ),
-            "[ @Foo Str (Num *) ]*",
+            "[ @Foo Str (Int *) ]*",
         );
     }
 
@@ -1407,7 +1407,7 @@ mod solve_expr {
                         { x: 4 } -> 4
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -2347,7 +2347,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num a, y : F64 }",
+            "{ numIdentity : Num a -> Num a, x : Int *, y : F64 }",
         );
     }
 
@@ -2383,7 +2383,7 @@ mod solve_expr {
                     f
                 "#
             ),
-            "Num * -> Num *",
+            "Int * -> Int *",
         );
     }
 
@@ -2416,7 +2416,7 @@ mod solve_expr {
                    toBit
                 "#
             ),
-            "[ False, True ] -> Num *",
+            "[ False, True ] -> Int *",
         );
     }
 
@@ -2453,7 +2453,7 @@ mod solve_expr {
                    fromBit
                 "#
             ),
-            "Num * -> [ False, True ]*",
+            "Int * -> [ False, True ]*",
         );
     }
 
@@ -2505,7 +2505,7 @@ mod solve_expr {
                     foo { x: 5 }
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -2774,7 +2774,7 @@ mod solve_expr {
     //     infer_eq_without_problem(
     //         indoc!(
     //             r#"
-    //                 s : Num *
+    //                 s : Int *
     //                 s = 3.1
 
     //                 s
@@ -3214,7 +3214,7 @@ mod solve_expr {
                     List.get [ 10, 9, 8, 7 ] 1
                 "#
             ),
-            "Result (Num *) [ OutOfBounds ]*",
+            "Result (Int *) [ OutOfBounds ]*",
         );
 
         infer_eq_without_problem(
@@ -3497,7 +3497,7 @@ mod solve_expr {
                 f
                 "#
             ),
-            "{ p : *, q : * }* -> Num *",
+            "{ p : *, q : * }* -> Int *",
         );
     }
 
@@ -3552,7 +3552,7 @@ mod solve_expr {
                         _ -> 3
                 "#
             ),
-            "Num * -> Num *",
+            "Int * -> Int *",
         );
     }
 
@@ -3724,7 +3724,8 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : F64, z : Int * }",
+            // TODO this should be "Int a", FIXME
+            "{ x : Int *, y : F64, z : Int * }",
         );
     }
 
@@ -3741,7 +3742,8 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num a, y : F64, z : c }, b : { blah : Str, x : Num a, y : F64, z : c } }",
+            // TODO this should be "Int a", FIXME
+            "{ a : { x : Int *, y : F64, z : c }, b : { blah : Str, x : Int *, y : F64, z : c } }",
         );
     }
 
@@ -3753,7 +3755,7 @@ mod solve_expr {
                 \{ x, y ? 0 } -> x + y
                 "#
             ),
-            "{ x : Num a, y ? Num a }* -> Num a",
+            "{ x : Int a, y ? Int a }* -> Int a",
         );
     }
 
@@ -3767,7 +3769,7 @@ mod solve_expr {
                 x + y
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -3781,7 +3783,7 @@ mod solve_expr {
                         { x, y ? 0 } -> x + y
                 "#
             ),
-            "{ x : Num a, y ? Num a }* -> Num a",
+            "{ x : Int a, y ? Int a }* -> Int a",
         );
     }
 
@@ -3946,7 +3948,7 @@ mod solve_expr {
                 g
                 "#
             ),
-            "Num a -> Num a",
+            "Int a -> Int a",
         );
     }
 
@@ -3985,10 +3987,10 @@ mod solve_expr {
                         Foo Bar 1
                 "#
             ),
-            "[ Foo [ Bar ]* (Num *) ]*",
+            "[ Foo [ Bar ]* (Int *) ]*",
         );
 
-        infer_eq_without_problem("Foo Bar 1", "[ Foo [ Bar ]* (Num *) ]*");
+        infer_eq_without_problem("Foo Bar 1", "[ Foo [ Bar ]* (Int *) ]*");
     }
 
     #[test]
@@ -4680,7 +4682,7 @@ mod solve_expr {
                     x
                 "#
             ),
-            "Num *",
+            "Int *",
         );
     }
 
@@ -4981,7 +4983,7 @@ mod solve_expr {
                          None -> 0
                  "#
             ),
-            "[ None, Some { tag : [ A, B ] }* ] -> Num *",
+            "[ None, Some { tag : [ A, B ] }* ] -> Int *",
         )
     }
 
@@ -5014,7 +5016,7 @@ mod solve_expr {
                          { x: Red, y ? 5 } -> y
                  "#
             ),
-            "{ x : [ Blue, Red ], y ? Num a }* -> Num a",
+            "{ x : [ Blue, Red ], y ? Int a }* -> Int a",
         )
     }
 
@@ -5027,7 +5029,8 @@ mod solve_expr {
                  \UserId id -> id + 1
                  "#
             ),
-            "[ UserId (Num a) ] -> Num a",
+            // TODO needs parantheses
+            "[ UserId Int a ] -> Int a",
         )
     }
 

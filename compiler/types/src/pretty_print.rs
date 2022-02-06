@@ -206,6 +206,13 @@ fn find_names_needed(
             // TODO should we also look in the actual variable?
             // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
         }
+        &RangedNumber(typ, vars) => {
+            find_names_needed(typ, subs, roots, root_appearances, names_taken);
+            for var_index in vars {
+                let var = subs[var_index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            }
+        }
         Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
         }
@@ -397,6 +404,13 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                 }),
             }
         }
+        RangedNumber(typ, _range_vars) => write_content(
+            env,
+            subs.get_content_without_compacting(*typ),
+            subs,
+            buf,
+            parens,
+        ),
         Error => buf.push_str("<type mismatch>"),
     }
 }

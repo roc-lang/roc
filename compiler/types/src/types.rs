@@ -196,6 +196,7 @@ pub enum Type {
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
     Apply(Symbol, Vec<Type>, Region),
     Variable(Variable),
+    RangedNumber(Box<Type>, Vec<Variable>),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }
@@ -439,6 +440,9 @@ impl fmt::Debug for Type {
 
                 write!(f, " as <{:?}>", rec)
             }
+            Type::RangedNumber(typ, range_vars) => {
+                write!(f, "Ranged({:?}, {:?})", typ, range_vars)
+            }
         }
     }
 }
@@ -549,6 +553,9 @@ impl Type {
                     arg.substitute(substitutions);
                 }
             }
+            RangedNumber(typ, _) => {
+                typ.substitute(substitutions);
+            }
 
             EmptyRec | EmptyTagUnion | Erroneous(_) => {}
         }
@@ -616,6 +623,7 @@ impl Type {
                 }
                 Ok(())
             }
+            RangedNumber(typ, _) => typ.substitute_alias(rep_symbol, rep_args, actual),
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => Ok(()),
         }
     }
@@ -653,6 +661,7 @@ impl Type {
             }
             Apply(symbol, _, _) if *symbol == rep_symbol => true,
             Apply(_, args, _) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
+            RangedNumber(typ, _) => typ.contains_symbol(rep_symbol),
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
         }
     }
@@ -689,6 +698,9 @@ impl Type {
             } => actual_type.contains_variable(rep_variable),
             HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
             Apply(_, args, _) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
+            RangedNumber(typ, vars) => {
+                typ.contains_variable(rep_variable) || vars.iter().any(|&v| v == rep_variable)
+            }
             EmptyRec | EmptyTagUnion | Erroneous(_) => false,
         }
     }
@@ -845,6 +857,9 @@ impl Type {
                     }
                 }
             }
+            RangedNumber(typ, _) => {
+                typ.instantiate_aliases(region, aliases, var_store, introduced);
+            }
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
     }
@@ -900,6 +915,9 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
         }
         Erroneous(Problem::CyclicAlias(alias, _, _)) => {
             accum.insert(*alias);
+        }
+        RangedNumber(typ, _) => {
+            symbols_help(typ, accum);
         }
         EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
     }
@@ -978,6 +996,10 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(arg, accum);
             }
             variables_help(actual, accum);
+        }
+        RangedNumber(typ, vars) => {
+            variables_help(typ, accum);
+            accum.extend(vars.iter().copied());
         }
         Apply(_, args, _) => {
             for x in args {
@@ -1082,6 +1104,10 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(arg, accum);
             }
             variables_help_detailed(actual, accum);
+        }
+        RangedNumber(typ, vars) => {
+            variables_help_detailed(typ, accum);
+            accum.type_variables.extend(vars);
         }
         Apply(_, args, _) => {
             for x in args {
@@ -1288,6 +1314,7 @@ pub enum Mismatch {
     InconsistentIfElse,
     InconsistentWhenBranches,
     CanonicalizationProblem,
+    TypeNotInRange(Variable, Vec<Variable>),
 }
 
 #[derive(PartialEq, Eq, Clone, Hash)]

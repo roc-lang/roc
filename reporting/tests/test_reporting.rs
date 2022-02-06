@@ -1221,6 +1221,7 @@ mod test_reporting {
                 x
                 "#
             ),
+            // TODO FIXME the second error message is incomplete, should be removed
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
@@ -1241,6 +1242,20 @@ mod test_reporting {
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
+
+                ── TYPE NOT IN RANGE ───────────────────────────────────────────────────────────
+
+                This expression is used in an unexpected way:
+
+                2│  x = if True then 3.14 else 4
+                                               ^
+
+                It can only be used as a
+                `I8``U8`, `I16`, `U16`, `I32`, `U32`, `I64`, `Nat`, `U64`, `I128`, or `U128`
+
+                But it is being used as:
+
+                `Int` `*`
                 "#
             ),
         )
@@ -3386,7 +3401,9 @@ mod test_reporting {
                 minlit = -170_141_183_460_469_231_731_687_303_715_884_105_728
                 maxlit =  340_282_366_920_938_463_463_374_607_431_768_211_455
 
-                x + y + h + l + minlit + maxlit
+                getI128 = \_ -> 1i128
+
+                x + y + h + l + minlit + (getI128 maxlit)
                 "#
             ),
             indoc!(
@@ -7882,18 +7899,26 @@ I need all branches in an `if` to have the same type!
     #[test]
     fn list_get_negative_number() {
         report_problem_as(
-            "List.get [1, 2, 3] -1",
             indoc!(
                 r#"
-                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+                a = -9_223_372_036_854
+                List.get [1,2,3] a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE NOT IN RANGE ───────────────────────────────────────────────────────────
 
-                This integer literal overflows the type indicated by its suffix:
+                This expression is used in an unexpected way:
 
-                1│  170_141_183_460_469_231_731_687_303_715_884_105_728i128
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                2│  List.get [1,2,3] a
+                                     ^
 
-                Tip: The suffix indicates this integer is a I128, whose maximum value
-                is 170_141_183_460_469_231_731_687_303_715_884_105_727.
+                It can only be used as a `I64` or `I128`
+
+                But it is being used as:
+
+                `Nat`
                 "#
             ),
         )

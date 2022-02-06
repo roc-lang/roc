@@ -72,6 +72,7 @@ pub enum TypeError {
     CircularType(Region, Symbol, ErrorType),
     BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
+    NotInRange(Region, ErrorType, Expected<Vec<ErrorType>>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -233,6 +234,17 @@ fn solve(
 
                     state
                 }
+                NotInRange(vars, typ, range) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::NotInRange(
+                        *region,
+                        typ,
+                        expectation.clone().replace(range),
+                    ));
+
+                    state
+                }
             }
         }
         Store(source, target, _filename, _linenr) => {
@@ -254,7 +266,7 @@ fn solve(
 
                     state
                 }
-                BadType(vars, _problem) => {
+                BadType(vars, _) | NotInRange(vars, _, _) => {
                     introduce(subs, rank, pools, &vars);
 
                     // ERROR NOT REPORTED
@@ -320,6 +332,17 @@ fn solve(
                             introduce(subs, rank, pools, &vars);
 
                             problems.push(TypeError::BadType(problem));
+
+                            state
+                        }
+                        NotInRange(vars, typ, range) => {
+                            introduce(subs, rank, pools, &vars);
+
+                            problems.push(TypeError::NotInRange(
+                                *region,
+                                typ,
+                                expectation.clone().replace(range),
+                            ));
 
                             state
                         }
@@ -390,6 +413,18 @@ fn solve(
                     introduce(subs, rank, pools, &vars);
 
                     problems.push(TypeError::BadType(problem));
+
+                    state
+                }
+                NotInRange(vars, typ, range) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::NotInRange(
+                        *region,
+                        typ,
+                        // TODO expectation.clone().replace(range),
+                        Expected::NoExpectation(range),
+                    ));
 
                     state
                 }
@@ -687,52 +722,18 @@ fn solve(
 
                     state
                 }
-            }
-        }
-        EqBoundedRange(typ, expect_one_of, category, region) => {
-            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                NotInRange(vars, typ, range) => {
+                    introduce(subs, rank, pools, &vars);
 
-            let mut it = expect_one_of.get_type_ref().iter().peekable();
+                    problems.push(TypeError::NotInRange(
+                        Region::zero(),
+                        typ,
+                        Expected::NoExpectation(range),
+                    ));
 
-            while let Some(expected) = it.next() {
-                let expected = type_to_var(subs, rank, pools, cached_aliases, expected);
-                let snapshot = subs.snapshot();
-                match unify(subs, actual, expected, Mode::Eq) {
-                    Success(vars) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        return state;
-                    }
-                    Failure(..) if it.peek().is_some() => {
-                        subs.rollback_to(snapshot);
-
-                        continue;
-                    }
-                    Failure(vars, actual_type, expected_type) => {
-                        // This is the last type we could have tried and failed; record the error.
-                        introduce(subs, rank, pools, &vars);
-
-                        let problem = TypeError::BadExpr(
-                            *region,
-                            category.clone(),
-                            actual_type,
-                            expect_one_of.clone().replace(expected_type),
-                        );
-
-                        problems.push(problem);
-
-                        return state;
-                    }
-                    BadType(vars, problem) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        problems.push(TypeError::BadType(problem));
-
-                        return state;
-                    }
+                    state
                 }
             }
-            unreachable!()
         }
     }
 }
@@ -816,6 +817,13 @@ fn type_to_variable<'a>(
 
     match typ {
         Variable(var) => *var,
+        RangedNumber(typ, vars) => {
+            let ty_var = type_to_variable(subs, rank, pools, arena, typ);
+            let vars = VariableSubsSlice::insert_into_subs(subs, vars.iter().copied());
+            let content = Content::RangedNumber(ty_var, vars);
+
+            register(subs, rank, pools, content)
+        }
         Apply(symbol, arguments, _) => {
             let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
             for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
@@ -1636,6 +1644,8 @@ fn adjust_rank_content(
 
             rank
         }
+
+        RangedNumber(typ, _) => adjust_rank(subs, young_mark, visit_mark, group_rank, *typ),
     }
 }
 
@@ -1770,6 +1780,11 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                 stack.extend(var_slice!(args.variables()));
 
                 stack.push(var);
+            }
+            &RangedNumber(typ, vars) => {
+                stack.push(typ);
+
+                stack.extend(var_slice!(vars));
             }
         }
     }
@@ -2022,6 +2037,23 @@ fn deep_copy_var_help(
             let new_real_type_var =
                 deep_copy_var_help(subs, max_rank, pools, visited, real_type_var);
             let new_content = Alias(symbol, new_arguments, new_real_type_var);
+
+            subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+
+        RangedNumber(typ, range_vars) => {
+            let new_type_var = deep_copy_var_help(subs, max_rank, pools, visited, typ);
+
+            let new_vars = SubsSlice::reserve_into_subs(subs, range_vars.len());
+            for (target_index, var_index) in (new_vars.indices()).zip(range_vars) {
+                let var = subs[var_index];
+                let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
+                subs.variables[target_index] = copy_var;
+            }
+
+            let new_content = RangedNumber(new_type_var, new_vars);
 
             subs.set(copy, make_descriptor(new_content));
 

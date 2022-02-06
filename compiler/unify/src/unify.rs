@@ -83,6 +83,7 @@ pub enum Unified {
     Success(Pool),
     Failure(Pool, ErrorType, ErrorType),
     BadType(Pool, roc_types::types::Problem),
+    NotInRange(Pool, ErrorType, Vec<ErrorType>),
 }
 
 type Outcome = Vec<Mismatch>;
@@ -94,6 +95,13 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Uni
 
     if mismatches.is_empty() {
         Unified::Success(vars)
+    } else if let Some((typ, range)) = mismatches.iter().find_map(|mis| match mis {
+        Mismatch::TypeNotInRange(typ, range) => Some((typ, range)),
+        _ => None,
+    }) {
+        let (target_type, _) = subs.var_to_error_type(*typ);
+        let range_types = range.iter().map(|&v| subs.var_to_error_type(v).0).collect();
+        Unified::NotInRange(vars, target_type, range_types)
     } else {
         let (type1, mut problems) = subs.var_to_error_type(var1);
         let (type2, problems2) = subs.var_to_error_type(var2);
@@ -175,11 +183,79 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
         }
         Alias(symbol, args, real_var) => unify_alias(subs, pool, &ctx, *symbol, *args, *real_var),
+        &RangedNumber(typ, range_vars) => unify_ranged_number(subs, pool, &ctx, typ, range_vars),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
         }
     }
+}
+
+#[inline(always)]
+fn unify_ranged_number(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    ctx: &Context,
+    real_var: Variable,
+    range_vars: VariableSubsSlice,
+) -> Outcome {
+    let other_content = &ctx.second_desc.content;
+
+    let outcome = match other_content {
+        FlexVar(_) => {
+            // Ranged number wins
+            merge(subs, ctx, RangedNumber(real_var, range_vars))
+        }
+        RecursionVar { .. } | RigidVar(..) | Alias(..) | Structure(..) => {
+            unify_pool(subs, pool, real_var, ctx.second, ctx.mode)
+        }
+        &RangedNumber(other_real_var, _other_range_vars) => {
+            unify_pool(subs, pool, real_var, other_real_var, ctx.mode)
+            // TODO: check and intersect "other_range_vars"
+        }
+        Error => merge(subs, ctx, Error),
+    };
+
+    if !outcome.is_empty() {
+        return outcome;
+    }
+
+    check_valid_range(subs, pool, ctx.second, range_vars, ctx.mode)
+}
+
+fn check_valid_range(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    var: Variable,
+    range: VariableSubsSlice,
+    mode: Mode,
+) -> Outcome {
+    let slice = subs
+        .get_subs_slice(range)
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+
+    let mut it = slice.iter().peekable();
+    while let Some(&possible_var) = it.next() {
+        let snapshot = subs.snapshot();
+        let old_pool = pool.clone();
+        let outcome = unify_pool(subs, pool, var, possible_var, mode);
+        if outcome.is_empty() {
+            // Okay, we matched some type in the range.
+            subs.rollback_to(snapshot);
+            *pool = old_pool;
+            return vec![];
+        } else if it.peek().is_some() {
+            // We failed to match something in the range, but there are still things we can try.
+            subs.rollback_to(snapshot);
+            *pool = old_pool;
+        } else {
+            subs.commit_snapshot(snapshot);
+        }
+    }
+
+    return vec![Mismatch::TypeNotInRange(var, slice)];
 }
 
 #[inline(always)]
@@ -231,6 +307,9 @@ fn unify_alias(
             }
         }
         Structure(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        RangedNumber(other_real_var, _) => {
+            unify_pool(subs, pool, real_var, *other_real_var, ctx.mode)
+        }
         Error => merge(subs, ctx, Error),
     }
 }
@@ -302,6 +381,7 @@ fn unify_structure(
             // can't quite figure out why, but it doesn't seem to impact other types.
             unify_pool(subs, pool, ctx.first, *real_var, Mode::Eq)
         }
+        RangedNumber(real_var, _) => unify_pool(subs, pool, ctx.first, *real_var, ctx.mode),
         Error => merge(subs, ctx, Error),
     }
 }
@@ -829,6 +909,7 @@ fn unify_tag_union_new(
     }
 }
 
+#[derive(Debug)]
 enum OtherTags2 {
     Empty,
     Union(
@@ -1222,7 +1303,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
             // If the other is flex, rigid wins!
             merge(subs, ctx, RigidVar(name.clone()))
         }
-        RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _) => {
+        RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _) | RangedNumber(..) => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
@@ -1247,7 +1328,12 @@ fn unify_flex(
             merge(subs, ctx, FlexVar(opt_name.clone()))
         }
 
-        FlexVar(Some(_)) | RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _) => {
+        FlexVar(Some(_))
+        | RigidVar(_)
+        | RecursionVar { .. }
+        | Structure(_)
+        | Alias(_, _, _)
+        | RangedNumber(..) => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)
@@ -1305,6 +1391,12 @@ fn unify_recursion(
 
             unify_pool(subs, pool, ctx.first, *actual, ctx.mode)
         }
+
+        RangedNumber(..) => mismatch!(
+            "RecursionVar {:?} with ranged number {:?}",
+            ctx.first,
+            &other
+        ),
 
         Error => merge(subs, ctx, Error),
     }

@@ -11,38 +11,31 @@ use roc_types::types::Category;
 use roc_types::types::Reason;
 use roc_types::types::Type::{self, *};
 
+#[must_use]
 pub fn add_numeric_bound_constr(
     constrs: &mut Vec<Constraint>,
     num_type: Type,
     bound: impl TypedNumericBound,
     region: Region,
     category: Category,
-) {
-    if let Some(typ) = bound.concrete_num_type() {
-        constrs.push(Eq(
-            num_type,
-            Expected::ForReason(Reason::NumericLiteralSuffix, typ, region),
-            category,
-            region,
-        ));
-    }
-}
-
-pub fn add_numeric_range_constr(
-    constrs: &mut Vec<Constraint>,
-    num_type: Type,
-    bound: impl TypedNumericBound,
-    region: Region,
-    category: Category,
-) {
+) -> Type {
     let range = bound.bounded_range();
-    if !range.is_empty() {
-        constrs.push(EqBoundedRange(
-            num_type,
-            Expected::ForReason(Reason::NumericLiteralSuffix, range, region),
-            category,
-            region,
-        ));
+
+    let total_num_type = num_type;
+
+    match range.len() {
+        0 => total_num_type,
+        1 => {
+            let actual_type = Variable(range[0]);
+            constrs.push(Eq(
+                total_num_type.clone(),
+                Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region),
+                category,
+                region,
+            ));
+            total_num_type
+        }
+        _ => RangedNumber(Box::new(total_num_type.clone()), range),
     }
 }
 
@@ -54,13 +47,18 @@ pub fn int_literal(
     region: Region,
     bound: IntBound,
 ) -> Constraint {
-    let num_type = Variable(num_var);
     let reason = Reason::IntLiteral;
 
     let mut constrs = Vec::with_capacity(3);
     // Always add the bound first; this improves the resolved type quality in case it's an alias
     // like "U8".
-    add_numeric_bound_constr(&mut constrs, num_type.clone(), bound, region, Category::Num);
+    let num_type = add_numeric_bound_constr(
+        &mut constrs,
+        Variable(num_var),
+        bound,
+        region,
+        Category::Num,
+    );
     constrs.extend(vec![
         Eq(
             num_type.clone(),
@@ -70,13 +68,6 @@ pub fn int_literal(
         ),
         Eq(num_type, expected.clone(), Category::Int, region),
     ]);
-    add_numeric_range_constr(
-        &mut constrs,
-        expected.get_type(),
-        bound,
-        region,
-        Category::Int,
-    );
 
     exists(vec![num_var], And(constrs))
 }
@@ -89,13 +80,12 @@ pub fn float_literal(
     region: Region,
     bound: FloatBound,
 ) -> Constraint {
-    let num_type = Variable(num_var);
     let reason = Reason::FloatLiteral;
 
     let mut constrs = Vec::with_capacity(3);
-    add_numeric_bound_constr(
+    let num_type = add_numeric_bound_constr(
         &mut constrs,
-        num_type.clone(),
+        Variable(num_var),
         bound,
         region,
         Category::Float,
@@ -120,10 +110,11 @@ pub fn num_literal(
     region: Region,
     bound: NumericBound,
 ) -> Constraint {
-    let num_type = crate::builtins::num_num(Type::Variable(num_var));
+    let open_number_type = crate::builtins::num_num(Type::Variable(num_var));
 
     let mut constrs = Vec::with_capacity(3);
-    add_numeric_bound_constr(&mut constrs, num_type.clone(), bound, region, Category::Num);
+    let num_type =
+        add_numeric_bound_constr(&mut constrs, open_number_type, bound, region, Category::Num);
     constrs.extend(vec![Eq(num_type, expected, Category::Num, region)]);
 
     exists(vec![num_var], And(constrs))
@@ -219,56 +210,56 @@ pub fn num_int(range: Type) -> Type {
     )
 }
 
-macro_rules! num_types {
-    // Represent
-    //   num_u8 ~ U8 : Num Integer Unsigned8 = @Num (@Integer (@Unsigned8))
-    //   int_u8 ~ Integer Unsigned8 = @Integer (@Unsigned8)
-    //
-    //   num_f32 ~ F32 : Num FloaingPoint Binary32 = @Num (@FloaingPoint (@Binary32))
-    //   float_f32 ~ FloatingPoint Binary32 = @FloatingPoint (@Binary32)
-    // and so on, for all numeric types.
-    ($($num_fn:ident, $sub_fn:ident, $num_type:ident, $alias:path, $inner_alias:path, $inner_private_tag:path)*) => {
-        $(
-            #[inline(always)]
-            fn $sub_fn() -> Type {
-                builtin_alias(
-                    $inner_alias,
-                    vec![],
-                    Box::new(Type::TagUnion(
-                        vec![(TagName::Private($inner_private_tag), vec![])],
-                        Box::new(Type::EmptyTagUnion)
-                    )),
-                )
-            }
-
-            #[inline(always)]
-            fn $num_fn() -> Type {
-                builtin_alias(
-                    $alias,
-                    vec![],
-                    Box::new($num_type($sub_fn()))
-                )
-            }
-        )*
-    }
-}
-
-num_types! {
-    num_u8,   int_u8,    num_int,   Symbol::NUM_U8,   Symbol::NUM_UNSIGNED8,   Symbol::NUM_AT_UNSIGNED8
-    num_u16,  int_u16,   num_int,   Symbol::NUM_U16,  Symbol::NUM_UNSIGNED16,  Symbol::NUM_AT_UNSIGNED16
-    num_u32,  int_u32,   num_int,   Symbol::NUM_U32,  Symbol::NUM_UNSIGNED32,  Symbol::NUM_AT_UNSIGNED32
-    num_u64,  int_u64,   num_int,   Symbol::NUM_U64,  Symbol::NUM_UNSIGNED64,  Symbol::NUM_AT_UNSIGNED64
-    num_u128, int_u128,  num_int,   Symbol::NUM_U128, Symbol::NUM_UNSIGNED128, Symbol::NUM_AT_UNSIGNED128
-    num_i8,   int_i8,    num_int,   Symbol::NUM_I8,   Symbol::NUM_SIGNED8,     Symbol::NUM_AT_SIGNED8
-    num_i16,  int_i16,   num_int,   Symbol::NUM_I16,  Symbol::NUM_SIGNED16,    Symbol::NUM_AT_SIGNED16
-    num_i32,  int_i32,   num_int,   Symbol::NUM_I32,  Symbol::NUM_SIGNED32,    Symbol::NUM_AT_SIGNED32
-    num_i64,  int_i64,   num_int,   Symbol::NUM_I64,  Symbol::NUM_SIGNED64,    Symbol::NUM_AT_SIGNED64
-    num_i128, int_i128,  num_int,   Symbol::NUM_I128, Symbol::NUM_SIGNED128,   Symbol::NUM_AT_SIGNED128
-    num_nat,  int_nat,   num_int,   Symbol::NUM_NAT,  Symbol::NUM_NATURAL,     Symbol::NUM_AT_NATURAL
-    num_dec,  float_dec, num_float, Symbol::NUM_DEC,  Symbol::NUM_DECIMAL,     Symbol::NUM_AT_DECIMAL
-    num_f32,  float_f32, num_float, Symbol::NUM_F32,  Symbol::NUM_BINARY32,    Symbol::NUM_AT_BINARY32
-    num_f64,  float_f64, num_float, Symbol::NUM_F64,  Symbol::NUM_BINARY64,    Symbol::NUM_AT_BINARY64
-}
+// macro_rules! num_types {
+//     // Represent
+//     //   num_u8 ~ U8 : Num Integer Unsigned8 = @Num (@Integer (@Unsigned8))
+//     //   int_u8 ~ Integer Unsigned8 = @Integer (@Unsigned8)
+//     //
+//     //   num_f32 ~ F32 : Num FloaingPoint Binary32 = @Num (@FloaingPoint (@Binary32))
+//     //   float_f32 ~ FloatingPoint Binary32 = @FloatingPoint (@Binary32)
+//     // and so on, for all numeric types.
+//     ($($num_fn:ident, $sub_fn:ident, $num_type:ident, $alias:path, $inner_alias:path, $inner_private_tag:path)*) => {
+//         $(
+//             #[inline(always)]
+//             fn $sub_fn() -> Type {
+//                 builtin_alias(
+//                     $inner_alias,
+//                     vec![],
+//                     Box::new(Type::TagUnion(
+//                         vec![(TagName::Private($inner_private_tag), vec![])],
+//                         Box::new(Type::EmptyTagUnion)
+//                     )),
+//                 )
+//             }
+//
+//             #[inline(always)]
+//             fn $num_fn() -> Type {
+//                 builtin_alias(
+//                     $alias,
+//                     vec![],
+//                     Box::new($num_type($sub_fn()))
+//                 )
+//             }
+//         )*
+//     }
+// }
+//
+// num_types! {
+//     num_u8,   int_u8,    num_int,   Symbol::NUM_U8,   Symbol::NUM_UNSIGNED8,   Symbol::NUM_AT_UNSIGNED8
+//     num_u16,  int_u16,   num_int,   Symbol::NUM_U16,  Symbol::NUM_UNSIGNED16,  Symbol::NUM_AT_UNSIGNED16
+//     num_u32,  int_u32,   num_int,   Symbol::NUM_U32,  Symbol::NUM_UNSIGNED32,  Symbol::NUM_AT_UNSIGNED32
+//     num_u64,  int_u64,   num_int,   Symbol::NUM_U64,  Symbol::NUM_UNSIGNED64,  Symbol::NUM_AT_UNSIGNED64
+//     num_u128, int_u128,  num_int,   Symbol::NUM_U128, Symbol::NUM_UNSIGNED128, Symbol::NUM_AT_UNSIGNED128
+//     num_i8,   int_i8,    num_int,   Symbol::NUM_I8,   Symbol::NUM_SIGNED8,     Symbol::NUM_AT_SIGNED8
+//     num_i16,  int_i16,   num_int,   Symbol::NUM_I16,  Symbol::NUM_SIGNED16,    Symbol::NUM_AT_SIGNED16
+//     num_i32,  int_i32,   num_int,   Symbol::NUM_I32,  Symbol::NUM_SIGNED32,    Symbol::NUM_AT_SIGNED32
+//     num_i64,  int_i64,   num_int,   Symbol::NUM_I64,  Symbol::NUM_SIGNED64,    Symbol::NUM_AT_SIGNED64
+//     num_i128, int_i128,  num_int,   Symbol::NUM_I128, Symbol::NUM_SIGNED128,   Symbol::NUM_AT_SIGNED128
+//     num_nat,  int_nat,   num_int,   Symbol::NUM_NAT,  Symbol::NUM_NATURAL,     Symbol::NUM_AT_NATURAL
+//     num_dec,  float_dec, num_float, Symbol::NUM_DEC,  Symbol::NUM_DECIMAL,     Symbol::NUM_AT_DECIMAL
+//     num_f32,  float_f32, num_float, Symbol::NUM_F32,  Symbol::NUM_BINARY32,    Symbol::NUM_AT_BINARY32
+//     num_f64,  float_f64, num_float, Symbol::NUM_F64,  Symbol::NUM_BINARY64,    Symbol::NUM_AT_BINARY64
+// }
 
 #[inline(always)]
 pub fn num_signed64() -> Type {
@@ -312,37 +303,26 @@ pub fn num_num(typ: Type) -> Type {
 }
 
 pub trait TypedNumericBound {
-    /// Get a concrete type for this number, if one exists.
-    /// Returns `None` e.g. if the bound is open, like `Int *`.
-    fn concrete_num_type(&self) -> Option<Type>;
-
-    fn bounded_range(&self) -> Vec<Type>;
+    fn bounded_range(&self) -> Vec<Variable>;
 }
 
 impl TypedNumericBound for IntBound {
-    fn concrete_num_type(&self) -> Option<Type> {
-        match self {
-            IntBound::None | IntBound::AtLeast { .. } => None,
-            IntBound::Exact(w) => Some(match w {
-                IntWidth::U8 => num_u8(),
-                IntWidth::U16 => num_u16(),
-                IntWidth::U32 => num_u32(),
-                IntWidth::U64 => num_u64(),
-                IntWidth::U128 => num_u128(),
-                IntWidth::I8 => num_i8(),
-                IntWidth::I16 => num_i16(),
-                IntWidth::I32 => num_i32(),
-                IntWidth::I64 => num_i64(),
-                IntWidth::I128 => num_i128(),
-                IntWidth::Nat => num_nat(),
-            }),
-        }
-    }
-
-    fn bounded_range(&self) -> Vec<Type> {
+    fn bounded_range(&self) -> Vec<Variable> {
         match self {
             IntBound::None => vec![],
-            IntBound::Exact(_) => vec![],
+            IntBound::Exact(w) => vec![match w {
+                IntWidth::U8 => Variable::U8,
+                IntWidth::U16 => Variable::U16,
+                IntWidth::U32 => Variable::U32,
+                IntWidth::U64 => Variable::U64,
+                IntWidth::U128 => Variable::U128,
+                IntWidth::I8 => Variable::I8,
+                IntWidth::I16 => Variable::I16,
+                IntWidth::I32 => Variable::I32,
+                IntWidth::I64 => Variable::I64,
+                IntWidth::I128 => Variable::I128,
+                IntWidth::Nat => Variable::NAT,
+            }],
             IntBound::AtLeast { sign, width } => {
                 let whole_range: &[(IntWidth, Variable)] = match sign {
                     SignDemand::NoDemand => {
@@ -371,7 +351,7 @@ impl TypedNumericBound for IntBound {
                 whole_range
                     .iter()
                     .skip_while(|(lower_bound, _)| *lower_bound != *width)
-                    .map(|(_, var)| Type::Variable(*var))
+                    .map(|(_, var)| *var)
                     .collect()
             }
         }
@@ -379,35 +359,20 @@ impl TypedNumericBound for IntBound {
 }
 
 impl TypedNumericBound for FloatBound {
-    fn concrete_num_type(&self) -> Option<Type> {
-        match self {
-            FloatBound::None => None,
-            FloatBound::Exact(w) => Some(match w {
-                FloatWidth::Dec => num_dec(),
-                FloatWidth::F32 => num_f32(),
-                FloatWidth::F64 => num_f64(),
-            }),
-        }
-    }
-
-    fn bounded_range(&self) -> Vec<Type> {
+    fn bounded_range(&self) -> Vec<Variable> {
         match self {
             FloatBound::None => vec![],
-            FloatBound::Exact(_) => vec![],
+            FloatBound::Exact(w) => vec![match w {
+                FloatWidth::Dec => Variable::DEC,
+                FloatWidth::F32 => Variable::F32,
+                FloatWidth::F64 => Variable::F64,
+            }],
         }
     }
 }
 
 impl TypedNumericBound for NumericBound {
-    fn concrete_num_type(&self) -> Option<Type> {
-        match self {
-            NumericBound::None => None,
-            NumericBound::Int(ib) => ib.concrete_num_type(),
-            NumericBound::Float(fb) => fb.concrete_num_type(),
-        }
-    }
-
-    fn bounded_range(&self) -> Vec<Type> {
+    fn bounded_range(&self) -> Vec<Variable> {
         match self {
             NumericBound::None => vec![],
             NumericBound::Int(ib) => ib.bounded_range(),
