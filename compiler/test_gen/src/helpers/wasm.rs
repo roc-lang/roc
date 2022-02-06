@@ -123,7 +123,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     };
 
     let (mut module, called_preload_fns, main_fn_index) =
-        roc_gen_wasm::build_module_without_test_wrapper(
+        roc_gen_wasm::build_module_without_wrapper(
             &env,
             &mut interns,
             preload_bytes,
