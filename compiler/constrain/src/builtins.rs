@@ -210,57 +210,6 @@ pub fn num_int(range: Type) -> Type {
     )
 }
 
-// macro_rules! num_types {
-//     // Represent
-//     //   num_u8 ~ U8 : Num Integer Unsigned8 = @Num (@Integer (@Unsigned8))
-//     //   int_u8 ~ Integer Unsigned8 = @Integer (@Unsigned8)
-//     //
-//     //   num_f32 ~ F32 : Num FloaingPoint Binary32 = @Num (@FloaingPoint (@Binary32))
-//     //   float_f32 ~ FloatingPoint Binary32 = @FloatingPoint (@Binary32)
-//     // and so on, for all numeric types.
-//     ($($num_fn:ident, $sub_fn:ident, $num_type:ident, $alias:path, $inner_alias:path, $inner_private_tag:path)*) => {
-//         $(
-//             #[inline(always)]
-//             fn $sub_fn() -> Type {
-//                 builtin_alias(
-//                     $inner_alias,
-//                     vec![],
-//                     Box::new(Type::TagUnion(
-//                         vec![(TagName::Private($inner_private_tag), vec![])],
-//                         Box::new(Type::EmptyTagUnion)
-//                     )),
-//                 )
-//             }
-//
-//             #[inline(always)]
-//             fn $num_fn() -> Type {
-//                 builtin_alias(
-//                     $alias,
-//                     vec![],
-//                     Box::new($num_type($sub_fn()))
-//                 )
-//             }
-//         )*
-//     }
-// }
-//
-// num_types! {
-//     num_u8,   int_u8,    num_int,   Symbol::NUM_U8,   Symbol::NUM_UNSIGNED8,   Symbol::NUM_AT_UNSIGNED8
-//     num_u16,  int_u16,   num_int,   Symbol::NUM_U16,  Symbol::NUM_UNSIGNED16,  Symbol::NUM_AT_UNSIGNED16
-//     num_u32,  int_u32,   num_int,   Symbol::NUM_U32,  Symbol::NUM_UNSIGNED32,  Symbol::NUM_AT_UNSIGNED32
-//     num_u64,  int_u64,   num_int,   Symbol::NUM_U64,  Symbol::NUM_UNSIGNED64,  Symbol::NUM_AT_UNSIGNED64
-//     num_u128, int_u128,  num_int,   Symbol::NUM_U128, Symbol::NUM_UNSIGNED128, Symbol::NUM_AT_UNSIGNED128
-//     num_i8,   int_i8,    num_int,   Symbol::NUM_I8,   Symbol::NUM_SIGNED8,     Symbol::NUM_AT_SIGNED8
-//     num_i16,  int_i16,   num_int,   Symbol::NUM_I16,  Symbol::NUM_SIGNED16,    Symbol::NUM_AT_SIGNED16
-//     num_i32,  int_i32,   num_int,   Symbol::NUM_I32,  Symbol::NUM_SIGNED32,    Symbol::NUM_AT_SIGNED32
-//     num_i64,  int_i64,   num_int,   Symbol::NUM_I64,  Symbol::NUM_SIGNED64,    Symbol::NUM_AT_SIGNED64
-//     num_i128, int_i128,  num_int,   Symbol::NUM_I128, Symbol::NUM_SIGNED128,   Symbol::NUM_AT_SIGNED128
-//     num_nat,  int_nat,   num_int,   Symbol::NUM_NAT,  Symbol::NUM_NATURAL,     Symbol::NUM_AT_NATURAL
-//     num_dec,  float_dec, num_float, Symbol::NUM_DEC,  Symbol::NUM_DECIMAL,     Symbol::NUM_AT_DECIMAL
-//     num_f32,  float_f32, num_float, Symbol::NUM_F32,  Symbol::NUM_BINARY32,    Symbol::NUM_AT_BINARY32
-//     num_f64,  float_f64, num_float, Symbol::NUM_F64,  Symbol::NUM_BINARY64,    Symbol::NUM_AT_BINARY64
-// }
-
 #[inline(always)]
 pub fn num_signed64() -> Type {
     let alias_content = Type::TagUnion(
