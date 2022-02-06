@@ -1557,11 +1557,11 @@ where
                                 shut_down_worker_threads!();
 
                                 let module_ids = Arc::try_unwrap(arc_modules)
-                            .unwrap_or_else(|_| {
-                                panic!(r"There were still outstanding Arc references to module_ids")
-                            })
-                            .into_inner()
-                            .into_module_ids();
+                                    .unwrap_or_else(|_| {
+                                        panic!(r"There were still outstanding Arc references to module_ids")
+                                    })
+                                    .into_inner()
+                                    .into_module_ids();
 
                                 let buf = to_parse_problem_report(
                                     problem,
