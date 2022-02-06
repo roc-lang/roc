@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use wasmer::{Memory, WasmPtr};
 
-use crate::helpers::from_wasm32_memory::FromWasm32Memory;
+use crate::helpers::from_wasmer_memory::FromWasmerMemory;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_gen_wasm::wasm32_test_result::Wasm32TestResult;
@@ -193,7 +193,7 @@ fn load_bytes_into_runtime(bytes: Vec<u8>) -> wasmer::Instance {
 #[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
 where
-    T: FromWasm32Memory + Wasm32TestResult,
+    T: FromWasmerMemory + Wasm32TestResult,
 {
     let arena = bumpalo::Bump::new();
 
@@ -225,7 +225,7 @@ where
                 // Manually provide address and size based on printf in wasm_test_platform.c
                 crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
             }
-            let output = <T as FromWasm32Memory>::decode(memory, address as u32);
+            let output = <T as FromWasmerMemory>::decode(memory, address as u32);
 
             Ok(output)
         }
@@ -239,7 +239,7 @@ pub fn assert_wasm_refcounts_help<T>(
     num_refcounts: usize,
 ) -> Result<Vec<u32>, String>
 where
-    T: FromWasm32Memory + Wasm32TestResult,
+    T: FromWasmerMemory + Wasm32TestResult,
 {
     let arena = bumpalo::Bump::new();
 
