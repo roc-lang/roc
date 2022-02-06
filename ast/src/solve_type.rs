@@ -225,7 +225,7 @@ fn solve<'a>(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected, Mode::Eq) {
+            match unify(subs, actual, expected, Mode::EQ) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -252,7 +252,6 @@ fn solve<'a>(
 
                     state
                 }
-                NotInRange(_vars, _typ, _range) => todo!(),
             }
         }
         //        Store(source, target, _filename, _linenr) => {
@@ -319,7 +318,7 @@ fn solve<'a>(
                         expectation.get_type_ref(),
                     );
 
-                    match unify(subs, actual, expected, Mode::Eq) {
+                    match unify(subs, actual, expected, Mode::EQ) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);
 
@@ -347,7 +346,6 @@ fn solve<'a>(
 
                             state
                         }
-                        NotInRange(_vars, _typ, _range) => todo!(),
                     }
                 }
                 None => {
@@ -391,7 +389,7 @@ fn solve<'a>(
             );
 
             // TODO(ayazhafiz): presence constraints for Expr2/Type2
-            match unify(subs, actual, expected, Mode::Eq) {
+            match unify(subs, actual, expected, Mode::EQ) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -418,7 +416,6 @@ fn solve<'a>(
 
                     state
                 }
-                NotInRange(_vars, _typ, _range) => todo!(),
             }
         }
         Let(let_con) => {
@@ -700,7 +697,7 @@ fn solve<'a>(
             );
             let includes = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, &tag_ty);
 
-            match unify(subs, actual, includes, Mode::Present) {
+            match unify(subs, actual, includes, Mode::PRESENT) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -728,7 +725,6 @@ fn solve<'a>(
 
                     state
                 }
-                NotInRange(_vars, _typ, _range) => todo!(),
             }
         }
     }
