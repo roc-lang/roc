@@ -801,6 +801,25 @@ mod cli_run {
             ),
         );
     }
+
+    #[test]
+    fn exposed_not_defined() {
+        check_compile_error(
+            &known_bad_file("ExposedNotDefined.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── MISSING DEFINITION ──────────────────────────────────────────────────────────
+
+                bar is listed as exposed, but it isn't defined in this module.
+
+                You can fix this by adding a definition for bar, or by removing it
+                from exposes.
+
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
+        );
+    }
 }
 
 #[allow(dead_code)]
