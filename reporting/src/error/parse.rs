@@ -109,7 +109,6 @@ fn to_syntax_report<'a>(
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I expected to reach the end of the file, but got stuck here:"),
                 alloc.region(region),
-                alloc.concat(vec![alloc.reflow("no hints")]),
             ]);
 
             Report {

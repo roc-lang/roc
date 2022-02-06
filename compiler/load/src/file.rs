@@ -1525,13 +1525,7 @@ where
                     Msg::FailedToParse(problem) => {
                         shut_down_worker_threads!();
 
-                        let module_ids = Arc::try_unwrap(state.arc_modules)
-                            .unwrap_or_else(|_| {
-                                panic!("There were still outstanding Arc references to module_ids")
-                            })
-                            .into_inner()
-                            .into_module_ids();
-
+                        let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
                         let buf = to_parse_problem_report(
                             problem,
                             module_ids,
@@ -1563,11 +1557,11 @@ where
                                 shut_down_worker_threads!();
 
                                 let module_ids = Arc::try_unwrap(arc_modules)
-                            .unwrap_or_else(|_| {
-                                panic!(r"There were still outstanding Arc references to module_ids")
-                            })
-                            .into_inner()
-                            .into_module_ids();
+                                    .unwrap_or_else(|_| {
+                                        panic!(r"There were still outstanding Arc references to module_ids")
+                                    })
+                                    .into_inner()
+                                    .into_module_ids();
 
                                 let buf = to_parse_problem_report(
                                     problem,
