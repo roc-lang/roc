@@ -72,7 +72,7 @@ bitflags! {
         /// Usually rigids can only unify with flex vars, because rigids are named and bound
         /// explicitly.
         /// However, when checking type ranges, as we do for `RangedNumber` types, we must loosen
-        /// this restriction because otherwise an admissable range will appear inadmissable.
+        /// this restriction because otherwise an admissible range will appear inadmissible.
         /// For example, Int * is in the range <I8, U8, ...>.
         const RIGID_AS_FLEX = 1 << 2;
     }
