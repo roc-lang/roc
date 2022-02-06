@@ -1221,7 +1221,6 @@ mod test_reporting {
                 x
                 "#
             ),
-            // TODO FIXME the second error message is incomplete, should be removed
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
@@ -6103,6 +6102,12 @@ I need all branches in an `if` to have the same type!
                     packages {}
                     imports [Task]
                     provides [ mainForHost ]
+                    effects fx.Effect
+                         {
+                             putChar : I64 -> Effect {},
+                             putLine : Str -> Effect {},
+                             getLine : Effect Str
+                         }
                 "#
             ),
             indoc!(
