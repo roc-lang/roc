@@ -605,4 +605,47 @@ mod test_load {
             Ok(_) => unreachable!("we expect failure here"),
         }
     }
+
+    #[test]
+    fn platform_parse_error() {
+        let modules = vec![
+            (
+                "platform/Package-Config.roc",
+                indoc!(
+                    r#"
+                        platform "examples/hello-world"
+                            requires {} { main : Str }
+                            exposes []
+                            packages {}
+                            imports []
+                            provides [ mainForHost ]
+                            blah 1 2 3 # causing a parse error on purpose
+
+                        mainForHost : Str
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                        app "hello-world"
+                            packages { pf: "platform" }
+                            imports []
+                            provides [ main ] to pf
+
+                        main = "Hello, World!\n"
+                    "#
+                ),
+            ),
+        ];
+
+        match multiple_modules(modules) {
+            Err(report) => {
+                assert!(report.contains("NOT END OF FILE"));
+                assert!(report.contains("blah 1 2 3 # causing a parse error on purpose"));
+            }
+            Ok(_) => unreachable!("we expect failure here"),
+        }
+    }
 }
