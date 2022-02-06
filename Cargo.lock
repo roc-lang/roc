@@ -3723,10 +3723,13 @@ dependencies = [
  "bumpalo",
  "js-sys",
  "roc_builtins",
+ "roc_collections",
+ "roc_gen_wasm",
  "roc_load",
  "roc_parse",
  "roc_repl_eval",
  "roc_target",
+ "roc_types",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]

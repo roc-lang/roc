@@ -1,12 +1,17 @@
-use bumpalo::Bump;
+use bumpalo::{collections::vec::Vec, Bump};
 use std::mem::size_of;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
+use roc_collections::all::MutSet;
+use roc_gen_wasm::wasm32_result::insert_wrapper_for_layout;
 use roc_load::file::MonomorphizedModule;
 use roc_parse::ast::Expr;
 use roc_repl_eval::{gen::compile_to_mono, ReplApp, ReplAppMemory};
 use roc_target::TargetInfo;
+use roc_types::pretty_print::{content_to_string, name_all_type_vars};
+
+const WRAPPER_NAME: &str = "wrapper";
 
 #[wasm_bindgen]
 extern "C" {
@@ -135,9 +140,10 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     }
 }
 
-#[wasm_bindgen]
+// #[wasm_bindgen]
 pub async fn repl_wasm_entrypoint_from_js(src: String) -> Result<String, String> {
     let arena = &Bump::new();
+    let pre_linked_binary: &'static [u8] = include_bytes!("../data/pre_linked_binary.o");
 
     // Compile the app
     let mono = match compile_to_mono(arena, &src, TargetInfo::default_wasm32()) {
@@ -149,22 +155,58 @@ pub async fn repl_wasm_entrypoint_from_js(src: String) -> Result<String, String>
         module_id,
         procedures,
         mut interns,
+        mut subs,
         exposed_to_host,
         ..
     } = mono;
 
-    let pre_linked_binary: &'static [u8] = include_bytes!("../data/pre_linked_binary.o");
+    debug_assert_eq!(exposed_to_host.values.len(), 1);
+    let (main_fn_symbol, main_fn_var) = exposed_to_host.values.iter().next().unwrap();
+    let main_fn_symbol = *main_fn_symbol;
+    let main_fn_var = *main_fn_var;
 
-    /*
-        TODO
-        - reuse code from test_gen/src/wasm.rs
-        - use return type to create test_wrapper
-        - preload builtins and libc platform
-    */
+    // pretty-print the expr type string for later.
+    name_all_type_vars(main_fn_var, &mut subs);
+    let content = subs.get_content_without_compacting(main_fn_var);
+    let expr_type_str = content_to_string(content, &subs, module_id, &interns);
 
-    let app_module_bytes: &[u8] = &[];
+    let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
+        Some(layout) => *layout,
+        None => return Ok(format!("<function> : {}", expr_type_str)),
+    };
 
-    js_create_app(app_module_bytes)
+    let env = roc_gen_wasm::Env {
+        arena,
+        module_id,
+        exposed_to_host: exposed_to_host
+            .values
+            .keys()
+            .copied()
+            .collect::<MutSet<_>>(),
+    };
+
+    let (mut module, called_preload_fns, main_fn_index) =
+        roc_gen_wasm::build_module_without_wrapper(
+            &env,
+            &mut interns,
+            pre_linked_binary,
+            procedures,
+        );
+
+    insert_wrapper_for_layout(
+        arena,
+        &mut module,
+        WRAPPER_NAME,
+        main_fn_index,
+        &main_fn_layout.result,
+    );
+
+    module.remove_dead_preloads(env.arena, called_preload_fns);
+
+    let mut app_module_bytes = Vec::with_capacity_in(module.size(), arena);
+    module.serialize(&mut app_module_bytes);
+
+    js_create_app(&app_module_bytes)
         .await
         .map_err(|js| format!("{:?}", js))?;
 

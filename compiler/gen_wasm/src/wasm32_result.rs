@@ -1,4 +1,13 @@
-use bumpalo::collections::Vec;
+/*
+Generate a wrapper function to expose a generic interface from a Wasm module for any result type.
+The wrapper function ensures the value is written to memory and returns its address as i32.
+The user needs to analyse the Wasm module's memory to decode the result.
+*/
+
+use bumpalo::{collections::Vec, Bump};
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_mono::layout::{Builtin, Layout};
+use roc_target::TargetInfo;
 
 use crate::wasm32_sized::Wasm32Sized;
 use crate::wasm_module::{
@@ -7,41 +16,83 @@ use crate::wasm_module::{
 };
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
+/// Type-driven wrapper generation
 pub trait Wasm32Result {
     fn insert_wrapper<'a>(
-        arena: &'a bumpalo::Bump,
+        arena: &'a Bump,
         module: &mut WasmModule<'a>,
         wrapper_name: &str,
         main_function_index: u32,
     ) {
-        let index = module.import.function_count
-            + module.code.preloaded_count
-            + module.code.code_builders.len() as u32;
-
-        module.add_function_signature(Signature {
-            param_types: Vec::with_capacity_in(0, arena),
-            ret_type: Some(ValueType::I32),
-        });
-
-        module.export.append(Export {
-            name: arena.alloc_slice_copy(wrapper_name.as_bytes()),
-            ty: ExportType::Func,
-            index,
-        });
-
-        let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
-            flags: 0,
-            index,
-            name: wrapper_name.to_string(),
-        });
-        module.linking.symbol_table.push(linker_symbol);
-
+        insert_wrapper_metadata(arena, module, wrapper_name);
         let mut code_builder = CodeBuilder::new(arena);
         Self::build_wrapper_body(&mut code_builder, main_function_index);
         module.code.code_builders.push(code_builder);
     }
 
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32);
+}
+
+/// Layout-driven wrapper generation
+pub fn insert_wrapper_for_layout<'a>(
+    arena: &'a Bump,
+    module: &mut WasmModule<'a>,
+    wrapper_name: &str,
+    main_fn_index: u32,
+    layout: &Layout<'a>,
+) {
+    match layout {
+        Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
+            i8::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+        }
+        Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
+            i16::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+        }
+        Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
+            i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+        }
+        Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
+            i64::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+        }
+        Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+            f32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+        }
+        Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+            f64::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+        }
+        _ => {
+            // The result is not a Wasm primitive, it's an array of bytes in stack memory.
+            let size = layout.stack_size(TargetInfo::default_wasm32());
+            insert_wrapper_metadata(arena, module, wrapper_name);
+            let mut code_builder = CodeBuilder::new(arena);
+            build_wrapper_body_stack_memory(&mut code_builder, main_fn_index, size as usize);
+            module.code.code_builders.push(code_builder);
+        }
+    }
+}
+
+fn insert_wrapper_metadata<'a>(arena: &'a Bump, module: &mut WasmModule<'a>, wrapper_name: &str) {
+    let index = module.import.function_count
+        + module.code.preloaded_count
+        + module.code.code_builders.len() as u32;
+
+    module.add_function_signature(Signature {
+        param_types: Vec::with_capacity_in(0, arena),
+        ret_type: Some(ValueType::I32),
+    });
+
+    module.export.append(Export {
+        name: arena.alloc_slice_copy(wrapper_name.as_bytes()),
+        ty: ExportType::Func,
+        index,
+    });
+
+    let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
+        flags: 0,
+        index,
+        name: wrapper_name.to_string(),
+    });
+    module.linking.symbol_table.push(linker_symbol);
 }
 
 macro_rules! build_wrapper_body_primitive {
