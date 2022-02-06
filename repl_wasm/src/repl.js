@@ -1,6 +1,7 @@
 // wasm_bindgen's JS code expects our imported functions to be global
-window.js_create_and_run_app = js_create_and_run_app;
-window.js_copy_app_memory = js_copy_app_memory;
+window.js_create_app = js_create_app;
+window.js_run_app = js_run_app;
+window.js_get_result_and_memory = js_get_result_and_memory;
 import * as mock_repl from "./mock_repl.js";
 
 // ----------------------------------------------------------------------------
@@ -18,6 +19,7 @@ const repl = {
   textEncoder: new TextEncoder(),
 
   compiler: null,
+  app: null,
 
   // Temporary storage for values passing back and forth between JS and Wasm
   result: { addr: 0, buffer: new ArrayBuffer() },
@@ -69,26 +71,29 @@ async function processInputQueue() {
 // Callbacks to JS from Rust
 // ----------------------------------------------------------------------------
 
-// Transform the app bytes into a Wasm module and execute it
-// Cache the result but don't send it to Rust yet, as it needs to allocate space first.
-// Then it will immediately call js_copy_app_memory.
-async function js_create_and_run_app(app_bytes, app_memory_size_ptr) {
-  const { instance: app } = await WebAssembly.instantiate(app_bytes);
+// Create an executable Wasm instance from an array of bytes
+// (Browser validates the module and does the final compilation to the host's machine code.)
+async function js_create_app(wasm_module_bytes) {
+  const { instance } = await WebAssembly.instantiate(wasm_module_bytes);
+  repl.app = instance;
+}
 
-  const addr = app.exports.run();
-  const { buffer } = app.exports.memory;
+// Call the main function of the app, via the test wrapper
+// Cache the result and return the size of the app's memory
+function js_run_app() {
+  const { run, memory } = repl.app.exports;
+  const addr = run();
+  const { buffer } = memory;
   repl.result = { addr, buffer };
 
   // Tell Rust how much space to reserve for its copy of the app's memory buffer.
-  // The app might have grown its heap while running, so we couldn't predict it beforehand.
-  // Write the result to memory instead of returning, since wasm_bindgen only allows
-  // imported async functions to return JsValue, which has some conversion overhead.
-  const compilerMemory32 = new Uint32Array(repl.compiler.memory.buffer);
-  compilerMemory32[app_memory_size_ptr >> 2] = buffer.byteLength;
+  // This is not predictable, since the app can resize its own memory via malloc.
+  return buffer.byteLength;
 }
 
-// Now that the Rust app has allocated space for the app's memory buffer, we can copy it
-function js_copy_app_memory(buffer_alloc_addr) {
+// After the Rust app has allocated space for the app's memory buffer,
+// it calls this function and we copy it, and return the result too
+function js_get_result_and_memory(buffer_alloc_addr) {
   const { addr, buffer } = repl.result;
   const appMemory = new Uint8Array(buffer);
   const compilerMemory = new Uint8Array(repl.compiler.memory.buffer);
