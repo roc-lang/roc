@@ -4,7 +4,6 @@ platform "examples/hello-world"
     packages {}
     imports []
     provides [ renderForHost ]
-    effects fx.Effect {}
 
 renderForHost : Str
 renderForHost = render
