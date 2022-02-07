@@ -23,7 +23,7 @@ roc_reporting = { path = "../../reporting" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
 ven_pretty = { path = "../../vendor/pretty" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
-parking_lot = { version = "0.11.2", features = ["deadlock_detection"] }
+parking_lot = { version = "0.11.2" }
 crossbeam = "0.8.1"
 num_cpus = "1.13.0"
 
