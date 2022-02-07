@@ -648,4 +648,42 @@ mod test_load {
             Ok(_) => unreachable!("we expect failure here"),
         }
     }
+
+    #[test]
+    // See https://github.com/rtfeldman/roc/issues/2413
+    fn platform_exposes_main_return_by_pointer_issue() {
+        let modules = vec![
+            (
+                "platform/Package-Config.roc",
+                indoc!(
+                    r#"
+                    platform "examples/hello-world"
+                        requires {} { main : { content: Str, other: Str } }
+                        exposes []
+                        packages {}
+                        imports []
+                        provides [ mainForHost ]
+
+                    mainForHost : { content: Str, other: Str }
+                    mainForHost = main
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                    app "hello-world"
+                        packages { pf: "platform" }
+                        imports []
+                        provides [ main ] to pf
+
+                    main = { content: "Hello, World!\n", other: "" }
+                    "#
+                ),
+            ),
+        ];
+
+        assert!(multiple_modules(modules).is_ok());
+    }
 }
