@@ -621,17 +621,18 @@ peg::parser!{
 
         rule record() =
           empty_record()
-          / [T::OpenCurly] __ assigned_fields() __ [T::CloseCurly]
+          / [T::OpenCurly] [T::SameIndent]? assigned_fields() [T::SameIndent]? [T::CloseCurly]
+          / [T::OpenCurly] [T::OpenIndent] assigned_fields() [T::CloseIndent] [T::CloseCurly]
 
         rule assigned_fields() =
-          (__ assigned_field() [T::Comma])* __ assigned_field()? [T::Comma]?
+          (assigned_field() [T::SameIndent]? [T::Comma] [T::SameIndent]?)* [T::SameIndent]? assigned_field()? [T::Comma]?
 
         rule assigned_field() =
           required_value()
-          / __ [T::LowercaseIdent]
+          / [T::LowercaseIdent]
 
         rule required_value() =
-          __ [T::LowercaseIdent] [T::Colon] full_expr()
+          [T::LowercaseIdent] [T::Colon] full_expr()
 
         rule empty_record() = [T::OpenCurly] [T::CloseCurly]
 
@@ -641,8 +642,16 @@ peg::parser!{
           empty_record()
           / [T::OpenCurly] record_field_types_i() [T::CloseCurly]
 
+        rule record_type_i() = 
+          [T::OpenIndent] record_type() [T::CloseIndent]?
+          / record_type()
+
+        rule record_field_types_i() =
+          [T::OpenIndent] record_field_types() [T::CloseIndent]
+          / record_field_types()
+
         rule record_field_types() =
-          (record_field_type() [T::Comma] __)* record_field_type() [T::Comma]?
+          ([T::SameIndent]? record_field_type() [T::SameIndent]? [T::Comma])* ([T::SameIndent]? record_field_type() [T::Comma]?)?
 
         rule record_field_type() =
           ident() [T::Colon] type_annotation()
@@ -656,7 +665,7 @@ peg::parser!{
         rule expect() = [T::KeywordExpect] expr()
 
         pub rule backpass() =
-          __ backpass_pattern() [T::OpBackpassing] expr()
+          backpass_pattern() [T::OpBackpassing] expr()
 
         rule common_pattern() =
           [T::LowercaseIdent]
@@ -797,6 +806,7 @@ peg::parser!{
 
         rule type_annotation_no_fun() =
           [T::OpenParen] type_annotation_no_fun() [T::CloseParen]
+          / [T::OpenIndent] type_annotation_no_fun() close_or_end()
           / tag_union()
           / apply_type()
           / bound_variable()
@@ -814,9 +824,12 @@ peg::parser!{
           / [T::OpenSquare] tags() [T::CloseSquare] type_variable()?
 
         rule tags() =
-          [T::OpenIndent] apply_type() (__ [T::Comma] __ apply_type() __)* [T::Comma]? [T::CloseIndent]
-          / (apply_type() [T::Comma])* apply_type() [T::Comma]?
-        
+          [T::OpenIndent] tags_only() [T::CloseIndent]
+          / tags_only()
+
+        rule tags_only() =
+          ([T::SameIndent]? apply_type() [T::SameIndent]? [T::Comma] [T::SameIndent]? )* ([T::SameIndent]? apply_type() [T::Comma]?)?
+
         rule type_variable() =
           [T::Underscore]
           / bound_variable()
@@ -995,13 +1008,6 @@ peg::parser!{
         rule end_of_file() =
          ![_]
 
-        rule record_type_i() = 
-          [T::OpenIndent] record_type() [T::CloseIndent]?
-          / record_type()
-
-        rule record_field_types_i() =
-          [T::OpenIndent] record_field_types() [T::CloseIndent]
-          / record_field_types()
     }
 }
 
@@ -1131,9 +1137,9 @@ fn test_record_def_4() {
   let tokens = test_tokenize( r#"x =
    {
      a: 4,
-       b: 5,
+     b: 5,
      c: 6,
-       }"#);
+    }"#);
   
   assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
@@ -1606,7 +1612,7 @@ Expr : I64"#);
 #[test]
 fn test_cfold() {
   let tokens = test_tokenize(&example_path("benchmarks/CFold.roc"));
-  dbg!(&tokens);
+
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
@@ -1735,6 +1741,24 @@ fn test_rbtree_ck() {
 
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
+
+#[test]
+fn test_record_type_def() {
+  let tokens = test_tokenize(r#"Model position :
+  {
+      evaluated : Set,
+  }"#);
+
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+// TODO implement access
+/*#[test]
+fn test_astar() {
+  let tokens = test_tokenize(&example_path("benchmarks/AStar.roc"));
+  dbg!(&tokens);
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}*/
 
 
 
