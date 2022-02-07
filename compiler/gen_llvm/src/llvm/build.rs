@@ -3600,11 +3600,14 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
 
     let param_types = Vec::from_iter_in(roc_function.get_type().get_param_types(), env.arena);
 
-    // drop the "return pointer" if it exists on the roc function
-    // and the c function does not return via pointer
-    let param_types = match (&roc_return, &cc_return) {
-        (RocReturn::ByPointer, CCReturn::Return) => &param_types[1..],
-        _ => &param_types,
+    let (params, param_types) = match (&roc_return, &cc_return) {
+        // Drop the "return pointer" if it exists on the roc function
+        // and the c function does not return via pointer
+        (RocReturn::ByPointer, CCReturn::Return) => (&params[..], &param_types[1..]),
+        // Drop the return pointer the other way, if the C function returns by pointer but Roc
+        // doesn't
+        (RocReturn::Return, CCReturn::ByPointer) => (&params[1..], &param_types[..]),
+        _ => (&params[..], &param_types[..]),
     };
 
     debug_assert_eq!(params.len(), param_types.len());
