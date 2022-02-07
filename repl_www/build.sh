@@ -19,4 +19,11 @@ cp repl_www/public/* $WWW_DIR
 wasm-pack build --target web "$@" repl_wasm
 
 cp repl_wasm/pkg/*.wasm $WWW_DIR
-cp repl_wasm/pkg/*.js $WWW_DIR
+
+# Copy the JS from wasm_bindgen, replacing its invalid `import` statement with a `var`.
+# The JS import from the invalid path 'env', seems to be generated when there are unresolved symbols.
+# However there is no corresponding import declared in the .wasm file so we can leave the `var` undefined.
+# Anyway, it works. ¯\_(ツ)_/¯
+BINDGEN_FILE="roc_repl_wasm.js"
+echo 'var __wbg_star0;' > $WWW_DIR/$BINDGEN_FILE
+grep -v '^import' repl_wasm/pkg/$BINDGEN_FILE >> $WWW_DIR/$BINDGEN_FILE
