@@ -176,7 +176,7 @@ mod test_peg_grammar {
               }
               b'\n' => {
                   // TODO: add newline to side_table
-                  let (new_skip, curr_line_indent) = skip_newlines(bytes);
+                  let (new_skip, curr_line_indent) = skip_newlines_and_comments(bytes);
                   i += new_skip;
 
                   if let Some(&prev_indent) = state.indents.last() {
@@ -261,9 +261,10 @@ mod test_peg_grammar {
       while skip < bytes.len() && bytes[skip] != b'\n' {
           skip += 1;
       }
-      if skip < bytes.len() && bytes[skip] == b'\n' {
-          skip += 1;
+      if (skip + 1) < bytes.len() && bytes[skip] == b'\n' && bytes[skip+1] == b'#'{
+        skip += 1;
       }
+
       skip
   }
   
@@ -281,28 +282,44 @@ mod test_peg_grammar {
   }
   
   // also skips lines that contain only whitespace
-  fn skip_newlines(bytes: &[u8]) -> (usize, usize) {
+  fn skip_newlines_and_comments(bytes: &[u8]) -> (usize, usize) {
       let mut skip = 0;
       let mut indent = 0;
   
       while skip < bytes.len() && bytes[skip] == b'\n' {
           skip += indent + 1;
 
-          let spaces = 
-          if bytes.len() > skip && bytes[skip] == b' ' {
-            skip_whitespace(&bytes[skip..])
-          } else {
-            0
-          };
 
-          if bytes.len() > (skip + spaces) && bytes[skip + spaces] == b'\n' {
-            indent = 0;
-            skip += spaces;
-          } else {
-            indent = spaces;
-          }
+          if bytes.len() > skip {
+            if bytes[skip] == b' ' {
+              let spaces = skip_whitespace(&bytes[skip..]);
+
+              if bytes.len() > (skip + spaces) {
+                if bytes[skip + spaces] == b'\n' {
+                  indent = 0;
+                  skip += spaces;
+                } else if bytes[skip+spaces] == b'#' {
+                  let comment_skip = skip_comment(&bytes[(skip + spaces)..]);
+
+                  indent = 0;
+                  skip += spaces + comment_skip;
+                } else {
+                  indent = spaces;
+                }
+              } else {
+                indent = spaces;
+              }
+            } else {
+              while bytes[skip] == b'#' {
+                let comment_skip = skip_comment(&bytes[skip..]);
+
+                indent = 0;
+                skip += comment_skip;
+              }
+            }
       }
-  
+    }
+    
       (skip, indent)
   }
   
@@ -505,6 +522,35 @@ fn test_tokenization_line_with_only_spaces() {
   );
 }
 
+
+#[test]
+fn test_tokenization_empty_lines_and_comments() {
+  let tokens = test_tokenize(r#"a = 5
+
+# com1
+# com2
+b = 6"#);
+
+  assert_eq!(
+    tokens,[T::LowercaseIdent, T::OpAssignment, T::Number,
+    T::SameIndent, T::LowercaseIdent, T::OpAssignment, T::Number]);
+}
+
+
+
+#[test]
+fn test_tokenization_when_branch_comments() {
+  let tokens = test_tokenize(r#"when errorCode is
+  # A -> Task.fail InvalidCharacter
+  # B -> Task.fail IOError
+  _ ->
+      Task.succeed -1"#);
+
+  assert_eq!(
+    tokens,[T::KeywordWhen, T::LowercaseIdent, T::KeywordIs,
+    T::OpenIndent, T::Underscore, T::Arrow, T::OpenIndent, T::UppercaseIdent, T::Dot, T::LowercaseIdent, T::OpMinus, T::Number]);
+}
+
 // Inspired by https://ziglang.org/documentation/0.7.1/#Grammar
 // license information can be found in the LEGAL_DETAILS file in
 // the root directory of this distribution.
@@ -515,9 +561,12 @@ peg::parser!{
       pub rule module() =
         header() module_defs()? indented_end()
 
-      pub rule full_expr() = [T::OpenIndent]? op_expr() [T::CloseIndent]?
+      pub rule full_expr() = 
+        op_expr()
+        / [T::OpenIndent] op_expr() close_or_end()
 
-      
+      pub rule op_expr() = pizza_expr()
+
       rule common_expr() =
           closure()
           / expect()
@@ -794,38 +843,66 @@ peg::parser!{
           type_annotation_no_fun() type_annotation_no_fun()*
 
         rule _() =
-          ([T::OpenIndent]/[T::SameIndent])?
+          ([T::SameIndent])?
 
-        // TODO write tests for precedence
-        pub rule op_expr() = precedence!{ // lowest precedence
-            x:(@) _ [T::OpPizza] _ y:@ {}// |>
-            --
-            x:(@) _ [T::OpAnd] _ y:@ {}
-            x:(@) _ [T::OpOr] _ y:@ {}
-            --
-            x:(@) _ [T::OpEquals] _ y:@ {}
-            x:(@) _ [T::OpNotEquals] _ y:@ {}
-            x:(@) _ [T::OpLessThan] _ y:@ {}
-            x:(@) _ [T::OpGreaterThan] _ y:@ {}
-            x:(@) _ [T::OpLessThanOrEq] _ y:@ {}
-            x:(@) _ [T::OpGreaterThanOrEq] _ y:@ {}
-            --
-            x:(@) _ [T::OpPlus] _ y:@ {}
-            x:(@) _ [T::OpMinus] _ y:@ {}
-            --
-            x:(@) _ [T::Asterisk] _ y:@ {}
-            x:(@) _ [T::OpSlash] _ y:@ {}
-            x:(@) _ [T::OpDoubleSlash] _ y:@ {}
-            x:(@) _ [T::OpPercent] _ y:@ {}
-            x:(@) _ [T::OpDoublePercent] _ y:@ {}
-            --
-            x:@ _ [T::OpCaret] _ y:(@) {} // ^
-            --
-            [T::OpMinus] x:@ {}
-            [T::Bang] x:@ {} // !
-            --
-            expr() {}
-        }  // highest precedence
+        // the rules below allow us to set assoicativity and precedence
+        rule unary_op() =
+          [T::OpMinus]
+          / [T::Bang]
+        rule unary_expr() =
+          unary_op()* expr()
+
+        rule mul_level_op() =
+          [T::Asterisk]
+          / [T::OpSlash] 
+          / [T::OpDoubleSlash] 
+          / [T::OpPercent]
+          / [T::OpDoublePercent]
+        rule mul_level_expr() =
+          unary_expr() (mul_level_op() unary_expr())*
+
+        rule add_level_op() =
+          [T::OpPlus]
+          / [T::OpMinus]
+        rule add_level_expr() =
+          mul_level_expr() (add_level_op() mul_level_expr())*
+        
+        rule compare_op() =
+          [T::OpEquals] // ==
+          / [T::OpNotEquals]
+          / [T::OpLessThan]
+          / [T::OpGreaterThan]
+          / [T::OpLessThanOrEq]
+          / [T::OpGreaterThanOrEq]
+        rule compare_expr() =
+          add_level_expr() (compare_op() add_level_expr())?
+
+        rule bool_and_expr() =
+          compare_expr() ([T::OpAnd] compare_expr())*
+
+        rule bool_or_expr() =
+          bool_and_expr() ([T::OpOr] bool_and_expr())*
+
+
+        rule pizza_expr() =
+          bool_or_expr() pizza_end()?
+
+        rule pizza_end() =
+          [T::SameIndent]? [T::OpPizza] [T::SameIndent]? bool_or_expr() pizza_end()*
+          / [T::SameIndent]? [T::OpPizza] [T::OpenIndent] bool_or_expr() pizza_end()* close_or_end()
+          / [T::OpenIndent] [T::OpPizza] [T::SameIndent]? bool_or_expr() pizza_end()* close_or_end()
+          / [T::OpenIndent] [T::OpPizza] [T::OpenIndent] bool_or_expr() pizza_end()* close_double_or_end()
+
+        rule close_or_end() =
+          [T::CloseIndent]
+          / end_of_file()
+
+        rule close_double_or_end() =
+          [T::CloseIndent] [T::CloseIndent]
+          / [T::CloseIndent] end_of_file()
+          / end_of_file()
+
+        //TODO support right assoicative caret(^), for example: 2^2
 
         pub rule defs() =
           def() ([T::SameIndent]? def())* [T::SameIndent]? full_expr()
@@ -859,10 +936,14 @@ peg::parser!{
           apply_type() [T::Colon] type_annotation()
           
         pub rule when() =
-          [T::KeywordWhen] expr() [T::KeywordIs] when_branch()+
+          [T::KeywordWhen] expr() [T::KeywordIs] when_branches()
+
+        rule when_branches() =
+          [T::OpenIndent] when_branch()+ close_or_end()
+          / when_branch()+
 
         pub rule when_branch() =
-          __ matchable() ([T::Pipe] full_expr())* ([T::KeywordIf] full_expr())? [T::Arrow] when_branch_body() 
+          matchable() ([T::Pipe] full_expr())* ([T::KeywordIf] full_expr())? [T::Arrow] when_branch_body() 
 
         rule when_branch_body() =
           [T::OpenIndent] full_expr() ([T::CloseIndent] / end_of_file())
@@ -1107,7 +1188,7 @@ fn test_hello() {
 #[test]
 fn test_fibo() {
   let tokens = test_tokenize(&example_path("fib/Fib.roc"));
-  
+  dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
@@ -1156,7 +1237,7 @@ fn test_when_1() {
 
   Nil ->
       0"#);
-  
+  dbg!(&tokens);
   assert_eq!(tokenparser::when(&tokens), Ok(()));
 }
 
@@ -1180,9 +1261,20 @@ fn test_cons_list() {
 }
 
 #[test]
+fn test_when_in_defs() {
+  let tokens = test_tokenize(r#"fromBytes = \bytes ->
+  when bytes is
+      Ok v -> v
+"#);
+
+  dbg!(&tokens);
+  assert_eq!(tokenparser::module_defs(&tokens), Ok(()));
+}
+
+#[test]
 fn test_base64() {
   let tokens = test_tokenize(&example_path("benchmarks/Base64.roc"));
-
+  dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
@@ -1199,6 +1291,7 @@ fn test_when_branch() {
 
   assert_eq!(tokenparser::when_branch(&tokens), Ok(()));
 }
+
 #[test]
 fn test_def_in_def() {
   let tokens = test_tokenize(r#"example =
@@ -1232,12 +1325,187 @@ fn test_cli_echo() {
 }
 
 #[test]
-fn test_pizza() {
+fn test_pizza_1() {
   let tokens = test_tokenize(r#"closure = \_ ->
   Task.succeed {}
       |> Task.map (\_ -> x)"#);
 
   assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_one_line() {
+  let tokens = test_tokenize(r#"5 |> fun"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_same_indent_1() {
+  let tokens = test_tokenize(r#"5
+|> fun"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_same_indent_2() {
+  let tokens = test_tokenize(r#"5
+|>
+fun"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_indented_1_a() {
+  let tokens = test_tokenize(r#"5
+  |> fun"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_indented_1_b() {
+  let tokens = test_tokenize(r#"5
+  |> fun
+"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_indented_2_a() {
+  let tokens = test_tokenize(r#"5
+  |>
+    fun"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_indented_2_b() {
+  let tokens = test_tokenize(r#"5
+  |>
+    fun
+  "#);
+  dbg!(&tokens);
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_indented_2_c() {
+  let tokens = test_tokenize(r#"5
+  |>
+    fun
+  
+"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_mixed_indent_1_a() {
+  let tokens = test_tokenize(r#"5
+|>
+    fun"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_mixed_indent_1_b() {
+  let tokens = test_tokenize(r#"5
+|>
+    fun
+"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_mixed_indent_2_a() {
+  let tokens = test_tokenize(r#"5
+  |>
+  fun"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_pizza_mixed_indent_2_b() {
+  let tokens = test_tokenize(r#"5
+  |>
+  fun"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_longer_pizza() {
+  let tokens = test_tokenize(r#"5 |> fun a |> fun b"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_deeper_pizza() {
+  let tokens = test_tokenize(r#"5
+|> fun a 
+|> fun b"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_deeper_indented_pizza_a() {
+  let tokens = test_tokenize(r#"5
+  |> fun a 
+  |> fun b"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_deeper_indented_pizza_b() {
+  let tokens = test_tokenize(r#"5
+  |> fun a 
+  |> fun b
+"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_deep_mixed_indent_pizza_a() {
+  let tokens = test_tokenize(r#"5
+  |> fun a |> fun b
+  |> fun c d
+  |> fun "test"
+    |> List.map Str.toI64
+       |> g (1 + 1)"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_deep_mixed_indent_pizza_b() {
+  let tokens = test_tokenize(r#"5
+  |> fun a |> fun b
+  |> fun c d
+  |> fun "test"
+    |> List.map Str.toI64
+       |> g (1 + 1)
+"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+#[test]
+fn test_bool_or() {
+  let tokens = test_tokenize(r#"a || True || b || False"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
 }
 
 #[test]
@@ -1265,13 +1533,27 @@ fn test_nqueens() {
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
 
-// TODO fix infinite loop
-/*#[test]
+#[test]
+fn test_quicksort_help() {
+  let tokens = test_tokenize(r#"quicksortHelp = \list, low, high ->
+  if low < high then
+      when partition low is
+          Pair ->
+              partitioned
+                  |> quicksortHelp low
+  else
+      list"#);
+  dbg!(&tokens);
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+
+#[test]
 fn test_quicksort() {
   let tokens = test_tokenize(&example_path("benchmarks/Quicksort.roc"));
-
+  dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
-}*/
+}
 
 #[test]
 fn test_indented_closure_apply() {
@@ -1307,14 +1589,40 @@ fn test_defs_w_apply() {
   assert_eq!(tokenparser::defs(&tokens), Ok(()));
 }
 
-// TODO fix infinite loop
-/*
+#[test]
+fn test_indented_apply_defs() {
+  let tokens = test_tokenize(r#"main =
+  after
+      \n ->
+          e = 5
+
+          4
+
+Expr : I64"#);
+
+  assert_eq!(tokenparser::module_defs(&tokens), Ok(()));
+}
+
 #[test]
 fn test_cfold() {
   let tokens = test_tokenize(&example_path("benchmarks/CFold.roc"));
   dbg!(&tokens);
   assert_eq!(tokenparser::module(&tokens), Ok(()));
-}*/
+}
+
+#[test]
+fn test_apply_with_comment() {
+  let tokens = test_tokenize(r#"main =
+  Task.after
+      \n ->
+        e = mkExpr n 1 # comment
+        unoptimized = eval e
+        optimized = eval (constFolding (reassoc e))
+        
+        optimized"#);
+
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
 
 #[test]
 fn test_multi_defs() {
@@ -1421,13 +1729,12 @@ map : Str"#);
   assert_eq!(tokenparser::module_defs(&tokens), Ok(()));
 }
 
-// TODO fix infinite loop
-/*#[test]
+#[test]
 fn test_rbtree_ck() {
   let tokens = test_tokenize(&example_path("benchmarks/RBTreeCk.roc"));
 
   assert_eq!(tokenparser::module(&tokens), Ok(()));
-}*/
+}
 
 
 
