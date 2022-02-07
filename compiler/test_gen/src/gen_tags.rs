@@ -1449,3 +1449,28 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
         u8
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_2445() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            none : [ None, Update a ]
+            none = None
+
+            press : [ None, Update U8 ]
+            press = none
+
+            main =
+                when press is
+                    None -> 15
+                    Update _ -> 25
+            "#
+        ),
+        15,
+        i64
+    );
+}

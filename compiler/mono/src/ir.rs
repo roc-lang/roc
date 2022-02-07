@@ -2941,8 +2941,7 @@ fn specialize_naked_symbol<'a>(
     symbol: Symbol,
 ) -> Stmt<'a> {
     if procs.is_module_thunk(symbol) {
-        let partial_proc = procs.get_partial_proc(symbol).unwrap();
-        let fn_var = partial_proc.annotation;
+        let fn_var = variable;
 
         // This is a top-level declaration, which will code gen to a 0-arity thunk.
         let result = call_by_name(
