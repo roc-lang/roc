@@ -4,6 +4,6 @@ app "hello-gui"
     provides [ render ] to pf
 
 render =
-    btn = Button { onPress : \_ -> Action.none } (text "Hello, button!")
+    btn = button { onPress : \prev, _ -> Action.none } (text "Hello, button!")
 
     "Hello, World!"
