@@ -12,7 +12,7 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 static_assertions::assert_eq_size!([u8; 6 * 8], Descriptor);
 static_assertions::assert_eq_size!([u8; 4 * 8], Content);
 static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
-static_assertions::assert_eq_size!([u8; 6 * 8], Problem);
+static_assertions::assert_eq_size!(([usize; 4], [u64; 2]), Problem);
 static_assertions::assert_eq_size!([u8; 12], UnionTags);
 static_assertions::assert_eq_size!([u8; 2 * 8], RecordFields);
 
@@ -1624,7 +1624,7 @@ impl From<Content> for Descriptor {
 }
 
 static_assertions::assert_eq_size!([u8; 4 * 8], Content);
-static_assertions::assert_eq_size!([u8; 4 * 8], (Variable, Option<Lowercase>));
+static_assertions::assert_eq_size!([usize; 4], (Variable, Option<Lowercase>));
 static_assertions::assert_eq_size!([u8; 3 * 8], (Symbol, AliasVariables, Variable));
 static_assertions::assert_eq_size!([u8; 8], AliasVariables);
 static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);

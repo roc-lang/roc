@@ -59,7 +59,7 @@ pub enum TagName {
     Closure(Symbol),
 }
 
-static_assertions::assert_eq_size!([u8; 24], TagName);
+static_assertions::assert_eq_size!((usize, usize, u64), TagName);
 
 impl TagName {
     pub fn as_ident_str(&self, interns: &Interns, home: ModuleId) -> IdentStr {
