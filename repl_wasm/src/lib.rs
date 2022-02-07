@@ -1,3 +1,7 @@
+// wasm_bindgen procedural macro breaks this clippy rule
+// https://github.com/rustwasm/wasm-bindgen/issues/2774
+#![allow(clippy::unused_unit)]
+
 use bumpalo::{collections::vec::Vec, Bump};
 use std::mem::size_of;
 use wasm_bindgen::prelude::wasm_bindgen;
