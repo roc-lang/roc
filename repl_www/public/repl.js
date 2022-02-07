@@ -46,8 +46,8 @@ function onInputChange(event) {
 }
 
 // Use a queue just in case we somehow get inputs very fast
-// This is definitely an edge case, but maybe could happen from copy/paste?
-// It allows us to rely on having only one input at a time
+// We want the REPL to only process one at a time, since we're using some global state.
+// In normal usage we shouldn't see this edge case anyway. Maybe with copy/paste?
 async function processInputQueue() {
   while (repl.inputQueue.length) {
     const inputText = repl.inputQueue[0];

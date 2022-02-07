@@ -1,7 +1,10 @@
 #include <stdio.h>
 
-// printf debugging slows down automated tests a lot so make sure to disable it afterwards!
-// (Wasmer has a much larger binary to validate and compile. Chrome handles it easily though.)
+/*
+    A bare-bones Roc "platform" for REPL code, providing heap allocation for builtins.
+*/
+
+// Enable/disable printf debugging. Leave disabled to avoid bloating .wasm files and slowing down Wasmer tests.
 #define ENABLE_PRINTF 0
 
 //--------------------------
