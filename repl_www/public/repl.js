@@ -1,8 +1,8 @@
-// wasm_bindgen's JS code expects our imported functions to be global
+// wasm_bindgen treats our `extern` declarations as JS globals, so let's keep it happy
 window.js_create_app = js_create_app;
 window.js_run_app = js_run_app;
 window.js_get_result_and_memory = js_get_result_and_memory;
-import * as mock_repl from "./mock_repl.js";
+import * as roc_repl_wasm from "./roc_repl_wasm.js";
 
 // ----------------------------------------------------------------------------
 // REPL state
@@ -27,7 +27,7 @@ const repl = {
 
 // Initialise
 repl.elemSourceInput.addEventListener("change", onInputChange);
-mock_repl.default().then((instance) => {
+roc_repl_wasm.default().then((instance) => {
   repl.compiler = instance;
 });
 
@@ -56,7 +56,7 @@ async function processInputQueue() {
     let outputText;
     let ok = true;
     try {
-      outputText = await mock_repl.webrepl_run(inputText);
+      outputText = await roc_repl_wasm.repl_wasm_entrypoint_from_js(inputText);
     } catch (e) {
       outputText = `${e}`;
       ok = false;

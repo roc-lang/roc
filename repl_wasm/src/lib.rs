@@ -143,7 +143,7 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     }
 }
 
-// #[wasm_bindgen]
+#[wasm_bindgen]
 pub async fn repl_wasm_entrypoint_from_js(src: String) -> Result<String, String> {
     let arena = &Bump::new();
     let pre_linked_binary: &'static [u8] = include_bytes!("../data/pre_linked_binary.o");

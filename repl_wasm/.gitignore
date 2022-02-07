@@ -2,7 +2,7 @@
 /dist
 /notes.md
 
-# Binary data folder
+# Binary data (pre-linked Wasm object file)
 /data
 
 # wasm-pack
