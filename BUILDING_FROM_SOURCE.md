@@ -79,6 +79,12 @@ There are also alternative installation options at http://releases.llvm.org/down
 
 [Troubleshooting](#troubleshooting)
 
+### Building
+
+Use `cargo build` to build the whole project.
+Use `cargo run help` to see all subcommands.
+To use the `repl` subcommand, execute `cargo run repl`.
+
 ## Using Nix
 
 ### Install
@@ -105,11 +111,10 @@ Now with nix installed, you just need to run one command:
 
 > Also, if you're on NixOS you'll need to enable opengl at the system-wide level. You can do this in configuration.nix with `hardware.opengl.enable = true;`. If you don't do this, nix-shell will fail!
 
-You should be in a shell with everything needed to build already installed. Next run:
-
-`cargo run repl`
-
-You should be in a repl now. Have fun!
+You should be in a shell with everything needed to build already installed.
+Use `cargo run help` to see all subcommands.
+To use the `repl` subcommand, execute `cargo run repl`.
+Use `cargo build` to build the whole project.
 
 ### Extra tips
 
