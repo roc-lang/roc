@@ -709,7 +709,10 @@ peg::parser!{
         rule expect() = [T::KeywordExpect] expr()
 
         pub rule backpass() =
-          backpass_pattern() [T::OpBackpassing] expr()
+        single_backpass() ([T::SameIndent] single_backpass())* [T::SameIndent] full_expr() 
+
+        pub rule single_backpass() =
+          backpass_pattern() [T::OpBackpassing] full_expr()
 
         rule common_pattern() =
           [T::LowercaseIdent]
@@ -732,6 +735,7 @@ peg::parser!{
           accessor_function()
           / access()
           / record()
+          / record_update()
           / common_pattern()
           / [T::Number]
           / [T::NumberBase]
@@ -1077,8 +1081,6 @@ fn test_basic_expr() {
     assert_eq!(tokenparser::expr(&[T::KeywordIf, T::Number, T::KeywordThen, T::Number, T::KeywordElse, T::Number]), Ok(()));
 
     assert_eq!(tokenparser::expr(&[T::KeywordExpect, T::Number]), Ok(()));
-
-    assert_eq!(tokenparser::expr(&[T::LowercaseIdent, T::OpBackpassing, T::Number]), Ok(()));    
 }
 
 #[test]
@@ -1278,14 +1280,6 @@ fn test_apply_expect_fail_2() {
 b"#);
 
   assert!(tokenparser::apply(&tokens).is_err());
-}
-
-#[test]
-fn test_backpass_expect_fail() {
-  let tokens = test_tokenize( r#"lastName <- 4
-5"#);
-
-  assert!(tokenparser::backpass(&tokens).is_err());
 }
 
 #[test]
@@ -1823,6 +1817,23 @@ fn test_space_dot() {
 #[test]
 fn test_astar() {
   let tokens = test_tokenize(&example_path("benchmarks/AStar.roc"));
+
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}
+
+#[test]
+fn test_backpass_in_def_2() {
+  let tokens = test_tokenize(r#"with = \path ->
+  handle <- withOpen
+  
+  4"#);
+
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
+fn test_false_interpreter_context() {
+  let tokens = test_tokenize(&example_path("false-interpreter/Context.roc"));
 
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
