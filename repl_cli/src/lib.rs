@@ -300,8 +300,6 @@ fn gen_and_eval_llvm<'a>(
     let lib = module_to_dylib(env.module, &target, opt_level)
         .expect("Error loading compiled dylib for test");
 
-    // The app is `mut` only because Wasm needs it.
-    // It has no public fields, and its "mutating" methods don't actually mutate.
     let app = CliApp { lib };
 
     let res_answer = jit_to_ast(
