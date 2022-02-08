@@ -101,6 +101,7 @@ mod test_peg_grammar {
       Ampersand,
       Pipe,
       Dot,
+      SpaceDot, // ` .` necessary to know difference between `Result.map .position` and `Result.map.position`
       Bang,
       LambdaStart,
       Arrow,
@@ -171,43 +172,31 @@ mod test_peg_grammar {
               b'-' | b':' | b'!' | b'.' | b'*' | b'/' | b'&' |
               b'%' | b'^' | b'+' | b'<' | b'=' | b'>' | b'|' | b'\\' => lex_operator(bytes),
               b' ' => {
-                  i += skip_whitespace(bytes);
-                  continue;
+                  match skip_whitespace(bytes) {
+                    SpaceDotOrSpaces::SpacesWSpaceDot(skip) => {
+                      i += skip;
+                      (Token::SpaceDot, 1)
+                    },
+                    SpaceDotOrSpaces::Spaces(skip) => {
+                      i += skip;
+                      continue;
+                    }
+                  }
+                  
               }
               b'\n' => {
                   // TODO: add newline to side_table
-                  let (new_skip, curr_line_indent) = skip_newlines_and_comments(bytes);
-                  i += new_skip;
+                  let skip_newline_return = skip_newlines_and_comments(bytes);
 
-                  if let Some(&prev_indent) = state.indents.last() {
-                    if curr_line_indent > prev_indent {
-                      state.indents.push(curr_line_indent);
-                      (Token::OpenIndent, curr_line_indent)
-                    } else {
-                      i += curr_line_indent;
-
-                      if curr_line_indent == 0 {
-
-                      }
-
-                      if prev_indent == curr_line_indent {
-                        consumer.token(Token::SameIndent, i, 0);
-                      } else if curr_line_indent < prev_indent {
-                        // safe unwrap because we check first
-                        while state.indents.last().is_some() && curr_line_indent < *state.indents.last().unwrap() {
-                          state.indents.pop();
-                          consumer.token(Token::CloseIndent, i, 0);
-                        }
-                      }
-
+                  match skip_newline_return {
+                    SkipNewlineReturn::SkipWIndent(skipped_lines, curr_line_indent) => {
+                      add_indents(skipped_lines, curr_line_indent, state, consumer, &mut i);
                       continue;
                     }
-                  } else if curr_line_indent > 0 {
-                    state.indents.push(curr_line_indent);
-                    (Token::OpenIndent, curr_line_indent)
-                  } else {
-                    consumer.token(Token::SameIndent, i, 0);
-                    continue;
+                    SkipNewlineReturn::WSpaceDot(skipped_lines, curr_line_indent) => {
+                      add_indents(skipped_lines, curr_line_indent, state, consumer, &mut i);
+                      (Token::SpaceDot, 1)
+                    }
                   }
                   
               }
@@ -223,6 +212,35 @@ mod test_peg_grammar {
           consumer.token(token, i, len);
           i += len;
       }
+  }
+
+  fn add_indents(skipped_lines: usize, curr_line_indent: usize, state: &mut LexState, consumer: &mut impl ConsumeToken, curr_byte_ctr: &mut usize) {
+    *curr_byte_ctr += skipped_lines;
+
+    if let Some(&prev_indent) = state.indents.last() {
+      if curr_line_indent > prev_indent {
+        state.indents.push(curr_line_indent);
+        consumer.token(Token::OpenIndent, *curr_byte_ctr, 0);
+      } else {
+        *curr_byte_ctr += curr_line_indent;
+
+        if prev_indent == curr_line_indent {
+          consumer.token(Token::SameIndent, *curr_byte_ctr, 0);
+        } else if curr_line_indent < prev_indent {
+          // safe unwrap because we check first
+          while state.indents.last().is_some() && curr_line_indent < *state.indents.last().unwrap() {
+            state.indents.pop();
+            consumer.token(Token::CloseIndent, *curr_byte_ctr, 0);
+          }
+        }
+
+      }
+    } else if curr_line_indent > 0 {
+      state.indents.push(curr_line_indent);
+      consumer.token(Token::OpenIndent, *curr_byte_ctr, 0);
+    } else {
+      consumer.token(Token::SameIndent, *curr_byte_ctr, 0);
+    }
   }
   
   impl TokenTable {
@@ -270,19 +288,34 @@ mod test_peg_grammar {
   
   #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
   struct Indent(usize);
+
+  enum SpaceDotOrSpaces {
+    SpacesWSpaceDot(usize),
+    Spaces(usize)
+  }
   
-  fn skip_whitespace(bytes: &[u8]) -> usize {
+  fn skip_whitespace(bytes: &[u8]) -> SpaceDotOrSpaces {
       debug_assert!(bytes[0] == b' ');
   
       let mut skip = 0;
       while skip < bytes.len() && bytes[skip] == b' ' {
           skip += 1;
       }
-      skip
+
+      if skip < bytes.len() && bytes[skip] == b'.' {
+        SpaceDotOrSpaces::SpacesWSpaceDot(skip)
+      } else {
+        SpaceDotOrSpaces::Spaces(skip)
+      }
+  }
+
+  enum SkipNewlineReturn {
+    SkipWIndent(usize, usize),
+    WSpaceDot(usize, usize)
   }
   
   // also skips lines that contain only whitespace
-  fn skip_newlines_and_comments(bytes: &[u8]) -> (usize, usize) {
+  fn skip_newlines_and_comments(bytes: &[u8]) -> SkipNewlineReturn {
       let mut skip = 0;
       let mut indent = 0;
   
@@ -292,23 +325,30 @@ mod test_peg_grammar {
 
           if bytes.len() > skip {
             if bytes[skip] == b' ' {
-              let spaces = skip_whitespace(&bytes[skip..]);
+              let space_dot_or_spaces = skip_whitespace(&bytes[skip..]);
 
-              if bytes.len() > (skip + spaces) {
-                if bytes[skip + spaces] == b'\n' {
-                  indent = 0;
-                  skip += spaces;
-                } else if bytes[skip+spaces] == b'#' {
-                  let comment_skip = skip_comment(&bytes[(skip + spaces)..]);
-
-                  indent = 0;
-                  skip += spaces + comment_skip;
-                } else {
-                  indent = spaces;
+              match space_dot_or_spaces {
+                SpaceDotOrSpaces::SpacesWSpaceDot(spaces) => {
+                  return SkipNewlineReturn::WSpaceDot(skip, spaces)
                 }
-              } else {
-                indent = spaces;
-              }
+                SpaceDotOrSpaces::Spaces(spaces) => {
+                  if bytes.len() > (skip + spaces) {
+                    if bytes[skip + spaces] == b'\n' {
+                      indent = 0;
+                      skip += spaces;
+                    } else if bytes[skip+spaces] == b'#' {
+                      let comment_skip = skip_comment(&bytes[(skip + spaces)..]);
+    
+                      indent = 0;
+                      skip += spaces + comment_skip;
+                    } else {
+                      indent = spaces;
+                    }
+                  } else {
+                    indent = spaces;
+                  }
+                }
+              }              
             } else {
               while bytes[skip] == b'#' {
                 let comment_skip = skip_comment(&bytes[skip..]);
@@ -320,7 +360,7 @@ mod test_peg_grammar {
       }
     }
     
-      (skip, indent)
+    SkipNewlineReturn::SkipWIndent(skip, indent)
   }
   
   fn is_op_continue(ch: u8) -> bool {
@@ -587,9 +627,9 @@ peg::parser!{
           / annotation()
           / [T::LowercaseIdent]
       pub rule expr() =
-          apply()
+          access()
+          / apply()
           / common_expr()
-          // / access() // TODO prevent infinite loop
 
         pub rule closure() =
           [T::LambdaStart] args() [T::Arrow] closure_body()
@@ -621,11 +661,15 @@ peg::parser!{
 
         rule record() =
           empty_record()
-          / [T::OpenCurly] [T::SameIndent]? assigned_fields() [T::SameIndent]? [T::CloseCurly]
-          / [T::OpenCurly] [T::OpenIndent] assigned_fields() [T::CloseIndent] [T::CloseCurly]
+          / [T::OpenCurly] assigned_fields_i() [T::CloseCurly]
 
         rule assigned_fields() =
           (assigned_field() [T::SameIndent]? [T::Comma] [T::SameIndent]?)* [T::SameIndent]? assigned_field()? [T::Comma]?
+
+        rule assigned_fields_i() =
+          [T::OpenIndent] assigned_fields() [T::CloseIndent]
+          / [T::SameIndent]? assigned_fields() [T::SameIndent]?
+           
 
         rule assigned_field() =
           required_value()
@@ -636,7 +680,7 @@ peg::parser!{
 
         rule empty_record() = [T::OpenCurly] [T::CloseCurly]
 
-        rule record_update() = [T::OpenCurly] expr() [T::Ampersand] assigned_fields() [T::CloseCurly]
+        rule record_update() = [T::OpenCurly] expr() [T::Ampersand] assigned_fields_i() [T::CloseCurly]
 
         rule record_type() =
           empty_record()
@@ -685,7 +729,9 @@ peg::parser!{
 
         // for applies without line breaks between args: Node color rK rV  
         rule apply_arg_pattern() =
-          record()
+          accessor_function()
+          / access()
+          / record()
           / common_pattern()
           / [T::Number]
           / [T::NumberBase]
@@ -702,17 +748,24 @@ peg::parser!{
           / common_pattern()
 
         rule apply_start_pattern() =
-          common_pattern()
+          access()
+          / common_pattern()
 
         rule record_destructure() =
           empty_record()
           / [T::OpenCurly] (ident() [T::Comma])* ident() [T::Comma]? [T::CloseCurly]
 
         rule access() =
-          expr() [T::Dot] ident()
+          access_start() [T::Dot] ident()
+
+        rule access_start() =
+          [T::LowercaseIdent]
+          / record()
+          / parens_around()
 
         rule accessor_function() =
-          [T::Dot] ident()
+          [T::SpaceDot] ident()
+          / [T::Dot] ident()
 
         pub rule header() =
           __ almost_header() header_end()
@@ -1752,13 +1805,27 @@ fn test_record_type_def() {
   assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
 
-// TODO implement access
-/*#[test]
+#[test]
+fn test_apply_with_acces() {
+  let tokens = test_tokenize(r#"Dict.get model.costs"#);
+
+  assert_eq!(tokenparser::apply(&tokens), Ok(()));
+}
+
+#[test]
+fn test_space_dot() {
+  let tokens = test_tokenize(r#"Result.map .position"#);
+
+  assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
+}
+
+
+#[test]
 fn test_astar() {
   let tokens = test_tokenize(&example_path("benchmarks/AStar.roc"));
-  dbg!(&tokens);
+
   assert_eq!(tokenparser::module(&tokens), Ok(()));
-}*/
+}
 
 
 
