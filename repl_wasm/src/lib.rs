@@ -24,11 +24,11 @@ const WRAPPER_NAME: &str = "wrapper";
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(catch)]
-    pub async fn js_create_app(wasm_module_bytes: &[u8]) -> Result<(), JsValue>;
+    async fn js_create_app(wasm_module_bytes: &[u8]) -> Result<(), JsValue>;
 
-    pub fn js_run_app() -> usize;
+    fn js_run_app() -> usize;
 
-    pub fn js_get_result_and_memory(buffer_alloc_addr: *mut u8) -> usize;
+    fn js_get_result_and_memory(buffer_alloc_addr: *mut u8) -> usize;
 }
 
 pub struct WasmReplApp<'a> {
@@ -148,7 +148,7 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
 }
 
 #[wasm_bindgen]
-pub async fn repl_wasm_entrypoint_from_js(src: String) -> Result<String, String> {
+pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     let arena = &Bump::new();
     let pre_linked_binary: &'static [u8] = include_bytes!("../data/pre_linked_binary.o");
 

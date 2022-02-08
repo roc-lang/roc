@@ -56,7 +56,7 @@ async function processInputQueue() {
     let outputText;
     let ok = true;
     try {
-      outputText = await roc_repl_wasm.repl_wasm_entrypoint_from_js(inputText);
+      outputText = await roc_repl_wasm.entrypoint_from_js(inputText);
     } catch (e) {
       outputText = `${e}`;
       ok = false;
