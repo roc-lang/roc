@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -eux
+
 if [[ ! -d repl_www ]]
 then
     echo "This script should be run from the project root"
@@ -22,8 +24,6 @@ cp repl_wasm/pkg/*.wasm $WWW_DIR
 
 # Copy the JS from wasm_bindgen, replacing its invalid `import` statement with a `var`.
 # The JS import from the invalid path 'env', seems to be generated when there are unresolved symbols.
-# However there is no corresponding import declared in the .wasm file so we can leave the `var` undefined.
-# Anyway, it works. ¯\_(ツ)_/¯
 BINDGEN_FILE="roc_repl_wasm.js"
-echo 'var __wbg_star0;' > $WWW_DIR/$BINDGEN_FILE
+echo 'var __wbg_star0 = { now: Date.now };' > $WWW_DIR/$BINDGEN_FILE
 grep -v '^import' repl_wasm/pkg/$BINDGEN_FILE >> $WWW_DIR/$BINDGEN_FILE
