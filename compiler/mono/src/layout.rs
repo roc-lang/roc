@@ -18,10 +18,10 @@ use ven_pretty::{DocAllocator, DocBuilder};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([u8; 3 * 8], Builtin);
-static_assertions::assert_eq_size!([u8; 4 * 8], Layout);
-static_assertions::assert_eq_size!([u8; 3 * 8], UnionLayout);
-static_assertions::assert_eq_size!([u8; 3 * 8], LambdaSet);
+static_assertions::assert_eq_size!([usize; 3], Builtin);
+static_assertions::assert_eq_size!([usize; 4], Layout);
+static_assertions::assert_eq_size!([usize; 3], UnionLayout);
+static_assertions::assert_eq_size!([usize; 3], LambdaSet);
 
 pub type TagIdIntType = u16;
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<TagIdIntType>() * 8) as usize;

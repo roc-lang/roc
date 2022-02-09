@@ -9,12 +9,15 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([u8; 6 * 8], Descriptor);
-static_assertions::assert_eq_size!([u8; 4 * 8], Content);
-static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
-static_assertions::assert_eq_size!([u8; 6 * 8], Problem);
-static_assertions::assert_eq_size!([u8; 12], UnionTags);
-static_assertions::assert_eq_size!([u8; 2 * 8], RecordFields);
+roc_error_macros::assert_sizeof_all!(Descriptor, 6 * 8);
+roc_error_macros::assert_sizeof_all!(Content, 4 * 8);
+roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
+roc_error_macros::assert_sizeof_all!(UnionTags, 12);
+roc_error_macros::assert_sizeof_all!(RecordFields, 2 * 8);
+
+roc_error_macros::assert_sizeof_aarch64!(Problem, 6 * 8);
+roc_error_macros::assert_sizeof_wasm!(Problem, 32);
+roc_error_macros::assert_sizeof_default!(Problem, 6 * 8);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
@@ -1623,11 +1626,14 @@ impl From<Content> for Descriptor {
     }
 }
 
-static_assertions::assert_eq_size!([u8; 4 * 8], Content);
-static_assertions::assert_eq_size!([u8; 4 * 8], (Variable, Option<Lowercase>));
-static_assertions::assert_eq_size!([u8; 3 * 8], (Symbol, AliasVariables, Variable));
-static_assertions::assert_eq_size!([u8; 8], AliasVariables);
-static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
+roc_error_macros::assert_sizeof_all!(Content, 4 * 8);
+roc_error_macros::assert_sizeof_all!((Symbol, AliasVariables, Variable), 3 * 8);
+roc_error_macros::assert_sizeof_all!(AliasVariables, 8);
+roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
+
+roc_error_macros::assert_sizeof_aarch64!((Variable, Option<Lowercase>), 4 * 8);
+roc_error_macros::assert_sizeof_wasm!((Variable, Option<Lowercase>), 4 * 4);
+roc_error_macros::assert_sizeof_all!((Variable, Option<Lowercase>), 4 * 8);
 
 #[derive(Clone, Debug)]
 pub enum Content {
@@ -1764,8 +1770,6 @@ impl Content {
         self
     }
 }
-
-static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
 
 #[derive(Clone, Debug)]
 pub enum FlatType {

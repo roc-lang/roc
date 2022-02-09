@@ -43,8 +43,12 @@ use std::iter;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
 use std::{env, fs};
+
+#[cfg(not(target_family = "wasm"))]
+use std::time::{Duration, SystemTime};
+#[cfg(target_family = "wasm")]
+use wasm_system_time::{Duration, SystemTime};
 
 /// Default name for the binary generated for an app, if an invalid one was specified.
 const DEFAULT_APP_OUTPUT_PATH: &str = "app";

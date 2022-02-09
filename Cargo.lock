@@ -3592,6 +3592,7 @@ dependencies = [
  "bumpalo",
  "lazy_static",
  "roc_collections",
+ "roc_error_macros",
  "roc_ident",
  "roc_region",
  "snafu",
@@ -3608,6 +3609,7 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_problem",
  "roc_region",
@@ -3792,6 +3794,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_region",
  "static_assertions",
