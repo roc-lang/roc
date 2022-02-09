@@ -2468,7 +2468,7 @@ fn function_malformed_pattern() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Hit an erroneous type when creating a layout for")]
 fn call_invalid_layout() {
     assert_evals_to!(

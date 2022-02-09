@@ -178,7 +178,7 @@ fn load_bytes_into_runtime(bytes: Vec<u8>) -> wasmer::Instance {
 }
 
 #[allow(dead_code)]
-pub fn assert_wasm_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
+pub fn assert_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
 where
     T: FromWasmerMemory + Wasm32Result,
 {
@@ -315,42 +315,31 @@ pub fn debug_memory_hex(memory: &Memory, address: i32, size: usize) {
 }
 
 #[allow(unused_macros)]
-macro_rules! assert_wasm_evals_to {
+macro_rules! assert_evals_to {
+    ($src:expr, $expected:expr, $ty:ty) => {
+        $crate::helpers::wasm::assert_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $crate::helpers::wasm::identity,
+            false
+        )
+    };
+
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+        $crate::helpers::wasm::assert_evals_to!($src, $expected, $ty, $transform, false);
+    };
+
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems: expr) => {{
         let phantom = std::marker::PhantomData;
-        match $crate::helpers::wasm::assert_wasm_evals_to_help::<$ty>($src, phantom) {
-            Err(msg) => panic!("{:?}", msg),
+        let _ = $ignore_problems; // Ignore `ignore_problems`! It is used for LLVM tests.
+        match $crate::helpers::wasm::assert_evals_to_help::<$ty>($src, phantom) {
+            Err(msg) => panic!("{}", msg),
             Ok(actual) => {
                 assert_eq!($transform(actual), $expected)
             }
         }
-    };
-
-    ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::helpers::wasm::assert_wasm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $crate::helpers::wasm::identity
-        );
-    };
-
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::helpers::wasm::assert_wasm_evals_to!($src, $expected, $ty, $transform);
-    };
-}
-
-#[allow(unused_macros)]
-macro_rules! assert_evals_to {
-    ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, $crate::helpers::wasm::identity);
     }};
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        // Same as above, except with an additional transformation argument.
-        {
-            $crate::helpers::wasm::assert_wasm_evals_to!($src, $expected, $ty, $transform);
-        }
-    };
 }
 
 #[allow(dead_code)]
@@ -379,8 +368,6 @@ macro_rules! assert_refcounts {
 
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
-#[allow(unused_imports)]
-pub(crate) use assert_wasm_evals_to;
 
 #[allow(unused_imports)]
 pub(crate) use assert_refcounts;
