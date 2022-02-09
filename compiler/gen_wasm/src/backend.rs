@@ -578,7 +578,22 @@ impl<'a> WasmBackend<'a> {
                 index,
             } => self.expr_union_at_index(*structure, *tag_id, union_layout, *index, sym),
 
-            _ => todo!("Expression `{}`", expr.to_pretty(100)),
+            Expr::Reuse {
+                symbol: _,
+                update_tag_id: _,
+                update_mode: _,
+                tag_layout: _,
+                tag_name: _,
+                tag_id: _,
+                arguments: _,
+            } => todo!("Expression `{}`", expr.to_pretty(100)),
+
+            Expr::Reset {
+                symbol: _,
+                update_mode: _,
+            } => todo!("Expression `{}`", expr.to_pretty(100)),
+
+            Expr::RuntimeErrorFunction(_) => todo!("Expression `{}`", expr.to_pretty(100)),
         }
     }
 
