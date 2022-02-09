@@ -3,8 +3,6 @@ use crate::helpers::llvm::assert_evals_to;
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_expect_failed;
 #[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::assert_llvm_evals_to;
-#[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_non_opt_evals_to;
 
 #[cfg(feature = "gen-dev")]
@@ -2473,7 +2471,7 @@ fn function_malformed_pattern() {
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = "Hit an erroneous type when creating a layout for")]
 fn call_invalid_layout() {
-    assert_llvm_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 f : I64 -> I64

@@ -590,19 +590,31 @@ macro_rules! assert_llvm_evals_to {
 #[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, $crate::helpers::llvm::identity);
+        assert_evals_to!($src, $expected, $ty, $crate::helpers::llvm::identity, false);
     }};
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {{
         // same as above, except with an additional transformation argument.
-        {
-            #[cfg(feature = "wasm-cli-run")]
-            $crate::helpers::llvm::assert_wasm_evals_to!(
-                $src, $expected, $ty, $transform, false, false
-            );
+        assert_evals_to!($src, $expected, $ty, $transform, false);
+    }};
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems: expr) => {{
+        // same as above, except with ignore_problems.
+        #[cfg(feature = "wasm-cli-run")]
+        $crate::helpers::llvm::assert_wasm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $transform,
+            $ignore_problems
+        );
 
-            $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
-        }
-    };
+        $crate::helpers::llvm::assert_llvm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $transform,
+            $ignore_problems
+        );
+    }};
 }
 
 #[allow(unused_macros)]
