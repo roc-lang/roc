@@ -716,6 +716,7 @@ peg::parser!{
 
         rule common_pattern() =
           [T::LowercaseIdent]
+          / [T::Underscore]
           / module_var()
           / concrete_type()
           / parens_around()
@@ -723,7 +724,6 @@ peg::parser!{
 
         rule backpass_pattern() =
           common_pattern()
-          / [T::Underscore]
           / record_destructure()
           / [T::Number]
           / [T::NumberBase]
@@ -736,13 +736,26 @@ peg::parser!{
           / access()
           / record()
           / record_update()
+          / closure()
           / common_pattern()
           / [T::Number]
           / [T::NumberBase]
           / [T::String]
           / list()
+          / parens_around()
 
-        // for applies where the arg is on its own line:
+        pub rule when_match_pattern() =
+          record()
+          / [T::Number]
+          / [T::NumberBase]
+          / [T::String]
+          / list()
+          / parens_around()
+          / apply()
+          / common_pattern()
+
+
+        // for applies where the arg is on its own line, for example:
         // Effect.after
         //    transform a  
         rule apply_arg_line_pattern() =
@@ -910,7 +923,11 @@ peg::parser!{
         rule concrete_type() =
           [T::UppercaseIdent] ([T::Dot] [T::UppercaseIdent])*
         rule apply_type_args() =
-          type_annotation_no_fun() type_annotation_no_fun()*
+          apply_type_arg() apply_type_arg()*
+
+        rule apply_type_arg() =
+          type_annotation_no_fun()
+          / record_destructure()
 
         rule _() =
           ([T::SameIndent])?
@@ -1013,15 +1030,11 @@ peg::parser!{
           / when_branch()+
 
         pub rule when_branch() =
-          matchable() ([T::Pipe] full_expr())* ([T::KeywordIf] full_expr())? [T::Arrow] when_branch_body() 
+          when_match_pattern() ([T::Pipe] full_expr())* ([T::KeywordIf] full_expr())? [T::Arrow] when_branch_body() 
 
         rule when_branch_body() =
           [T::OpenIndent] full_expr() ([T::CloseIndent] / end_of_file())
           / full_expr()
-
-        rule matchable() =
-          type_annotation_no_fun()
-          / expr()
 
         rule var() =
           [T::LowercaseIdent]
@@ -1211,6 +1224,19 @@ fn test_record_def_5() {
 }
 
 #[test]
+fn test_record_def_6() {
+
+  let tokens = test_tokenize( r#"a = {
+    b: c,
+    d: {
+        e: f,
+    },
+}"#);
+   
+  assert_eq!(tokenparser::def(&tokens), Ok(()));
+}
+
+#[test]
 fn test_typed_ident() {
   // main : Task {} []
   assert_eq!(tokenparser::typed_ident(&[
@@ -1290,7 +1316,7 @@ fn test_when_1() {
 
   Nil ->
       0"#);
-  dbg!(&tokens);
+
   assert_eq!(tokenparser::when(&tokens), Ok(()));
 }
 
@@ -1834,6 +1860,35 @@ fn test_backpass_in_def_2() {
 #[test]
 fn test_false_interpreter_context() {
   let tokens = test_tokenize(&example_path("false-interpreter/Context.roc"));
+
+  assert_eq!(tokenparser::module(&tokens), Ok(()));
+}
+
+#[test]
+fn test_when_match_apply() {
+  let tokens = test_tokenize(r#"Pair (Val 0) f"#);
+
+  assert_eq!(tokenparser::when_match_pattern(&tokens), Ok(()));
+}
+
+#[test]
+fn test_when_match_apply_2() {
+  let tokens = test_tokenize(r#"Pair (Val 0) f"#);
+
+  assert_eq!(tokenparser::when_match_pattern(&tokens), Ok(()));
+}
+
+#[test]
+fn test_apply_with_closure() {
+  let tokens = test_tokenize(r#"Task.after \w -> nestHelp s"#);
+
+  assert_eq!(tokenparser::apply(&tokens), Ok(()));
+}
+
+
+#[test]
+fn test_deriv() {
+  let tokens = test_tokenize(&example_path("benchmarks/Deriv.roc"));
 
   assert_eq!(tokenparser::module(&tokens), Ok(()));
 }
