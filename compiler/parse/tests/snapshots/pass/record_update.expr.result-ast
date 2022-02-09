@@ -1,20 +1,20 @@
 RecordUpdate {
-    update: |L 0-0, C 2-13| Var {
+    update: @2-13 Var {
         module_name: "Foo.Bar",
         ident: "baz",
     },
     fields: [
-        |L 0-0, C 16-20| RequiredValue(
-            |L 0-0, C 16-17| "x",
+        @16-20 RequiredValue(
+            @16-17 "x",
             [],
-            |L 0-0, C 19-20| Num(
+            @19-20 Num(
                 "5",
             ),
         ),
-        |L 0-0, C 22-26| RequiredValue(
-            |L 0-0, C 22-23| "y",
+        @22-26 RequiredValue(
+            @22-23 "y",
             [],
-            |L 0-0, C 25-26| Num(
+            @25-26 Num(
                 "0",
             ),
         ),

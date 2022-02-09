@@ -1,18 +1,18 @@
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Test.6 = lowlevel NumAdd #Attr.2 #Attr.3;
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Test.6 : Builtin(Int(I64)) = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Test.6;
 
 procedure Test.0 ():
-    let Test.11 = 41i64;
-    let Test.1 = Just Test.11;
-    let Test.8 = 0i64;
-    let Test.9 = GetTagId Test.1;
-    let Test.10 = lowlevel Eq Test.8 Test.9;
+    let Test.11 : Builtin(Int(I64)) = 41i64;
+    let Test.1 : Union(NonRecursive([[Builtin(Int(I64))], []])) = Just Test.11;
+    let Test.8 : Builtin(Int(U8)) = 0i64;
+    let Test.9 : Builtin(Int(U8)) = GetTagId Test.1;
+    let Test.10 : Builtin(Bool) = lowlevel Eq Test.8 Test.9;
     if Test.10 then
-        let Test.3 = UnionAtIndex (Id 0) (Index 0) Test.1;
-        let Test.5 = 1i64;
-        let Test.4 = CallByName Num.24 Test.3 Test.5;
+        let Test.3 : Builtin(Int(I64)) = UnionAtIndex (Id 0) (Index 0) Test.1;
+        let Test.5 : Builtin(Int(I64)) = 1i64;
+        let Test.4 : Builtin(Int(I64)) = CallByName Num.22 Test.3 Test.5;
         ret Test.4;
     else
-        let Test.7 = 1i64;
+        let Test.7 : Builtin(Int(I64)) = 1i64;
         ret Test.7;

@@ -48,17 +48,16 @@ fn headers_from_annotation_help(
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> bool {
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             headers.insert(*symbol, annotation.clone());
             true
         }
         Underscore
-        | Shadowed(_, _)
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
-        | NumLiteral(_, _, _)
-        | IntLiteral(_, _, _)
-        | FloatLiteral(_, _, _)
+        | NumLiteral(..)
+        | IntLiteral(..)
+        | FloatLiteral(..)
         | StrLiteral(_) => true,
 
         RecordDestructure { destructs, .. } => match annotation.value.shallow_dealias() {
@@ -159,11 +158,11 @@ pub fn constrain_pattern(
                 PresenceConstraint::IsOpen,
             ));
         }
-        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) | Shadowed(_, _) => {
+        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) => {
             // Neither the _ pattern nor erroneous ones add any constraints.
         }
 
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             if destruct_position {
                 state.constraints.push(Constraint::Present(
                     expected.get_type_ref().clone(),
@@ -179,31 +178,83 @@ pub fn constrain_pattern(
             );
         }
 
-        NumLiteral(var, _, _) => {
-            state.vars.push(*var);
+        &NumLiteral(var, _, _, bound) => {
+            state.vars.push(var);
+
+            let num_type = builtins::num_num(Type::Variable(var));
+
+            let num_type = builtins::add_numeric_bound_constr(
+                &mut state.constraints,
+                num_type,
+                bound,
+                region,
+                Category::Num,
+            );
 
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Num,
-                builtins::num_num(Type::Variable(*var)),
+                num_type,
                 expected,
             ));
         }
 
-        IntLiteral(precision_var, _, _) => {
+        &IntLiteral(num_var, precision_var, _, _, bound) => {
+            // First constraint on the free num var; this improves the resolved type quality in
+            // case the bound is an alias.
+            let num_type = builtins::add_numeric_bound_constr(
+                &mut state.constraints,
+                Type::Variable(num_var),
+                bound,
+                region,
+                Category::Int,
+            );
+
+            // Link the free num var with the int var and our expectation.
+            let int_type = builtins::num_int(Type::Variable(precision_var));
+
+            state.constraints.push(Constraint::Eq(
+                num_type, // TODO check me if something breaks!
+                Expected::NoExpectation(int_type),
+                Category::Int,
+                region,
+            ));
+
+            // Also constrain the pattern against the num var, again to reuse aliases if they're present.
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Int,
-                builtins::num_int(Type::Variable(*precision_var)),
+                Type::Variable(num_var),
                 expected,
             ));
         }
 
-        FloatLiteral(precision_var, _, _) => {
+        &FloatLiteral(num_var, precision_var, _, _, bound) => {
+            // First constraint on the free num var; this improves the resolved type quality in
+            // case the bound is an alias.
+            let num_type = builtins::add_numeric_bound_constr(
+                &mut state.constraints,
+                Type::Variable(num_var),
+                bound,
+                region,
+                Category::Float,
+            );
+
+            // Link the free num var with the float var and our expectation.
+            let float_type = builtins::num_float(Type::Variable(precision_var));
+
+            state.constraints.push(Constraint::Eq(
+                num_type.clone(), // TODO check me if something breaks!
+                Expected::NoExpectation(float_type),
+                Category::Float,
+                region,
+            ));
+
+            // Also constrain the pattern against the num var, again to reuse aliases if they're present.
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Float,
-                builtins::num_float(Type::Variable(*precision_var)),
+                num_type, // TODO check me if something breaks!
                 expected,
             ));
         }

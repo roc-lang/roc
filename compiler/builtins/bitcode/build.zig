@@ -26,7 +26,7 @@ pub fn build(b: *Builder) void {
         .default_target = CrossTarget{
             .cpu_model = .baseline,
             // TODO allow for native target for maximum speed
-        }
+        },
     });
     const i386_target = makeI386Target();
     const wasm32_target = makeWasm32Target();

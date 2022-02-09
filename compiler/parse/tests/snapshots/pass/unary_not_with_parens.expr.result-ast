@@ -1,15 +1,15 @@
 UnaryOp(
-    |L 0-0, C 2-14| ParensAround(
+    @2-14 ParensAround(
         Apply(
-            |L 0-0, C 2-6| Var {
+            @2-6 Var {
                 module_name: "",
                 ident: "whee",
             },
             [
-                |L 0-0, C 8-10| Num(
+                @8-10 Num(
                     "12",
                 ),
-                |L 0-0, C 11-14| Var {
+                @11-14 Var {
                     module_name: "",
                     ident: "foo",
                 },
@@ -17,5 +17,5 @@ UnaryOp(
             Space,
         ),
     ),
-    |L 0-0, C 0-1| Not,
+    @0-1 Not,
 )

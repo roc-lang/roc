@@ -1,13 +1,13 @@
 Closure(
     [
-        |L 0-0, C 1-2| Underscore(
+        @1-2 Underscore(
             "",
         ),
-        |L 0-0, C 4-9| Underscore(
+        @4-9 Underscore(
             "name",
         ),
     ],
-    |L 0-0, C 13-15| Num(
+    @13-15 Num(
         "42",
     ),
 )

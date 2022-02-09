@@ -5,8 +5,9 @@
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::ident::{ModuleName, TagName};
-use roc_module::low_level::LowLevel;
+use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{
@@ -14,7 +15,6 @@ use roc_mono::ir::{
     SelfRecursive, Stmt,
 };
 use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds};
-use roc_reporting::internal_error;
 
 mod generic64;
 mod object_builder;
@@ -260,8 +260,9 @@ trait Backend<'a> {
                         ret_layout,
                         ..
                     } => {
-                        // If this function is just a lowlevel wrapper, then inline it
-                        if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
+                        if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
+                            LowLevelWrapperType::from_symbol(*func_sym)
+                        {
                             self.build_run_low_level(
                                 sym,
                                 &lowlevel,

@@ -750,7 +750,8 @@ pub fn dictWalk(
     const alignment_u32 = alignment.toU32();
     // allocate space to write the result of the stepper into
     // experimentally aliasing the accum and output pointers is not a good idea
-    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment_u32);
+    // TODO handle alloc failing!
+    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment_u32) orelse unreachable;
     var b1 = output orelse unreachable;
     var b2 = bytes_ptr;
 

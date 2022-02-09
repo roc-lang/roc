@@ -121,7 +121,7 @@ fn union() {
             set1 = Set.fromList [1,2]
 
             set2 : Set I64
-            set2 = Set.fromList [1,3,4] 
+            set2 = Set.fromList [1,3,4]
 
             Set.union set1 set2
                 |> Set.toList
@@ -142,7 +142,7 @@ fn difference() {
             set1 = Set.fromList [1,2]
 
             set2 : Set I64
-            set2 = Set.fromList [1,3,4] 
+            set2 = Set.fromList [1,3,4]
 
             Set.difference set1 set2
                 |> Set.toList
@@ -163,7 +163,7 @@ fn intersection() {
             set1 = Set.fromList [1,2]
 
             set2 : Set I64
-            set2 = Set.fromList [1,3,4] 
+            set2 = Set.fromList [1,3,4]
 
             Set.intersection set1 set2
                 |> Set.toList

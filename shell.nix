@@ -3,6 +3,7 @@
 let
   sources = import nix/sources.nix { };
   pkgs = import sources.nixpkgs { };
+  unstable-pkgs = import sources.nixpkgs-unstable { };
 
   darwinInputs = with pkgs;
     lib.optionals stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks; [
@@ -35,12 +36,8 @@ let
   zig = import ./nix/zig.nix { inherit pkgs; };
   debugir = import ./nix/debugir.nix { inherit pkgs; };
 
-  inputs = with pkgs; [
+  inputs = (with pkgs; [
     # build libraries
-    rustc
-    cargo
-    clippy
-    rustfmt
     cmake
     git
     python3
@@ -68,7 +65,13 @@ let
 
     # tools for development environment
     less
-  ];
+  ]) ++ (with unstable-pkgs; [
+    rustc
+    cargo
+    clippy
+    rustfmt
+  ]);
+
 in pkgs.mkShell {
   buildInputs = inputs ++ darwinInputs ++ linuxInputs;
 

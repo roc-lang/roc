@@ -1,26 +1,23 @@
+use core::cell::Cell;
+use roc_gen_wasm::wasm_module::{Export, ExportType};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use tempfile::{tempdir, TempDir};
-use wasmer::Memory;
+use std::path::{Path, PathBuf};
+use wasmer::{Memory, WasmPtr};
 
-use crate::helpers::from_wasm32_memory::FromWasm32Memory;
-use crate::helpers::wasm32_test_result::Wasm32TestResult;
-use roc_builtins::bitcode;
+use crate::helpers::from_wasmer_memory::FromWasmerMemory;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
+use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
 
 // Should manually match build.rs
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
 const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
-const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
-const COMPILER_RT_PATH_VAR: &str = "TEST_GEN_WASM_COMPILER_RT_PATH";
-
-#[allow(unused_imports)]
-use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
+const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -36,14 +33,44 @@ fn promote_expr_to_module(src: &str) -> String {
 }
 
 #[allow(dead_code)]
-pub fn helper_wasm<'a, T: Wasm32TestResult>(
+pub fn compile_and_load<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
-    _result_type_dummy: PhantomData<T>,
+    _test_wrapper_type_info: PhantomData<T>,
 ) -> wasmer::Instance {
-    use std::path::{Path, PathBuf};
+    let platform_bytes = load_platform_and_builtins();
 
+    let compiled_bytes =
+        compile_roc_to_wasm_bytes(arena, stdlib, &platform_bytes, src, _test_wrapper_type_info);
+
+    if DEBUG_LOG_SETTINGS.keep_test_binary {
+        let build_dir_hash = src_hash(src);
+        save_wasm_file(&compiled_bytes, build_dir_hash)
+    };
+
+    load_bytes_into_runtime(compiled_bytes)
+}
+
+fn load_platform_and_builtins() -> std::vec::Vec<u8> {
+    let out_dir = std::env::var(OUT_DIR_VAR).unwrap();
+    let platform_path = Path::new(&out_dir).join([PLATFORM_FILENAME, "o"].join("."));
+    std::fs::read(&platform_path).unwrap()
+}
+
+fn src_hash(src: &str) -> u64 {
+    let mut hash_state = DefaultHasher::new();
+    src.hash(&mut hash_state);
+    hash_state.finish()
+}
+
+fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
+    arena: &'a bumpalo::Bump,
+    stdlib: &'a roc_builtins::std::StdLib,
+    preload_bytes: &[u8],
+    src: &str,
+    _test_wrapper_type_info: PhantomData<T>,
+) -> Vec<u8> {
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -59,7 +86,6 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     }
 
     let exposed_types = MutMap::default();
-    let ptr_bytes = 4;
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
@@ -67,7 +93,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         stdlib,
         src_dir,
         exposed_types,
-        ptr_bytes,
+        roc_target::TargetInfo::default_wasm32(),
         builtin_defs_map,
     );
 
@@ -82,32 +108,13 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         ..
     } = loaded;
 
-    // You can comment and uncomment this block out to get more useful information
-    // while you're working on the wasm backend!
-    {
-        // println!("=========== Procedures ==========");
-        // if PRETTY_PRINT_IR_SYMBOLS {
-        //     println!("");
-        //     for proc in procedures.values() {
-        //         println!("{}", proc.to_pretty(200));
-        //     }
-        // } else {
-        //     println!("{:?}", procedures.values());
-        // }
-        // println!("=================================\n");
+    debug_assert_eq!(exposed_to_host.values.len(), 1);
 
-        // println!("=========== Interns    ==========");
-        // println!("{:?}", interns);
-        // println!("=================================\n");
-
-        // println!("=========== Exposed    ==========");
-        // println!("{:?}", exposed_to_host);
-        // println!("=================================\n");
-    }
-
-    debug_assert_eq!(exposed_to_host.len(), 1);
-
-    let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
+    let exposed_to_host = exposed_to_host
+        .values
+        .keys()
+        .copied()
+        .collect::<MutSet<_>>();
 
     let env = roc_gen_wasm::Env {
         arena,
@@ -115,95 +122,50 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         exposed_to_host,
     };
 
-    let (mut wasm_module, main_fn_index) =
-        roc_gen_wasm::build_module_help(&env, &mut interns, procedures).unwrap();
+    let (mut module, called_preload_fns, main_fn_index) =
+        roc_gen_wasm::build_module_without_wrapper(&env, &mut interns, preload_bytes, procedures);
 
-    T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
+    T::insert_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
 
-    let mut module_bytes = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize_mut(&mut module_bytes);
+    // Export the initialiser function for refcount tests
+    let init_refcount_bytes = INIT_REFCOUNT_NAME.as_bytes();
+    let init_refcount_idx = module.names.functions[init_refcount_bytes];
+    module.export.append(Export {
+        name: arena.alloc_slice_copy(init_refcount_bytes),
+        ty: ExportType::Func,
+        index: init_refcount_idx,
+    });
 
-    // now, do wasmer stuff
+    module.remove_dead_preloads(env.arena, called_preload_fns);
 
-    use wasmer::{Instance, Module, Store};
+    let mut app_module_bytes = std::vec::Vec::with_capacity(module.size());
+    module.serialize(&mut app_module_bytes);
+
+    app_module_bytes
+}
+
+fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
+    let debug_dir_str = format!("/tmp/roc/gen_wasm/{:016x}", build_dir_hash);
+    let debug_dir_path = Path::new(&debug_dir_str);
+    let final_wasm_file = debug_dir_path.join("final.wasm");
+
+    std::fs::create_dir_all(debug_dir_path).unwrap();
+    std::fs::write(&final_wasm_file, app_module_bytes).unwrap();
+
+    println!(
+        "Debug command:\n\twasm-objdump -dx {}",
+        final_wasm_file.to_str().unwrap()
+    );
+}
+
+fn load_bytes_into_runtime(bytes: Vec<u8>) -> wasmer::Instance {
+    use wasmer::{Module, Store};
+    use wasmer_wasi::WasiState;
 
     let store = Store::default();
-
-    let wasmer_module = {
-        let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
-        let debug_dir: String; // persistent directory for debugging
-
-        let wasm_build_dir: &Path = if DEBUG_LOG_SETTINGS.keep_test_binary {
-            // Directory name based on a hash of the Roc source
-            let mut hash_state = DefaultHasher::new();
-            src.hash(&mut hash_state);
-            let src_hash = hash_state.finish();
-            debug_dir = format!("/tmp/roc/gen_wasm/{:016x}", src_hash);
-            std::fs::create_dir_all(&debug_dir).unwrap();
-            println!(
-                "Debug commands:\n\twasm-objdump -dx {}/app.o\n\twasm-objdump -dx {}/final.wasm",
-                &debug_dir, &debug_dir,
-            );
-            Path::new(&debug_dir)
-        } else {
-            tmp_dir = tempdir().unwrap();
-            tmp_dir.path()
-        };
-
-        let final_wasm_file = wasm_build_dir.join("final.wasm");
-        let app_o_file = wasm_build_dir.join("app.o");
-        let test_out_dir = std::env::var(OUT_DIR_VAR).unwrap();
-        let test_platform_o = format!("{}/{}.o", test_out_dir, PLATFORM_FILENAME);
-        let libc_a_file = std::env::var(LIBC_PATH_VAR).unwrap();
-        let compiler_rt_o_file = std::env::var(COMPILER_RT_PATH_VAR).unwrap();
-
-        // write the module to a file so the linker can access it
-        std::fs::write(&app_o_file, &module_bytes).unwrap();
-
-        let args = &[
-            "wasm-ld",
-            // input files
-            app_o_file.to_str().unwrap(),
-            bitcode::BUILTINS_WASM32_OBJ_PATH,
-            &test_platform_o,
-            &libc_a_file,
-            &compiler_rt_o_file,
-            // output
-            "-o",
-            final_wasm_file.to_str().unwrap(),
-            // we don't define `_start`
-            "--no-entry",
-            // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
-            // But if you specify both exports, you get all the dependencies.
-            //
-            // It seems that it will not write out an export you didn't explicitly specify,
-            // even if it's a dependency of another export!
-            // In our case we always export main and test_wrapper so that's OK.
-            "--export",
-            "test_wrapper",
-            "--export",
-            "#UserApp_main_1",
-        ];
-
-        let linker_output = std::process::Command::new(&crate::helpers::zig_executable())
-            .args(args)
-            .output()
-            .unwrap();
-
-        if !linker_output.status.success() {
-            print!("\nLINKER FAILED\n");
-            for arg in args {
-                print!("{} ", arg);
-            }
-            println!("\n{}", std::str::from_utf8(&linker_output.stdout).unwrap());
-            println!("{}", std::str::from_utf8(&linker_output.stderr).unwrap());
-        }
-
-        Module::from_file(&store, &final_wasm_file).unwrap()
-    };
+    let wasmer_module = Module::new(&store, &bytes).unwrap();
 
     // First, we create the `WasiEnv`
-    use wasmer_wasi::WasiState;
     let mut wasi_env = WasiState::new("hello").finalize().unwrap();
 
     // Then, we get the import object related to our WASI
@@ -212,20 +174,20 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         .import_object(&wasmer_module)
         .unwrap_or_else(|_| wasmer::imports!());
 
-    Instance::new(&wasmer_module, &import_object).unwrap()
+    wasmer::Instance::new(&wasmer_module, &import_object).unwrap()
 }
 
 #[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
 where
-    T: FromWasm32Memory + Wasm32TestResult,
+    T: FromWasmerMemory + Wasm32Result,
 {
     let arena = bumpalo::Bump::new();
 
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, phantom);
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -249,11 +211,77 @@ where
                 // Manually provide address and size based on printf in wasm_test_platform.c
                 crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
             }
-            let output = <T as FromWasm32Memory>::decode(memory, address as u32);
+            let output = <T as FromWasmerMemory>::decode(memory, address as u32);
 
             Ok(output)
         }
     }
+}
+
+#[allow(dead_code)]
+pub fn assert_wasm_refcounts_help<T>(
+    src: &str,
+    phantom: PhantomData<T>,
+    num_refcounts: usize,
+) -> Result<Vec<u32>, String>
+where
+    T: FromWasmerMemory + Wasm32Result,
+{
+    let arena = bumpalo::Bump::new();
+
+    // NOTE the stdlib must be in the arena; just taking a reference will segfault
+    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
+
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
+
+    let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
+
+    let expected_len = num_refcounts as i32;
+    let init_refcount_test = instance.exports.get_function(INIT_REFCOUNT_NAME).unwrap();
+    let init_result = init_refcount_test.call(&[wasmer::Value::I32(expected_len)]);
+    let refcount_vector_addr = match init_result {
+        Err(e) => return Err(format!("{:?}", e)),
+        Ok(result) => match result[0] {
+            wasmer::Value::I32(a) => a,
+            _ => panic!(),
+        },
+    };
+
+    // Run the test
+    let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
+    match test_wrapper.call(&[]) {
+        Err(e) => return Err(format!("{:?}", e)),
+        Ok(_) => {}
+    }
+
+    // Check we got the right number of refcounts
+    let refcount_vector_len: WasmPtr<i32> = WasmPtr::new(refcount_vector_addr as u32);
+    let actual_len = refcount_vector_len.deref(memory).unwrap().get();
+    if actual_len != expected_len {
+        panic!("Expected {} refcounts but got {}", expected_len, actual_len);
+    }
+
+    // Read the actual refcount values
+    let refcount_ptr_array: WasmPtr<WasmPtr<i32>, wasmer::Array> =
+        WasmPtr::new(4 + refcount_vector_addr as u32);
+    let refcount_ptrs: &[Cell<WasmPtr<i32>>] = refcount_ptr_array
+        .deref(memory, 0, num_refcounts as u32)
+        .unwrap();
+
+    let mut refcounts = Vec::with_capacity(num_refcounts);
+    for i in 0..num_refcounts {
+        let rc_ptr = refcount_ptrs[i].get();
+        let rc = if rc_ptr.offset() == 0 {
+            // RC pointer has been set to null, which means the value has been freed.
+            // In tests, we simply represent this as zero refcount.
+            0
+        } else {
+            let rc_encoded = rc_ptr.deref(memory).unwrap().get();
+            (rc_encoded - i32::MIN + 1) as u32
+        };
+        refcounts.push(rc);
+    }
+    Ok(refcounts)
 }
 
 /// Print out hex bytes of the test result, and a few words on either side
@@ -330,7 +358,29 @@ pub fn identity<T>(value: T) -> T {
     value
 }
 
+#[allow(unused_macros)]
+macro_rules! assert_refcounts {
+    // We need the result type to generate the test_wrapper, even though we ignore the value!
+    // We can't just call `main` with no args, because some tests return structs, via pointer arg!
+    // Also we need to know how much stack space to reserve for the struct.
+    ($src: expr, $ty: ty, $expected_refcounts: expr) => {{
+        let phantom = std::marker::PhantomData;
+        let num_refcounts = $expected_refcounts.len();
+        let result =
+            $crate::helpers::wasm::assert_wasm_refcounts_help::<$ty>($src, phantom, num_refcounts);
+        match result {
+            Err(msg) => panic!("{:?}", msg),
+            Ok(actual_refcounts) => {
+                assert_eq!(&actual_refcounts, $expected_refcounts)
+            }
+        }
+    }};
+}
+
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
+
+#[allow(unused_imports)]
+pub(crate) use assert_refcounts;

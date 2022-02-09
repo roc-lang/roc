@@ -1,6 +1,9 @@
 use crate::env::Env;
-use crate::expr::{canonicalize_expr, unescape_char, Expr, Output};
-use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
+use crate::num::{
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatBound, IntBound,
+    NumericBound, ParsedNumResult,
+};
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -9,6 +12,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
+
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 #[derive(Clone, Debug, PartialEq)]
@@ -25,14 +29,14 @@ pub enum Pattern {
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
     },
-    IntLiteral(Variable, Box<str>, i64),
-    NumLiteral(Variable, Box<str>, i64),
-    FloatLiteral(Variable, Box<str>, f64),
+    NumLiteral(Variable, Box<str>, IntValue, NumericBound),
+    IntLiteral(Variable, Variable, Box<str>, IntValue, IntBound),
+    FloatLiteral(Variable, Variable, Box<str>, f64, FloatBound),
     StrLiteral(Box<str>),
     Underscore,
 
     // Runtime Exceptions
-    Shadowed(Region, Loc<Ident>),
+    Shadowed(Region, Loc<Ident>, Symbol),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
     // parse error patterns
@@ -65,7 +69,7 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
     use Pattern::*;
 
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             symbols.push(*symbol);
         }
 
@@ -85,15 +89,13 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
             }
         }
 
-        NumLiteral(_, _, _)
-        | IntLiteral(_, _, _)
-        | FloatLiteral(_, _, _)
+        NumLiteral(..)
+        | IntLiteral(..)
+        | FloatLiteral(..)
         | StrLiteral(_)
         | Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => {}
-
-        Shadowed(_, _) => {}
     }
 }
 
@@ -121,13 +123,14 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::Identifier(symbol)
             }
-            Err((original_region, shadow)) => {
+            Err((original_region, shadow, new_symbol)) => {
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                     original_region,
                     shadow: shadow.clone(),
                 }));
+                output.references.bound_symbols.insert(new_symbol);
 
-                Pattern::Shadowed(original_region, shadow)
+                Pattern::Shadowed(original_region, shadow, new_symbol)
             }
         },
         GlobalTag(name) => {
@@ -185,13 +188,19 @@ pub fn canonicalize_pattern<'a>(
             }
         }
 
-        FloatLiteral(str) => match pattern_type {
+        &FloatLiteral(str) => match pattern_type {
             WhenBranch => match finish_parsing_float(str) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(float) => Pattern::FloatLiteral(var_store.fresh(), (*str).into(), float),
+                Ok((float, bound)) => Pattern::FloatLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    float,
+                    bound,
+                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -201,32 +210,58 @@ pub fn canonicalize_pattern<'a>(
             TopLevelDef | DefExpr => bad_underscore(env, region),
         },
 
-        NumLiteral(str) => match pattern_type {
-            WhenBranch => match finish_parsing_int(str) {
+        &NumLiteral(str) => match pattern_type {
+            WhenBranch => match finish_parsing_num(str) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => Pattern::NumLiteral(var_store.fresh(), (*str).into(), int),
+                Ok(ParsedNumResult::UnknownNum(int, bound)) => {
+                    Pattern::NumLiteral(var_store.fresh(), (str).into(), int, bound)
+                }
+                Ok(ParsedNumResult::Int(int, bound)) => Pattern::IntLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    int,
+                    bound,
+                ),
+                Ok(ParsedNumResult::Float(float, bound)) => Pattern::FloatLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    float,
+                    bound,
+                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        NonBase10Literal {
+        &NonBase10Literal {
             string,
             base,
             is_negative,
         } => match pattern_type {
-            WhenBranch => match finish_parsing_base(string, *base, *is_negative) {
+            WhenBranch => match finish_parsing_base(string, base, is_negative) {
                 Err(_error) => {
-                    let problem = MalformedPatternProblem::MalformedBase(*base);
+                    let problem = MalformedPatternProblem::MalformedBase(base);
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => {
-                    let sign_str = if *is_negative { "-" } else { "" };
+                Ok((IntValue::U128(_), _)) if is_negative => {
+                    // Can't negate a u128; that doesn't fit in any integer literal type we support.
+                    let problem = MalformedPatternProblem::MalformedInt;
+                    malformed_pattern(env, problem, region)
+                }
+                Ok((int, bound)) => {
+                    let sign_str = if is_negative { "-" } else { "" };
                     let int_str = format!("{}{}", sign_str, int.to_string()).into_boxed_str();
-                    let i = if *is_negative { -int } else { int };
-                    Pattern::IntLiteral(var_store.fresh(), int_str, i)
+                    let i = match int {
+                        // Safety: this is fine because I128::MAX = |I128::MIN| - 1
+                        IntValue::I128(n) if is_negative => IntValue::I128(-n),
+                        IntValue::I128(n) => IntValue::I128(n),
+                        IntValue::U128(_) => unreachable!(),
+                    };
+                    Pattern::IntLiteral(var_store.fresh(), var_store.fresh(), int_str, i, bound)
                 }
             },
             ptype => unsupported_pattern(env, ptype, region),
@@ -268,7 +303,7 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow)) => {
+                            Err((original_region, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
@@ -278,7 +313,8 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                                opt_erroneous =
+                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
                             }
                         };
                     }
@@ -339,7 +375,7 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow)) => {
+                            Err((original_region, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
@@ -349,7 +385,8 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                                opt_erroneous =
+                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
                             }
                         };
                     }
@@ -452,7 +489,7 @@ fn add_bindings_from_patterns(
     use Pattern::*;
 
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             answer.push((*symbol, *region));
         }
         AppliedTag {
@@ -472,12 +509,11 @@ fn add_bindings_from_patterns(
                 answer.push((*symbol, *region));
             }
         }
-        NumLiteral(_, _, _)
-        | IntLiteral(_, _, _)
-        | FloatLiteral(_, _, _)
+        NumLiteral(..)
+        | IntLiteral(..)
+        | FloatLiteral(..)
         | StrLiteral(_)
         | Underscore
-        | Shadowed(_, _)
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => (),
     }

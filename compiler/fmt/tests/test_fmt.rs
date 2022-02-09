@@ -410,19 +410,19 @@ mod test_fmt {
             indoc!(
                 r#"
                 x = (5)
-    
-    
+
+
                 y = ((10))
-    
+
                 42
                 "#
             ),
             indoc!(
                 r#"
                 x = 5
-    
+
                 y = 10
-    
+
                 42
                 "#
             ),
@@ -766,9 +766,9 @@ mod test_fmt {
 
                 # comment 2
                 x: 42
-                
+
                 # comment 3
-                
+
                 # comment 4
             }"#
             ),
@@ -819,7 +819,7 @@ mod test_fmt {
                 f: {                    y : Int *,
                                          x : Int * ,
                    }
-                
+
                 f"#
             ),
             indoc!(
@@ -910,7 +910,7 @@ mod test_fmt {
                     {
                         # comment
                     }
-                
+
                 f"#
             ),
         );
@@ -935,7 +935,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 f :
-                    { 
+                    {
                         x: Int * # comment 1
                         ,
                         # comment 2
@@ -951,7 +951,7 @@ mod test_fmt {
                         # comment 1
                         # comment 2
                     }
-                
+
                 f"#
             ),
         );
@@ -1007,7 +1007,7 @@ mod test_fmt {
             indoc!(
                 r#"
                     identity = \a
-                        -> 
+                        ->
                             a + b
 
                     identity 4010
@@ -1387,7 +1387,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-            {    
+            {
             }"#
             ),
             "{}",
@@ -2641,6 +2641,25 @@ mod test_fmt {
     }
 
     #[test]
+    fn multi_line_interface() {
+        module_formats_same(indoc!(
+            r#"
+                interface Foo
+                    exposes
+                        [
+                            Stuff,
+                            Things,
+                            somethingElse,
+                        ]
+                    imports
+                        [
+                            Blah,
+                            Baz.{ stuff, things },
+                        ]"#
+        ));
+    }
+
+    #[test]
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
@@ -2652,18 +2671,45 @@ mod test_fmt {
     fn single_line_platform() {
         module_formats_same(
             "platform \"folkertdev/foo\" \
-            requires { model=>Model, msg=>Msg } { main : Effect {} } \
+            requires { Model, Msg } { main : Effect {} } \
             exposes [] \
             packages {} \
             imports [ Task.{ Task } ] \
-            provides [ mainForHost ] \
-            effects fx.Effect \
-            { \
-                putLine : Str -> Effect {}, \
-                putInt : I64 -> Effect {}, \
-                getInt : Effect { value : I64, errorCode : [ A, B ], isError : Bool } \
-            }",
+            provides [ mainForHost ]",
         );
+    }
+
+    #[test]
+    fn single_line_hosted() {
+        module_formats_same(indoc!(
+            r#"
+                hosted Foo exposes [] imports [] generates Bar with []"#
+        ));
+    }
+
+    #[test]
+    fn multi_line_hosted() {
+        module_formats_same(indoc!(
+            r#"
+                hosted Foo
+                    exposes
+                        [
+                            Stuff,
+                            Things,
+                            somethingElse,
+                        ]
+                    imports
+                        [
+                            Blah,
+                            Baz.{ stuff, things },
+                        ]
+                    generates Bar with
+                        [
+                            map,
+                            after,
+                            loop,
+                        ]"#
+        ));
     }
 
     /// Annotations and aliases
@@ -2763,7 +2809,7 @@ mod test_fmt {
                         # comment 2
                         # comment 3
                     ]
-    
+
                 b
                 "#
             ),

@@ -48,8 +48,6 @@ impl Progress {
 pub enum SyntaxError<'a> {
     Unexpected(Region),
     OutdentedTooFar,
-    ConditionFailed,
-    LineTooLong(u32 /* which line was too long */),
     TooManyLines,
     Eof(Region),
     InvalidPattern,
@@ -60,7 +58,7 @@ pub enum SyntaxError<'a> {
     Todo,
     Type(EType<'a>),
     Pattern(EPattern<'a>),
-    Expr(EExpr<'a>),
+    Expr(EExpr<'a>, Position),
     Header(EHeader<'a>),
     Space(BadInputError),
     NotEndOfFile(Position),
@@ -73,7 +71,8 @@ pub enum EHeader<'a> {
     Imports(EImports, Position),
     Requires(ERequires<'a>, Position),
     Packages(EPackages<'a>, Position),
-    Effects(EEffects<'a>, Position),
+    Generates(EGenerates, Position),
+    GeneratesWith(EGeneratesWith, Position),
 
     Space(BadInputError, Position),
     Start(Position),
@@ -167,22 +166,6 @@ pub enum EPackageEntry<'a> {
     Space(BadInputError, Position),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EEffects<'a> {
-    Space(BadInputError, Position),
-    Effects(Position),
-    Open(Position),
-    IndentEffects(Position),
-    ListStart(Position),
-    ListEnd(Position),
-    IndentListStart(Position),
-    IndentListEnd(Position),
-    TypedIdent(ETypedIdent<'a>, Position),
-    ShorthandDot(Position),
-    Shorthand(Position),
-    TypeName(Position),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EImports {
     Open(Position),
@@ -205,40 +188,85 @@ pub enum EImports {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EGenerates {
+    Open(Position),
+    Generates(Position),
+    IndentGenerates(Position),
+    Identifier(Position),
+    Space(BadInputError, Position),
+    IndentTypeStart(Position),
+    IndentTypeEnd(Position),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EGeneratesWith {
+    Open(Position),
+    With(Position),
+    IndentWith(Position),
+    IndentListStart(Position),
+    IndentListEnd(Position),
+    ListStart(Position),
+    ListEnd(Position),
+    Identifier(Position),
+    Space(BadInputError, Position),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadInputError {
     HasTab,
     ///
-    LineTooLong,
     TooManyLines,
     ///
     ///
     BadUtf8,
 }
 
-pub fn bad_input_to_syntax_error<'a>(bad_input: BadInputError, pos: Position) -> SyntaxError<'a> {
+pub fn bad_input_to_syntax_error<'a>(bad_input: BadInputError) -> SyntaxError<'a> {
     use crate::parser::BadInputError::*;
     match bad_input {
         HasTab => SyntaxError::NotYetImplemented("call error on tabs".to_string()),
-        LineTooLong => SyntaxError::LineTooLong(pos.line),
         TooManyLines => SyntaxError::TooManyLines,
         BadUtf8 => SyntaxError::BadUtf8,
     }
 }
 
-impl<'a> SyntaxError<'a> {
-    pub fn into_parse_problem(
-        self,
-        filename: std::path::PathBuf,
-        prefix: &'a str,
-        bytes: &'a [u8],
-    ) -> ParseProblem<'a, SyntaxError<'a>> {
-        ParseProblem {
-            pos: Position::default(),
+impl<'a, T> SourceError<'a, T> {
+    pub fn new(problem: T, state: &State<'a>) -> Self {
+        Self {
+            problem,
+            bytes: state.original_bytes(),
+        }
+    }
+
+    pub fn map_problem<E>(self, f: impl FnOnce(T) -> E) -> SourceError<'a, E> {
+        SourceError {
+            problem: f(self.problem),
+            bytes: self.bytes,
+        }
+    }
+
+    pub fn into_file_error(self, filename: std::path::PathBuf) -> FileError<'a, T> {
+        FileError {
             problem: self,
             filename,
-            bytes,
-            prefix,
         }
+    }
+}
+
+impl<'a> SyntaxError<'a> {
+    pub fn into_source_error(self, state: &State<'a>) -> SourceError<'a, SyntaxError<'a>> {
+        SourceError {
+            problem: self,
+            bytes: state.original_bytes(),
+        }
+    }
+
+    pub fn into_file_error(
+        self,
+        filename: std::path::PathBuf,
+        state: &State<'a>,
+    ) -> FileError<'a, SyntaxError<'a>> {
+        self.into_source_error(state).into_file_error(filename)
     }
 }
 
@@ -293,7 +321,6 @@ pub enum EExpr<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ENumber {
     End,
-    LineTooLong,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -397,7 +424,7 @@ pub enum EWhen<'a> {
     IndentArrow(Position),
     IndentBranch(Position),
     IndentIfGuard(Position),
-    PatternAlignment(u16, Position),
+    PatternAlignment(u32, Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -562,13 +589,15 @@ pub enum ETypeInlineAlias {
 }
 
 #[derive(Debug)]
-pub struct ParseProblem<'a, T> {
-    pub pos: Position,
+pub struct SourceError<'a, T> {
     pub problem: T,
-    pub filename: std::path::PathBuf,
     pub bytes: &'a [u8],
-    /// prefix is usually the header (for parse problems in the body), or empty
-    pub prefix: &'a str,
+}
+
+#[derive(Debug)]
+pub struct FileError<'a, T> {
+    pub problem: SourceError<'a, T>,
+    pub filename: std::path::PathBuf,
 }
 
 pub trait Parser<'a, Output, Error> {
@@ -723,23 +752,21 @@ where
         let width = keyword.len();
 
         if !state.bytes().starts_with(keyword.as_bytes()) {
-            return Err((NoProgress, if_error(state.pos), state));
+            return Err((NoProgress, if_error(state.pos()), state));
         }
 
         // the next character should not be an identifier character
         // to prevent treating `whence` or `iffy` as keywords
         match state.bytes().get(width) {
             Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' => {
-                state.pos.column += width as u16;
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
             None => {
-                state.pos.column += width as u16;
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
-            Some(_) => Err((NoProgress, if_error(state.pos), state)),
+            Some(_) => Err((NoProgress, if_error(state.pos()), state)),
         }
     }
 }
@@ -964,7 +991,7 @@ where
                                     return Err((MadeProgress, fail, state));
                                 }
                                 Err((NoProgress, _fail, state)) => {
-                                    return Err((NoProgress, to_element_error(state.pos), state));
+                                    return Err((NoProgress, to_element_error(state.pos()), state));
                                 }
                             }
                         }
@@ -989,7 +1016,7 @@ where
 
             Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
             Err((NoProgress, _fail, state)) => {
-                Err((NoProgress, to_element_error(state.pos), state))
+                Err((NoProgress, to_element_error(state.pos()), state))
             }
         }
     }
@@ -1039,11 +1066,11 @@ macro_rules! loc {
         move |arena, state: $crate::state::State<'a>| {
             use roc_region::all::{Loc, Region};
 
-            let start = state.pos;
+            let start = state.pos();
 
             match $parser.parse(arena, state) {
                 Ok((progress, value, state)) => {
-                    let end = state.pos;
+                    let end = state.pos();
                     let region = Region::new(start, end);
 
                     Ok((progress, Loc { region, value }, state))
@@ -1245,7 +1272,7 @@ macro_rules! one_of_with_error {
             match $p1.parse(arena, state) {
                 valid @ Ok(_) => valid,
                 Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state )),
-                Err((NoProgress, _, state)) => Err((MadeProgress, $toerror(state.pos), state)),
+                Err((NoProgress, _, state)) => Err((MadeProgress, $toerror(state.pos()), state)),
             }
         }
     };
@@ -1263,7 +1290,23 @@ where
 {
     move |a, s| match parser.parse(a, s) {
         Ok(t) => Ok(t),
-        Err((p, error, s)) => Err((p, map_error(error, s.pos), s)),
+        Err((p, error, s)) => Err((p, map_error(error, s.pos()), s)),
+    }
+}
+
+/// Like `specialize`, except the error function receives a Region representing the begin/end of the error
+pub fn specialize_region<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
+where
+    F: Fn(X, Region) -> Y,
+    P: Parser<'a, T, X>,
+    Y: 'a,
+{
+    move |a, s: State<'a>| {
+        let start = s.pos();
+        match parser.parse(a, s) {
+            Ok(t) => Ok(t),
+            Err((p, error, s)) => Err((p, map_error(error, Region::new(start, s.pos())), s)),
+        }
     }
 }
 
@@ -1276,7 +1319,7 @@ where
 {
     move |a, s| match parser.parse(a, s) {
         Ok(t) => Ok(t),
-        Err((p, error, s)) => Err((p, map_error(a.alloc(error), s.pos), s)),
+        Err((p, error, s)) => Err((p, map_error(a.alloc(error), s.pos()), s)),
     }
 }
 
@@ -1289,11 +1332,10 @@ where
 
     move |_arena: &'a Bump, state: State<'a>| match state.bytes().get(0) {
         Some(x) if *x == word => {
-            let mut state = state.advance(1);
-            state.pos.column += 1;
+            let state = state.advance(1);
             Ok((MadeProgress, (), state))
         }
-        _ => Err((NoProgress, to_error(state.pos), state)),
+        _ => Err((NoProgress, to_error(state.pos()), state)),
     }
 }
 
@@ -1309,16 +1351,15 @@ where
 
     move |_arena: &'a Bump, state: State<'a>| {
         if state.bytes().starts_with(&needle) {
-            let mut state = state.advance(2);
-            state.pos.column += 2;
+            let state = state.advance(2);
             Ok((MadeProgress, (), state))
         } else {
-            Err((NoProgress, to_error(state.pos), state))
+            Err((NoProgress, to_error(state.pos()), state))
         }
     }
 }
 
-pub fn check_indent<'a, TE, E>(min_indent: u16, to_problem: TE) -> impl Parser<'a, (), E>
+pub fn check_indent<'a, TE, E>(min_indent: u32, to_problem: TE) -> impl Parser<'a, (), E>
 where
     TE: Fn(Position) -> E,
     E: 'a,
@@ -1326,7 +1367,7 @@ where
     move |_arena, state: State<'a>| {
         dbg!(state.indent_column, min_indent);
         if state.indent_column < min_indent {
-            Err((NoProgress, to_problem(state.pos), state))
+            Err((NoProgress, to_problem(state.pos()), state))
         } else {
             Ok((NoProgress, (), state))
         }

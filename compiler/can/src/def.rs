@@ -277,7 +277,7 @@ pub fn canonicalize_defs<'a>(
         let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
         let mut is_phantom = false;
 
-        for loc_lowercase in vars {
+        for loc_lowercase in vars.iter() {
             if let Some(var) = can_ann
                 .introduced_variables
                 .var_by_name(&loc_lowercase.value)
@@ -303,23 +303,42 @@ pub fn canonicalize_defs<'a>(
             continue;
         }
 
+        let mut is_nested_datatype = false;
         if can_ann.typ.contains_symbol(symbol) {
-            make_tag_union_recursive(
+            let alias_args = can_vars
+                .iter()
+                .map(|l| (l.value.0.clone(), Type::Variable(l.value.1)))
+                .collect::<Vec<_>>();
+            let alias_region =
+                Region::across_all([name.region].iter().chain(vars.iter().map(|l| &l.region)));
+
+            let made_recursive = make_tag_union_recursive(
                 env,
-                symbol,
+                Loc::at(alias_region, (symbol, &alias_args)),
                 name.region,
                 vec![],
                 &mut can_ann.typ,
                 var_store,
+                // Don't report any errors yet. We'll take care of self and mutual
+                // recursion errors after the sorted introductions are complete.
                 &mut false,
             );
+
+            is_nested_datatype = made_recursive.is_err();
         }
 
-        scope.add_alias(symbol, ann.region, can_vars.clone(), can_ann.typ.clone());
+        if is_nested_datatype {
+            // Bail out
+            continue;
+        }
+
+        scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
         let alias = scope.lookup_alias(symbol).expect("alias is added to scope");
         aliases.insert(symbol, alias.clone());
     }
 
+    // Now that we know the alias dependency graph, we can try to insert recursion variables
+    // where aliases are recursive tag unions, or detect illegal recursions.
     correct_mutual_recursive_type_alias(env, &mut aliases, var_store);
 
     // Now that we have the scope completely assembled, and shadowing resolved,
@@ -805,7 +824,7 @@ fn pattern_to_vars_by_symbol(
 ) {
     use Pattern::*;
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             vars_by_symbol.insert(*symbol, expr_var);
         }
 
@@ -821,15 +840,13 @@ fn pattern_to_vars_by_symbol(
             }
         }
 
-        NumLiteral(_, _, _)
-        | IntLiteral(_, _, _)
-        | FloatLiteral(_, _, _)
+        NumLiteral(..)
+        | IntLiteral(..)
+        | FloatLiteral(..)
         | StrLiteral(_)
         | Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => {}
-
-        Shadowed(_, _) => {}
     }
 }
 
@@ -880,7 +897,7 @@ fn canonicalize_pending_def<'a>(
                 Pattern::Identifier(symbol) => RuntimeError::NoImplementationNamed {
                     def_symbol: *symbol,
                 },
-                Pattern::Shadowed(region, loc_ident) => RuntimeError::Shadowing {
+                Pattern::Shadowed(region, loc_ident, _new_symbol) => RuntimeError::Shadowing {
                     original_region: *region,
                     shadow: loc_ident.clone(),
                 },
@@ -962,66 +979,7 @@ fn canonicalize_pending_def<'a>(
             }
         }
 
-        Alias {
-            name, ann, vars, ..
-        } => {
-            let symbol = name.value;
-            let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
-
-            // Record all the annotation's references in output.references.lookups
-
-            for symbol in can_ann.references {
-                output.references.lookups.insert(symbol);
-                output.references.referenced_aliases.insert(symbol);
-            }
-
-            let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
-
-            for loc_lowercase in vars {
-                if let Some(var) = can_ann
-                    .introduced_variables
-                    .var_by_name(&loc_lowercase.value)
-                {
-                    // This is a valid lowercase rigid var for the alias.
-                    can_vars.push(Loc {
-                        value: (loc_lowercase.value.clone(), *var),
-                        region: loc_lowercase.region,
-                    });
-                } else {
-                    env.problems.push(Problem::PhantomTypeArgument {
-                        alias: symbol,
-                        variable_region: loc_lowercase.region,
-                        variable_name: loc_lowercase.value.clone(),
-                    });
-                }
-            }
-
-            scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
-
-            if can_ann.typ.contains_symbol(symbol) {
-                // the alias is recursive. If it's a tag union, we attempt to fix this
-                if let Type::TagUnion(tags, ext) = can_ann.typ {
-                    // re-canonicalize the alias with the alias already in scope
-                    let rec_var = var_store.fresh();
-                    let mut rec_type_union = Type::RecursiveTagUnion(rec_var, tags, ext);
-                    rec_type_union.substitute_alias(symbol, &Type::Variable(rec_var));
-
-                    scope.add_alias(symbol, name.region, can_vars, rec_type_union);
-                } else {
-                    env.problems
-                        .push(Problem::CyclicAlias(symbol, name.region, vec![]));
-                    return output;
-                }
-            }
-
-            let alias = scope.lookup_alias(symbol).expect("alias was not added");
-            aliases.insert(symbol, alias.clone());
-
-            output
-                .introduced_variables
-                .union(&can_ann.introduced_variables);
-        }
-
+        Alias { .. } => unreachable!("Aliases are handled in a separate pass"),
         InvalidAlias => {
             // invalid aliases (shadowed, incorrect patterns) get ignored
         }
@@ -1557,7 +1515,7 @@ fn to_pending_def<'a>(
                     ))
                 }
 
-                Err((original_region, loc_shadowed_symbol)) => {
+                Err((original_region, loc_shadowed_symbol, _new_symbol)) => {
                     env.problem(Problem::ShadowingInAnnotation {
                         original_region,
                         shadow: loc_shadowed_symbol,
@@ -1681,9 +1639,16 @@ fn correct_mutual_recursive_type_alias<'a>(
                             var_store,
                             &mut ImSet::default(),
                         );
-                        make_tag_union_recursive(
+
+                        let alias_args = &alias
+                            .type_variables
+                            .iter()
+                            .map(|l| (l.value.0.clone(), Type::Variable(l.value.1)))
+                            .collect::<Vec<_>>();
+
+                        let _made_recursive = make_tag_union_recursive(
                             env,
-                            *rec,
+                            Loc::at(alias.header_region(), (*rec, alias_args)),
                             alias.region,
                             others,
                             &mut alias.typ,
@@ -1697,25 +1662,71 @@ fn correct_mutual_recursive_type_alias<'a>(
     }
 }
 
+/// Attempt to make a tag union recursive at the position of `recursive_alias`; for example,
+///
+/// ```roc
+/// [ Cons a (ConsList a), Nil ] as ConsList a
+/// ```
+///
+/// can be made recursive at the position "ConsList a" with a fresh recursive variable, say r1:
+///
+/// ```roc
+/// [ Cons a r1, Nil ] as r1
+/// ```
+///
+/// Returns `Err` if the tag union is recursive, but there is no structure-preserving recursion
+/// variable for it. This can happen when the type is a nested datatype, for example in either of
+///
+/// ```roc
+/// Nested a : [ Chain a (Nested (List a)), Term ]
+/// DuoList a b : [ Cons a (DuoList b a), Nil ]
+/// ```
+///
+/// When `Err` is returned, a problem will be added to `env`.
 fn make_tag_union_recursive<'a>(
     env: &mut Env<'a>,
-    symbol: Symbol,
+    recursive_alias: Loc<(Symbol, &[(Lowercase, Type)])>,
     region: Region,
     others: Vec<Symbol>,
     typ: &mut Type,
     var_store: &mut VarStore,
     can_report_error: &mut bool,
-) {
+) -> Result<(), ()> {
+    let Loc {
+        value: (symbol, args),
+        region: alias_region,
+    } = recursive_alias;
+    let vars = args.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
     match typ {
         Type::TagUnion(tags, ext) => {
             let rec_var = var_store.fresh();
-            *typ = Type::RecursiveTagUnion(rec_var, tags.to_vec(), ext.clone());
-            typ.substitute_alias(symbol, &Type::Variable(rec_var));
+            let mut pending_typ = Type::RecursiveTagUnion(rec_var, tags.to_vec(), ext.clone());
+            let substitution_result =
+                pending_typ.substitute_alias(symbol, &vars, &Type::Variable(rec_var));
+            match substitution_result {
+                Ok(()) => {
+                    // We can substitute the alias presence for the variable exactly.
+                    *typ = pending_typ;
+                    Ok(())
+                }
+                Err(differing_recursion_region) => {
+                    env.problems.push(Problem::NestedDatatype {
+                        alias: symbol,
+                        def_region: alias_region,
+                        differing_recursion_region,
+                    });
+                    Err(())
+                }
+            }
         }
-        Type::RecursiveTagUnion(_, _, _) => {}
-        Type::Alias { actual, .. } => make_tag_union_recursive(
+        Type::RecursiveTagUnion(_, _, _) => Ok(()),
+        Type::Alias {
+            actual,
+            type_arguments,
+            ..
+        } => make_tag_union_recursive(
             env,
-            symbol,
+            Loc::at_zero((symbol, type_arguments)),
             region,
             others,
             actual,
@@ -1733,6 +1744,7 @@ fn make_tag_union_recursive<'a>(
                 let problem = Problem::CyclicAlias(symbol, region, others);
                 env.problems.push(problem);
             }
+            Ok(())
         }
     }
 }

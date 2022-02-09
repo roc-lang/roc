@@ -1,3 +1,4 @@
+use roc_builtins::bitcode;
 use std::env;
 use std::ffi::OsStr;
 use std::path::Path;
@@ -5,8 +6,6 @@ use std::process::Command;
 
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
 const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
-const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
-const COMPILER_RT_PATH_VAR: &str = "TEST_GEN_WASM_COMPILER_RT_PATH";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -20,8 +19,7 @@ fn build_wasm() {
 
     println!("cargo:rustc-env={}={}", OUT_DIR_VAR, out_dir);
 
-    build_wasm_test_platform(&out_dir);
-    build_wasm_libc(&out_dir);
+    build_wasm_platform_and_builtins(&out_dir);
 }
 
 fn zig_executable() -> String {
@@ -31,52 +29,29 @@ fn zig_executable() -> String {
     }
 }
 
-fn build_wasm_test_platform(out_dir: &str) {
+/// Create an all-in-one object file: platform + builtins + libc
+fn build_wasm_platform_and_builtins(out_dir: &str) {
     println!("cargo:rerun-if-changed=src/helpers/{}.c", PLATFORM_FILENAME);
 
-    run_command(
-        Path::new("."),
-        &zig_executable(),
-        [
-            "build-obj",
-            "-target",
-            "wasm32-wasi",
-            "-lc",
-            &format!("src/helpers/{}.c", PLATFORM_FILENAME),
-            &format!("-femit-bin={}/{}.o", out_dir, PLATFORM_FILENAME),
-        ],
-    );
-}
+    // See discussion with Luuk de Gram (Zig contributor)
+    // https://github.com/rtfeldman/roc/pull/2181#pullrequestreview-839608063
+    // This builds a library file that exports everything. It has no linker data but we don't need that.
+    let args = [
+        "build-lib",
+        "-target",
+        "wasm32-wasi",
+        "-lc",
+        "-dynamic", // -dynamic ensures libc code goes into the binary
+        bitcode::BUILTINS_WASM32_OBJ_PATH,
+        &format!("src/helpers/{}.c", PLATFORM_FILENAME),
+        &format!("-femit-bin={}/{}.o", out_dir, PLATFORM_FILENAME),
+    ];
 
-fn build_wasm_libc(out_dir: &str) {
-    let source_path = "src/helpers/dummy_libc_program.c";
-    println!("cargo:rerun-if-changed={}", source_path);
-    let cwd = Path::new(".");
-    let zig_cache_dir = format!("{}/zig-cache-wasm32", out_dir);
+    let zig = zig_executable();
 
-    run_command(
-        cwd,
-        &zig_executable(),
-        [
-            "build-exe", // must be an executable or it won't compile libc
-            "-target",
-            "wasm32-wasi",
-            "-lc",
-            source_path,
-            "-femit-bin=/dev/null",
-            "--global-cache-dir",
-            &zig_cache_dir,
-        ],
-    );
+    // println!("{} {}", zig, args.join(" "));
 
-    let libc_path = run_command(cwd, "find", [&zig_cache_dir, "-name", "libc.a"]);
-    let compiler_rt_path = run_command(cwd, "find", [&zig_cache_dir, "-name", "compiler_rt.o"]);
-
-    println!("cargo:rustc-env={}={}", LIBC_PATH_VAR, libc_path);
-    println!(
-        "cargo:rustc-env={}={}",
-        COMPILER_RT_PATH_VAR, compiler_rt_path
-    );
+    run_command(Path::new("."), &zig, args);
 }
 
 fn feature_is_enabled(feature_name: &str) -> bool {

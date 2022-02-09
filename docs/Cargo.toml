@@ -18,6 +18,7 @@ roc_module = { path = "../compiler/module" }
 roc_region = { path = "../compiler/region" }
 roc_types = { path = "../compiler/types" }
 roc_parse = { path = "../compiler/parse" }
+roc_target = { path = "../compiler/roc_target" }
 roc_collections = { path = "../compiler/collections" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 snafu = { version = "0.6.10", features = ["backtraces"] }

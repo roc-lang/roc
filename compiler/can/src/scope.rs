@@ -110,15 +110,21 @@ impl Scope {
         exposed_ident_ids: &IdentIds,
         all_ident_ids: &mut IdentIds,
         region: Region,
-    ) -> Result<Symbol, (Region, Loc<Ident>)> {
+    ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
         match self.idents.get(&ident) {
-            Some((_, original_region)) => {
+            Some(&(_, original_region)) => {
                 let shadow = Loc {
-                    value: ident,
+                    value: ident.clone(),
                     region,
                 };
 
-                Err((*original_region, shadow))
+                let ident_id = all_ident_ids.add(ident.clone());
+                let symbol = Symbol::new(self.home, ident_id);
+
+                self.symbols.insert(symbol, region);
+                self.idents.insert(ident, (symbol, region));
+
+                Err((original_region, shadow, symbol))
             }
             None => {
                 // If this IdentId was already added previously

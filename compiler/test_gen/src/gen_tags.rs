@@ -23,9 +23,9 @@ fn width_and_alignment_u8_u8() {
 
     let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
 
-    let ptr_width = 8;
-    assert_eq!(layout.alignment_bytes(ptr_width), 1);
-    assert_eq!(layout.stack_size(ptr_width), 2);
+    let target_info = roc_target::TargetInfo::default_x86_64();
+    assert_eq!(layout.alignment_bytes(target_info), 1);
+    assert_eq!(layout.stack_size(target_info), 2);
 }
 
 #[test]
@@ -1240,6 +1240,237 @@ fn tag_must_be_its_own_type() {
             "#
         ),
         1,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn recursive_tag_union_into_flat_tag_union() {
+    // Comprehensive test for correctness in cli/tests/repl_eval
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Item : [ Shallow [ L Str, R Str ], Deep Item ]
+            i : Item
+            i = Deep (Shallow (R "woo"))
+            i
+            "#
+        ),
+        0,
+        usize,
+        |_| 0
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            b = False
+            f : Bool, [True, False, Idk] -> U8
+            f = \_, _ -> 18
+            f b b
+            "#
+        ),
+        18,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_applied_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main =
+                a = A "abc"
+                f = \x ->
+                    when x is
+                        A y -> y
+                        B y -> y
+                f a
+            "#
+        ),
+        RocStr::from_slice(b"abc"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_tag_with_polymorphic_arg() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                a = A
+                wrap = Wrapped a
+
+                useWrap1 : [Wrapped [A], Other] -> U8
+                useWrap1 =
+                    \w -> when w is
+                        Wrapped A -> 2
+                        Other -> 3
+
+                useWrap2 : [Wrapped [A, B]] -> U8
+                useWrap2 =
+                    \w -> when w is
+                        Wrapped A -> 5
+                        Wrapped B -> 7
+
+                useWrap1 wrap * useWrap2 wrap
+            "#
+        ),
+        10,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                mono : U8
+                mono = 15
+                poly = A
+                wrap = Wrapped poly mono
+
+                useWrap1 : [Wrapped [A] U8, Other] -> U8
+                useWrap1 =
+                    \w -> when w is
+                        Wrapped A n -> n
+                        Other -> 0
+
+                useWrap2 : [Wrapped [A, B] U8] -> U8
+                useWrap2 =
+                    \w -> when w is
+                        Wrapped A n -> n
+                        Wrapped B _ -> 0
+
+                useWrap1 wrap * useWrap2 wrap
+            "#
+        ),
+        225,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2365_monomorphize_tag_with_non_empty_ext_var() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Single a : [A, B, C]a
+            Compound a : Single [D, E, F]a
+
+            single : {} -> Single *
+            single = \{} -> C
+
+            compound : {} -> Compound *
+            compound = \{} -> single {}
+
+            main = compound {}
+            "#
+        ),
+        2, // C
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Single a : [A, B, C]a
+            Compound a : Single [D, E, F]a
+
+            single : {} -> Result Str (Single *)
+            single = \{} -> Err C
+
+            compound : {} -> Result Str (Compound *)
+            compound = \{} ->
+                when single {} is
+                    Ok s -> Ok s
+                    Err e -> Err e
+
+            main = compound {}
+            "#
+        ),
+        2, // C
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Single a : [A, B, C]a
+            Compound a : Single [D, E, F]a
+
+            main =
+                single : {} -> Result Str (Single *)
+                single = \{} -> Err C
+
+                compound : {} -> Result Str (Compound *)
+                compound = \{} ->
+                    when single {} is
+                        Ok s -> Ok s
+                        Err e -> Err e
+
+                compound {}
+            "#
+        ),
+        2, // C
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_2445() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            none : [ None, Update a ]
+            none = None
+
+            press : [ None, Update U8 ]
+            press = none
+
+            main =
+                when press is
+                    None -> 15
+                    Update _ -> 25
+            "#
+        ),
+        15,
         i64
     );
 }

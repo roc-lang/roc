@@ -1,10 +1,10 @@
 Defs(
     [
-        |L 0-1, C 0-6| Annotation(
-            |L 0-0, C 0-1| Identifier(
+        @0-19 Annotation(
+            @0-1 Identifier(
                 "f",
             ),
-            |L 1-1, C 4-6| SpaceBefore(
+            @17-19 SpaceBefore(
                 Record {
                     fields: [],
                     ext: None,
@@ -17,7 +17,7 @@ Defs(
             ),
         ),
     ],
-    |L 3-3, C 0-2| SpaceBefore(
+    @21-23 SpaceBefore(
         Num(
             "42",
         ),

@@ -2,9 +2,10 @@
 #![no_std]
 use core::convert::From;
 use core::ffi::c_void;
+use core::fmt::{self, Display, Formatter};
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
-use core::{fmt, mem, ptr, slice};
+use core::{mem, ptr, slice};
 
 // A list of C functions that are being imported
 extern "C" {
@@ -674,14 +675,30 @@ impl From<&str> for RocStr {
     }
 }
 
+impl Display for RocStr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.as_str().fmt(f)
+    }
+}
+
 impl fmt::Debug for RocStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // RocStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
-        f.debug_struct("RocStr")
-            .field("is_small_str", &self.is_small_str())
-            .field("storage", &self.storage())
-            .field("elements", &self.as_slice())
-            .finish()
+
+        match core::str::from_utf8(self.as_slice()) {
+            Ok(string) => f
+                .debug_struct("RocStr")
+                .field("is_small_str", &self.is_small_str())
+                .field("storage", &self.storage())
+                .field("string_contents", &string)
+                .finish(),
+            Err(_) => f
+                .debug_struct("RocStr")
+                .field("is_small_str", &self.is_small_str())
+                .field("storage", &self.storage())
+                .field("byte_contents", &self.as_slice())
+                .finish(),
+        }
     }
 }
 

@@ -1,18 +1,18 @@
 procedure Test.0 ():
-    let Test.10 = 1i64;
-    let Test.11 = 2i64;
-    let Test.5 = These Test.10 Test.11;
-    let Test.9 = GetTagId Test.5;
+    let Test.10 : Builtin(Int(I64)) = 1i64;
+    let Test.11 : Builtin(Int(I64)) = 2i64;
+    let Test.5 : Union(NonRecursive([[Builtin(Int(I64))], [Builtin(Int(I64)), Builtin(Int(I64))], [Builtin(Int(I64))]])) = These Test.10 Test.11;
+    let Test.9 : Builtin(Int(U8)) = GetTagId Test.5;
     switch Test.9:
         case 2:
-            let Test.2 = UnionAtIndex (Id 2) (Index 0) Test.5;
+            let Test.2 : Builtin(Int(I64)) = UnionAtIndex (Id 2) (Index 0) Test.5;
             ret Test.2;
     
         case 0:
-            let Test.3 = UnionAtIndex (Id 0) (Index 0) Test.5;
+            let Test.3 : Builtin(Int(I64)) = UnionAtIndex (Id 0) (Index 0) Test.5;
             ret Test.3;
     
         default:
-            let Test.4 = UnionAtIndex (Id 1) (Index 0) Test.5;
+            let Test.4 : Builtin(Int(I64)) = UnionAtIndex (Id 1) (Index 0) Test.5;
             ret Test.4;
     

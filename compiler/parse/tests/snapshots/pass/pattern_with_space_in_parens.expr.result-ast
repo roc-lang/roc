@@ -1,16 +1,16 @@
 When(
-    |L 0-0, C 5-22| Apply(
-        |L 0-0, C 5-11| GlobalTag(
+    @5-22 Apply(
+        @5-11 GlobalTag(
             "Delmin",
         ),
         [
-            |L 0-0, C 13-19| ParensAround(
+            @13-19 ParensAround(
                 Apply(
-                    |L 0-0, C 13-16| GlobalTag(
+                    @13-16 GlobalTag(
                         "Del",
                     ),
                     [
-                        |L 0-0, C 17-19| Var {
+                        @17-19 Var {
                             module_name: "",
                             ident: "rx",
                         },
@@ -18,7 +18,7 @@ When(
                     Space,
                 ),
             ),
-            |L 0-0, C 21-22| Num(
+            @21-22 Num(
                 "0",
             ),
         ],
@@ -27,23 +27,23 @@ When(
     [
         WhenBranch {
             patterns: [
-                |L 1-1, C 4-22| SpaceBefore(
+                @30-48 SpaceBefore(
                     Apply(
-                        |L 1-1, C 4-10| GlobalTag(
+                        @30-36 GlobalTag(
                             "Delmin",
                         ),
                         [
-                            |L 1-1, C 12-18| Apply(
-                                |L 1-1, C 12-15| GlobalTag(
+                            @38-44 Apply(
+                                @38-41 GlobalTag(
                                     "Del",
                                 ),
                                 [
-                                    |L 1-1, C 16-18| Identifier(
+                                    @42-44 Identifier(
                                         "ry",
                                     ),
                                 ],
                             ),
-                            |L 1-1, C 21-22| Underscore(
+                            @47-48 Underscore(
                                 "",
                             ),
                         ],
@@ -53,21 +53,21 @@ When(
                     ],
                 ),
             ],
-            value: |L 1-1, C 26-47| Apply(
-                |L 1-1, C 26-30| GlobalTag(
+            value: @52-73 Apply(
+                @52-56 GlobalTag(
                     "Node",
                 ),
                 [
-                    |L 1-1, C 31-36| GlobalTag(
+                    @57-62 GlobalTag(
                         "Black",
                     ),
-                    |L 1-1, C 37-38| Num(
+                    @63-64 Num(
                         "0",
                     ),
-                    |L 1-1, C 39-44| GlobalTag(
+                    @65-70 GlobalTag(
                         "False",
                     ),
-                    |L 1-1, C 45-47| Var {
+                    @71-73 Var {
                         module_name: "",
                         ident: "ry",
                     },

@@ -1,16 +1,16 @@
 SpaceBefore(
     Defs(
         [
-            |L 1-1, C 0-3| Body(
-                |L 1-1, C 0-1| Identifier(
+            @18-21 Body(
+                @18-19 Identifier(
                     "x",
                 ),
-                |L 1-1, C 2-3| Num(
+                @20-21 Num(
                     "5",
                 ),
             ),
         ],
-        |L 3-3, C 0-2| SpaceBefore(
+        @23-25 SpaceBefore(
             Num(
                 "42",
             ),

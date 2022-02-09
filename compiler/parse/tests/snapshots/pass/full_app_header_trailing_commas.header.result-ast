@@ -1,26 +1,26 @@
 App {
     header: AppHeader {
-        name: |L 0-0, C 4-15| PlainLine(
+        name: @4-15 PlainLine(
             "quicksort",
         ),
         packages: [
-            |L 1-1, C 15-31| PackageEntry {
+            @31-47 PackageEntry {
                 shorthand: "pf",
                 spaces_after_shorthand: [],
-                package_name: |L 1-1, C 19-31| PackageName(
+                package_name: @35-47 PackageName(
                     "./platform",
                 ),
             },
         ],
         imports: [
-            |L 2-6, C 14-5| Package(
+            @65-141 Package(
                 "foo",
                 ModuleName(
                     "Bar",
                 ),
                 Collection {
                     items: [
-                        |L 3-3, C 8-11| SpaceBefore(
+                        @83-86 SpaceBefore(
                             ExposedName(
                                 "Baz",
                             ),
@@ -28,7 +28,7 @@ App {
                                 Newline,
                             ],
                         ),
-                        |L 4-4, C 8-16| SpaceBefore(
+                        @96-104 SpaceBefore(
                             ExposedName(
                                 "FortyTwo",
                             ),
@@ -47,11 +47,12 @@ App {
             ),
         ],
         provides: [
-            |L 7-7, C 15-24| ExposedName(
+            @159-168 ExposedName(
                 "quicksort",
             ),
         ],
-        to: |L 7-7, C 31-33| ExistingPackage(
+        provides_types: None,
+        to: @175-177 ExistingPackage(
             "pf",
         ),
         before_header: [],

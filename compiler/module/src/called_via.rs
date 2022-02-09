@@ -45,10 +45,11 @@ pub enum BinOp {
     GreaterThanOrEq,
     And,
     Or,
-    Pizza, // lowest precedence
+    Pizza,
     Assignment,
     HasType,
     Backpassing,
+    // lowest precedence
 }
 
 impl BinOp {

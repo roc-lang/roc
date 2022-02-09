@@ -1,10 +1,10 @@
 [
-    |L 1-1, C 0-7| SpaceBefore(
+    @12-19 SpaceBefore(
         Body(
-            |L 1-1, C 0-3| Identifier(
+            @12-15 Identifier(
                 "foo",
             ),
-            |L 1-1, C 6-7| Num(
+            @18-19 Num(
                 "1",
             ),
         ),
@@ -14,12 +14,12 @@
             ),
         ],
     ),
-    |L 4-4, C 0-10| SpaceBefore(
+    @33-43 SpaceBefore(
         Body(
-            |L 4-4, C 0-3| Identifier(
+            @33-36 Identifier(
                 "bar",
             ),
-            |L 4-4, C 6-10| Str(
+            @39-43 Str(
                 PlainLine(
                     "hi",
                 ),
@@ -33,13 +33,13 @@
             ),
         ],
     ),
-    |L 5-5, C 0-13| SpaceAfter(
+    @44-57 SpaceAfter(
         SpaceBefore(
             Body(
-                |L 5-5, C 0-3| Identifier(
+                @44-47 Identifier(
                     "baz",
                 ),
-                |L 5-5, C 6-13| Str(
+                @50-57 Str(
                     PlainLine(
                         "stuff",
                     ),

@@ -1,4 +1,6 @@
-use crate::builtins::{empty_list_type, float_literal, int_literal, list_type, str_type};
+use crate::builtins::{
+    empty_list_type, float_literal, int_literal, list_type, num_literal, str_type,
+};
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::Constraint::{self, *};
@@ -77,7 +79,7 @@ fn constrain_untyped_args(
             loc_pattern.region,
             pattern_expected,
             &mut pattern_state,
-            false,
+            true,
         );
 
         vars.push(*pattern_var);
@@ -96,17 +98,11 @@ pub fn constrain_expr(
     expected: Expected<Type>,
 ) -> Constraint {
     match expr {
-        Int(var, precision, _, _) => int_literal(*var, *precision, expected, region),
-        Num(var, _, _) => exists(
-            vec![*var],
-            Eq(
-                crate::builtins::num_num(Type::Variable(*var)),
-                expected,
-                Category::Num,
-                region,
-            ),
-        ),
-        Float(var, precision, _, _) => float_literal(*var, *precision, expected, region),
+        &Int(var, precision, _, _, bound) => int_literal(var, precision, expected, region, bound),
+        &Num(var, _, _, bound) => num_literal(var, expected, region, bound),
+        &Float(var, precision, _, _, bound) => {
+            float_literal(var, precision, expected, region, bound)
+        }
         EmptyRecord => constrain_empty_record(region, expected),
         Expr::Record { record_var, fields } => {
             if fields.is_empty() {
@@ -1144,7 +1140,7 @@ fn constrain_def_pattern(env: &Env, loc_pattern: &Loc<Pattern>, expr_type: Type)
         loc_pattern.region,
         pattern_expected,
         &mut state,
-        false,
+        true,
     );
 
     state

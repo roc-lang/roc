@@ -1,22 +1,22 @@
 Platform {
     header: PlatformHeader {
-        name: |L 0-0, C 9-23| PackageName(
+        name: @9-23 PackageName(
             "examples/cli",
         ),
         requires: PlatformRequires {
             rigids: [],
-            signature: |L 1-1, C 17-34| TypedIdent {
-                ident: |L 1-1, C 17-21| "main",
+            signature: @41-58 TypedIdent {
+                ident: @41-45 "main",
                 spaces_before_colon: [],
-                ann: |L 1-1, C 24-34| Apply(
+                ann: @48-58 Apply(
                     "",
                     "Task",
                     [
-                        |L 1-1, C 29-31| Record {
+                        @53-55 Record {
                             fields: [],
                             ext: None,
                         },
-                        |L 1-1, C 32-34| TagUnion {
+                        @56-58 TagUnion {
                             ext: None,
                             tags: [],
                         },
@@ -27,121 +27,22 @@ Platform {
         exposes: [],
         packages: [],
         imports: [
-            |L 4-4, C 14-27| Module(
+            @119-132 Module(
                 ModuleName(
                     "Task",
                 ),
                 [
-                    |L 4-4, C 21-25| ExposedName(
+                    @126-130 ExposedName(
                         "Task",
                     ),
                 ],
             ),
         ],
         provides: [
-            |L 5-5, C 15-26| ExposedName(
+            @150-161 ExposedName(
                 "mainForHost",
             ),
         ],
-        effects: Effects {
-            spaces_before_effects_keyword: [
-                Newline,
-            ],
-            spaces_after_effects_keyword: [],
-            spaces_after_type_name: [
-                Newline,
-            ],
-            effect_shortname: "fx",
-            effect_type_name: "Effect",
-            entries: [
-                |L 8-8, C 12-32| SpaceBefore(
-                    TypedIdent {
-                        ident: |L 8-8, C 12-19| "getLine",
-                        spaces_before_colon: [],
-                        ann: |L 8-8, C 22-32| Apply(
-                            "",
-                            "Effect",
-                            [
-                                |L 8-8, C 29-32| Apply(
-                                    "",
-                                    "Str",
-                                    [],
-                                ),
-                            ],
-                        ),
-                    },
-                    [
-                        Newline,
-                    ],
-                ),
-                |L 9-9, C 12-38| SpaceBefore(
-                    TypedIdent {
-                        ident: |L 9-9, C 12-19| "putLine",
-                        spaces_before_colon: [],
-                        ann: |L 9-9, C 29-38| Function(
-                            [
-                                |L 9-9, C 22-25| Apply(
-                                    "",
-                                    "Str",
-                                    [],
-                                ),
-                            ],
-                            |L 9-9, C 29-38| Apply(
-                                "",
-                                "Effect",
-                                [
-                                    |L 9-9, C 36-38| Record {
-                                        fields: [],
-                                        ext: None,
-                                    },
-                                ],
-                            ),
-                        ),
-                    },
-                    [
-                        Newline,
-                    ],
-                ),
-                |L 10-10, C 12-48| SpaceBefore(
-                    SpaceAfter(
-                        TypedIdent {
-                            ident: |L 10-10, C 12-24| "twoArguments",
-                            spaces_before_colon: [],
-                            ann: |L 10-10, C 39-48| Function(
-                                [
-                                    |L 10-10, C 27-30| Apply(
-                                        "",
-                                        "Int",
-                                        [],
-                                    ),
-                                    |L 10-10, C 32-35| Apply(
-                                        "",
-                                        "Int",
-                                        [],
-                                    ),
-                                ],
-                                |L 10-10, C 39-48| Apply(
-                                    "",
-                                    "Effect",
-                                    [
-                                        |L 10-10, C 46-48| Record {
-                                            fields: [],
-                                            ext: None,
-                                        },
-                                    ],
-                                ),
-                            ),
-                        },
-                        [
-                            Newline,
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-        },
         before_header: [],
         after_platform_keyword: [],
         before_requires: [

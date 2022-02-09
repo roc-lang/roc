@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_def;
 use roc_fmt::module::fmt_module;
 use roc_fmt::Buf;
@@ -11,17 +12,17 @@ use roc_parse::ast::{
     TypeAnnotation, WhenBranch,
 };
 use roc_parse::header::{
-    AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
+    PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
 use roc_parse::{
     ast::{Def, Module},
+    ident::UppercaseIdent,
     module::{self, module_defs},
     parser::{Parser, SyntaxError},
     state::State,
 };
-use roc_region::all::Loc;
-use roc_reporting::{internal_error, user_error};
+use roc_region::all::{Loc, Region};
 
 pub fn format(files: std::vec::Vec<PathBuf>) {
     for file in files {
@@ -110,8 +111,8 @@ struct Ast<'a> {
 }
 
 fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
-    let (module, state) =
-        module::parse_header(arena, State::new(src.as_bytes())).map_err(SyntaxError::Header)?;
+    let (module, state) = module::parse_header(arena, State::new(src.as_bytes()))
+        .map_err(|e| SyntaxError::Header(e.problem))?;
 
     let (_, defs, _) = module_defs().parse(arena, state).map_err(|(_, e, _)| e)?;
 
@@ -176,6 +177,7 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     packages: header.packages.remove_spaces(arena),
                     imports: header.imports.remove_spaces(arena),
                     provides: header.provides.remove_spaces(arena),
+                    provides_types: header.provides_types.map(|ts| ts.remove_spaces(arena)),
                     to: header.to.remove_spaces(arena),
                     before_header: &[],
                     after_app_keyword: &[],
@@ -197,14 +199,6 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     packages: header.packages.remove_spaces(arena),
                     imports: header.imports.remove_spaces(arena),
                     provides: header.provides.remove_spaces(arena),
-                    effects: Effects {
-                        spaces_before_effects_keyword: &[],
-                        spaces_after_effects_keyword: &[],
-                        spaces_after_type_name: &[],
-                        effect_shortname: header.effects.effect_shortname.remove_spaces(arena),
-                        effect_type_name: header.effects.effect_type_name.remove_spaces(arena),
-                        entries: header.effects.entries.remove_spaces(arena),
-                    },
                     before_header: &[],
                     after_platform_keyword: &[],
                     before_requires: &[],
@@ -217,6 +211,25 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     after_imports: &[],
                     before_provides: &[],
                     after_provides: &[],
+                },
+            },
+            Module::Hosted { header } => Module::Hosted {
+                header: HostedHeader {
+                    name: header.name.remove_spaces(arena),
+                    exposes: header.exposes.remove_spaces(arena),
+                    imports: header.imports.remove_spaces(arena),
+                    generates: header.generates.remove_spaces(arena),
+                    generates_with: header.generates_with.remove_spaces(arena),
+                    before_header: &[],
+                    after_hosted_keyword: &[],
+                    before_exposes: &[],
+                    after_exposes: &[],
+                    before_imports: &[],
+                    after_imports: &[],
+                    before_generates: &[],
+                    after_generates: &[],
+                    before_with: &[],
+                    after_with: &[],
                 },
             },
         }
@@ -285,7 +298,7 @@ impl<'a> RemoveSpaces<'a> for PlatformRequires<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for PlatformRigid<'a> {
+impl<'a> RemoveSpaces<'a> for UppercaseIdent<'a> {
     fn remove_spaces(&self, _arena: &'a Bump) -> Self {
         *self
     }
@@ -319,7 +332,7 @@ impl<'a, T: RemoveSpaces<'a>> RemoveSpaces<'a> for Option<T> {
 impl<'a, T: RemoveSpaces<'a> + std::fmt::Debug> RemoveSpaces<'a> for Loc<T> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         let res = self.value.remove_spaces(arena);
-        Loc::new(0, 0, 0, 0, res)
+        Loc::at(Region::zero(), res)
     }
 }
 

@@ -1,6 +1,6 @@
 List(
     [
-        |L 1-1, C 0-1| SpaceBefore(
+        @2-3 SpaceBefore(
             SpaceAfter(
                 Num(
                     "1",

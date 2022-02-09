@@ -3,7 +3,8 @@ use crate::{
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
-use roc_parse::ast::{AliasHeader, AssignedField, Expr, Tag, TypeAnnotation};
+use roc_parse::ast::{AliasHeader, AssignedField, Collection, Expr, Tag, TypeAnnotation};
+use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
 /// Does an AST node need parens around it?
@@ -36,8 +37,8 @@ pub enum Parens {
 /// newlines are taken into account.
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Newlines {
-    Yes,
     No,
+    Yes,
 }
 
 pub trait Formattable {
@@ -82,6 +83,20 @@ where
     }
 }
 
+impl<'a, T> Formattable for Collection<'a, T>
+where
+    T: Formattable,
+{
+    fn is_multiline(&self) -> bool {
+        // if there are any comments, they must go on their own line
+        // because otherwise they'd comment out the closing delimiter
+        !self.final_comments().is_empty() ||
+        // if any of the items in the collection are multiline,
+        // then the whole collection must be multiline
+        self.items.iter().any(Formattable::is_multiline)
+    }
+}
+
 /// A Located formattable value is also formattable
 impl<T> Formattable for Loc<T>
 where
@@ -104,6 +119,22 @@ where
 
     fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
         self.value.format(buf, indent)
+    }
+}
+
+impl<'a> Formattable for UppercaseIdent<'a> {
+    fn is_multiline(&self) -> bool {
+        false
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: Parens,
+        _newlines: Newlines,
+        _indent: u16,
+    ) {
+        buf.push_str((*self).into())
     }
 }
 
@@ -246,8 +277,9 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             }
 
             As(lhs, _spaces, AliasHeader { name, vars }) => {
-                // TODO use spaces?
-                lhs.value.format(buf, indent);
+                // TODO use _spaces?
+                lhs.value
+                    .format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
                 buf.spaces(1);
                 buf.push_str("as");
                 buf.spaces(1);

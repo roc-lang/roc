@@ -1,27 +1,27 @@
 SpaceBefore(
     Defs(
         [
-            |L 1-1, C 0-12| Body(
-                |L 1-1, C 0-8| RecordDestructure(
+            @18-30 Body(
+                @18-26 RecordDestructure(
                     [
-                        |L 1-1, C 2-3| Identifier(
+                        @20-21 Identifier(
                             "x",
                         ),
-                        |L 1-1, C 5-7| Identifier(
+                        @23-25 Identifier(
                             "y",
                         ),
                     ],
                 ),
-                |L 1-1, C 11-12| Num(
+                @29-30 Num(
                     "5",
                 ),
             ),
-            |L 2-2, C 0-5| SpaceBefore(
+            @31-36 SpaceBefore(
                 Body(
-                    |L 2-2, C 0-1| Identifier(
+                    @31-32 Identifier(
                         "y",
                     ),
-                    |L 2-2, C 4-5| Num(
+                    @35-36 Num(
                         "6",
                     ),
                 ),
@@ -30,7 +30,7 @@ SpaceBefore(
                 ],
             ),
         ],
-        |L 4-4, C 0-2| SpaceBefore(
+        @38-40 SpaceBefore(
             Num(
                 "42",
             ),

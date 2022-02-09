@@ -1,13 +1,13 @@
-use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage, PTR_SIZE};
+use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage, TARGET_INFO};
 use crate::{
     single_register_builtins, single_register_floats, single_register_integers, Relocation,
 };
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
-use roc_reporting::internal_error;
 
 // Not sure exactly how I want to represent registers.
 // If we want max speed, we would likely make them structs that impl the same trait to avoid ifs.
@@ -451,7 +451,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
     fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
         // TODO: This may need to be more complex/extended to fully support the calling convention.
         // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
-        ret_layout.stack_size(PTR_SIZE) > 16
+        ret_layout.stack_size(TARGET_INFO) > 16
     }
 }
 
@@ -775,7 +775,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
     fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
         // TODO: This is not fully correct there are some exceptions for "vector" types.
         // details here: https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160#return-values
-        ret_layout.stack_size(PTR_SIZE) > 8
+        ret_layout.stack_size(TARGET_INFO) > 8
     }
 }
 

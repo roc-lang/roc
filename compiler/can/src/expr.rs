@@ -3,8 +3,8 @@ use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
-    finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
-    int_expr_from_result, num_expr_from_result,
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
+    int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumericBound,
 };
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
@@ -20,7 +20,7 @@ use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::{char, u32};
 
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -47,16 +47,31 @@ impl Output {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum IntValue {
+    I128(i128),
+    U128(u128),
+}
+
+impl Display for IntValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntValue::I128(n) => Display::fmt(&n, f),
+            IntValue::U128(n) => Display::fmt(&n, f),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, Box<str>, i64),
+    Num(Variable, Box<str>, IntValue, NumericBound),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, Variable, Box<str>, i128),
-    Float(Variable, Variable, Box<str>, f64),
+    Int(Variable, Variable, Box<str>, IntValue, IntBound),
+    Float(Variable, Variable, Box<str>, f64, FloatBound),
     Str(Box<str>),
     List {
         elem_var: Variable,
@@ -208,20 +223,20 @@ pub fn canonicalize_expr<'a>(
     use Expr::*;
 
     let (expr, output) = match expr {
-        ast::Expr::Num(str) => {
+        &ast::Expr::Num(str) => {
             let answer = num_expr_from_result(
                 var_store,
-                finish_parsing_int(*str).map(|int| (*str, int)),
+                finish_parsing_num(str).map(|result| (str, result)),
                 region,
                 env,
             );
 
             (answer, Output::default())
         }
-        ast::Expr::Float(str) => {
+        &ast::Expr::Float(str) => {
             let answer = float_expr_from_result(
                 var_store,
-                finish_parsing_float(str).map(|f| (*str, f)),
+                finish_parsing_float(str).map(|(f, bound)| (str, f, bound)),
                 region,
                 env,
             );
@@ -758,13 +773,13 @@ pub fn canonicalize_expr<'a>(
 
             let region1 = Region::new(
                 *binop1_position,
-                binop1_position.bump_column(binop1.width()),
+                binop1_position.bump_column(binop1.width() as u32),
             );
             let loc_binop1 = Loc::at(region1, *binop1);
 
             let region2 = Region::new(
                 *binop2_position,
-                binop2_position.bump_column(binop2.width()),
+                binop2_position.bump_column(binop2.width() as u32),
             );
             let loc_binop2 = Loc::at(region2, *binop2);
 
@@ -790,21 +805,21 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::NonBase10Int {
+        &ast::Expr::NonBase10Int {
             string,
             base,
             is_negative,
         } => {
             // the minus sign is added before parsing, to get correct overflow/underflow behavior
-            let answer = match finish_parsing_base(string, *base, *is_negative) {
-                Ok(int) => {
+            let answer = match finish_parsing_base(string, base, is_negative) {
+                Ok((int, bound)) => {
                     // Done in this kinda round about way with intermediate variables
                     // to keep borrowed values around and make this compile
                     let int_string = int.to_string();
                     let int_str = int_string.as_str();
-                    int_expr_from_result(var_store, Ok((int_str, int as i128)), region, *base, env)
+                    int_expr_from_result(var_store, Ok((int_str, int, bound)), region, base, env)
                 }
-                Err(e) => int_expr_from_result(var_store, Err(e), region, *base, env),
+                Err(e) => int_expr_from_result(var_store, Err(e), region, base, env),
             };
 
             (answer, Output::default())
@@ -1226,9 +1241,9 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
     match expr {
         // Num stores the `a` variable in `Num a`. Not the same as the variable
         // stored in Int and Float below, which is strictly for better error messages
-        other @ Num(_, _, _)
-        | other @ Int(_, _, _, _)
-        | other @ Float(_, _, _, _)
+        other @ Num(..)
+        | other @ Int(..)
+        | other @ Float(..)
         | other @ Str { .. }
         | other @ RuntimeError(_)
         | other @ EmptyRecord
@@ -1680,22 +1695,22 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
 
     let mut iter = segments.into_iter().rev();
     let mut loc_expr = match iter.next() {
-        Some(Plaintext(string)) => Loc::new(0, 0, 0, 0, Expr::Str(string)),
+        Some(Plaintext(string)) => Loc::at(Region::zero(), Expr::Str(string)),
         Some(Interpolation(loc_expr)) => loc_expr,
         None => {
             // No segments? Empty string!
 
-            Loc::new(0, 0, 0, 0, Expr::Str("".into()))
+            Loc::at(Region::zero(), Expr::Str("".into()))
         }
     };
 
     for seg in iter {
         let loc_new_expr = match seg {
-            Plaintext(string) => Loc::new(0, 0, 0, 0, Expr::Str(string)),
+            Plaintext(string) => Loc::at(Region::zero(), Expr::Str(string)),
             Interpolation(loc_interpolated_expr) => loc_interpolated_expr,
         };
 
-        let fn_expr = Loc::new(0, 0, 0, 0, Expr::Var(Symbol::STR_CONCAT));
+        let fn_expr = Loc::at(Region::zero(), Expr::Var(Symbol::STR_CONCAT));
         let expr = Expr::Call(
             Box::new((
                 var_store.fresh(),
@@ -1710,7 +1725,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
             CalledVia::StringInterpolation,
         );
 
-        loc_expr = Loc::new(0, 0, 0, 0, expr);
+        loc_expr = Loc::at(Region::zero(), expr);
     }
 
     loc_expr.value

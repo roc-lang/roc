@@ -7,7 +7,7 @@ zig-cache
 *.o
 *.tmp
 
-# llvm human-readable output 
+# llvm human-readable output
 *.ll
 *.bc
 
