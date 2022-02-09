@@ -517,8 +517,7 @@ fn gen_from_mono_module_dev_wasm32(
         &mut interns,
         platform_and_builtins_object_file_bytes,
         procedures,
-    )
-    .unwrap();
+    );
 
     std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
 

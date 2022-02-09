@@ -4,6 +4,10 @@ mod low_level;
 mod storage;
 pub mod wasm_module;
 
+// Helpers for interfacing to a Wasm module from outside
+pub mod wasm32_result;
+pub mod wasm32_sized;
+
 use bumpalo::{self, collections::Vec, Bump};
 
 use roc_collections::all::{MutMap, MutSet};
@@ -43,25 +47,25 @@ pub struct Env<'a> {
     pub exposed_to_host: MutSet<Symbol>,
 }
 
-/// Entry point for production
+/// Entry point for Roc CLI
 pub fn build_module<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
     preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<std::vec::Vec<u8>, String> {
+) -> std::vec::Vec<u8> {
     let (mut wasm_module, called_preload_fns, _) =
-        build_module_without_test_wrapper(env, interns, preload_bytes, procedures);
+        build_module_without_wrapper(env, interns, preload_bytes, procedures);
 
     wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
 
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
-    Ok(buffer)
+    buffer
 }
 
-/// Entry point for integration tests (test_gen)
-pub fn build_module_without_test_wrapper<'a>(
+/// Entry point for REPL (repl_wasm) and integration tests (test_gen)
+pub fn build_module_without_wrapper<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
     preload_bytes: &[u8],
