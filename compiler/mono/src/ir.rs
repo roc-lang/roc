@@ -35,14 +35,14 @@ pub fn pretty_print_ir_symbols() -> bool {
 
 // i128 alignment is different on arm
 #[cfg(target_arch = "aarch64")]
-static_assertions::assert_eq_size!([u8; 4 * 8], Literal);
+static_assertions::assert_eq_size!([u64; 4], Literal);
 #[cfg(not(target_arch = "aarch64"))]
-static_assertions::assert_eq_size!([u8; 3 * 8], Literal);
+static_assertions::assert_eq_size!([u64; 3], Literal);
 static_assertions::assert_eq_size!(([u64; 4], [usize; 6]), Expr);
 #[cfg(not(target_arch = "aarch64"))]
 static_assertions::assert_eq_size!(([u64; 5], [usize; 14]), Stmt);
 #[cfg(target_arch = "aarch64")]
-static_assertions::assert_eq_size!([u8; 20 * 8], Stmt);
+static_assertions::assert_eq_size!([u64; 20], Stmt);
 static_assertions::assert_eq_size!([usize; 6], ProcLayout);
 static_assertions::assert_eq_size!(([u64; 3], [usize; 4]), Call);
 static_assertions::assert_eq_size!(([u64; 3], [usize; 2]), CallType);
