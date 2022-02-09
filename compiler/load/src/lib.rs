@@ -3,3 +3,6 @@
 #![allow(clippy::large_enum_variant)]
 pub mod docs;
 pub mod file;
+
+#[cfg(target_family = "wasm")]
+mod wasm_system_time;
