@@ -34,18 +34,26 @@ pub fn pretty_print_ir_symbols() -> bool {
 // if it went up, maybe check that the change is really required
 
 // i128 alignment is different on arm
-#[cfg(target_arch = "aarch64")]
-static_assertions::assert_eq_size!([u64; 4], Literal);
-#[cfg(not(target_arch = "aarch64"))]
-static_assertions::assert_eq_size!([u64; 3], Literal);
-static_assertions::assert_eq_size!(([u64; 4], [usize; 6]), Expr);
-#[cfg(not(target_arch = "aarch64"))]
-static_assertions::assert_eq_size!(([u64; 5], [usize; 14]), Stmt);
-#[cfg(target_arch = "aarch64")]
-static_assertions::assert_eq_size!([u64; 20], Stmt);
-static_assertions::assert_eq_size!([usize; 6], ProcLayout);
-static_assertions::assert_eq_size!(([u64; 3], [usize; 4]), Call);
-static_assertions::assert_eq_size!(([u64; 3], [usize; 2]), CallType);
+roc_error_macros::assert_sizeof_aarch64!(Literal, 4 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Expr, 10 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Stmt, 20 * 8);
+roc_error_macros::assert_sizeof_aarch64!(ProcLayout, 6 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Call, 7 * 8);
+roc_error_macros::assert_sizeof_aarch64!(CallType, 5 * 8);
+
+roc_error_macros::assert_sizeof_wasm!(Literal, 24);
+roc_error_macros::assert_sizeof_wasm!(Expr, 56);
+roc_error_macros::assert_sizeof_wasm!(Stmt, 96);
+roc_error_macros::assert_sizeof_wasm!(ProcLayout, 24);
+roc_error_macros::assert_sizeof_wasm!(Call, 40);
+roc_error_macros::assert_sizeof_wasm!(CallType, 32);
+
+roc_error_macros::assert_sizeof_default!(Literal, 3 * 8);
+roc_error_macros::assert_sizeof_default!(Expr, 10 * 8);
+roc_error_macros::assert_sizeof_default!(Stmt, 19 * 8);
+roc_error_macros::assert_sizeof_default!(ProcLayout, 6 * 8);
+roc_error_macros::assert_sizeof_default!(Call, 7 * 8);
+roc_error_macros::assert_sizeof_default!(CallType, 5 * 8);
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {

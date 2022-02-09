@@ -59,7 +59,9 @@ pub enum TagName {
     Closure(Symbol),
 }
 
-static_assertions::assert_eq_size!((usize, usize, u64), TagName);
+roc_error_macros::assert_sizeof_aarch64!(TagName, 24);
+roc_error_macros::assert_sizeof_wasm!(TagName, 16);
+roc_error_macros::assert_sizeof_default!(TagName, 24);
 
 impl TagName {
     pub fn as_ident_str(&self, interns: &Interns, home: ModuleId) -> IdentStr {

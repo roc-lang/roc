@@ -29,3 +29,39 @@ macro_rules! user_error {
         std::process::exit(1);
     })
 }
+
+/// Assert that a type has the expected size on ARM
+#[macro_export]
+macro_rules! assert_sizeof_aarch64 {
+    ($t: ty, $expected_size: expr) => {
+        #[cfg(target_arch = "aarch64")]
+        static_assertions::assert_eq_size!($t, [u8; $expected_size]);
+    };
+}
+
+/// Assert that a type has the expected size in Wasm
+#[macro_export]
+macro_rules! assert_sizeof_wasm {
+    ($t: ty, $expected_size: expr) => {
+        #[cfg(target_family = "wasm")]
+        static_assertions::assert_eq_size!($t, [u8; $expected_size]);
+    };
+}
+
+/// Assert that a type has the expected size on any target not covered above
+/// In practice we use this for x86_64, and add specific macros for other platforms
+#[macro_export]
+macro_rules! assert_sizeof_default {
+    ($t: ty, $expected_size: expr) => {
+        #[cfg(not(any(target_family = "wasm", target_arch = "aarch64")))]
+        static_assertions::assert_eq_size!($t, [u8; $expected_size]);
+    };
+}
+
+/// Assert that a type has the expected size on all targets
+#[macro_export]
+macro_rules! assert_sizeof_all {
+    ($t: ty, $expected_size: expr) => {
+        static_assertions::assert_eq_size!($t, [u8; $expected_size]);
+    };
+}
