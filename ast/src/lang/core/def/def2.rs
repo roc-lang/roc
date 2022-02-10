@@ -14,6 +14,14 @@ pub enum Def2 {
         expr_id: NodeId<Expr2>,
     },
     Blank,
+    CommentsBefore {
+        comments: String,
+        def_id: DefId,
+    },
+    CommentsAfter {
+        comments: String,
+        def_id: DefId,
+    },
 }
 
 pub type DefId = NodeId<Def2>;
@@ -36,6 +44,14 @@ pub fn def2_to_string(node_id: DefId, pool: &Pool) -> String {
         Def2::Blank => {
             full_string.push_str("Def2::Blank");
         }
+        Def2::CommentsBefore {
+            comments,
+            def_id: _,
+        } => full_string.push_str(comments),
+        Def2::CommentsAfter {
+            comments,
+            def_id: _,
+        } => full_string.push_str(comments),
     }
 
     full_string

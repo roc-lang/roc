@@ -406,6 +406,15 @@ impl<'a> CommentOrNewline<'a> {
             DocComment(_) => false,
         }
     }
+
+    pub fn to_string_repr(&self) -> std::string::String {
+        use CommentOrNewline::*;
+        match self {
+            Newline => "\n".to_owned(),
+            LineComment(comment_str) => format!("#{}", comment_str),
+            DocComment(comment_str) => format!("##{}", comment_str),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

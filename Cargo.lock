@@ -3392,6 +3392,7 @@ name = "roc_docs"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "indoc",
  "pretty_assertions",
  "pulldown-cmark",
  "roc_ast",
