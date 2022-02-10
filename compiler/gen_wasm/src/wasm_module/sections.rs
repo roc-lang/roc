@@ -850,7 +850,7 @@ impl Serialize for DataSegment<'_> {
 #[derive(Debug)]
 pub struct DataSection<'a> {
     count: u32,
-    bytes: Vec<'a, u8>,
+    pub bytes: Vec<'a, u8>,
 }
 
 impl<'a> DataSection<'a> {

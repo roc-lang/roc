@@ -78,6 +78,9 @@ impl<'a> WasmBackend<'a> {
             index: STACK_POINTER_GLOBAL_ID,
         });
 
+        // TODO: Read the actual address ranges of preloaded data sections, in case they do something unexpected
+        let next_constant_addr = CONST_SEGMENT_BASE_ADDR + module.data.bytes.len() as u32;
+
         WasmBackend {
             env,
             interns,
@@ -86,7 +89,7 @@ impl<'a> WasmBackend<'a> {
             module,
 
             layout_ids,
-            next_constant_addr: CONST_SEGMENT_BASE_ADDR,
+            next_constant_addr,
             fn_index_offset,
             called_preload_fns: Vec::with_capacity_in(2, env.arena),
             proc_symbols,
@@ -529,7 +532,23 @@ impl<'a> WasmBackend<'a> {
     }
 
     fn stmt_runtime_error(&mut self, msg: &'a str) {
-        todo!("RuntimeError {:?}", msg)
+        // Create a zero-terminated version of the message string
+        let mut bytes = Vec::with_capacity_in(msg.len() + 1, self.env.arena);
+        bytes.extend_from_slice(msg.as_bytes());
+        bytes.push(0);
+
+        // Store it in the app's data section
+        let sym = self.create_symbol(msg);
+        let (linker_sym_index, elements_addr) = self.store_bytes_in_data_section(&bytes, sym);
+
+        // Pass its address to roc_panic
+        let tag_id = 0;
+        self.code_builder
+            .i32_const_mem_addr(elements_addr, linker_sym_index);
+        self.code_builder.i32_const(tag_id);
+        self.call_zig_builtin_after_loading_args("roc_panic", 2, false);
+
+        self.code_builder.unreachable_();
     }
 
     /**********************************************************
@@ -540,7 +559,7 @@ impl<'a> WasmBackend<'a> {
 
     fn expr(&mut self, sym: Symbol, expr: &Expr<'a>, layout: &Layout<'a>, storage: &StoredValue) {
         match expr {
-            Expr::Literal(lit) => self.expr_literal(lit, storage, sym, layout),
+            Expr::Literal(lit) => self.expr_literal(lit, storage, sym),
 
             Expr::Call(roc_mono::ir::Call {
                 call_type,
@@ -601,13 +620,7 @@ impl<'a> WasmBackend<'a> {
      * Literals
      *******************************************************************/
 
-    fn expr_literal(
-        &mut self,
-        lit: &Literal<'a>,
-        storage: &StoredValue,
-        sym: Symbol,
-        layout: &Layout<'a>,
-    ) {
+    fn expr_literal(&mut self, lit: &Literal<'a>, storage: &StoredValue, sym: Symbol) {
         let invalid_error =
             || internal_error!("Literal value {:?} has invalid storage {:?}", lit, storage);
 
@@ -670,8 +683,9 @@ impl<'a> WasmBackend<'a> {
                             self.code_builder.i64_const(str_as_int);
                             self.code_builder.i64_store(Align::Bytes4, offset);
                         } else {
+                            let bytes = string.as_bytes();
                             let (linker_sym_index, elements_addr) =
-                                self.expr_literal_big_str(string, sym, layout);
+                                self.store_bytes_in_data_section(bytes, sym);
 
                             self.code_builder.get_local(local_id);
                             self.code_builder
@@ -693,16 +707,11 @@ impl<'a> WasmBackend<'a> {
 
     /// Create a string constant in the module data section
     /// Return the data we need for code gen: linker symbol index and memory address
-    fn expr_literal_big_str(
-        &mut self,
-        string: &'a str,
-        sym: Symbol,
-        layout: &Layout<'a>,
-    ) -> (u32, u32) {
+    fn store_bytes_in_data_section(&mut self, bytes: &[u8], sym: Symbol) -> (u32, u32) {
         // Place the segment at a 4-byte aligned offset
         let segment_addr = round_up_to_alignment!(self.next_constant_addr, PTR_SIZE);
         let elements_addr = segment_addr + PTR_SIZE;
-        let length_with_refcount = 4 + string.len();
+        let length_with_refcount = 4 + bytes.len();
         self.next_constant_addr = segment_addr + length_with_refcount as u32;
 
         let mut segment = DataSegment {
@@ -713,14 +722,14 @@ impl<'a> WasmBackend<'a> {
         // Prefix the string bytes with "infinite" refcount
         let refcount_max_bytes: [u8; 4] = (REFCOUNT_MAX as i32).to_le_bytes();
         segment.init.extend_from_slice(&refcount_max_bytes);
-        segment.init.extend_from_slice(string.as_bytes());
+        segment.init.extend_from_slice(bytes);
 
         let segment_index = self.module.data.append_segment(segment);
 
         // Generate linker symbol
         let name = self
             .layout_ids
-            .get(sym, layout)
+            .get(sym, &Layout::Builtin(Builtin::Str))
             .to_symbol_string(sym, self.interns);
 
         let linker_symbol = SymInfo::Data(DataSymbol::Defined {
@@ -728,7 +737,7 @@ impl<'a> WasmBackend<'a> {
             name: name.clone(),
             segment_index,
             segment_offset: 4,
-            size: string.len() as u32,
+            size: bytes.len() as u32,
         });
 
         // Ensure the linker keeps the segment aligned when relocating it
