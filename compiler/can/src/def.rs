@@ -22,7 +22,7 @@ use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
-use ven_graph::{strongly_connected_components, topological_sort, topological_sort_into_groups};
+use ven_graph::{strongly_connected_components, topological_sort};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Def {
@@ -265,8 +265,7 @@ pub fn canonicalize_defs<'a>(
         let (name, vars, ann) = alias_defs.remove(&alias_name).unwrap();
 
         let symbol = name.value;
-        let mut can_ann =
-            canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
+        let can_ann = canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
 
         // Record all the annotation's references in output.references.lookups
         for symbol in can_ann.references {
@@ -303,35 +302,6 @@ pub fn canonicalize_defs<'a>(
             continue;
         }
 
-        let mut is_nested_datatype = false;
-        if can_ann.typ.contains_symbol(symbol) {
-            let alias_args = can_vars
-                .iter()
-                .map(|l| (l.value.0.clone(), Type::Variable(l.value.1)))
-                .collect::<Vec<_>>();
-            let alias_region =
-                Region::across_all([name.region].iter().chain(vars.iter().map(|l| &l.region)));
-
-            let made_recursive = make_tag_union_recursive(
-                env,
-                Loc::at(alias_region, (symbol, &alias_args)),
-                name.region,
-                vec![],
-                &mut can_ann.typ,
-                var_store,
-                // Don't report any errors yet. We'll take care of self and mutual
-                // recursion errors after the sorted introductions are complete.
-                &mut false,
-            );
-
-            is_nested_datatype = made_recursive.is_err();
-        }
-
-        if is_nested_datatype {
-            // Bail out
-            continue;
-        }
-
         scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
         let alias = scope.lookup_alias(symbol).expect("alias is added to scope");
         aliases.insert(symbol, alias.clone());
@@ -339,7 +309,7 @@ pub fn canonicalize_defs<'a>(
 
     // Now that we know the alias dependency graph, we can try to insert recursion variables
     // where aliases are recursive tag unions, or detect illegal recursions.
-    correct_mutual_recursive_type_alias(env, &mut aliases, var_store);
+    correct_mutual_recursive_type_alias(env, &mut scope, &mut aliases, var_store);
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
@@ -1564,6 +1534,7 @@ fn pending_typed_body<'a>(
 /// Make aliases recursive
 fn correct_mutual_recursive_type_alias<'a>(
     env: &mut Env<'a>,
+    scope: &mut Scope,
     aliases: &mut SendMap<Symbol, Alias>,
     var_store: &mut VarStore,
 ) {
@@ -1586,80 +1557,111 @@ fn correct_mutual_recursive_type_alias<'a>(
         }
     };
 
-    let all_successors_without_self = |symbol: &Symbol| -> ImSet<Symbol> {
-        match aliases.get(symbol) {
-            Some(alias) => {
-                let mut loc_succ = alias.typ.symbols();
-                // remove anything that is not defined in the current block
-                loc_succ.retain(|key| symbols_introduced.contains(key));
-                loc_succ.remove(symbol);
-
-                loc_succ
-            }
-            None => ImSet::default(),
-        }
-    };
-
-    let originals = aliases.clone();
-
     // TODO investigate should this be in a loop?
     let defined_symbols: Vec<Symbol> = aliases.keys().copied().collect();
 
-    // split into self-recursive and mutually recursive
-    match topological_sort_into_groups(&defined_symbols, all_successors_with_self) {
-        Ok(_) => {
-            // no mutual recursion in any alias
-        }
-        Err((_, mutually_recursive_symbols)) => {
-            for cycle in strongly_connected_components(
-                &mutually_recursive_symbols,
-                all_successors_without_self,
-            ) {
-                // make sure we report only one error for the cycle, not an error for every
-                // alias in the cycle.
-                let mut can_still_report_error = true;
+    let cycles = &strongly_connected_components(&defined_symbols, all_successors_with_self);
 
-                // TODO use itertools to be more efficient here
-                for rec in &cycle {
-                    let mut to_instantiate = ImMap::default();
-                    let mut others = Vec::with_capacity(cycle.len() - 1);
-                    for other in &cycle {
-                        if rec != other {
-                            others.push(*other);
-                            if let Some(alias) = originals.get(other) {
-                                to_instantiate.insert(*other, alias.clone());
-                            }
+    for cycle in cycles {
+        debug_assert!(!cycle.is_empty());
+        if cycle.len() == 1 {
+            let symbol = cycle[0];
+            let alias = aliases.get_mut(&symbol).unwrap();
+
+            if alias.typ.contains_symbol(symbol) {
+                let mut can_still_report_error = true;
+                let mut opt_rec_var = None;
+
+                let _made_recursive = make_tag_union_of_alias_recursive(
+                    env,
+                    symbol,
+                    alias,
+                    vec![],
+                    var_store,
+                    &mut can_still_report_error,
+                    &mut opt_rec_var,
+                );
+
+                scope.add_alias(
+                    symbol,
+                    alias.region,
+                    alias.type_variables.clone(),
+                    alias.typ.clone(),
+                );
+            }
+        } else {
+            // This is a mutually recursive cycle
+
+            // make sure we report only one error for the cycle, not an error for every
+            // alias in the cycle.
+            let mut can_still_report_error = true;
+
+            let mut opt_rec_var = None;
+            for symbol in cycle {
+                let alias = aliases.get_mut(&symbol).unwrap();
+
+                let _made_recursive = make_tag_union_of_alias_recursive(
+                    env,
+                    *symbol,
+                    alias,
+                    vec![],
+                    var_store,
+                    &mut can_still_report_error,
+                    &mut opt_rec_var,
+                );
+            }
+
+            // TODO use itertools to be more efficient here
+            for rec in cycle {
+                let mut to_instantiate = ImMap::default();
+                let mut others = Vec::with_capacity(cycle.len() - 1);
+                for other in cycle {
+                    if rec != other {
+                        others.push(*other);
+                        if let Some(alias) = aliases.get(other) {
+                            to_instantiate.insert(*other, alias.clone());
                         }
                     }
+                }
 
-                    if let Some(alias) = aliases.get_mut(rec) {
-                        alias.typ.instantiate_aliases(
-                            alias.region,
-                            &to_instantiate,
-                            var_store,
-                            &mut ImSet::default(),
-                        );
-
-                        let alias_args = &alias
-                            .type_variables
-                            .iter()
-                            .map(|l| (l.value.0.clone(), Type::Variable(l.value.1)))
-                            .collect::<Vec<_>>();
-
-                        let _made_recursive = make_tag_union_recursive(
-                            env,
-                            Loc::at(alias.header_region(), (*rec, alias_args)),
-                            alias.region,
-                            others,
-                            &mut alias.typ,
-                            var_store,
-                            &mut can_still_report_error,
-                        );
-                    }
+                if let Some(alias) = aliases.get_mut(rec) {
+                    alias.typ.instantiate_aliases(
+                        alias.region,
+                        &to_instantiate,
+                        var_store,
+                        &mut ImSet::default(),
+                    );
                 }
             }
         }
     }
+}
+
+fn make_tag_union_of_alias_recursive<'a>(
+    env: &mut Env<'a>,
+    alias_name: Symbol,
+    alias: &mut Alias,
+    others: Vec<Symbol>,
+    var_store: &mut VarStore,
+    can_report_error: &mut bool,
+    opt_rec_var: &mut Option<Variable>,
+) -> Result<(), ()> {
+    let alias_args = alias
+        .type_variables
+        .iter()
+        .map(|l| (l.value.0.clone(), Type::Variable(l.value.1)))
+        .collect::<Vec<_>>();
+
+    make_tag_union_recursive_help(
+        env,
+        Loc::at(alias.header_region(), (alias_name, &alias_args)),
+        alias.region,
+        others,
+        &mut alias.typ,
+        var_store,
+        can_report_error,
+        opt_rec_var,
+    )
 }
 
 /// Attempt to make a tag union recursive at the position of `recursive_alias`; for example,
@@ -1683,7 +1685,7 @@ fn correct_mutual_recursive_type_alias<'a>(
 /// ```
 ///
 /// When `Err` is returned, a problem will be added to `env`.
-fn make_tag_union_recursive<'a>(
+fn make_tag_union_recursive_help<'a>(
     env: &mut Env<'a>,
     recursive_alias: Loc<(Symbol, &[(Lowercase, Type)])>,
     region: Region,
@@ -1691,6 +1693,7 @@ fn make_tag_union_recursive<'a>(
     typ: &mut Type,
     var_store: &mut VarStore,
     can_report_error: &mut bool,
+    opt_rec_var: &mut Option<Variable>,
 ) -> Result<(), ()> {
     let Loc {
         value: (symbol, args),
@@ -1699,7 +1702,10 @@ fn make_tag_union_recursive<'a>(
     let vars = args.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
     match typ {
         Type::TagUnion(tags, ext) => {
-            let rec_var = var_store.fresh();
+            if opt_rec_var.is_none() {
+                *opt_rec_var = Some(var_store.fresh());
+            }
+            let rec_var = opt_rec_var.unwrap();
             let mut pending_typ = Type::RecursiveTagUnion(rec_var, tags.to_vec(), ext.clone());
             let substitution_result =
                 pending_typ.substitute_alias(symbol, &vars, &Type::Variable(rec_var));
@@ -1724,7 +1730,7 @@ fn make_tag_union_recursive<'a>(
             actual,
             type_arguments,
             ..
-        } => make_tag_union_recursive(
+        } => make_tag_union_recursive_help(
             env,
             Loc::at_zero((symbol, type_arguments)),
             region,
@@ -1732,6 +1738,7 @@ fn make_tag_union_recursive<'a>(
             actual,
             var_store,
             can_report_error,
+            opt_rec_var,
         ),
         _ => {
             let problem = roc_types::types::Problem::CyclicAlias(symbol, region, others.clone());

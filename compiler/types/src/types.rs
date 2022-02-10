@@ -595,9 +595,15 @@ impl Type {
                 ext.substitute_alias(rep_symbol, rep_args, actual)
             }
             Alias {
+                type_arguments,
                 actual: alias_actual,
                 ..
-            } => alias_actual.substitute_alias(rep_symbol, rep_args, actual),
+            } => {
+                for (_, ta) in type_arguments {
+                    ta.substitute_alias(rep_symbol, rep_args, actual)?;
+                }
+                alias_actual.substitute_alias(rep_symbol, rep_args, actual)
+            }
             HostExposedAlias {
                 actual: actual_type,
                 ..
