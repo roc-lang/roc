@@ -11,9 +11,9 @@ use std::collections::hash_map::Entry;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 
-#[derive(Debug, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Index<T: ?Sized> {
-    index: u32,
+    pub index: u32,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -26,6 +26,8 @@ impl<T: ?Sized> Clone for Index<T> {
     }
 }
 
+impl<T: ?Sized> Copy for Index<T> {}
+
 impl<T: ?Sized> Index<T> {
     pub const fn new(index: u32) -> Self {
         Self {
@@ -35,10 +37,10 @@ impl<T: ?Sized> Index<T> {
     }
 }
 
-#[derive(Debug, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Slice<T: ?Sized> {
-    start: u32,
-    length: u16,
+    pub start: u32,
+    pub length: u16,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -51,6 +53,8 @@ impl<T: ?Sized> Clone for Slice<T> {
         }
     }
 }
+
+impl<T: ?Sized> Copy for Slice<T> {}
 
 impl<T: ?Sized> Slice<T> {
     pub const fn new(start: u32, length: u16) -> Self {
@@ -429,6 +433,8 @@ impl<'a> Layouts<'a> {
     const VOID_INDEX: Index<Layout> = Index::new(0);
     const VOID_TUPLE: Index<(Layout, Layout)> = Index::new(0);
     const UNIT_INDEX: Index<Layout> = Index::new(2);
+    pub const STR_INDEX: Index<Layout> = Index::new(3);
+    pub const BOOL_INDEX: Index<Layout> = Index::new(4);
 
     pub fn new_in(arena: &'a Bump, target_info: TargetInfo) -> Self {
         let mut layouts = Vec::with_capacity_in(64, arena);
@@ -436,11 +442,15 @@ impl<'a> Layouts<'a> {
         layouts.push(Layout::VOID);
         layouts.push(Layout::VOID);
         layouts.push(Layout::UNIT);
+        layouts.push(Layout::Str);
+        layouts.push(Layout::Bool);
 
         // sanity check
         debug_assert_eq!(layouts[Self::VOID_INDEX.index as usize], Layout::VOID);
         debug_assert_eq!(layouts[Self::VOID_TUPLE.index as usize + 1], Layout::VOID);
         debug_assert_eq!(layouts[Self::UNIT_INDEX.index as usize], Layout::UNIT);
+        debug_assert_eq!(layouts[Self::STR_INDEX.index as usize], Layout::Str);
+        debug_assert_eq!(layouts[Self::BOOL_INDEX.index as usize], Layout::Bool);
 
         Layouts {
             layouts: Vec::new_in(arena),
@@ -452,7 +462,7 @@ impl<'a> Layouts<'a> {
         }
     }
 
-    fn push_layout(&mut self, layout: Layout) -> Index<Layout> {
+    pub fn push_layout(&mut self, layout: Layout) -> Index<Layout> {
         let index = Index::new(self.layouts.len() as u32);
         self.layouts.push(layout);
 
@@ -461,6 +471,10 @@ impl<'a> Layouts<'a> {
 
     fn reserve_layout(&mut self) -> Index<Layout> {
         self.push_layout(Layout::Reserved)
+    }
+
+    pub fn reserve_layout_slice(&mut self, length: usize) -> Slice<Layout> {
+        Slice::reserve(self, length)
     }
 
     pub fn from_standard_layout(&mut self, standard: &crate::layout::Layout<'a>) -> Index<Layout> {
@@ -612,6 +626,7 @@ impl<'a> Layouts<'a> {
     }
 }
 
+#[derive(Debug)]
 pub enum LayoutError {
     UnresolvedVariable(Variable),
     TypeError(()),
