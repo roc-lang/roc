@@ -103,6 +103,7 @@ pub struct Layouts {
     target_info: TargetInfo,
 }
 
+#[derive(Clone, Debug)]
 pub struct FunctionLayout {
     /// last element is the result, prior elements the arguments
     arguments_and_result: Slice<Layout>,
@@ -197,6 +198,7 @@ impl FunctionLayout {
 }
 
 /// Idea: don't include the symbols for the first 3 cases in --optimize mode
+#[derive(Clone, Debug)]
 pub enum LambdaSet {
     Empty {
         symbol: Index<Symbol>,

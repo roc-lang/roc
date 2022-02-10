@@ -308,6 +308,7 @@ pub struct Proc<'a> {
     pub name: Symbol,
     pub args: &'a [(Layout<'a>, Symbol)],
     pub body: Stmt<'a>,
+    /// Is the closure data passed as an argument
     pub closure_data_layout: Option<Layout<'a>>,
     pub ret_layout: Layout<'a>,
     pub is_self_recursive: SelfRecursive,

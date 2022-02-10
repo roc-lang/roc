@@ -11,6 +11,7 @@ pub mod layout;
 pub mod layout_soa;
 pub mod low_level;
 pub mod reset_reuse;
+pub mod stmt_soa;
 pub mod tail_recursion;
 
 // Temporary, while we can build up test cases and optimize the exhaustiveness checking.
