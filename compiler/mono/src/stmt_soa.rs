@@ -36,7 +36,7 @@ struct Module<'a> {
 
     literals: Vec<'a, Literal>,
 
-    layouts: Layouts,
+    layouts: Layouts<'a>,
 
     symbols: Vec<'a, Symbol>,
     branch_infos: Vec<'a, BranchInfo>,
@@ -77,7 +77,7 @@ pub enum Literal {
     Int(i64),
     Float(f64),
     Decimal(Index<RocDec>),
-    Str(Slice<String>),
+    Str(Slice<str>),
     Bool(bool),
     Byte(u8),
 }
@@ -166,7 +166,7 @@ pub enum Stmt {
         // JoinPointId, is implicit
         Slice<SymbolOrLiteral>,
     ),
-    RuntimeError(Index<String>),
+    RuntimeError(Index<str>),
 }
 
 #[derive(Clone, Debug)]
@@ -248,5 +248,5 @@ pub enum Expr {
         update_mode: UpdateModeId,
     },
 
-    RuntimeErrorFunction(Index<String>),
+    RuntimeErrorFunction(Index<str>),
 }

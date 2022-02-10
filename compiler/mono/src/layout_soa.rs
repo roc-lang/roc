@@ -8,13 +8,25 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
 use std::collections::hash_map::Entry;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Index<T> {
+use bumpalo::collections::Vec;
+use bumpalo::Bump;
+
+#[derive(Debug, Copy, PartialEq, Eq)]
+pub struct Index<T: ?Sized> {
     index: u32,
     _marker: std::marker::PhantomData<T>,
 }
 
-impl<T> Index<T> {
+impl<T: ?Sized> Clone for Index<T> {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index,
+            _marker: self._marker,
+        }
+    }
+}
+
+impl<T: ?Sized> Index<T> {
     pub const fn new(index: u32) -> Self {
         Self {
             index,
@@ -23,14 +35,24 @@ impl<T> Index<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Slice<T> {
+#[derive(Debug, Copy, PartialEq, Eq)]
+pub struct Slice<T: ?Sized> {
     start: u32,
     length: u16,
     _marker: std::marker::PhantomData<T>,
 }
 
-impl<T> Slice<T> {
+impl<T: ?Sized> Clone for Slice<T> {
+    fn clone(&self) -> Self {
+        Self {
+            start: self.start,
+            length: self.length,
+            _marker: self._marker,
+        }
+    }
+}
+
+impl<T: ?Sized> Slice<T> {
     pub const fn new(start: u32, length: u16) -> Self {
         Self {
             start,
@@ -93,12 +115,12 @@ impl Reserve for Slice<Slice<Layout>> {
 
 static_assertions::assert_eq_size!([u8; 12], Layout);
 
-pub struct Layouts {
-    layouts: Vec<Layout>,
-    layout_slices: Vec<Slice<Layout>>,
+pub struct Layouts<'a> {
+    layouts: Vec<'a, Layout>,
+    layout_slices: Vec<'a, Slice<Layout>>,
     // function_layouts: Vec<(Slice<Layout>, Index<LambdaSet>)>,
-    lambda_sets: Vec<LambdaSet>,
-    symbols: Vec<Symbol>,
+    lambda_sets: Vec<'a, LambdaSet>,
+    symbols: Vec<'a, Symbol>,
     recursion_variable_to_structure_variable_map: MutMap<Variable, Index<Layout>>,
     target_info: TargetInfo,
 }
@@ -402,13 +424,13 @@ fn round_up_to_alignment(unaligned: u16, alignment_bytes: u16) -> u16 {
     aligned as u16
 }
 
-impl Layouts {
+impl<'a> Layouts<'a> {
     const VOID_INDEX: Index<Layout> = Index::new(0);
     const VOID_TUPLE: Index<(Layout, Layout)> = Index::new(0);
     const UNIT_INDEX: Index<Layout> = Index::new(2);
 
-    pub fn new(target_info: TargetInfo) -> Self {
-        let mut layouts = Vec::with_capacity(64);
+    pub fn new_in(arena: &'a Bump, target_info: TargetInfo) -> Self {
+        let mut layouts = Vec::with_capacity_in(64, arena);
 
         layouts.push(Layout::VOID);
         layouts.push(Layout::VOID);
@@ -420,10 +442,10 @@ impl Layouts {
         debug_assert_eq!(layouts[Self::UNIT_INDEX.index as usize], Layout::UNIT);
 
         Layouts {
-            layouts: Vec::default(),
-            layout_slices: Vec::default(),
-            lambda_sets: Vec::default(),
-            symbols: Vec::default(),
+            layouts: Vec::new_in(arena),
+            layout_slices: Vec::new_in(arena),
+            lambda_sets: Vec::new_in(arena),
+            symbols: Vec::new_in(arena),
             recursion_variable_to_structure_variable_map: MutMap::default(),
             target_info,
         }
