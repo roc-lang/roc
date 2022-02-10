@@ -66,6 +66,7 @@ impl<'a> WasmModule<'a> {
         self.element.serialize(buffer);
         self.code.serialize(buffer);
         self.data.serialize(buffer);
+        self.names.serialize(buffer);
     }
 
     /// Serialize the module to bytes

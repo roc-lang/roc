@@ -928,8 +928,9 @@ enum NameSubSections {
     LocalNames = 2,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct NameSection<'a> {
+    pub bytes: Vec<'a, u8>,
     pub functions: MutMap<&'a [u8], u32>,
 }
 
@@ -938,13 +939,6 @@ impl<'a> NameSection<'a> {
     const NAME: &'static str = "name";
 
     pub fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
-        let functions = MutMap::default();
-        let mut section = NameSection { functions };
-        section.parse_help(arena, module_bytes, cursor);
-        section
-    }
-
-    fn parse_help(&mut self, arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) {
         // Custom section ID
         let section_id_byte = module_bytes[*cursor];
         if section_id_byte != Self::ID as u8 {
@@ -958,16 +952,32 @@ impl<'a> NameSection<'a> {
         *cursor += 1;
 
         // Section size
-        let section_size = parse_u32_or_panic(module_bytes, cursor);
-        let section_end = *cursor + section_size as usize;
+        let section_size = parse_u32_or_panic(module_bytes, cursor) as usize;
+        let section_end = *cursor + section_size;
 
+        let mut bytes = Vec::with_capacity_in(section_size, arena);
+        bytes.extend_from_slice(&module_bytes[*cursor..section_end]);
+        let functions = MutMap::default();
+        let mut section = NameSection { bytes, functions };
+
+        section.parse_body(arena, module_bytes, cursor, section_end);
+        section
+    }
+
+    fn parse_body(
+        &mut self,
+        arena: &'a Bump,
+        module_bytes: &[u8],
+        cursor: &mut usize,
+        section_end: usize,
+    ) {
         // Custom section name
         let section_name_len = parse_u32_or_panic(module_bytes, cursor);
         let section_name_end = *cursor + section_name_len as usize;
         let section_name = &module_bytes[*cursor..section_name_end];
         if section_name != Self::NAME.as_bytes() {
             internal_error!(
-                "Expected Custon section {:?}, found {:?}",
+                "Expected Custom section {:?}, found {:?}",
                 Self::NAME,
                 std::str::from_utf8(section_name)
             );
@@ -1004,6 +1014,16 @@ impl<'a> NameSection<'a> {
 
             self.functions
                 .insert(arena.alloc_slice_copy(name_bytes), fn_index);
+        }
+    }
+}
+
+impl<'a> Serialize for NameSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        if !self.bytes.is_empty() {
+            let header_indices = write_section_header(buffer, Self::ID);
+            buffer.append_slice(&self.bytes);
+            update_section_size(buffer, header_indices);
         }
     }
 }
