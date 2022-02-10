@@ -381,6 +381,7 @@ pub enum Layout {
     Int(IntWidth),
     Float(FloatWidth),
     Decimal,
+    Bool,
 
     Str,
     Dict(Index<(Layout, Layout)>),
@@ -451,6 +452,23 @@ impl<'a> Layouts<'a> {
         }
     }
 
+    fn push_layout(&mut self, layout: Layout) -> Index<Layout> {
+        let index = Index::new(self.layouts.len() as u32);
+        self.layouts.push(layout);
+
+        index
+    }
+
+    fn reserve_layout(&mut self) -> Index<Layout> {
+        self.push_layout(Layout::Reserved)
+    }
+
+    pub fn from_standard_layout(&mut self, standard: &crate::layout::Layout<'a>) -> Index<Layout> {
+        let index = self.reserve_layout();
+        Layout::from_standard_layout_dps(self, standard, index);
+        index
+    }
+
     /// sort a slice according to elements' alignment
     fn sort_slice_by_alignment(&mut self, layout_slice: Slice<Layout>) {
         let slice = &mut self.layouts[layout_slice.indices()];
@@ -494,6 +512,7 @@ impl<'a> Layouts<'a> {
 
         match layout {
             Layout::Reserved => unreachable!(),
+            Layout::Bool => IntWidth::U8.alignment_bytes(self.target_info) as u16,
             Layout::Int(int_width) => int_width.alignment_bytes(self.target_info) as u16,
             Layout::Float(float_width) => float_width.alignment_bytes(self.target_info) as u16,
             Layout::Decimal => IntWidth::U128.alignment_bytes(self.target_info) as u16,
@@ -564,6 +583,7 @@ impl<'a> Layouts<'a> {
 
         match layout {
             Layout::Reserved => unreachable!(),
+            Layout::Bool => IntWidth::U8.stack_size() as _,
             Layout::Int(int_width) => int_width.stack_size() as _,
             Layout::Float(float_width) => float_width as _,
             Layout::Decimal => (std::mem::size_of::<roc_std::RocDec>()) as _,
@@ -881,5 +901,75 @@ impl Layout {
         layouts.sort_slice_by_alignment(slice);
 
         Ok(slice)
+    }
+
+    fn from_standard_layout_dps<'a>(
+        layouts: &mut Layouts<'a>,
+        standard: &crate::layout::Layout<'a>,
+        output: Index<Layout>,
+    ) {
+        use crate::layout;
+
+        match standard {
+            layout::Layout::Builtin(builtin) => {
+                Self::from_standard_builtin_dps(layouts, builtin, output)
+            }
+            layout::Layout::Struct(elements) => {
+                let slice = Slice::reserve(layouts, elements.len() + 1);
+
+                let it = slice.indices().zip(elements.iter());
+                for (target_index, standard) in it {
+                    Self::from_standard_layout_dps(
+                        layouts,
+                        standard,
+                        Index::new(target_index as u32),
+                    );
+                }
+
+                layouts.layouts[output.index as usize] = Layout::Struct(slice);
+            }
+            layout::Layout::Union(_) => todo!(),
+            layout::Layout::LambdaSet(_) => todo!(),
+            layout::Layout::RecursivePointer => todo!(),
+        }
+    }
+
+    fn from_standard_builtin_dps<'a>(
+        layouts: &mut Layouts<'a>,
+        standard: &crate::layout::Builtin<'a>,
+        output: Index<Layout>,
+    ) {
+        use crate::layout::Builtin;
+
+        let layout = match standard {
+            Builtin::Int(width) => Layout::Int(*width),
+            Builtin::Float(width) => Layout::Float(*width),
+            Builtin::Bool => Layout::Bool,
+            Builtin::Decimal => Layout::Decimal,
+            Builtin::Str => Layout::Str,
+            Builtin::Dict(key, value) => {
+                let key_index = layouts.reserve_layout();
+                let value_index = layouts.reserve_layout();
+
+                // invariant: these indices are adjacent to each other
+                debug_assert_eq!(key_index.index + 1, value_index.index);
+
+                Layout::from_standard_layout_dps(layouts, key, key_index);
+                Layout::from_standard_layout_dps(layouts, value, value_index);
+
+                let index = Index::new(key_index.index);
+                Layout::Dict(index)
+            }
+            Builtin::Set(element) => {
+                let element = layouts.from_standard_layout(element);
+                Layout::Set(element)
+            }
+            Builtin::List(element) => {
+                let element = layouts.from_standard_layout(element);
+                Layout::List(element)
+            }
+        };
+
+        layouts.layouts[output.index as usize] = layout;
     }
 }
