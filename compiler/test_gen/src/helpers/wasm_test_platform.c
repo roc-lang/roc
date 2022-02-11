@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 
 // Makes test runs take 50% longer, due to linking
 #define ENABLE_PRINTF 0
@@ -121,14 +122,13 @@ void roc_dealloc(void *ptr, unsigned int alignment)
 
 //--------------------------
 
-void roc_panic(void *ptr, unsigned int alignment)
+void roc_panic(char *msg, unsigned int tag_id)
 {
-#if ENABLE_PRINTF
-    char *msg = (char *)ptr;
-    fprintf(stderr,
-            "Application crashed with message\n\n    %s\n\nShutting down\n", msg);
-#endif
-    abort();
+    // Note: no dynamic string formatting
+    fputs("Application crashed with message\n\n    ", stderr);
+    fputs(msg, stderr);
+    fputs("\n\nShutting down\n", stderr);
+    exit(101);
 }
 
 //--------------------------
