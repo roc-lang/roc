@@ -5014,7 +5014,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListMapWithIndex { xs } => {
-            // List.mapWithIndex : List before, (Nat, before -> after) -> List after
+            // List.mapWithIndex : List before, (before, Nat -> after) -> List after
             let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();

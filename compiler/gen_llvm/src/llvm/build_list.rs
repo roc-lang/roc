@@ -687,7 +687,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     )
 }
 
-/// List.mapWithIndex : List before, (Nat, before -> after) -> List after
+/// List.mapWithIndex : List before, (before, Nat -> after) -> List after
 pub fn list_map_with_index<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function_call: RocFunctionCall<'ctx>,

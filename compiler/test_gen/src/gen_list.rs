@@ -2363,7 +2363,7 @@ fn list_keep_errs() {
 #[cfg(any(feature = "gen-llvm"))]
 fn list_map_with_index() {
     assert_evals_to!(
-        "List.mapWithIndex [0,0,0] (\\index, x -> Num.intCast index + x)",
+        "List.mapWithIndex [0,0,0] (\\x, index -> Num.intCast index + x)",
         RocList::from_slice(&[0, 1, 2]),
         RocList<i64>
     );
