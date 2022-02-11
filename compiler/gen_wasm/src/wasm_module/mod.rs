@@ -15,8 +15,8 @@ use crate::wasm_module::serialize::SkipBytes;
 
 use self::linking::{LinkingSection, RelocationSection};
 use self::sections::{
-    CodeSection, DataSection, ExportSection, FunctionSection, GlobalSection, ImportSection,
-    MemorySection, NameSection, OpaqueSection, Section, SectionId, TypeSection,
+    CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
+    ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId, TypeSection,
 };
 use self::serialize::{SerialBuffer, Serialize};
 
@@ -32,7 +32,7 @@ pub struct WasmModule<'a> {
     pub global: GlobalSection<'a>,
     pub export: ExportSection<'a>,
     pub start: OpaqueSection<'a>,
-    pub element: OpaqueSection<'a>,
+    pub element: ElementSection<'a>,
     pub code: CodeSection<'a>,
     pub data: DataSection<'a>,
     pub names: NameSection<'a>,
@@ -143,7 +143,7 @@ impl<'a> WasmModule<'a> {
         let export = ExportSection::empty(arena);
 
         let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
-        let element = OpaqueSection::preload(SectionId::Element, arena, bytes, &mut cursor);
+        let element = ElementSection::preload(arena, bytes, &mut cursor);
         let code = CodeSection::preload(arena, bytes, &mut cursor, import.function_count);
 
         let data = DataSection::preload(arena, bytes, &mut cursor);

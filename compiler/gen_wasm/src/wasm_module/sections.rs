@@ -701,6 +701,204 @@ impl<'a> Serialize for ExportSection<'a> {
 
 /*******************************************************************
  *
+ * Element section
+ *
+ * Elements are entries in tables (see Table section)
+ * For example, Wasm uses a function table instead of function pointers,
+ * and each entry in that function table is an element.
+ * The call_indirect instruction uses element indices to refer to functions.
+ * This section therefore enumerates all indirectly-called functions.
+ *
+ *******************************************************************/
+
+/*
+https://webassembly.github.io/spec/core/binary/modules.html#binary-elemsec
+
+Note: Wasm MVP only had variant 0x00, and tables only contained functions.
+
+byte fields                                            ⇒  syntax
+-------------------------------------------------------------------------------------------------------------------------------------
+0x00             e:expr               y∗:vec(funcidx)  ⇒  {type funcref,  init ((ref.func y) end)∗,  mode active {table 0, offset e}}
+0x01                     et:elemkind  y∗:vec(funcidx)  ⇒  {type et,       init ((ref.func y) end)∗,  mode passive}
+0x02 x:tableidx  e:expr  et:elemkind  y∗:vec(funcidx)  ⇒  {type et,       init ((ref.func y) end)∗,  mode active {table x, offset e}}
+0x03                     et:elemkind  y∗:vec(funcidx)  ⇒  {type et,       init ((ref.func y) end)∗,  mode declarative}
+
+0x04             e:expr               el∗:vec(expr)    ⇒  {type funcref,  init el∗,                  mode active {table 0, offset e}}
+0x05                     et:reftype   el∗:vec(expr)    ⇒  {type et,       init el∗,                  mode passive}
+0x06 x:tableidx  e:expr  et:reftype   el∗:vec(expr)    ⇒  {type et,       init el∗,                  mode active {table x, offset e}}
+0x07                     et:reftype   el∗:vec(expr)    ⇒  {type et,       init el ∗ ,                mode declarative}
+
+The initial byte can be interpreted as a bitfield
+Bit 0 indicates a passive or declarative segment
+Bit 1 indicates the presence of an explicit table index for an active segment and otherwise distinguishes passive from declarative segments
+Bit 2 indicates the use of element type and element expressions instead of element kind and element indices.
+
+Active means "element is loaded into the table on module instantiation"
+Passive means it's loaded by explicit instructions in the code section
+Declarative is a declaration that a reference will be taken at runtime
+
+Sigh. This is only the post-MVP version of Wasm! Some day it'll end up as convoluted as x86, wait and see.
+*/
+
+#[repr(u8)]
+#[derive(Debug)]
+#[allow(dead_code)]
+enum ElementKind {
+    FuncRef = 0,
+}
+
+#[repr(u8)]
+#[allow(dead_code)]
+enum ElementSegmentFormatId {
+    ActiveImplicitTableIndex = 0x00,
+    PassiveKindAndIndex = 0x01,
+    ActiveExplicitTableKindAndIndex = 0x02,
+    DeclarativeKindAndIndex = 0x03,
+    ActiveImplicitTableTypeAndExpr = 0x04,
+    PassiveTypeAndExpr = 0x05,
+    ActiveExplicitTableTypeAndExpr = 0x06,
+    DeclarativeTypeAndExpr = 0x07,
+}
+
+// A representation based on the (convoluted) binary format.
+// NOTE: If we ever need a more intuitive format, we can base it on the syntax doc
+//       https://webassembly.github.io/spec/core/syntax/modules.html#syntax-elem
+#[derive(Debug)]
+#[allow(dead_code)]
+enum ElementSegment<'a> {
+    /// This is the only variant we currently use. It is from the original Wasm MVP.
+    /// The rest are dead code but kept in case we need them later.
+    ActiveImplicitTableIndex {
+        offset: ConstExpr,
+        fn_indices: Vec<'a, u32>,
+    },
+    PassiveKindAndIndex {
+        kind: ElementKind,
+        fn_indices: Vec<'a, u32>,
+    },
+    ActiveExplicitTableKindAndIndex {
+        table_idx: u32,
+        offset: ConstExpr,
+        kind: ElementKind,
+        fn_indices: Vec<'a, u32>,
+    },
+    DeclarativeKindAndIndex {
+        kind: ElementKind,
+        fn_indices: Vec<'a, u32>,
+    },
+    ActiveImplicitTableTypeAndExpr {
+        offset: ConstExpr,
+        init: Vec<'a, ConstExpr>,
+    },
+    PassiveTypeAndExpr {
+        elem_type: RefType,
+        init: Vec<'a, ConstExpr>,
+    },
+    ActiveExplicitTableTypeAndExpr {
+        table_idx: u32,
+        offset: ConstExpr,
+        elem_type: RefType,
+        init: Vec<'a, ConstExpr>,
+    },
+    DeclarativeTypeAndExpr {
+        elem_type: RefType,
+        init: Vec<'a, ConstExpr>,
+    },
+}
+
+impl<'a> ElementSegment<'a> {
+    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Self {
+        // In practice we only need the original MVP format
+        let format_id = bytes[*cursor];
+        assert!(format_id == ElementSegmentFormatId::ActiveImplicitTableIndex as u8);
+        *cursor += 1;
+
+        // The table index offset is encoded as a ConstExpr, but only I32 makes sense
+        let const_expr_opcode = bytes[*cursor];
+        assert!(const_expr_opcode == OpCode::I32CONST as u8);
+        *cursor += 1;
+        let offset = parse_u32_or_panic(bytes, cursor);
+        assert!(bytes[*cursor] == OpCode::END as u8);
+        *cursor += 1;
+
+        let num_elems = parse_u32_or_panic(bytes, cursor);
+        let mut fn_indices = Vec::with_capacity_in(num_elems as usize, arena);
+        for _ in 0..num_elems {
+            let fn_idx = parse_u32_or_panic(bytes, cursor);
+
+            fn_indices.push(fn_idx);
+        }
+
+        ElementSegment::ActiveImplicitTableIndex {
+            offset: ConstExpr::I32(offset as i32),
+            fn_indices,
+        }
+    }
+
+    fn size(&self) -> usize {
+        let variant_id = 1;
+        let constexpr_opcode = 1;
+        let constexpr_value = MAX_SIZE_ENCODED_U32;
+        let vec_len = MAX_SIZE_ENCODED_U32;
+        let vec_contents = MAX_SIZE_ENCODED_U32
+            * if let ElementSegment::ActiveImplicitTableIndex { fn_indices, .. } = &self {
+                fn_indices.len()
+            } else {
+                internal_error!("Unsupported ElementSegment {:?}", self)
+            };
+        variant_id + constexpr_opcode + constexpr_value + vec_len + vec_contents
+    }
+}
+
+impl<'a> Serialize for ElementSegment<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        if let ElementSegment::ActiveImplicitTableIndex { offset, fn_indices } = &self {
+            buffer.append_u8(ElementSegmentFormatId::ActiveImplicitTableIndex as u8);
+            offset.serialize(buffer);
+            fn_indices.serialize(buffer);
+        } else {
+            internal_error!("Unsupported ElementSegment {:?}", self)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ElementSection<'a> {
+    segments: Vec<'a, ElementSegment<'a>>,
+}
+
+impl<'a> ElementSection<'a> {
+    const ID: SectionId = SectionId::Element;
+
+    pub fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+        let (num_segments, body_bytes) = parse_section(Self::ID, module_bytes, cursor);
+
+        let mut segments = Vec::with_capacity_in(num_segments as usize, arena);
+
+        let mut body_cursor = 0;
+        for _ in 0..num_segments {
+            let seg = ElementSegment::parse(arena, body_bytes, &mut body_cursor);
+            segments.push(seg);
+        }
+
+        ElementSection { segments }
+    }
+
+    pub fn size(&self) -> usize {
+        self.segments.iter().map(|seg| seg.size()).sum()
+    }
+}
+
+impl<'a> Serialize for ElementSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        let header_indices = write_section_header(buffer, Self::ID);
+        self.segments.serialize(buffer);
+        update_section_size(buffer, header_indices);
+    }
+}
+
+/*******************************************************************
+ *
  * Code section (see also code_builder.rs)
  *
  *******************************************************************/
