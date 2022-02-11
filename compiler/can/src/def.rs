@@ -9,6 +9,7 @@ use crate::expr::{
 };
 use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::procedure::References;
+use crate::scope::create_alias;
 use crate::scope::Scope;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
@@ -302,14 +303,21 @@ pub fn canonicalize_defs<'a>(
             continue;
         }
 
-        scope.add_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
-        let alias = scope.lookup_alias(symbol).expect("alias is added to scope");
+        let alias = create_alias(symbol, name.region, can_vars.clone(), can_ann.typ.clone());
         aliases.insert(symbol, alias.clone());
     }
 
     // Now that we know the alias dependency graph, we can try to insert recursion variables
     // where aliases are recursive tag unions, or detect illegal recursions.
-    correct_mutual_recursive_type_alias(env, &mut scope, &mut aliases, var_store);
+    let mut aliases = correct_mutual_recursive_type_alias(env, &aliases, var_store);
+    for (symbol, alias) in aliases.iter() {
+        scope.add_alias(
+            *symbol,
+            alias.region,
+            alias.type_variables.clone(),
+            alias.typ.clone(),
+        );
+    }
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
@@ -1534,18 +1542,17 @@ fn pending_typed_body<'a>(
 /// Make aliases recursive
 fn correct_mutual_recursive_type_alias<'a>(
     env: &mut Env<'a>,
-    scope: &mut Scope,
-    aliases: &mut SendMap<Symbol, Alias>,
+    original_aliases: &SendMap<Symbol, Alias>,
     var_store: &mut VarStore,
-) {
+) -> SendMap<Symbol, Alias> {
     let mut symbols_introduced = ImSet::default();
 
-    for (key, _) in aliases.iter() {
+    for (key, _) in original_aliases.iter() {
         symbols_introduced.insert(*key);
     }
 
     let all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
-        match aliases.get(symbol) {
+        match original_aliases.get(symbol) {
             Some(alias) => {
                 let mut loc_succ = alias.typ.symbols();
                 // remove anything that is not defined in the current block
@@ -1558,58 +1565,57 @@ fn correct_mutual_recursive_type_alias<'a>(
     };
 
     // TODO investigate should this be in a loop?
-    let defined_symbols: Vec<Symbol> = aliases.keys().copied().collect();
+    let defined_symbols: Vec<Symbol> = original_aliases.keys().copied().collect();
 
     let cycles = strongly_connected_components(&defined_symbols, all_successors_with_self);
+    let mut solved_aliases = SendMap::default();
 
-    'next_cycle: for cycle in cycles {
+    for cycle in cycles {
         debug_assert!(!cycle.is_empty());
+
+        let mut pending_aliases: SendMap<_, _> = cycle
+            .iter()
+            .map(|&sym| (sym, original_aliases.get(&sym).unwrap().clone()))
+            .collect();
 
         // Make sure we report only one error for the cycle, not an error for every
         // alias in the cycle.
         let mut can_still_report_error = true;
 
-        // Go through and mark every self- and mutually-recursive alias cycle recursive.
-        if cycle.len() == 1 {
-            let symbol = cycle[0];
-            let alias = aliases.get_mut(&symbol).unwrap();
-
-            if !alias.typ.contains_symbol(symbol) {
-                // This alias is neither self nor mutually recursive.
-                continue 'next_cycle;
+        for &rec in cycle.iter() {
+            // First, we need to instantiate the alias with any symbols in the currrent module it
+            // depends on.
+            // We only need to worry about symbols in this SCC or any prior one, since the SCCs
+            // were sorted topologically, and we've already instantiated aliases coming from other
+            // modules.
+            let mut to_instantiate: ImMap<_, _> = solved_aliases.clone().into_iter().collect();
+            let mut others_in_scc = Vec::with_capacity(cycle.len() - 1);
+            for &other in cycle.iter() {
+                if rec != other {
+                    others_in_scc.push(other);
+                    if let Some(alias) = original_aliases.get(&other) {
+                        to_instantiate.insert(other, alias.clone());
+                    }
+                }
             }
 
-            // This is a self-recursive cycle.
-            let mut can_still_report_error = true;
-            let mut opt_rec_var = None;
-
-            let _made_recursive = make_tag_union_of_alias_recursive(
-                env,
-                symbol,
-                alias,
-                vec![],
-                var_store,
-                &mut can_still_report_error,
-                &mut opt_rec_var,
-            );
-
-            scope.add_alias(
-                symbol,
+            let alias = pending_aliases.get_mut(&rec).unwrap();
+            alias.typ.instantiate_aliases(
                 alias.region,
-                alias.type_variables.clone(),
-                alias.typ.clone(),
+                &to_instantiate,
+                var_store,
+                &mut ImSet::default(),
             );
-        } else {
-            // This is a mutually recursive cycle.
-            let mut opt_rec_var = None;
 
-            // First mark everything in the cycle recursive, as it needs to be.
-            for symbol in cycle.iter() {
-                let alias = aliases.get_mut(&symbol).unwrap();
+            // Now mark the alias recursive, if it needs to be.
+            let is_self_recursive = alias.typ.contains_symbol(rec);
+            let is_mutually_recursive = cycle.len() > 1;
 
+            if is_self_recursive || is_mutually_recursive {
+                let mut opt_rec_var = None;
                 let _made_recursive = make_tag_union_of_alias_recursive(
                     env,
-                    *symbol,
+                    rec,
                     alias,
                     vec![],
                     var_store,
@@ -1617,62 +1623,38 @@ fn correct_mutual_recursive_type_alias<'a>(
                     &mut opt_rec_var,
                 );
             }
-
-            // Now go through and instantiate references that are recursive, but we didn't know
-            // they were until now.
-            //
-            // TODO use itertools to be more efficient here
-            for &rec in cycle.iter() {
-                let mut to_instantiate = ImMap::default();
-                let mut others = Vec::with_capacity(cycle.len() - 1);
-                for &other in cycle.iter() {
-                    if rec != other {
-                        others.push(other);
-                        if let Some(alias) = aliases.get(&other) {
-                            to_instantiate.insert(other, alias.clone());
-                        }
-                    }
-                }
-
-                if let Some(alias) = aliases.get_mut(&rec) {
-                    alias.typ.instantiate_aliases(
-                        alias.region,
-                        &to_instantiate,
-                        var_store,
-                        &mut ImSet::default(),
-                    );
-                }
-            }
         }
 
-        // The cycle we just marked recursive and instantiated may still be illegal cycles, if
+        // The cycle we just instantiated and marked recursive may still be an illegal cycle, if
         // all the types in the cycle are narrow newtypes. We can't figure this out until now,
         // because we need all the types to be deeply instantiated.
-
         let all_are_narrow = cycle.iter().all(|sym| {
-            let typ = &aliases.get(sym).unwrap().typ;
+            let typ = &pending_aliases.get(sym).unwrap().typ;
             typ.is_tag_union_like() && typ.is_narrow()
         });
-        if !all_are_narrow {
-            // We pass through at least one tag union that has a non-recursive variant, so this
-            // cycle is legal.
-            continue 'next_cycle;
+
+        if all_are_narrow {
+            // This cycle is illegal!
+            let mut rest = cycle;
+            let alias_name = rest.pop().unwrap();
+
+            let alias = pending_aliases.get_mut(&alias_name).unwrap();
+
+            mark_cyclic_alias(
+                env,
+                &mut alias.typ,
+                alias_name,
+                alias.region,
+                rest,
+                can_still_report_error,
+            )
         }
 
-        let mut rest = cycle;
-        let alias_name = rest.pop().unwrap();
-
-        let alias = aliases.get_mut(&alias_name).unwrap();
-
-        mark_cyclic_alias(
-            env,
-            &mut alias.typ,
-            alias_name,
-            alias.region,
-            rest,
-            can_still_report_error,
-        )
+        // Now, promote all resolved aliases in this cycle as solved.
+        solved_aliases.extend(pending_aliases);
     }
+
+    solved_aliases
 }
 
 fn make_tag_union_of_alias_recursive<'a>(

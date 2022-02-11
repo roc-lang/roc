@@ -3036,7 +3036,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn typecheck_mutually_recursive_tag_union_2() {
         infer_eq_without_problem(
             indoc!(
@@ -3064,7 +3063,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn typecheck_mutually_recursive_tag_union_listabc() {
         infer_eq_without_problem(
             indoc!(
@@ -5194,6 +5192,24 @@ mod solve_expr {
                 "#
             ),
             r#"{ bi128 : I128 -> I128, bi16 : I16 -> I16, bi32 : I32 -> I32, bi64 : I64 -> I64, bi8 : I8 -> I8, bnat : Nat -> Nat, bu128 : U128 -> U128, bu16 : U16 -> U16, bu32 : U32 -> U32, bu64 : U64 -> U64, bu8 : U8 -> U8, dec : Dec -> Dec, f32 : F32 -> F32, f64 : F64 -> F64, fdec : Dec -> Dec, ff32 : F32 -> F32, ff64 : F64 -> F64, i128 : I128 -> I128, i16 : I16 -> I16, i32 : I32 -> I32, i64 : I64 -> I64, i8 : I8 -> I8, nat : Nat -> Nat, u128 : U128 -> U128, u16 : U16 -> U16, u32 : U32 -> U32, u64 : U64 -> U64, u8 : U8 -> U8 }"#,
+        )
+    }
+
+    #[test]
+    fn issue_2458() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Foo a : [ Blah (Result (Bar a) { val: a }) ]
+                Bar a : Foo a
+
+                v : Bar U8
+                v = Blah (Ok (Blah (Err { val: 1 })))
+
+                v
+                "#
+            ),
+            "Bar U8",
         )
     }
 }
