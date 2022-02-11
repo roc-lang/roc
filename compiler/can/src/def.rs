@@ -1612,7 +1612,6 @@ fn correct_mutual_recursive_type_alias<'a>(
             let is_mutually_recursive = cycle.len() > 1;
 
             if is_self_recursive || is_mutually_recursive {
-                let mut opt_rec_var = None;
                 let _made_recursive = make_tag_union_of_alias_recursive(
                     env,
                     rec,
@@ -1620,7 +1619,6 @@ fn correct_mutual_recursive_type_alias<'a>(
                     vec![],
                     var_store,
                     &mut can_still_report_error,
-                    &mut opt_rec_var,
                 );
             }
         }
@@ -1664,7 +1662,6 @@ fn make_tag_union_of_alias_recursive<'a>(
     others: Vec<Symbol>,
     var_store: &mut VarStore,
     can_report_error: &mut bool,
-    opt_rec_var: &mut Option<Variable>,
 ) -> Result<(), ()> {
     let alias_args = alias
         .type_variables
@@ -1680,7 +1677,6 @@ fn make_tag_union_of_alias_recursive<'a>(
         &mut alias.typ,
         var_store,
         can_report_error,
-        opt_rec_var,
     )
 }
 
@@ -1713,7 +1709,6 @@ fn make_tag_union_recursive_help<'a>(
     typ: &mut Type,
     var_store: &mut VarStore,
     can_report_error: &mut bool,
-    opt_rec_var: &mut Option<Variable>,
 ) -> Result<(), ()> {
     let Loc {
         value: (symbol, args),
@@ -1722,10 +1717,7 @@ fn make_tag_union_recursive_help<'a>(
     let vars = args.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
     match typ {
         Type::TagUnion(tags, ext) => {
-            if opt_rec_var.is_none() {
-                *opt_rec_var = Some(var_store.fresh());
-            }
-            let rec_var = opt_rec_var.unwrap();
+            let rec_var = var_store.fresh();
             let mut pending_typ = Type::RecursiveTagUnion(rec_var, tags.to_vec(), ext.clone());
             let substitution_result =
                 pending_typ.substitute_alias(symbol, &vars, &Type::Variable(rec_var));
@@ -1758,7 +1750,6 @@ fn make_tag_union_recursive_help<'a>(
             actual,
             var_store,
             can_report_error,
-            opt_rec_var,
         ),
         _ => {
             mark_cyclic_alias(env, typ, symbol, region, others.clone(), *can_report_error);
