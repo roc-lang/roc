@@ -2852,7 +2852,7 @@ mod test_reporting {
                     ^^^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7075,7 +7075,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7102,7 +7102,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7128,7 +7128,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7973,6 +7973,97 @@ I need all branches in an `if` to have the same type!
                 But the expression between `when` and `is` has the type:
 
                     I8, I16, I32, I64, I128, F32, F64, or Dec
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype() {
+        report_problem_as(
+            indoc!(
+                r#"
+                R a : [ Only (R a) ]
+
+                v : R U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `R` alias is self-recursive in an invalid way:
+
+                1│  R a : [ Only (R a) ]
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype_deep() {
+        report_problem_as(
+            indoc!(
+                r#"
+                R a : [ Only { very: [ Deep (R a) ] } ]
+
+                v : R U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `R` alias is self-recursive in an invalid way:
+
+                1│  R a : [ Only { very: [ Deep (R a) ] } ]
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype_mutual() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo a : [ Thing (Bar a) ]
+                Bar a : [ Stuff (Foo a) ]
+
+                v : Bar U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `Bar` alias is recursive in an invalid way:
+
+                2│  Bar a : [ Stuff (Foo a) ]
+                    ^^^^^
+
+                The `Bar` alias depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     Bar
+                    │     ↓
+                    │     Foo
+                    └─────┘
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )

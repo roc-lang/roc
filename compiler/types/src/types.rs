@@ -3,6 +3,7 @@ use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
 use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -867,6 +868,54 @@ impl Type {
                 typ.instantiate_aliases(region, aliases, var_store, introduced);
             }
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
+        }
+    }
+
+    pub fn is_tag_union_like(&self) -> bool {
+        matches!(
+            self,
+            Type::TagUnion(..)
+                | Type::RecursiveTagUnion(..)
+                | Type::FunctionOrTagUnion(..)
+                | Type::EmptyTagUnion
+        )
+    }
+
+    /// We say a type is "narrow" if no type composing it is a proper sum; that is, no type
+    /// composing it is a tag union with more than one variant.
+    ///
+    /// The types checked here must have all of their non-builtin `Apply`s instantiated, as a
+    /// non-instantiated `Apply` would be ambiguous.
+    ///
+    /// The following are narrow:
+    ///
+    ///     U8
+    ///     [ A I8 ]
+    ///     [ A [ B [ C U8 ] ] ]
+    ///     [ A (R a) ] as R a
+    ///
+    /// The following are not:
+    ///
+    ///     [ A I8, B U8 ]
+    ///     [ A [ B [ Result U8 {} ] ] ]         (Result U8 {} is actually [ Ok U8, Err {} ])
+    ///     [ A { lst: List (R a) } ] as R a     (List a is morally [ Cons (List a), Nil ] as List a)
+    pub fn is_narrow(&self) -> bool {
+        match self.shallow_dealias() {
+            Type::TagUnion(tags, ext) | Type::RecursiveTagUnion(_, tags, ext) => {
+                ext.is_empty_tag_union()
+                    && tags.len() == 1
+                    && tags[0].1.len() == 1
+                    && tags[0].1[0].is_narrow()
+            }
+            Type::Record(fields, ext) => {
+                fields.values().all(|field| field.as_inner().is_narrow()) && ext.is_narrow()
+            }
+            // Lists and sets are morally two-tagged unions, as they can be empty
+            Type::Apply(Symbol::LIST_LIST | Symbol::SET_SET, _, _) => false,
+            Type::Apply(..) => internal_error!("cannot chase an Apply!"),
+            Type::Alias { .. } => internal_error!("should be dealiased"),
+            // Non-composite types are trivially narrow
+            _ => true,
         }
     }
 }
