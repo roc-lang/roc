@@ -81,7 +81,7 @@ with = \path, callback ->
     # I cant define scope here and put it in the list in callback. It breaks alias anaysis.
     # Instead I have to inline this.
     # root_scope = { data: Some handle, index: 0, buf: [], whileInfo: None }
-    callback { scopes: [ { data: Some handle, index: 0, buf: [], whileInfo: None } ], state: Executing, stack: [], vars: List.repeat Variable.totalCount (Number 0) }
+    callback { scopes: [ { data: Some handle, index: 0, buf: [], whileInfo: None } ], state: Executing, stack: [], vars: List.repeat (Number 0) Variable.totalCount }
 
 # I am pretty sure there is a syntax to destructure and keep a reference to the whole, but Im not sure what it is.
 getChar : Context -> Task [ T U8 Context ] [ EndOfData, NoScope ]*

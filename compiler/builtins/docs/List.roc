@@ -207,7 +207,7 @@ empty : List *
 ## Returns a list with the given length, where every element is the given value.
 ##
 ##
-repeat : Nat, elem -> List elem
+repeat : elem, Nat -> List elem
 
 ## Returns a list of all the integers between one and another,
 ## including both of the given numbers.

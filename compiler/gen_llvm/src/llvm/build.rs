@@ -5484,13 +5484,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_single(env, arg, arg_layout)
         }
         ListRepeat => {
-            // List.repeat : Int, elem -> List elem
+            // List.repeat : elem, Int -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let list_len = load_symbol(scope, &args[0]).into_int_value();
-            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[0]);
+            let list_len = load_symbol(scope, &args[1]).into_int_value();
 
-            list_repeat(env, layout_ids, list_len, elem, elem_layout)
+            list_repeat(env, layout_ids, elem, elem_layout, list_len)
         }
         ListReverse => {
             // List.reverse : List elem -> List elem

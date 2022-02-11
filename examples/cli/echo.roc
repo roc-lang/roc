@@ -18,7 +18,7 @@ echo = \shout ->
     silence = \length ->
         spaceInUtf8 = 32
 
-        List.repeat length spaceInUtf8
+        List.repeat spaceInUtf8 length
 
     shout
         |> Str.toUtf8

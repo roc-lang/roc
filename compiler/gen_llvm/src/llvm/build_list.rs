@@ -119,13 +119,13 @@ pub fn list_single<'a, 'ctx, 'env>(
     )
 }
 
-/// List.repeat : Int, elem -> List elem
+/// List.repeat : elem, Int -> List elem
 pub fn list_repeat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    list_len: IntValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
+    list_len: IntValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let inc_element_fn = build_inc_n_wrapper(env, layout_ids, element_layout);
 
