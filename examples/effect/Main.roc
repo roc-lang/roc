@@ -1,5 +1,5 @@
 app "effect-example"
-    packages { pf: "thing/platform-dir" }
+    packages { pf: "platform" }
     imports [ pf.Effect ]
     provides [ main ] to pf
 
