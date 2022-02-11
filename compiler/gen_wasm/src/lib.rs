@@ -213,7 +213,7 @@ macro_rules! round_up_to_alignment {
         if $alignment_bytes <= 1 {
             $unaligned
         } else if $alignment_bytes.count_ones() != 1 {
-            panic!(
+            internal_error!(
                 "Cannot align to {} bytes. Not a power of 2.",
                 $alignment_bytes
             );
