@@ -30,6 +30,7 @@ members = [
     "ast",
     "cli",
     "code_markup",
+    "highlight",
     "reporting",
     "roc_std",
     "test_utils",

@@ -1232,7 +1232,7 @@ fn test_record_def_6() {
         e: f,
     },
 }"#);
-   
+   dbg!(&tokens);
   assert_eq!(tokenparser::def(&tokens), Ok(()));
 }
 
