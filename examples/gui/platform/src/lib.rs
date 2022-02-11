@@ -7,6 +7,7 @@ use std::os::raw::c_char;
 
 mod graphics;
 mod gui;
+mod rects_and_texts;
 
 extern "C" {
     #[link_name = "roc__renderForHost_1_exposed"]

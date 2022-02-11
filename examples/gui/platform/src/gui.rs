@@ -1,7 +1,7 @@
-use crate::graphics::{
+use crate::{graphics::{
     lowlevel::buffer::create_rect_buffers, lowlevel::ortho::update_ortho_buffer,
-    lowlevel::pipelines, primitives::rect::Rect, primitives::text::build_glyph_brush,
-};
+    lowlevel::pipelines, primitives::rect::Rect, primitives::text::{build_glyph_brush, owned_section_from_text, Text}, colors,
+}, rects_and_texts::RectsAndTexts};
 use pipelines::RectResources;
 use roc_std::RocStr;
 use std::error::Error;
@@ -87,6 +87,19 @@ fn run_event_loop(title: &str) -> Result<(), Box<dyn Error>> {
     let is_animating = true;
 
     let mut keyboard_modifiers = ModifiersState::empty();
+
+    let mut rects_and_texts = RectsAndTexts::new();
+
+    let hello_text = owned_section_from_text(&Text {
+        position: (50.0, 50.0).into(),
+        area_bounds: (size.width as f32, size.height as f32).into(),
+        color: colors::WHITE,
+        text: "Hello, World!",
+        size: 40.0,
+        ..Default::default()
+    });
+
+    rects_and_texts.add_text_behind(hello_text);
 
     // Render loop
     window.request_redraw();
@@ -192,11 +205,11 @@ fn run_event_loop(title: &str) -> Result<(), Box<dyn Error>> {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                // for text_section in &rendered_wgpu.text_sections_behind {
-                //     let borrowed_text = text_section.to_borrowed();
+                for text_section in &rects_and_texts.text_sections_behind {
+                     let borrowed_text = text_section.to_borrowed();
 
-                //     glyph_brush.queue(borrowed_text);
-                // }
+                     glyph_brush.queue(borrowed_text);
+                }
 
                 // draw first layer of text
                 glyph_brush
