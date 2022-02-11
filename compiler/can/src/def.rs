@@ -1752,7 +1752,7 @@ fn make_tag_union_recursive_help<'a>(
             can_report_error,
         ),
         _ => {
-            mark_cyclic_alias(env, typ, symbol, region, others.clone(), *can_report_error);
+            mark_cyclic_alias(env, typ, symbol, region, others, *can_report_error);
             *can_report_error = false;
 
             Ok(())
