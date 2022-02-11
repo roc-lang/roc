@@ -334,7 +334,7 @@ mod cli_run {
         },
         hello_zig:"hello-zig" => Example {
             filename: "Hello.roc",
-            executable_filename: "hello-world",
+            executable_filename: "hello-zig",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
