@@ -1,4 +1,4 @@
-platform "folkertdev/foo"
+platform "tui"
     requires { Model } { main : Effect {} }
     exposes []
     packages {}

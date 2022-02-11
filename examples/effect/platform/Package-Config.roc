@@ -1,4 +1,4 @@
-platform "roc-examples/cli"
+platform "effects"
     requires {} { main : Effect {} }
     exposes []
     packages {}

@@ -1,4 +1,4 @@
-platform "examples/hello-swift"
+platform "hello-swift"
     requires {} { main : Str }
     exposes []
     packages {}

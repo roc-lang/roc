@@ -1,4 +1,4 @@
-platform "examples/add"
+platform "fib"
     requires {} { main : I64 -> I64 }
     exposes []
     packages {}
