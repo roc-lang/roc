@@ -330,9 +330,12 @@ macro_rules! assert_evals_to {
         $crate::helpers::wasm::assert_evals_to!($src, $expected, $ty, $transform, false);
     };
 
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems: expr) => {{
+    // LLVM tests call the last arg $ignore_problems rather than $expect_panic
+    // Either way, it's only `true` for tests that use `should_panic`.
+    // In Wasm, `should_panic` only works if we spawn a child process.
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $expect_panic: expr) => {{
         let phantom = std::marker::PhantomData;
-        let _ = $ignore_problems; // Ignore `ignore_problems`! It is used for LLVM tests.
+        let _ = $expect_panic; // TODO
         match $crate::helpers::wasm::assert_evals_to_help::<$ty>($src, phantom) {
             Err(msg) => panic!("{}", msg),
             Ok(actual) => {
