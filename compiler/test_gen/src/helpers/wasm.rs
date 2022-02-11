@@ -18,6 +18,7 @@ const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
+const GET_PANIC_MSG_NAME: &str = "get_panic_msg";
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -136,6 +137,15 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         index: init_refcount_idx,
     });
 
+    // Export the getter function for panic messages
+    let get_panic_msg_bytes = GET_PANIC_MSG_NAME.as_bytes();
+    let get_panic_msg_idx = module.names.functions[get_panic_msg_bytes];
+    module.export.append(Export {
+        name: arena.alloc_slice_copy(get_panic_msg_bytes),
+        ty: ExportType::Func,
+        index: get_panic_msg_idx,
+    });
+
     module.remove_dead_preloads(env.arena, called_preload_fns);
 
     let mut app_module_bytes = std::vec::Vec::with_capacity(module.size());
@@ -194,7 +204,10 @@ where
     let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
 
     match test_wrapper.call(&[]) {
-        Err(e) => Err(format!("{:?}", e)),
+        Err(e) => match get_panic_msg(&instance, memory) {
+            Ok(msg) => Err(msg),
+            Err(_) => Err(format!("{}", e)),
+        },
         Ok(result) => {
             let address = match result[0] {
                 wasmer::Value::I32(a) => a,
@@ -216,6 +229,35 @@ where
             Ok(output)
         }
     }
+}
+
+/// Call our test platform's getter function for panic messages
+fn get_panic_msg(instance: &wasmer::Instance, memory: &wasmer::Memory) -> Result<String, String> {
+    let msg_getter = instance
+        .exports
+        .get_function(GET_PANIC_MSG_NAME)
+        .map_err(|e| format!("{:?}", e))?;
+
+    let msg_result = msg_getter.call(&[]).map_err(|e| format!("{:?}", e))?;
+
+    let msg_addr: i32 = match msg_result[0] {
+        wasmer::Value::I32(a) => a,
+        _ => panic!(),
+    };
+    if msg_addr == 0 {
+        return Err("no panic msg".to_string());
+    }
+
+    let msg_index = msg_addr as usize;
+    let memory_bytes = unsafe { memory.data_unchecked() };
+    let msg_len = memory_bytes[msg_index..]
+        .iter()
+        .position(|c| *c == 0)
+        .unwrap();
+
+    let msg_bytes = &memory_bytes[msg_index..msg_len];
+    let msg = unsafe { String::from_utf8_unchecked(msg_bytes.to_vec()) };
+    Ok(msg)
 }
 
 #[allow(dead_code)]
