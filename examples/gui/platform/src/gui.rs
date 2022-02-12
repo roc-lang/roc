@@ -1,7 +1,14 @@
-use crate::{graphics::{
-    lowlevel::buffer::create_rect_buffers, lowlevel::ortho::update_ortho_buffer,
-    lowlevel::pipelines, primitives::rect::Rect, primitives::text::{build_glyph_brush, owned_section_from_text, Text}, colors,
-}, rects_and_texts::RectsAndTexts};
+use crate::{
+    graphics::{
+        colors::{self, from_hsb, to_wgpu_color},
+        lowlevel::buffer::create_rect_buffers,
+        lowlevel::ortho::update_ortho_buffer,
+        lowlevel::pipelines,
+        primitives::rect::Rect,
+        primitives::text::{build_glyph_brush, owned_section_from_text, Text},
+    },
+    rects_and_texts::RectsAndTexts,
+};
 use pipelines::RectResources;
 use roc_std::RocStr;
 use std::error::Error;
@@ -20,7 +27,7 @@ use winit::{
 //
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
-fn run_event_loop(title: &str) -> Result<(), Box<dyn Error>> {
+fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box<dyn Error>> {
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
     let mut needs_repaint = true;
@@ -87,19 +94,6 @@ fn run_event_loop(title: &str) -> Result<(), Box<dyn Error>> {
     let is_animating = true;
 
     let mut keyboard_modifiers = ModifiersState::empty();
-
-    let mut rects_and_texts = RectsAndTexts::new();
-
-    let hello_text = owned_section_from_text(&Text {
-        position: (50.0, 50.0).into(),
-        area_bounds: (size.width as f32, size.height as f32).into(),
-        color: colors::WHITE,
-        text: "Hello, World!",
-        size: 40.0,
-        ..Default::default()
-    });
-
-    rects_and_texts.add_text_behind(hello_text);
 
     // Render loop
     window.request_redraw();
@@ -205,10 +199,19 @@ fn run_event_loop(title: &str) -> Result<(), Box<dyn Error>> {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                for text_section in &rects_and_texts.text_sections_behind {
-                     let borrowed_text = text_section.to_borrowed();
+                draw_rects(
+                    &rects_and_texts.rects_behind,
+                    &mut encoder,
+                    &view,
+                    &gpu_device,
+                    &rect_resources,
+                    wgpu::LoadOp::Clear(to_wgpu_color(from_hsb(240, 10, 19))),
+                );
 
-                     glyph_brush.queue(borrowed_text);
+                for text_section in &rects_and_texts.text_sections_behind {
+                    let borrowed_text = text_section.to_borrowed();
+
+                    glyph_brush.queue(borrowed_text);
                 }
 
                 // draw first layer of text
@@ -224,20 +227,20 @@ fn run_event_loop(title: &str) -> Result<(), Box<dyn Error>> {
                     .expect("Failed to draw first layer of text.");
 
                 // draw rects on top of first text layer
-                // draw_rects(
-                //     &rendered_wgpu.rects_front,
-                //     &mut encoder,
-                //     &view,
-                //     &gpu_device,
-                //     &rect_resources,
-                //     wgpu::LoadOp::Load,
-                // );
+                draw_rects(
+                    &rects_and_texts.rects_front,
+                    &mut encoder,
+                    &view,
+                    &gpu_device,
+                    &rect_resources,
+                    wgpu::LoadOp::Load,
+                );
 
-                // for text_section in &rendered_wgpu.text_sections_front {
-                //     let borrowed_text = text_section.to_borrowed();
+                for text_section in &rects_and_texts.text_sections_front {
+                    let borrowed_text = text_section.to_borrowed();
 
-                //     glyph_brush.queue(borrowed_text);
-                // }
+                    glyph_brush.queue(borrowed_text);
+                }
 
                 // draw text
                 glyph_brush
@@ -315,5 +318,45 @@ fn begin_render_pass<'a>(
 }
 
 pub fn render(title: RocStr) {
-    run_event_loop(title.as_str()).expect("Error running event loop")
+    let rects_behind = vec![
+        Rect {
+            top_left_coords: (20.0, 20.0).into(),
+            width: 200.0,
+            height: 100.0,
+            color: (0.4, 0.2, 0.5, 1.0),
+        }
+    ];
+
+    let texts_behind = vec![
+        Text {
+            position: (50.0, 50.0).into(),
+            color: colors::WHITE,
+            text: "Back",
+            size: 40.0,
+            ..Default::default()
+        }
+    ];
+
+    let rects_front = vec![
+        Rect {
+            top_left_coords: (30.0, 30.0).into(),
+            width: 70.0,
+            height: 70.0,
+            color: (0.7, 0.2, 0.2, 0.6),
+        }
+    ];
+
+    let texts_front = vec![
+        Text {
+            position: (70.0, 70.0).into(),
+        color: colors::WHITE,
+        text: "Front",
+        size: 40.0,
+        ..Default::default()
+        }
+    ];
+
+    let rects_and_texts = RectsAndTexts::init(rects_behind, texts_behind, rects_front, texts_front);
+
+    run_event_loop(title.as_str(), rects_and_texts).expect("Error running event loop");
 }

@@ -1,4 +1,3 @@
-
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text::{owned_section_from_text, Text};
 
@@ -17,6 +16,15 @@ impl RectsAndTexts {
             text_sections_front: Vec::new(),
             rects_behind: Vec::new(),
             rects_front: Vec::new(),
+        }
+    }
+
+    pub fn init(rects_behind: Vec<Rect>, texts_behind: Vec<Text>, rects_front: Vec<Rect>, texts_front: Vec<Text>) -> Self {
+        Self {
+            text_sections_behind: texts_behind.iter().map(|txt| owned_section_from_text(txt)).collect(),
+            text_sections_front: texts_front.iter().map(|txt| owned_section_from_text(txt)).collect(),
+            rects_behind,
+            rects_front,
         }
     }
 

@@ -2862,9 +2862,18 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "const_format",
+ "inkwell 0.1.0",
+ "libloading 0.7.1",
+ "roc_build",
+ "roc_builtins",
+ "roc_collections",
+ "roc_gen_llvm",
+ "roc_load",
  "roc_mono",
  "roc_parse",
  "roc_repl_eval",
+ "roc_target",
+ "roc_types",
  "rustyline",
  "rustyline-derive",
  "target-lexicon",
@@ -2875,14 +2884,10 @@ name = "roc_repl_eval"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "inkwell 0.1.0",
- "libloading 0.7.1",
- "roc_build",
  "roc_builtins",
  "roc_can",
  "roc_collections",
  "roc_fmt",
- "roc_gen_llvm",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -2891,7 +2896,6 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
- "target-lexicon",
 ]
 
 [[package]]
