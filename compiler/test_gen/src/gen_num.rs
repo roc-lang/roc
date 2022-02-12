@@ -2054,6 +2054,286 @@ fn max_u8() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toI8 TODO
+                "#
+        ),
+        i8::MAX, // TODO
+        i8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i8_checked() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toI8Checked TODO
+                "#
+        ),
+        i8::MAX, // TODO
+        i8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toI16 TODO
+                "#
+        ),
+        i16::MAX, // TODO
+        i16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i16_checked() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toI16Checked TODO
+                "#
+        ),
+        i16::MAX, // TODO
+        i16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toI32 TODO
+                "#
+        ),
+        i32::MAX, // TODO
+        i32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i32_checked() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toI32Checked TODO
+                "#
+        ),
+        i32::MAX, // TODO
+        i32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toI64 TODO
+                "#
+        ),
+        i64::MAX, // TODO
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i64_checked() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toI64Checked TODO
+                "#
+        ),
+        i64::MAX, // TODO
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toI128 TODO
+                "#
+        ),
+        i128::MAX, // TODO
+        i128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i128_checked() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toI128Checked TODO
+                "#
+        ),
+        i128::MAX, // TODO
+        i128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toU8 TODO
+                "#
+        ),
+        u8::MAX, // TODO
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u8_checked() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toU8Checked TODO
+                "#
+        ),
+        u8::MAX, // TODO
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toU16 TODO
+                "#
+        ),
+        u16::MAX, // TODO
+        u16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u16_checked() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toU16Checked TODO
+                "#
+        ),
+        u16::MAX, // TODO
+        u16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toU32 TODO
+                "#
+        ),
+        u32::MAX, // TODO
+        u32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u32_checked() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toU32Checked TODO
+                "#
+        ),
+        u32::MAX, // TODO
+        u32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toU64 TODO
+                "#
+        ),
+        u64::MAX, // TODO
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u64_checked() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toU64Checked TODO
+                "#
+        ),
+        u64::MAX, // TODO
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toU128 TODO
+                "#
+        ),
+        u128::MAX, // TODO
+        u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u128_checked() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.toU128Checked TODO
+                "#
+        ),
+        u128::MAX, // TODO
+        u128
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn is_multiple_of() {
     // true

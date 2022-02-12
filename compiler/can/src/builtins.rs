@@ -242,6 +242,26 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_MAX_U64=> num_max_u64,
         NUM_MIN_I128=> num_min_i128,
         NUM_MAX_I128=> num_max_i128,
+        NUM_TO_I8 => num_to_i8,
+        NUM_TO_I8_CHECKED => num_to_i8_checked,
+        NUM_TO_I16 => num_to_i16,
+        NUM_TO_I16_CHECKED => num_to_i16_checked,
+        NUM_TO_I32 => num_to_i32,
+        NUM_TO_I32_CHECKED => num_to_i32_checked,
+        NUM_TO_I64 => num_to_i64,
+        NUM_TO_I64_CHECKED => num_to_i64_checked,
+        NUM_TO_I128 => num_to_i128,
+        NUM_TO_I128_CHECKED => num_to_i128_checked,
+        NUM_TO_U8 => num_to_u8,
+        NUM_TO_U8_CHECKED => num_to_u8_checked,
+        NUM_TO_U16 => num_to_u16,
+        NUM_TO_U16_CHECKED => num_to_u16_checked,
+        NUM_TO_U32 => num_to_u32,
+        NUM_TO_U32_CHECKED => num_to_u32_checked,
+        NUM_TO_U64 => num_to_u64,
+        NUM_TO_U64_CHECKED => num_to_u64_checked,
+        NUM_TO_U128 => num_to_u128,
+        NUM_TO_U128_CHECKED => num_to_u128_checked,
         NUM_TO_STR => num_to_str,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
@@ -388,6 +408,256 @@ fn lowlevel_5(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
         body,
         ret_var,
     )
+}
+
+// Num.toI8 : Int * -> I8
+fn num_to_i8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let i8_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(int_var, Var(Symbol::ARG_1))],
+        ret_var: i8_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        i8_var,
+    )
+}
+
+// Num.toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
+fn num_to_i8_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // TODO
+}
+
+// Num.toI16 : Int * -> I16
+fn num_to_i16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let i16_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(int_var, Var(Symbol::ARG_1))],
+        ret_var: i16_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        i16_var,
+    )
+}
+
+// Num.toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
+fn num_to_i16_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // TODO
+}
+
+// Num.toI32 : Int * -> I32
+fn num_to_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let i32_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(int_var, Var(Symbol::ARG_1))],
+        ret_var: i32_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        i32_var,
+    )
+}
+
+// Num.toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
+fn num_to_i32_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // TODO
+}
+
+// Num.toI64 : Int * -> I64
+fn num_to_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let i64_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(int_var, Var(Symbol::ARG_1))],
+        ret_var: i64_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        i64_var,
+    )
+}
+
+// Num.toI64Checked : Int * -> Result I64 [ OutOfBounds ]*
+fn num_to_i64_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // TODO
+}
+
+// Num.toI128 : Int * -> I128
+fn num_to_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let i128_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(int_var, Var(Symbol::ARG_1))],
+        ret_var: i128_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        i128_var,
+    )
+}
+
+// Num.toI128Checked : Int * -> Result I128 [ OutOfBounds ]*
+fn num_to_i128_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // TODO
+}
+
+// Num.toU8 : Int * -> U8
+fn num_to_u8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let u8_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(int_var, Var(Symbol::ARG_1))],
+        ret_var: u8_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        u8_var,
+    )
+}
+
+// Num.toU8Checked : Int * -> Result U8 [ OutOfBounds ]*
+fn num_to_u8_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // TODO
+}
+
+// Num.toU16 : Int * -> U16
+fn num_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let u16_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(int_var, Var(Symbol::ARG_1))],
+        ret_var: u16_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        u16_var,
+    )
+}
+
+// Num.toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
+fn num_to_u16_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // TODO
+}
+
+// Num.toU32 : Int * -> U32
+fn num_to_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let u32_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(int_var, Var(Symbol::ARG_1))],
+        ret_var: u32_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        u32_var,
+    )
+}
+
+// Num.toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
+fn num_to_u32_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // TODO
+}
+
+// Num.toU64 : Int * -> U64
+fn num_to_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let u64_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(int_var, Var(Symbol::ARG_1))],
+        ret_var: u64_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        u64_var,
+    )
+}
+
+// Num.toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
+fn num_to_u64_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // TODO
+}
+
+// Num.toU128 : Int * -> U128
+fn num_to_u128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let u128_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(int_var, Var(Symbol::ARG_1))],
+        ret_var: u128_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        u128_var,
+    )
+}
+
+// Num.toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+fn num_to_u128_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // TODO
 }
 
 // Num.toStr : Num a -> Str
