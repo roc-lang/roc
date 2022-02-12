@@ -377,8 +377,8 @@ impl<'a> ImportSection<'a> {
         self.count += 1;
     }
 
-    fn update_function_count(&mut self) {
-        let mut f_count = 0;
+    pub fn parse(&mut self, arena: &'a Bump) -> Vec<'a, u32> {
+        let mut fn_signatures = bumpalo::vec![in arena];
         let mut cursor = 0;
         while cursor < self.bytes.len() {
             String::skip_bytes(&self.bytes, &mut cursor);
@@ -389,8 +389,7 @@ impl<'a> ImportSection<'a> {
 
             match type_id {
                 ImportTypeId::Func => {
-                    f_count += 1;
-                    u32::skip_bytes(&self.bytes, &mut cursor);
+                    fn_signatures.push(parse_u32_or_panic(&self.bytes, &mut cursor));
                 }
                 ImportTypeId::Table => {
                     TableType::skip_bytes(&self.bytes, &mut cursor);
@@ -404,17 +403,16 @@ impl<'a> ImportSection<'a> {
             }
         }
 
-        self.function_count = f_count;
+        self.function_count = fn_signatures.len() as u32;
+        fn_signatures
     }
 
     pub fn from_count_and_bytes(count: u32, bytes: Vec<'a, u8>) -> Self {
-        let mut created = ImportSection {
+        ImportSection {
             bytes,
             count,
             function_count: 0,
-        };
-        created.update_function_count();
-        created
+        }
     }
 }
 
@@ -441,6 +439,16 @@ impl<'a> FunctionSection<'a> {
     pub fn add_sig(&mut self, sig_id: u32) {
         self.bytes.encode_u32(sig_id);
         self.count += 1;
+    }
+
+    pub fn parse(&self, arena: &'a Bump) -> Vec<'a, u32> {
+        let count = self.count as usize;
+        let mut signatures = Vec::with_capacity_in(count, arena);
+        let mut cursor = 0;
+        for _ in 0..count {
+            signatures.push(parse_u32_or_panic(&self.bytes, &mut cursor));
+        }
+        signatures
     }
 }
 
@@ -887,6 +895,18 @@ impl<'a> ElementSection<'a> {
     pub fn size(&self) -> usize {
         self.segments.iter().map(|seg| seg.size()).sum()
     }
+
+    pub fn indirect_callees(&self, arena: &'a Bump) -> Vec<'a, u32> {
+        let mut result = bumpalo::vec![in arena];
+        for segment in self.segments.iter() {
+            if let ElementSegment::ActiveImplicitTableIndex { fn_indices, .. } = segment {
+                result.extend_from_slice(fn_indices);
+            } else {
+                internal_error!("Unsupported ElementSegment {:?}", self)
+            }
+        }
+        result
+    }
 }
 
 impl<'a> Serialize for ElementSection<'a> {
@@ -940,14 +960,21 @@ impl<'a> CodeSection<'a> {
         arena: &'a Bump,
         module_bytes: &[u8],
         cursor: &mut usize,
-        import_fn_count: u32,
+        import_signatures: &[u32],
+        function_signatures: &[u32],
+        indirect_callees: &[u32],
     ) -> Self {
         let (preloaded_count, initial_bytes) = parse_section(SectionId::Code, module_bytes, cursor);
         let preloaded_bytes = arena.alloc_slice_copy(initial_bytes);
 
         // TODO: Try to move this call_graph preparation to platform build time
-        let dead_code_metadata =
-            parse_preloads_call_graph(arena, preloaded_count, initial_bytes, import_fn_count);
+        let dead_code_metadata = parse_preloads_call_graph(
+            arena,
+            initial_bytes,
+            import_signatures,
+            function_signatures,
+            indirect_callees,
+        );
 
         CodeSection {
             preloaded_count,
