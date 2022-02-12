@@ -816,16 +816,17 @@ impl Type {
                         substitution.insert(*placeholder, filler);
                     }
 
+                    // make sure hidden variables are freshly instantiated
                     let mut lambda_set_variables =
                         Vec::with_capacity(alias.lambda_set_variables.len());
-                    for lambda_set in alias.lambda_set_variables.iter() {
-                        let fresh = var_store.fresh();
-                        introduced.insert(fresh);
-
-                        lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
-
-                        if let Type::Variable(lambda_set_var) = lambda_set.0 {
-                            substitution.insert(lambda_set_var, Type::Variable(fresh));
+                    for typ in alias.lambda_set_variables.iter() {
+                        if let Type::Variable(var) = typ.0 {
+                            let fresh = var_store.fresh();
+                            introduced.insert(fresh);
+                            substitution.insert(var, Type::Variable(fresh));
+                            lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
+                        } else {
+                            unreachable!("at this point there should be only vars in there");
                         }
                     }
 
