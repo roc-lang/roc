@@ -4,7 +4,6 @@ struct VertexOutput {
     [[builtin(position)]] position: vec4<f32>;
 };
 
-[[block]]
 struct Globals {
     ortho: mat4x4<f32>;
 };

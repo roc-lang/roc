@@ -5,7 +5,7 @@ use crate::{
         lowlevel::ortho::update_ortho_buffer,
         lowlevel::pipelines,
         primitives::rect::Rect,
-        primitives::text::{build_glyph_brush, owned_section_from_text, Text},
+        primitives::text::{build_glyph_brush, Text},
     },
     rects_and_texts::RectsAndTexts,
 };
@@ -30,7 +30,6 @@ use winit::{
 fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box<dyn Error>> {
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
-    let mut needs_repaint = true;
 
     let window = winit::window::WindowBuilder::new()
         .with_inner_size(PhysicalSize::new(1900.0, 1000.0))

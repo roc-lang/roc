@@ -25,10 +25,10 @@ roc_std = { path = "../../../roc_std" }
 libc = "0.2"
 arrayvec = "0.7.2"
 page_size = "0.4.2"
-# once winit 0.26 is out, check if copypasta can be updated simultaneously so they use the same versions for their dependencies. This will save build time.
-winit = "0.25.0"
-wgpu = "0.11.0"
-wgpu_glyph = "0.15.1"
+# when changing winit version, check if copypasta can be updated simultaneously so they use the same versions for their dependencies. This will save build time.
+winit = "0.26.1"
+wgpu = "0.12.0"
+wgpu_glyph = "0.16.0"
 glyph_brush = "0.7.2"
 log = "0.4.14"
 env_logger = "0.9.0"
