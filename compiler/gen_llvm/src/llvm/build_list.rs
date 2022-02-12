@@ -119,7 +119,7 @@ pub fn list_single<'a, 'ctx, 'env>(
     )
 }
 
-/// List.repeat : elem, Int -> List elem
+/// List.repeat : elem, Nat -> List elem
 pub fn list_repeat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
