@@ -656,9 +656,9 @@ impl RocStr {
 
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         if self.is_empty() {
-            &[]
+            &mut []
         } else if self.is_small_str() {
-            unsafe { core::slice::from_raw_parts_mut(self.get_small_str_ptr(), self.len()) }
+            unsafe { core::slice::from_raw_parts_mut(self.get_small_str_ptr_mut(), self.len()) }
         } else {
             unsafe { core::slice::from_raw_parts_mut(self.elements, self.length) }
         }
