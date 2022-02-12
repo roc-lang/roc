@@ -5484,7 +5484,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_single(env, arg, arg_layout)
         }
         ListRepeat => {
-            // List.repeat : elem, Int -> List elem
+            // List.repeat : elem, Nat -> List elem
             debug_assert_eq!(args.len(), 2);
 
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[0]);
