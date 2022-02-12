@@ -910,6 +910,9 @@ impl Type {
             Type::Record(fields, ext) => {
                 fields.values().all(|field| field.as_inner().is_narrow()) && ext.is_narrow()
             }
+            Type::Function(args, clos, ret) => {
+                args.iter().all(|a| a.is_narrow()) && clos.is_narrow() && ret.is_narrow()
+            }
             // Lists and sets are morally two-tagged unions, as they can be empty
             Type::Apply(Symbol::LIST_LIST | Symbol::SET_SET, _, _) => false,
             Type::Apply(..) => internal_error!("cannot chase an Apply!"),
