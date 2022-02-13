@@ -17,21 +17,26 @@ Val :
 
 Task ok err : [ Task U32 Val (Val -> Result ok err) ]
 
-Action state : [ Always state, Fx U32 Val (state, Val -> Action state) ]
+Action state : [ None, Always state, Fx U32 Val (state, Val -> Action state) ]
 
 ## Convert a Task to an Action
 toAction : Task ok err, (state, Result ok err -> Action state) -> Action state
-# toAction = \Task id arg retToResult, stateResultToAction ->
-#     Fx id arg \state, ret ->
-#         stateResultToAction state (retToResult ret)
+toAction = \task, stateResultToAction ->
+    Task id arg retToResult = task
+
+    None
+    # FIXME Replace `None` here with the following to reproduce a compiler crash
+    # Fx id arg \state, ret ->
+    #     stateResultToAction state (retToResult ret)
 
 update : state -> Action state
 update = Always
 
 bimap : Action child, (parent -> child), (child -> parent) -> Action parent
-# bimap = \action, toChild, toParent ->
-#     when action is
-#         Always child -> toParent child
-#         Fx id arg childRetToAction ->
-#             Fx id arg \parent, ret ->
-#                 childRetToAction (toChild parent) ret
+bimap = \action, toChild, toParent ->
+    when action is
+        None -> None
+        Always child -> Always (toParent child)
+        Fx id arg childRetToAction ->
+            Fx id arg \parent, ret ->
+                childRetToAction (toChild parent) ret
