@@ -123,7 +123,7 @@ If a function is "small enough" it's probably worth inlining too.
 
 ## Fusion
 
-https://www.microsoft.com/en-us/research/wp-content/uploads/2016/07/deforestation-short-cut.pdf
+<https://www.microsoft.com/en-us/research/wp-content/uploads/2016/07/deforestation-short-cut.pdf>
 
 Basic approach:
 
@@ -139,7 +139,7 @@ Advanced approach:
 Express operations like map and filter in terms of toStream and fromStream, to unlock more deforestation.
 More info on here:
 
-https://wiki.haskell.org/GHC_optimisations#Fusion
+<https://wiki.haskell.org/GHC_optimisations#Fusion>
 
 # Getting started with the code
 

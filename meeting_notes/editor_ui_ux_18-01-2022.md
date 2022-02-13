@@ -10,14 +10,14 @@
 - Given a selected expression, how do we show all plugins available that can visualize this
   expression or have an interactive widget to alter the expression (color picker). What does
   this API look like?
-- use type driven UX? https://pchiusano.github.io/2013-09-10/type-systems-and-ux-example.html
+- use type driven UX? <https://pchiusano.github.io/2013-09-10/type-systems-and-ux-example.html>
 
 ## ideas
 
 - Several "zoom levels" in the editor should show/hide context-appropriate views/buttons/functionality:
-  + zoomed out view should show type defs and function defs with folded body
-  + zooming in on function should unfold/show function body
-  + Traditional IDE's like ecplise can show an overwhelming amount of possible buttons/actions and views. Zoom levels can be used to prevent this excess of available options.
+  - zoomed out view should show type defs and function defs with folded body
+  - zooming in on function should unfold/show function body
+  - Traditional IDE's like ecplise can show an overwhelming amount of possible buttons/actions and views. Zoom levels can be used to prevent this excess of available options.
 
 - There should be a single editable text field to alter AST. This could be the same text field for entering commands, pressing a certain key could switch between command/plain text input into AST. Current part of AST that is being edited is highlighted.
 
@@ -28,5 +28,6 @@
 - UI interaction specification from which we can generate both e.g. a window with clickable buttons 'previuous' and `next` that also supports the voice commands `previuous` and `next`.
 
 Next actions to take:
+
 - Zeljko: draft UI interaction in figma
 - Anton: draft plugin API in roc

@@ -112,6 +112,7 @@ to destructure variants inline in function declarations, like in these two examp
 ```elm
 \(UserId id1) (UserId id2) ->
 ```
+
 ```elm
 \(UserId id) ->
 ```
@@ -124,6 +125,7 @@ You can write the above like so in Roc:
 ```elm
 \UserId id1, UserId id2 ->
 ```
+
 ```elm
 \UserId id ->
 ```
@@ -701,6 +703,7 @@ toStr : Username -> Str
 toStr = \@Username str ->
     str
 ```
+
 I can now expose the `Username` type alias, which other modules can use as an opaque type.
 
 It's not even syntactically possible for me to expose the `@Username` tag,
@@ -1084,6 +1087,7 @@ list =
 
     num + 1
 ```
+
 Both snippets are calling `List.map` passing `numbers` as the first argument,
 and a `\num -> num + 1` function for the other argument.
 

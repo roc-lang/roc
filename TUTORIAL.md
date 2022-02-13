@@ -12,7 +12,7 @@ Let’s start by getting acquainted with Roc’s Read Eval Print Loop, or REPL f
 short. Run this in a terminal:
 
 ```
-$ roc repl
+roc repl
 ```
 
 You should see this:
@@ -127,7 +127,7 @@ main = Stdout.line "I'm a Roc application!"
 Try running this with:
 
 ```
-$ roc Hello.roc
+roc Hello.roc
 ```
 
 You should see this:
@@ -160,6 +160,7 @@ There are 5 animals.
 short - namely, `main`, `birds`, `iguanas`, and `total`.
 
 A definition names an expression.
+
 - The first def assigns the name `main` to the expression `Stdout.line "I have \(numDefs) definitions."`.  The `Stdout.line` function takes a string and prints it as a line to [`stdout`] (the terminal's standard output device).
 - The next two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
 - The last def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
@@ -226,8 +227,9 @@ addAndStringify = \num1, num2 ->
 ```
 
 We did two things here:
-* We introduced a local def named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it will not be accessible outside that function.
-* We added an `if` / `then` / `else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
+
+- We introduced a local def named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it will not be accessible outside that function.
+- We added an `if` / `then` / `else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
 
 Of note, we couldn't have done `total = num1 + num2` because that would be
 redefining `total` in the global scope, and defs can't be redefined. (However, we could use the name
@@ -405,8 +407,8 @@ fromOriginal = { original & birds: 4, iguanas: 3 }
 The `fromScratch` and `fromOriginal` records are equal, although they're assembled in
 different ways.
 
-* `fromScratch` was built using the same record syntax we've been using up to this point.
-* `fromOriginal` created a new record using the contents of `original` as defaults for fields that it didn't specify after the `&`.
+- `fromScratch` was built using the same record syntax we've been using up to this point.
+- `fromOriginal` created a new record using the contents of `original` as defaults for fields that it didn't specify after the `&`.
 
 Note that when we do this, the fields you're overriding must all be present on the original record,
 and their values must have the same type as the corresponding values in the original record.
@@ -707,6 +709,7 @@ in the list returns `True`:
 List.any [ 1, 2, 3 ] Num.isOdd
 # returns True because 1 and 3 are odd
 ```
+
 ```coffee
 List.any [ 1, 2, 3 ] Num.isNegative
 # returns False because none of these is negative
@@ -718,6 +721,7 @@ There's also `List.all` which only returns `True` if all the elements in the lis
 List.all [ 1, 2, 3 ] Num.isOdd
 # returns False because 2 is not odd
 ```
+
 ```coffee
 List.all [ 1, 2, 3 ] Num.isPositive
 # returns True because all of these are positive
@@ -797,6 +801,7 @@ For example, what do each of these return?
 ```coffee
 List.get [ "a", "b", "c" ] 1
 ```
+
 ```coffee
 List.get [ "a", "b", "c" ] 100
 ```
@@ -870,6 +875,7 @@ functions where argument order matters. For example, these two uses of `List.app
 ```coffee
 List.append [ "a", "b", "c" ] "d"
 ```
+
 ```coffee
 [ "a", "b", "c" ]
     |> List.append "d"
@@ -881,9 +887,11 @@ sugar for `Num.div a b`:
 ```coffee
 first / second
 ```
+
 ```coffee
 Num.div first second
 ```
+
 ```coffee
 first
     |> Num.div second
@@ -1026,9 +1034,11 @@ What we want is something like one of these:
 ```coffee
 reverse : List elem -> List elem
 ```
+
 ```coffee
 reverse : List value -> List value
 ```
+
 ```coffee
 reverse : List a -> List a
 ```
@@ -1089,9 +1099,9 @@ the lowest `U16` would be zero (since it always is for unsigned integers), and t
 
 Choosing a size depends on your performance needs and the range of numbers you want to represent. Consider:
 
-* Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
-* Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
-* Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
+- Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
+- Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
+- Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
 
 Here are the different fixed-size integer types that Roc supports:
 
@@ -1132,9 +1142,9 @@ As such, it's very important to design your integer operations not to exceed the
 
 Roc has three fractional types:
 
-* `F32`, a 32-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
-* `F64`, a 64-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
-* `Dec`, a 128-bit decimal [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
+- `F32`, a 32-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
+- `F64`, a 64-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
+- `Dec`, a 128-bit decimal [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
 
 These are different from integers in that they can represent numbers with fractional components,
 such as 1.5 and -0.123.
@@ -1156,7 +1166,7 @@ quintillion, along with 18 decimal places. (To be precise, it can store
 numbers betwween `-170_141_183_460_469_231_731.687303715884105728`
 and `170_141_183_460_469_231_731.687303715884105727`.) Why 18
 decimal places? It's the highest number of decimal places where you can still
-convert any `U64] to a `Dec` without losing information.
+convert any `U64] to a`Dec` without losing information.
 
 While the fixed-point `Dec` has a fixed range, the floating-point `F32` and `F64` do not.
 Instead, outside of a certain range they start to lose precision instead of immediately overflowing
@@ -1223,8 +1233,8 @@ Roc compiler. That's why they're called "builtins!"
 
 Besides being built into the compiler, the builtin modules are different from other modules in that:
 
-* They are always imported. You never need to add them to `imports`.
-* All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [ Num.{ Nat } ]` (and the same for all the other types in the `Num` module).
+- They are always imported. You never need to add them to `imports`.
+- All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [ Num.{ Nat } ]` (and the same for all the other types in the `Num` module).
 
 ## The app module header
 
@@ -1291,10 +1301,10 @@ platforms. Let's use the CLI platform in `examples/cli` as an example!
 
 In the CLI platform, we have four operations we can do:
 
-* Write a string to the console
-* Read a string from user input
-* Write a string to a file
-* Read a string from a file
+- Write a string to the console
+- Read a string from user input
+- Write a string to a file
+- Read a string from a file
 
 We'll use these four operations to learn about tasks.
 
@@ -1500,14 +1510,16 @@ main =
 ```
 
 This way, it reads like a series of instructions:
+
 1. First, run the `Stdout.line` task and await its completion. Ignore its output (hence the underscore in `_ <-`)
 2. Next, run the `Stdin.line` task and await its completion. Name its output `text`.
 3. Finally, run the `Stdout.line` task again, using the `text` value we got from the `Stdin.line` effect.
 
 Some important things to note about backpassing and `await`:
-* `await` is not a language keyword in Roc! It's referring to the `Task.await` function, which we imported unqualified by writing `Task.{ await }` in our module imports. (That said, it is playing a similar role here to the `await` keyword in languages that have `async`/`await` keywords, even though in this case it's a function instead of a special keyword.)
-* Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
-* Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
+
+- `await` is not a language keyword in Roc! It's referring to the `Task.await` function, which we imported unqualified by writing `Task.{ await }` in our module imports. (That said, it is playing a similar role here to the `await` keyword in languages that have `async`/`await` keywords, even though in this case it's a function instead of a special keyword.)
+- Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
+- Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
 
 # Appendix: Advanced Concepts
 
@@ -1529,9 +1541,9 @@ I can pass this function a record that has more fields than just
 `firstName` and `lastName`, as long as it has *at least* both of those fields
 (and both of them are strings). So any of these calls would work:
 
-* `fullName { firstName: "Sam", lastName: "Sample" }`
-* `fullName { firstName: "Sam", lastName: "Sample", email: "blah@example.com" }`
-* `fullName { age: 5, firstName: "Sam", things: 3, lastName: "Sample", role: Admin }`
+- `fullName { firstName: "Sam", lastName: "Sample" }`
+- `fullName { firstName: "Sam", lastName: "Sample", email: "blah@example.com" }`
+- `fullName { age: 5, firstName: "Sam", things: 3, lastName: "Sample", role: Admin }`
 
 This `user` argument is an *open record* - that is, a description of a minimum set of fields
 on a record, and their types. When a function takes an open record as an argument,
@@ -1584,9 +1596,10 @@ addHttps = \record ->
 ```
 
 This function uses *constrained records* in its type. The annotation is saying:
-* This function takes a record which has at least a `url` field, and possibly others
-* That `url` field has the type `Str`
-* It returns a record of exactly the same type as the one it was given
+
+- This function takes a record which has at least a `url` field, and possibly others
+- That `url` field has the type `Str`
+- It returns a record of exactly the same type as the one it was given
 
 So if we give this function a record with five fields, it will return a record with those
 same five fields. The only requirement is that one of those fields must be `url : Str`.
@@ -1825,14 +1838,14 @@ the tags in the open union you're providing.
 
 So if I have an `[ Ok Str ]*` value, I can pass it functions with any of these types (among others):
 
-* `[ Ok Str ]* -> Bool`
-* `[ Ok Str ] -> Bool`
-* `[ Ok Str, Err Bool ]* -> Bool`
-* `[ Ok Str, Err Bool ] -> Bool`
-* `[ Ok Str, Err Bool, Whatever ]* -> Bool`
-* `[ Ok Str, Err Bool, Whatever ] -> Bool`
-* `Result Str Bool -> Bool`
-* `[ Err Bool, Whatever ]* -> Bool`
+- `[ Ok Str ]* -> Bool`
+- `[ Ok Str ] -> Bool`
+- `[ Ok Str, Err Bool ]* -> Bool`
+- `[ Ok Str, Err Bool ] -> Bool`
+- `[ Ok Str, Err Bool, Whatever ]* -> Bool`
+- `[ Ok Str, Err Bool, Whatever ] -> Bool`
+- `Result Str Bool -> Bool`
+- `[ Err Bool, Whatever ]* -> Bool`
 
 That last one works because a function accepting an open union can accept any unrecognized tag, including
 `Ok Str` - even though it is not mentioned as one of the tags in `[ Err Bool, Whatever ]*`! Remember, when
@@ -1856,10 +1869,10 @@ a catch-all `_ ->` branch, it might not know what to do with an `Ok Str` if it r
 
 In summary, here's a way to think about the difference between open unions in a value you have, compared to a value you're accepting:
 
-* If you *have* a closed union, that means it has all the tags it ever will, and can't accumulate more.
-* If you *have* an open union, that means it can accumulate more tags through conditional branches.
-* If you *accept* a closed union, that means you only have to handle the possibilities listed in the union.
-* If you *accept* an open union, that means you have to handle the possibility that it has a tag you can't know about.
+- If you *have* a closed union, that means it has all the tags it ever will, and can't accumulate more.
+- If you *have* an open union, that means it can accumulate more tags through conditional branches.
+- If you *accept* a closed union, that means you only have to handle the possibilities listed in the union.
+- If you *accept* an open union, that means you have to handle the possibility that it has a tag you can't know about.
 
 ## Type Variables in Tag Unions
 
@@ -1907,8 +1920,8 @@ the `Foo Str` and `Bar Bool` we already know about).
 If we removed the type annotation from `example` above, Roc's compiler would infer the same type anyway.
 This may be surprising if you look closely at the body of the function, because:
 
-* The return type includes `Foo Str`, but no branch explicitly returns `Foo`. Couldn't the return type be `[ Bar Bool ]a` instead?
-* The argument type includes `Bar Bool` even though we never look at `Bar`'s payload. Couldn't the argument type be inferred to be `Bar *` instead of `Bar Bool`, since we never look at it?
+- The return type includes `Foo Str`, but no branch explicitly returns `Foo`. Couldn't the return type be `[ Bar Bool ]a` instead?
+- The argument type includes `Bar Bool` even though we never look at `Bar`'s payload. Couldn't the argument type be inferred to be `Bar *` instead of `Bar Bool`, since we never look at it?
 
 The reason it has this type is the `other -> other` branch. Take a look at that branch, and ask this question:
 "What is the type of `other`?" There has to be exactly one answer! It can't be the case that `other` has one

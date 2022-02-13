@@ -1,9 +1,9 @@
-# Hello, World!
+# Hello, World
 
 To run, go to the project home directory and run:
 
 ```bash
-$ cargo run -- build --backend=wasm32 examples/hello-web/Hello.roc
+cargo run -- build --backend=wasm32 examples/hello-web/Hello.roc
 ```
 
 Then `cd` into the example directory and run any web server that can handle WebAssembly.
@@ -15,7 +15,7 @@ npm install -g http-server
 http-server
 ```
 
-Now open your browser at http://localhost:8080
+Now open your browser at <http://localhost:8080>
 
 ## Design Notes
 

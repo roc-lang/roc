@@ -1,6 +1,5 @@
 # Building the Roc compiler from source
 
-
 ## Installing LLVM, Zig, valgrind, and Python
 
 To build the compiler, you need these installed:
@@ -34,29 +33,34 @@ sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
 ### Zig
+
 **version: 0.8.0**
 
 For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
 
 If you prefer a package manager, you can try the following:
-- For MacOS, you can install with `brew install zig`
-- For, Ubuntu, you can use Snap, you can install with `snap install zig --classic --beta`
-- For other systems, checkout this [page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
+
+* For MacOS, you can install with `brew install zig`
+* For, Ubuntu, you can use Snap, you can install with `snap install zig --classic --beta`
+* For other systems, checkout this [page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
 
 If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
 
 ### LLVM
+
 **version: 12.0.x**
 
 For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
 `$(brew --prefix llvm@12)/bin` to your `PATH`. You can confirm this worked by
 running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
 You may also need to manually specify a prefix env var like so:
+
 ```
 export LLVM_SYS_120_PREFIX=/usr/local/opt/llvm@12
 ```
 
 For Ubuntu and Debian:
+
 ```
 sudo apt -y install lsb-release software-properties-common gnupg
 wget https://apt.llvm.org/llvm.sh
@@ -71,11 +75,12 @@ respectively. You can address this with symlinks like so:
 ```
 sudo ln -s /usr/bin/clang-12 /usr/bin/clang
 ```
+
 ```
 sudo ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
 ````
 
-There are also alternative installation options at http://releases.llvm.org/download.html
+There are also alternative installation options at <http://releases.llvm.org/download.html>
 
 [Troubleshooting](#troubleshooting)
 
@@ -128,22 +133,27 @@ The editor is a WIP and not ready yet to replace your favorite editor, although 
 #### Nvidia GPU
 
 Outside of a nix shell, execute the following:
+
 ```
 nix-channel --add https://github.com/guibou/nixGL/archive/main.tar.gz nixgl && nix-channel --update
 nix-env -iA nixgl.auto.nixVulkanNvidia
 ```
+
 Running the editor does not work with `nix-shell --pure`.
+
 ```
 nix-shell
 ```
+
 460.91.03 may be different for you, type nixVulkanNvidia and press tab to autocomplete for your version.
+
 ```
 nixVulkanNvidia-460.91.03 cargo run edit
 ```
 
 #### Integrated Intel Graphics
 
-:exclamation: ** Our Nix setup currently cannot run the editor with integrated intel graphics, see #1856 ** :exclamation:
+:exclamation: **Our Nix setup currently cannot run the editor with integrated intel graphics, see #1856** :exclamation:
 
 Outside of a nix shell, run:
 
@@ -154,6 +164,7 @@ nix-env -f ./ -iA nixVulkanIntel
 ```
 
 cd to the roc repo, and run (without --pure):
+
 ```
 nix-shell
 nixVulkanIntel cargo run edit
@@ -178,10 +189,12 @@ On Ubuntu, running `sudo apt install pkg-config cmake libx11-dev` fixed this.
 If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 
 If you encounter:
+
 ```
 error: No suitable version of LLVM was found system-wide or pointed
        to by LLVM_SYS_120_PREFIX.
 ```
+
 Add `export LLVM_SYS_120_PREFIX=/usr/lib/llvm-12` to your `~/.bashrc` or equivalent file for your shell.
 
 ### LLVM installation on macOS
@@ -208,7 +221,6 @@ on Windows. After lots of help from [**@IanMacKenzie**](https://github.com/IanMa
 1. I ran `cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ../llvm` to generate a NMake makefile.
 1. Once that completed, I ran `nmake` to build LLVM. (This took about 2 hours on my laptop.)
 1. Finally, I set an environment variable `LLVM_SYS_100_PREFIX` to point to the `build` directory where I ran the `cmake` command.
-
 
 Once all that was done, `cargo` ran successfully for Roc!
 
