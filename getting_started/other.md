@@ -1,3 +1,4 @@
+# Getting started on other operating systems
 
 1. [Install Rust](https://rustup.rs/)
 2. [Build roc from source](../BUILDING_FROM_SOURCE.md)

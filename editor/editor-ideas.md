@@ -1,6 +1,6 @@
-(For background, [this talk](https://youtu.be/ZnYa99QoznE?t=4790) has an overview of the design goals for the editor.)
-
 # Editor Ideas
+
+(For background, [this talk](https://youtu.be/ZnYa99QoznE?t=4790) has an overview of the design goals for the editor.)
 
 Here are some ideas and interesting resources for the editor. Feel free to make a PR to add more!
 

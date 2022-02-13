@@ -1,6 +1,8 @@
+# Compiler
+
 Here's how the compiler is laid out.
 
-# Parsing
+## Parsing
 
 The main goal of parsing is to take a plain old String (such as the contents a .roc source file read from the filesystem) and translate that String into an `Expr` value.
 
@@ -45,7 +47,7 @@ This is gibberish to the parser, so it will produce an error rather than an `Exp
 
 Roc's parser is implemented using the [`marwes/combine`](http://github.com/marwes/combine-language/) crate.
 
-# Evaluating
+## Evaluating
 
 One of the useful things we can do with an `Expr` is to evaluate it.
 
@@ -104,7 +106,7 @@ That concludes our original recursive call to `eval`, after which point we'll be
 
 This will work the same way as `Minus` did, and will reduce down to `Int(6)`.
 
-## Optimization philosophy
+### Optimization philosophy
 
 Focus on optimizations which are only safe in the absence of side effects, and leave the rest to LLVM.
 
@@ -116,12 +118,12 @@ inlining and constant propagation/folding.
 Even if we're doing those things, it may still make sense to have LLVM do a pass for them as well, since
 early LLVM optimization passes may unlock later opportunities for inlining and constant propagation/folding.
 
-## Inlining
+### Inlining
 
 If a function is called exactly once (it's a helper function), presumably we always want to inline those.
 If a function is "small enough" it's probably worth inlining too.
 
-## Fusion
+### Fusion
 
 <https://www.microsoft.com/en-us/research/wp-content/uploads/2016/07/deforestation-short-cut.pdf>
 
@@ -141,7 +143,7 @@ More info on here:
 
 <https://wiki.haskell.org/GHC_optimisations#Fusion>
 
-# Getting started with the code
+## Getting started with the code
 
 The compiler contains a lot of code! If you're new to the project it can be hard to know where to start. It's useful to have some sort of "main entry point", or at least a "good place to start" for each of the main phases.
 
@@ -165,9 +167,9 @@ The compiler is invoked from the CLI via `build_file` in cli/src/build.rs
 
 For a more detailed understanding of the compilation phases, see the `Phase`, `BuildTask`, and `Msg` enums in `load/src/file.rs`.
 
-## Debugging intermediate representations
+### Debugging intermediate representations
 
-### The mono IR
+#### The mono IR
 
 If you observe a miscomplication, you may first want to check the generated mono
 IR for your code - maybe there was a problem during specialization or layout

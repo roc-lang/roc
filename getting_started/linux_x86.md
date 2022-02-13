@@ -1,3 +1,5 @@
+# Getting started on x86 Linux
+
 0. Download the latest nightly from the assets [here](https://github.com/rtfeldman/roc/releases).
 0. Untar the archive:
 
