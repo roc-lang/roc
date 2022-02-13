@@ -1628,7 +1628,7 @@ fn correct_mutual_recursive_type_alias<'a>(
         // because we need all the types to be deeply instantiated.
         let all_are_narrow = cycle.iter().all(|sym| {
             let typ = &pending_aliases.get(sym).unwrap().typ;
-            typ.is_tag_union_like() && typ.is_narrow()
+            matches!(typ, Type::RecursiveTagUnion(..)) && typ.is_narrow()
         });
 
         if all_are_narrow {
