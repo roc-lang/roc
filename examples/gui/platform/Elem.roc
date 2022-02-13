@@ -127,7 +127,7 @@ translate = \renderChild, toChild, toParent ->
                 onPress = \prevParent, event ->
                     toChild prevParent
                         |> config.onPress event
-                        |> Action.bimap toChild (\c -> toParent prevParent c)
+                        |> Action.translate toChild (\c -> toParent prevParent c)
 
                 Button { onPress } (translate label toChild toParent)
             Cached renderChild ->
@@ -194,7 +194,7 @@ translateOrDrop = \child, toChild, toParent ->
                     Ok newChild ->
                         newChild
                             |> config.onPress event
-                            |> Action.bimap toChild (\c -> toParent parentState c)
+                            |> Action.translate toChild (\c -> toParent parentState c)
 
                     Err _ ->
                         # The child was removed from the list before this onPress handler resolved.
