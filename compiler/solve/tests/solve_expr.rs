@@ -5212,4 +5212,21 @@ mod solve_expr {
             "Bar U8",
         )
     }
+
+    // https://github.com/rtfeldman/roc/issues/2379
+    #[test]
+    fn copy_vars_referencing_copied_vars() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Job : [ Job [ Command ] (List Job) ]
+
+                job : Job
+
+                job
+                "#
+            ),
+            "Job",
+        )
+    }
 }

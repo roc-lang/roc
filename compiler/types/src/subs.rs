@@ -1522,12 +1522,21 @@ impl Subs {
     }
 
     /// Checks whether the content of `var`, or any nested content, satisfies the `predicate`.
+    pub fn var_contains<P>(&self, var: Variable, predicate: P) -> bool
+    where
+        P: Fn(&Descriptor) -> bool + Copy,
+    {
+        let mut seen_recursion_vars = MutSet::default();
+        var_contains_help(self, var, predicate, &mut seen_recursion_vars)
+    }
+
+    /// Checks whether the content of `var`, or any nested content, satisfies the `predicate`.
     pub fn var_contains_content<P>(&self, var: Variable, predicate: P) -> bool
     where
         P: Fn(&Content) -> bool + Copy,
     {
-        let mut seen_recursion_vars = MutSet::default();
-        var_contains_content_help(self, var, predicate, &mut seen_recursion_vars)
+        let p = |descriptor: &Descriptor| predicate(&descriptor.content);
+        self.var_contains(var, p)
     }
 }
 
@@ -3757,14 +3766,14 @@ fn deep_copy_var_to_help<'a>(
     }
 }
 
-fn var_contains_content_help<P>(
+fn var_contains_help<P>(
     subs: &Subs,
     var: Variable,
     predicate: P,
     seen_recursion_vars: &mut MutSet<Variable>,
 ) -> bool
 where
-    P: Fn(&Content) -> bool + Copy,
+    P: Fn(&Descriptor) -> bool + Copy,
 {
     let mut stack = vec![var];
 
@@ -3779,15 +3788,15 @@ where
             continue;
         }
 
-        let content = subs.get_content_without_compacting(var);
+        let desc = subs.get_ref(var);
 
-        if predicate(content) {
+        if predicate(desc) {
             return true;
         }
 
         use Content::*;
         use FlatType::*;
-        match content {
+        match &desc.content {
             FlexVar(_) | RigidVar(_) => {}
             RecursionVar {
                 structure,

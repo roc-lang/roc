@@ -1795,7 +1795,7 @@ fn deep_copy_var_help(
 
     if let Some(copy) = desc.copy.into_variable() {
         return copy;
-    } else if desc.rank != Rank::NONE {
+    } else if desc.rank != Rank::NONE && !subs.var_contains(var, |d| d.copy.is_some()) {
         return var;
     }
 
@@ -1920,6 +1920,8 @@ fn deep_copy_var_help(
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
 
+                    let new_rec_var = deep_copy_var_help(subs, max_rank, pools, visited, rec_var);
+
                     let it = (new_variable_slices.indices()).zip(tags.variables());
                     for (target_index, index) in it {
                         let slice = subs[index];
@@ -1938,7 +1940,6 @@ fn deep_copy_var_help(
                     let union_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
 
                     let new_ext = deep_copy_var_help(subs, max_rank, pools, visited, ext_var);
-                    let new_rec_var = deep_copy_var_help(subs, max_rank, pools, visited, rec_var);
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
