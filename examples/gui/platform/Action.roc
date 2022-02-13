@@ -24,10 +24,8 @@ toAction : Task ok err, (state, Result ok err -> Action state) -> Action state
 toAction = \task, stateResultToAction ->
     Task id arg retToResult = task
 
-    None
-    # FIXME Replace `None` here with the following to reproduce a compiler crash
-    # Fx id arg \state, ret ->
-    #     stateResultToAction state (retToResult ret)
+    Fx id arg \state, ret ->
+        stateResultToAction state (retToResult ret)
 
 update : state -> Action state
 update = Always
