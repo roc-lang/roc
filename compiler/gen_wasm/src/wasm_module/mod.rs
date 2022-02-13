@@ -119,6 +119,7 @@ impl<'a> WasmModule<'a> {
             + self.element.size()
             + self.code.size()
             + self.data.size()
+            + self.names.size()
     }
 
     pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Self {
@@ -146,7 +147,6 @@ impl<'a> WasmModule<'a> {
         let global = GlobalSection::preload(arena, bytes, &mut cursor);
 
         ExportSection::skip_bytes(bytes, &mut cursor);
-
         let export = ExportSection::empty(arena);
 
         let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);

@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
@@ -1153,7 +1155,6 @@ enum NameSubSections {
     LocalNames = 2,
 }
 
-#[derive(Debug)]
 pub struct NameSection<'a> {
     pub bytes: Vec<'a, u8>,
     pub functions: MutMap<&'a [u8], u32>,
@@ -1187,6 +1188,10 @@ impl<'a> NameSection<'a> {
 
         section.parse_body(arena, module_bytes, cursor, section_end);
         section
+    }
+
+    pub fn size(&self) -> usize {
+        self.bytes.len()
     }
 
     fn parse_body(
@@ -1250,6 +1255,27 @@ impl<'a> Serialize for NameSection<'a> {
             buffer.append_slice(&self.bytes);
             update_section_size(buffer, header_indices);
         }
+    }
+}
+
+impl<'a> Debug for NameSection<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NameSection\n")?;
+
+        // We want to display index->name because it matches the binary format and looks nicer.
+        // But our hashmap is name->index because that's what code gen wants to look up.
+        let mut by_index = std::vec::Vec::with_capacity(self.functions.len());
+        for (name, index) in self.functions.iter() {
+            by_index.push((*index, name));
+        }
+        by_index.sort_unstable();
+
+        for (index, name) in by_index.iter() {
+            let name_str = unsafe { std::str::from_utf8_unchecked(name) };
+            write!(f, "  {:4}: {}\n", index, name_str)?;
+        }
+
+        Ok(())
     }
 }
 
