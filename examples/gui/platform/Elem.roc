@@ -8,11 +8,52 @@ Elem state :
         Text Str,
         Col (List (Elem state)),
         Row (List (Elem state)),
-        Lazy (Result { state, elem : Elem state } [ NotCached ] -> { state, elem : Elem state }),
+        Lazy (state -> Elem state),
+        Cached (Result { state, elem : Elem state } [ NotCached ] -> { state, elem : Elem state }),
         # TODO FIXME: using this definition of Lazy causes a stack overflow in the compiler!
         #Lazy (Result (Cached state) [ NotCached ] -> Cached state),
         None,
     ]
+
+# traverse : Elem state ->
+# when elem is
+#     Button (ButtonConfig state) (Elem state),
+#     Text Str,
+#     Col (List (Elem state)),
+#     Row (List (Elem state)),
+#     Lazy (state -> Elem state),
+#     Cached (Result { state, elem : Elem state } [ NotCached ] -> { state, elem : Elem state }),
+#     # TODO FIXME: using this definition of Lazy causes a stack overflow in the compiler!
+#     #Lazy (Result (Cached state) [ NotCached ] -> Cached state),
+#     None,
+# ]
+
+# TODO this can be an Ability so we don't have to pass a big record around
+# this is how to define a way to traverse the opaque Elem type.
+#
+# ElemWalker state accum : {
+#     ifButton : (accum, ButtonConfig state, Elem state -> accum),
+#     ifText : (accum, Str -> accum),
+#     ifCol : (accum, List (Elem state) -> accum),
+#     ifRow : (accum, List (Elem state) -> accum),
+#     ifLazy (accum, (state -> Elem state) -> accum),
+#     ifCached accum, (Result { state, elem : Elem state } [ NotCached ] -> { state, elem : Elem state }) -> accum),
+#     # NOTE: if it's None, `step` automatically returns Err ElemWasNone; no handler needed for that one!
+# }
+#
+#
+# step : Elem state, accum, ElemWalker state accum -> ElemWalkerOutput state accum
+#
+# root = render state
+#
+# Example usage: Walk the Elem tree to build up a layout (or maybe just layout constraints at first).
+# Note that the layout functions might also call `step` (e.g. Row, Col, and Button would all recurse on child Elems)
+# step root Layout.empty {
+#     ifText: Layout.addText
+#     ifButton: Layout.addButton
+#     ifRow: Layout.addRow
+#     ifLazy: \layout, renderChild -> Layout.addElem layout (renderChild state) # maybe just ifLazy: Layout.addLazy?
+# }
 
 ## Used internally in the type definition of Lazy
 Cached state : { state, elem: Elem state }
@@ -37,12 +78,12 @@ col : List (Elem state) -> Elem state
 col = \children ->
     Col children
 
-lazy : state, (state -> Elem state) -> Elem state
-lazy = \state, render ->
+cached : state, (state -> Elem state) -> Elem state
+cached = \state, render ->
     # This function gets called by the host during rendering. It will
     # receive the cached state and element (wrapped in Ok) if we've
     # ever rendered this before, and Err otherwise.
-    Lazy \result ->
+    Cached \result ->
         when result is
             Ok cached if cached.state == state ->
                 # If we have a cached value, and the new state is the
@@ -72,32 +113,33 @@ none = None # I've often wanted this in elm/html. Usually end up resorting to (H
 ##
 ##         col {} [ child, otherElems ]
 translate :
-    Elem child,
+    (child -> Elem child),
     (parent -> child),
     (parent, child -> parent)
     -> Elem parent
-translate = \child, toChild, toParent ->
-    when child is
-        Text str -> Text str
-        Col elems -> Col (List.map elems \elem -> translate elem toChild toParent)
-        Row elems -> Row (List.map elems \elem -> translate elem toChild toParent)
-        Button config label ->
-            onPress = \parentState, event ->
-                toChild parentState
-                    |> config.onPress event
-                    |> Action.map \c -> toParent parentState c
+translate = \renderChild, toChild, toParent ->
+    Lazy \parent ->
+        when renderChild (toChild parent) is
+            Text str -> Text str
+            Col elems -> Col (List.map elems \elem -> translate elem toChild toParent)
+            Row elems -> Row (List.map elems \elem -> translate elem toChild toParent)
+            Button config label ->
+                onPress = \prevParent, event ->
+                    toChild prevParent
+                        |> config.onPress event
+                        |> Action.bimap toChild (\c -> toParent prevParent c)
 
-            Button { onPress } (translate label toChild toParent)
-        Lazy renderChild ->
-            Lazy \parentState ->
-                { elem, state } = renderChild (toChild parentState)
+                Button { onPress } (translate label toChild toParent)
+            Cached renderChild ->
+                Cached \prevParent ->
+                    { elem, state } = renderChild (toChild prevParent)
 
-                {
-                    elem: translate toChild toParent newChild,
-                    state: toParent parentState state
-                }
+                    {
+                        elem: translate renderChild toChild toParent,
+                        state: toParent prevParent state
+                    }
 
-        None -> None
+            None -> None
 
 
 ## Render a list of elements, using [Elem.translate] on each of them.
@@ -152,7 +194,7 @@ translateOrDrop = \child, toChild, toParent ->
                     Ok newChild ->
                         newChild
                             |> config.onPress event
-                            |> Action.map \c -> toParent parentState c
+                            |> Action.bimap toChild (\c -> toParent parentState c)
 
                     Err _ ->
                         # The child was removed from the list before this onPress handler resolved.
@@ -160,8 +202,8 @@ translateOrDrop = \child, toChild, toParent ->
                         Action.none
 
             Button { onPress } (translateOrDrop label toChild toParent)
-        Lazy childState renderChild ->
-            Lazy (toParent childState) \parentState ->
+        Cached childState renderChild ->
+            Cached (toParent childState) \parentState ->
                 when toChild parentState is
                     Ok newChild ->
                         renderChild newChild
