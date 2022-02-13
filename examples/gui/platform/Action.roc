@@ -21,9 +21,9 @@ Action state : [ Always state, Fx U32 Val (state, Val -> Action state) ]
 
 ## Convert a Task to an Action
 toAction : Task ok err (state, Result ok err -> Action state) -> Action state
-# toAction = \Task id arg retToResult, stateResultToAction ->
-#     Fx id arg \state, ret ->
-#         stateResultToAction state (retToResult ret)
+toAction = \Task id arg retToResult, stateResultToAction ->
+    Fx id arg \state, ret ->
+        stateResultToAction state (retToResult ret)
 
 update : state -> Action state
 update = Always
