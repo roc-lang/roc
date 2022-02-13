@@ -76,9 +76,9 @@ popd
 valgrind --version
 
 # install zig - can't use apt-get since we require at least a specific commit later then the most recent tag (0.6.0)
-wget -c https://ziglang.org/download/0.9.0/zig-linux-x86_64-0.9.0.tar.xz --no-check-certificate
-tar -xf zig-linux-x86_64-0.9.0.tar.xz
-ln -s "$PWD/zig-linux-x86_64-0.9.0/zig" /usr/local/bin/zig
+wget -c https://ziglang.org/builds/zig-linux-x86_64-0.10.0-dev.691+16ec848d2.tar.xz --no-check-certificate
+tar -xf zig-linux-x86_64-0.10.0-dev.691+16ec848d2.tar.xz
+ln -s "$PWD/zig-linux-x86_64-0.10.0-dev.691+16ec848d2.tar.xz/zig" /usr/local/bin/zig
 
 # test sccache
 ./ci/sccache -V
