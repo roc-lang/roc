@@ -886,16 +886,20 @@ impl Type {
     ///
     /// The following are narrow:
     ///
-    ///     U8
-    ///     [ A I8 ]
-    ///     [ A [ B [ C U8 ] ] ]
-    ///     [ A (R a) ] as R a
+    /// ```roc
+    /// U8
+    /// [ A I8 ]
+    /// [ A [ B [ C U8 ] ] ]
+    /// [ A (R a) ] as R a
+    /// ```
     ///
     /// The following are not:
     ///
-    ///     [ A I8, B U8 ]
-    ///     [ A [ B [ Result U8 {} ] ] ]         (Result U8 {} is actually [ Ok U8, Err {} ])
-    ///     [ A { lst: List (R a) } ] as R a     (List a is morally [ Cons (List a), Nil ] as List a)
+    /// ```roc
+    /// [ A I8, B U8 ]
+    /// [ A [ B [ Result U8 {} ] ] ]         (Result U8 {} is actually [ Ok U8, Err {} ])
+    /// [ A { lst: List (R a) } ] as R a     (List a is morally [ Cons (List a), Nil ] as List a)
+    /// ```
     pub fn is_narrow(&self) -> bool {
         match self.shallow_dealias() {
             Type::TagUnion(tags, ext) | Type::RecursiveTagUnion(_, tags, ext) => {
