@@ -1,14 +1,14 @@
 # Getting started on x86 Linux
 
-0. Download the latest nightly from the assets [here](https://github.com/rtfeldman/roc/releases).
-0. Untar the archive:
+1. Download the latest nightly from the assets [here](https://github.com/rtfeldman/roc/releases).
+1. Untar the archive:
 
     ```bash
     tar -xf roc_nightly-linux_x86_64-<VERSION>.tar.gz
     ```
 
-0. Some fresh installs require executing `sudo apt update`, it is not needed to execute `sudo apt upgrade` after this.
-0. To be able to run examples:
+1. Some fresh installs require executing `sudo apt update`, it is not needed to execute `sudo apt upgrade` after this.
+1. To be able to run examples:
     - for the Rust example:
 
     ```bash
@@ -29,7 +29,7 @@
     sudo apt install build-essential clang
     ```
 
-0. Run examples with:
+1. Run examples with:
 
     ```bash
     # Rust. If you installed rust in this terminal you'll need to open a new one first!
@@ -40,6 +40,6 @@
     ./roc examples/hello-world/Hello.roc
     ```
 
-0. See [here](../README.md#examples) for the other examples.
+1. See [here](../README.md#examples) for the other examples.
 
 **Tip:** when programming in roc, we recommend to execute `./roc check myproject/Foo.roc` before `./roc myproject/Foo.roc` or `./roc build myproject/Foo.roc`. `./roc check` can produce clear error messages in cases where building/running may panic.
