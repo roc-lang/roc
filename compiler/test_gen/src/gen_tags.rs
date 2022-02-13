@@ -1518,3 +1518,39 @@ fn issue_2458_deep_recursion_var() {
         u8
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_1162() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+
+            balance : a, RBTree a -> RBTree a
+            balance = \key, left ->
+                  when left is
+                    Node _ _ lRight ->
+                        Node key lRight Empty
+
+                    _ ->
+                        Empty
+
+
+            tree : RBTree {}
+            tree =
+                balance {} Empty
+
+            main : U8
+            main =
+                when tree is
+                    Empty -> 15
+                    _ -> 25
+            "#
+        ),
+        15,
+        u8
+    )
+}
