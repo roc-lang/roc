@@ -2852,7 +2852,7 @@ mod test_reporting {
                     ^^^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -3348,6 +3348,8 @@ mod test_reporting {
                 { x, y }
                 "#
             ),
+            // TODO render tag unions across multiple lines
+            // TODO do not show recursion var if the recursion var does not render on the surface of a type
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
@@ -3360,12 +3362,13 @@ mod test_reporting {
 
                 This `ACons` global tag application has the type:
 
-                    [ ACons Num (Integer Signed64) [ BCons (Num a) [ ACons Str [ BNil
-                    ]b ]c ]d, ANil ]
+                    [ ACons (Num (Integer Signed64)) [
+                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 a, BNil ],
+                    ANil ], BNil ], ANil ]
 
                 But the type annotation on `x` says it should be:
 
-                    [ ACons I64 BList I64 I64, ANil ]
+                    [ ACons I64 (BList I64 I64), ANil ] as a
                 "#
             ),
         )
@@ -7075,7 +7078,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7102,7 +7105,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7128,7 +7131,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7975,6 +7978,113 @@ I need all branches in an `if` to have the same type!
                     I8, I16, I32, I64, I128, F32, F64, or Dec
                 "#
             ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype() {
+        report_problem_as(
+            indoc!(
+                r#"
+                R a : [ Only (R a) ]
+
+                v : R U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `R` alias is self-recursive in an invalid way:
+
+                1│  R a : [ Only (R a) ]
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype_deep() {
+        report_problem_as(
+            indoc!(
+                r#"
+                R a : [ Only { very: [ Deep (R a) ] } ]
+
+                v : R U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `R` alias is self-recursive in an invalid way:
+
+                1│  R a : [ Only { very: [ Deep (R a) ] } ]
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype_mutual() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo a : [ Thing (Bar a) ]
+                Bar a : [ Stuff (Foo a) ]
+
+                v : Bar U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `Bar` alias is recursive in an invalid way:
+
+                2│  Bar a : [ Stuff (Foo a) ]
+                    ^^^^^
+
+                The `Bar` alias depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     Bar
+                    │     ↓
+                    │     Foo
+                    └─────┘
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2458() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo a : [ Blah (Result (Bar a) []) ]
+                Bar a : Foo a
+
+                v : Bar U8
+                v
+                "#
+            ),
+            "",
         )
     }
 }

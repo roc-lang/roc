@@ -148,6 +148,9 @@ pub fn cyclic_alias<'b>(
     region: roc_region::all::Region,
     others: Vec<Symbol>,
 ) -> (RocDocBuilder<'b>, String) {
+    let when_is_recursion_legal =
+        alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive.");
+
     let doc = if others.is_empty() {
         alloc.stack(vec![
             alloc
@@ -155,7 +158,7 @@ pub fn cyclic_alias<'b>(
                 .append(alloc.symbol_unqualified(symbol))
                 .append(alloc.reflow(" alias is self-recursive in an invalid way:")),
             alloc.region(lines.convert_region(region)),
-            alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
+            when_is_recursion_legal,
         ])
     } else {
         alloc.stack(vec![
@@ -179,7 +182,7 @@ pub fn cyclic_alias<'b>(
                     .map(|other| alloc.symbol_unqualified(other))
                     .collect::<Vec<_>>(),
             ),
-            alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
+            when_is_recursion_legal,
         ])
     };
 
