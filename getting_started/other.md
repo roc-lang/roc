@@ -3,7 +3,7 @@
 2. [Build roc from source](../BUILDING_FROM_SOURCE.md)
 3. Run examples with:
 
-    ```
+    ```bash
     # Rust
     cargo run examples/hello-rust/Hello.roc
     # Zig

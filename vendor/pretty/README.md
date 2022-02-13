@@ -27,7 +27,7 @@ See the generated API documentation [here](https://docs.rs/pretty).
 
 You can install both with the following:
 
-```
+```bash
 curl -s https://static.rust-lang.org/rustup.sh | sudo sh
 ```
 
@@ -35,7 +35,7 @@ See [Installation](https://doc.rust-lang.org/book/ch01-01-installation.html) for
 
 ## Usage
 
-```
+```bash
 cargo build                                          ## build library and binary
 cargo run --example trees                            ## run the example (pretty trees)
 cargo run --example colored --features termcolor     ## run the example (pretty colored output)

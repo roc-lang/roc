@@ -23,7 +23,7 @@ Many programs can however be compiled correctly. Check out [examples](examples) 
 
 Run examples as follows:
 
-```
+```sh-session
 cargo run examples/hello-world/Hello.roc
 ```
 

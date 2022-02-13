@@ -20,7 +20,7 @@ For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir).
 
 You may see an error like this during builds:
 
-```
+```sh-session
 /usr/bin/ld: cannot find -lxcb-render
 /usr/bin/ld: cannot find -lxcb-shape
 /usr/bin/ld: cannot find -lxcb-xfixes
@@ -28,7 +28,7 @@ You may see an error like this during builds:
 
 If so, you can fix it like so:
 
-```
+```sh-session
 sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
@@ -55,13 +55,13 @@ For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
 running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
 You may also need to manually specify a prefix env var like so:
 
-```
+```sh-session
 export LLVM_SYS_120_PREFIX=/usr/local/opt/llvm@12
 ```
 
 For Ubuntu and Debian:
 
-```
+```sh-session
 sudo apt -y install lsb-release software-properties-common gnupg
 wget https://apt.llvm.org/llvm.sh
 chmod +x llvm.sh
@@ -72,13 +72,13 @@ If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
 By default, the script installs them as `clang-12` and `llvm-as-12`,
 respectively. You can address this with symlinks like so:
 
-```
+```sh-session
 sudo ln -s /usr/bin/clang-12 /usr/bin/clang
 ```
 
-```
+```sh-session
 sudo ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
-````
+```
 
 There are also alternative installation options at <http://releases.llvm.org/download.html>
 
@@ -134,20 +134,20 @@ The editor is a WIP and not ready yet to replace your favorite editor, although 
 
 Outside of a nix shell, execute the following:
 
-```
+```sh-session
 nix-channel --add https://github.com/guibou/nixGL/archive/main.tar.gz nixgl && nix-channel --update
 nix-env -iA nixgl.auto.nixVulkanNvidia
 ```
 
 Running the editor does not work with `nix-shell --pure`.
 
-```
+```sh-session
 nix-shell
 ```
 
 460.91.03 may be different for you, type nixVulkanNvidia and press tab to autocomplete for your version.
 
-```
+```sh-session
 nixVulkanNvidia-460.91.03 cargo run edit
 ```
 
@@ -165,7 +165,7 @@ nix-env -f ./ -iA nixVulkanIntel
 
 cd to the roc repo, and run (without --pure):
 
-```
+```sh-session
 nix-shell
 nixVulkanIntel cargo run edit
 ```
@@ -190,7 +190,7 @@ If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 
 If you encounter:
 
-```
+```text
 error: No suitable version of LLVM was found system-wide or pointed
        to by LLVM_SYS_120_PREFIX.
 ```
@@ -203,7 +203,7 @@ If installing LLVM fails, it might help to run `sudo xcode-select -r` before ins
 
 It might also be useful to add these exports to your shell:
 
-```
+```sh-session
 export LDFLAGS="-L/usr/local/opt/llvm/lib -Wl,-rpath,/usr/local/opt/llvm/lib"
 export CPPFLAGS="-I/usr/local/opt/llvm/include"
 ```
@@ -236,7 +236,7 @@ makes build times a lot faster, and I highly recommend it.
 
 Create `~/.cargo/config.toml` if it does not exist and add this to it:
 
-```
+```toml
 [build]
 # Link with lld, per https://github.com/rust-lang/rust/issues/39915#issuecomment-538049306
 # Use target-cpu=native, per https://deterministic.space/high-performance-rust.html

@@ -8,7 +8,7 @@ Run examples as follows:
 1. Navigate to `/examples`
 2. Run with:
 
-```
+```bash
 cargo run hello-world/Hello.roc
 ```
 

@@ -12,7 +12,7 @@ Check [Build from source](BUILDING_FROM_SOURCE.md) for instructions.
 
 To run all tests and checks as they are run on CI, [install earthly](https://earthly.dev/get-earthly) and run:
 
-```
+```sh-session
 earthly +test-all
 ```
 
@@ -29,7 +29,7 @@ Earthly may temporarily use a lot of disk space, up to 90 GB. This disk space is
   3. [Configure git to use your key.](https://docs.github.com/en/authentication/managing-commit-signature-verification/telling-git-about-your-signing-key)
   4. Make git sign your commits automatically:
 
-   ```
+   ```sh-session
    git config --global commit.gpgsign true
    ```
 

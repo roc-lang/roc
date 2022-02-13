@@ -1,7 +1,7 @@
 0. Download the latest nightly from the assets [here](https://github.com/rtfeldman/roc/releases).
 0. Untar the archive:
 
-    ```
+    ```bash
     tar -xf roc_nightly-linux_x86_64-<VERSION>.tar.gz
     ```
 
@@ -9,13 +9,13 @@
 0. To be able to run examples:
     - for the Rust example:
 
-    ```
+    ```bash
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     ```
 
     - for the zig example:
 
-    ```
+    ```bash
     wget https://ziglang.org/download/0.8.1/zig-linux-x86_64-0.8.1.tar.xz
     tar -xf zig-linux-x86_64-0.8.1.tar.xz
     sudo ln -s  $(pwd)/zig-linux-x86_64-0.8.1/zig /usr/local/bin/zig
@@ -23,13 +23,13 @@
 
     - for the C example:
 
-    ```
+    ```bash
     sudo apt install build-essential clang
     ```
 
 0. Run examples with:
 
-    ```
+    ```bash
     # Rust. If you installed rust in this terminal you'll need to open a new one first!
     ./roc examples/hello-rust/Hello.roc
     # Zig

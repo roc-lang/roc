@@ -204,13 +204,13 @@ Closed record annotations look the same as they do in Elm, e.g.
 
 In Elm:
 
-```
+```elm
 { a | name : Str, email : Str } -> Str
 ```
 
 In Roc:
 
-```
+```elm
 { name : Str, email : Str }* -> Str
 ```
 
@@ -298,7 +298,7 @@ There is no need to use a `defaultConfig` record.
 
 Here's how `table` would be defined in Roc:
 
-```
+```elm
 table = \{ height, width, title ? "", description ? "" } ->
 ```
 
@@ -306,7 +306,7 @@ This is using *optional field destructuring* to destructure a record while
 also providing default values for any fields that might be missing.
 Here's the type of `table`:
 
-```
+```elm
 table :
     {
         height : Pixels,
@@ -517,7 +517,7 @@ the type of the union it goes in.
 
 Here are some examples of using tags in a REPL:
 
-```
+```elm
 > True
 True : [ True ]*
 
@@ -1335,7 +1335,7 @@ A phantom value is one which affects types, but which holds no information at ru
 As an example, let's say I wanted to define a [units library](https://package.elm-lang.org/packages/ianmackenzie/elm-units/latest/) -
 a classic example of phantom types. I could do that in Roc like this:
 
-```
+```elm
 Quantity units data : [ Quantity units data ]
 
 km : Num a -> Quantity [ Km ] (Num a)
