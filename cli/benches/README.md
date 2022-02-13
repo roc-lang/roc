@@ -1,4 +1,3 @@
-
 # Running the benchmarks
 
 Install cargo criterion:

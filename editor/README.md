@@ -1,4 +1,3 @@
-
 # Editor
 
 The editor is a work in progress, only a limited subset of Roc expressions are currently supported.

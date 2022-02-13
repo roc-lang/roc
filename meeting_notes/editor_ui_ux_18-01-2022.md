@@ -1,4 +1,3 @@
-
 # Meeting notes
 
 - 18/1/2022 2pm GMT

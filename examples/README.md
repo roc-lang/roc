@@ -1,4 +1,3 @@
-
 # Examples
 
 Took a look around in the `examples` folder, `examples/benchmarks` contains some larger examples.
