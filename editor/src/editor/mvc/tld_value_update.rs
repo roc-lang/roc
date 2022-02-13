@@ -1,17 +1,10 @@
-use roc_ast::lang::{
-    core::{ast::ASTNodeId, def::def2::Def2, expr::expr2::Expr2},
-    env::Env,
-};
+use roc_ast::lang::core::{ast::ASTNodeId, def::def2::Def2, expr::expr2::Expr2};
 use roc_code_markup::{
     markup::{
-        attribute::Attributes,
-        common_nodes::{new_blank_mn_w_nls, new_equals_mn},
-        nodes::{set_parent_for_all, MarkupNode},
+        common_nodes::new_blank_mn_w_nls, nodes::set_parent_for_all, top_level_def::tld_mark_node,
     },
-    slow_pool::{MarkNodeId, SlowPool},
-    syntax_highlight::HighlightStyle,
+    slow_pool::MarkNodeId,
 };
-use roc_module::symbol::IdentId;
 
 use crate::{
     editor::ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},
@@ -25,39 +18,6 @@ use super::{
 };
 
 // Top Level Defined Value. example: `main = "Hello, World!"`
-
-pub fn tld_mark_node<'a>(
-    identifier_id: IdentId,
-    expr_mark_node_id: MarkNodeId,
-    ast_node_id: ASTNodeId,
-    mark_node_pool: &mut SlowPool,
-    env: &Env<'a>,
-) -> EdResult<MarkupNode> {
-    let val_name = env.ident_ids.get_name_str_res(identifier_id)?;
-
-    let val_name_mn = MarkupNode::Text {
-        content: val_name.to_owned(),
-        ast_node_id,
-        syn_high_style: HighlightStyle::Value,
-        attributes: Attributes::default(),
-        parent_id_opt: None,
-        newlines_at_end: 0,
-    };
-
-    let val_name_mn_id = mark_node_pool.add(val_name_mn);
-
-    let equals_mn_id = mark_node_pool.add(new_equals_mn(ast_node_id, None));
-
-    let full_let_node = MarkupNode::Nested {
-        ast_node_id,
-        children_ids: vec![val_name_mn_id, equals_mn_id, expr_mark_node_id],
-        parent_id_opt: None,
-        newlines_at_end: 2,
-    };
-
-    Ok(full_let_node)
-}
-
 pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,

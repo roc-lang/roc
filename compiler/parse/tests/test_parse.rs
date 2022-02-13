@@ -105,6 +105,7 @@ mod test_parse {
         };
     }
 
+    // see tests/snapshots to see test input(.roc) and expected output(.result-ast)
     snapshot_tests! {
         fail/type_argument_no_arrow.expr,
         fail/type_double_comma.expr,
@@ -126,6 +127,7 @@ mod test_parse {
         pass/basic_private_tag.expr,
         pass/basic_var.expr,
         pass/closure_with_underscores.expr,
+        pass/comment_after_def.module,
         pass/comment_after_op.expr,
         pass/comment_before_op.expr,
         pass/comment_inside_empty_list.expr,

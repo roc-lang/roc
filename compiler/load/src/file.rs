@@ -3298,6 +3298,7 @@ where
         &mut var_store,
         look_up_builtins,
     );
+
     let canonicalize_end = SystemTime::now();
 
     module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();

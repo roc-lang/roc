@@ -4,7 +4,7 @@ use core::convert::From;
 use core::ffi::c_void;
 use core::fmt::{self, Display, Formatter};
 use core::mem::{ManuallyDrop, MaybeUninit};
-use core::ops::Drop;
+use core::ops::{Deref, DerefMut, Drop};
 use core::{mem, ptr, slice};
 
 // A list of C functions that are being imported
@@ -211,6 +211,10 @@ impl<T> RocList<T> {
         unsafe { core::slice::from_raw_parts(self.elements, self.length) }
     }
 
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        unsafe { core::slice::from_raw_parts_mut(self.elements, self.length) }
+    }
+
     /// Copy the contents of the given slice into the end of this list,
     /// reallocating and resizing as necessary.
     pub fn append_slice(&mut self, slice: &[T]) {
@@ -311,6 +315,20 @@ impl<T> RocList<T> {
 
         // The only remaining option is that this is in readonly memory,
         // in which case we shouldn't attempt to do anything to it.
+    }
+}
+
+impl<T> Deref for RocList<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+impl<T> DerefMut for RocList<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        self.as_mut_slice()
     }
 }
 
@@ -636,10 +654,26 @@ impl RocStr {
         }
     }
 
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        if self.is_empty() {
+            &mut []
+        } else if self.is_small_str() {
+            unsafe { core::slice::from_raw_parts_mut(self.get_small_str_ptr_mut(), self.len()) }
+        } else {
+            unsafe { core::slice::from_raw_parts_mut(self.elements, self.length) }
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         let slice = self.as_slice();
 
         unsafe { core::str::from_utf8_unchecked(slice) }
+    }
+
+    pub fn as_mut_str(&mut self) -> &mut str {
+        let slice = self.as_mut_slice();
+
+        unsafe { core::str::from_utf8_unchecked_mut(slice) }
     }
 
     /// Write a CStr (null-terminated) representation of this RocStr into
@@ -657,6 +691,20 @@ impl RocStr {
 
         // null-terminate
         *(buf.add(self.len())) = '\0';
+    }
+}
+
+impl Deref for RocStr {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl DerefMut for RocStr {
+    fn deref_mut(&mut self) -> &mut str {
+        self.as_mut_str()
     }
 }
 
