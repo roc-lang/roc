@@ -830,8 +830,9 @@ impl Type {
                         }
                     }
 
-                    actual.substitute(&substitution);
                     actual.instantiate_aliases(region, aliases, var_store, introduced);
+
+                    actual.substitute(&substitution);
 
                     // instantiate recursion variable!
                     if let Type::RecursiveTagUnion(rec_var, mut tags, mut ext) = actual {
@@ -844,20 +845,15 @@ impl Type {
                         }
                         ext.substitute(&substitution);
 
-                        *self = Type::Alias {
-                            symbol: *symbol,
-                            type_arguments: named_args,
-                            lambda_set_variables: alias.lambda_set_variables.clone(),
-                            actual: Box::new(Type::RecursiveTagUnion(new_rec_var, tags, ext)),
-                        };
-                    } else {
-                        *self = Type::Alias {
-                            symbol: *symbol,
-                            type_arguments: named_args,
-                            lambda_set_variables: alias.lambda_set_variables.clone(),
-                            actual: Box::new(actual),
-                        };
+                        actual = Type::RecursiveTagUnion(new_rec_var, tags, ext);
                     }
+
+                    *self = Type::Alias {
+                        symbol: *symbol,
+                        type_arguments: named_args,
+                        lambda_set_variables,
+                        actual: Box::new(actual),
+                    };
                 } else {
                     // one of the special-cased Apply types.
                     for x in args {
