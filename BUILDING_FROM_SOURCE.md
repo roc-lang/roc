@@ -34,7 +34,7 @@ sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
 ### Zig
 
-**version: 0.8.0**
+#### version: 0.8.0
 
 For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
 
@@ -48,7 +48,7 @@ If you want to install it manually, you can also download Zig directly [here](ht
 
 ### LLVM
 
-**version: 12.0.x**
+#### version: 12.0.x
 
 For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
 `$(brew --prefix llvm@12)/bin` to your `PATH`. You can confirm this worked by
