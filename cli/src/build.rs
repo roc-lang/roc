@@ -309,10 +309,10 @@ fn spawn_rebuild_thread(
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
-        print!("🔨 Rebuilding host... ");
-
         let rebuild_host_start = SystemTime::now();
         if !precompiled {
+            print!("🔨 Rebuilding host... ");
+
             if surgically_link {
                 roc_linker::build_and_preprocess_host(
                     opt_level,
@@ -340,7 +340,9 @@ fn spawn_rebuild_thread(
         }
         let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
 
-        println!("Done!");
+        if !precompiled {
+            println!("Done!");
+        }
 
         rebuild_host_end.as_millis()
     })
