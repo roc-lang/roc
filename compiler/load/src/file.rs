@@ -1074,71 +1074,24 @@ fn load<'a>(
                 // (since other threads need to reference it too).
                 let injector = &injector;
 
+
+
                 // Record this thread's handle so the main thread can join it later.
                 let res_join_handle = thread_scope
                     .builder()
                     .stack_size(EXPANDED_STACK_SIZE)
                     .spawn(move |_| {
-                        // Keep listening until we receive a Shutdown msg
-
-                        for msg in worker_msg_rx.iter() {
-                            match msg {
-                                WorkerMsg::Shutdown => {
-                                    // We've finished all our work. It's time to
-                                    // shut down the thread, so when the main thread
-                                    // blocks on joining with all the worker threads,
-                                    // it can finally exit too!
-                                    return Ok(());
-                                }
-                                WorkerMsg::TaskAdded => {
-                                    // Find a task - either from this thread's queue,
-                                    // or from the main queue, or from another worker's
-                                    // queue - and run it.
-                                    //
-                                    // There might be no tasks to work on! That could
-                                    // happen if another thread is working on a task
-                                    // which will later result in more tasks being
-                                    // added. In that case, do nothing, and keep waiting
-                                    // until we receive a Shutdown message.
-                                    if let Some(task) = find_task(&worker, injector, stealers) {
-                                        let result = run_task(
-                                            task,
-                                            worker_arena,
-                                            src_dir,
-                                            msg_tx.clone(),
-                                            target_info,
-                                        );
-
-                                        match result {
-                                            Ok(()) => {}
-                                            Err(LoadingProblem::MsgChannelDied) => {
-                                                panic!("Msg channel closed unexpectedly.")
-                                            }
-                                            Err(LoadingProblem::ParsingFailed(problem)) => {
-                                                msg_tx.send(Msg::FailedToParse(problem)).unwrap();
-                                            }
-                                            Err(LoadingProblem::FileProblem {
-                                                filename,
-                                                error,
-                                            }) => {
-                                                msg_tx
-                                                    .send(Msg::FailedToReadFile { filename, error })
-                                                    .unwrap();
-                                            }
-                                            Err(other) => {
-                                                return Err(other);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Needed to prevent a borrow checker error about this closure
-                        // outliving its enclosing function.
-                        drop(worker_msg_rx);
-
-                        Ok(())
+                        // will process messages until we run out
+                        worker_task(
+                            worker_arena,
+                            worker,
+                            injector,
+                            stealers,
+                            worker_msg_rx,
+                            msg_tx,
+                            src_dir,
+                            target_info,
+                        )
                     });
 
                 res_join_handle.unwrap();
@@ -1300,6 +1253,65 @@ fn load<'a>(
         })
     }
     .unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn worker_task<'a>(
+    worker_arena: &'a Bump,
+    worker: Worker<BuildTask<'a>>,
+    injector: &Injector<BuildTask<'a>>,
+    stealers: &[Stealer<BuildTask<'a>>],
+    worker_msg_rx: crossbeam::channel::Receiver<WorkerMsg>,
+    msg_tx: MsgSender<'a>,
+    src_dir: &Path,
+    target_info: TargetInfo,
+) -> Result<(), LoadingProblem<'a>> {
+    // Keep listening until we receive a Shutdown msg
+    for msg in worker_msg_rx.iter() {
+        match msg {
+            WorkerMsg::Shutdown => {
+                // We've finished all our work. It's time to
+                // shut down the thread, so when the main thread
+                // blocks on joining with all the worker threads,
+                // it can finally exit too!
+                return Ok(());
+            }
+            WorkerMsg::TaskAdded => {
+                // Find a task - either from this thread's queue,
+                // or from the main queue, or from another worker's
+                // queue - and run it.
+                //
+                // There might be no tasks to work on! That could
+                // happen if another thread is working on a task
+                // which will later result in more tasks being
+                // added. In that case, do nothing, and keep waiting
+                // until we receive a Shutdown message.
+                if let Some(task) = find_task(&worker, injector, stealers) {
+                    let result = run_task(task, worker_arena, src_dir, msg_tx.clone(), target_info);
+
+                    match result {
+                        Ok(()) => {}
+                        Err(LoadingProblem::MsgChannelDied) => {
+                            panic!("Msg channel closed unexpectedly.")
+                        }
+                        Err(LoadingProblem::ParsingFailed(problem)) => {
+                            msg_tx.send(Msg::FailedToParse(problem)).unwrap();
+                        }
+                        Err(LoadingProblem::FileProblem { filename, error }) => {
+                            msg_tx
+                                .send(Msg::FailedToReadFile { filename, error })
+                                .unwrap();
+                        }
+                        Err(other) => {
+                            return Err(other);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn start_tasks<'a>(
