@@ -4,8 +4,8 @@
 name: Lint
 
 on:
-  pull_request:
-    branches: [trunk]
+  push:
+    branches: [add_linter_workflow]
 
 env: # Comment env block if you do not want to apply fixes
   # Apply linter fixes configuration
@@ -38,7 +38,7 @@ jobs:
         env:
           # All available variables are described in documentation
           # https://megalinter.github.io/configuration/
-          VALIDATE_ALL_CODEBASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }} # Validates all source when push on main, else just the git diff with main. Set 'true' if you always want to lint all sources
+          VALIDATE_ALL_CODEBASE: true
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # ADD YOUR CUSTOM ENV VARIABLES HERE TO OVERRIDE VALUES OF .mega-linter.yml AT THE ROOT OF YOUR REPOSITORY
 
