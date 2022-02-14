@@ -809,6 +809,7 @@ fn call_spec(
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
 
+                // List.mapWithIndex : List before, (before, Nat -> after) -> List after
                 ListMapWithIndex { xs } => {
                     let list = env.symbols[xs];
 
@@ -818,7 +819,8 @@ fn call_spec(
                         let element = builder.add_bag_get(block, input_bag)?;
                         let index = builder.add_make_tuple(block, &[])?;
 
-                        let new_element = call_function!(builder, block, [index, element]);
+                        // before, Nat -> after
+                        let new_element = call_function!(builder, block, [element, index]);
 
                         list_append(builder, block, update_mode_var, state, new_element)
                     };

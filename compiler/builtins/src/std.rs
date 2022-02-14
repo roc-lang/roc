@@ -1078,14 +1078,14 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR2))),
     );
 
-    // mapWithIndex : List before, (Nat, before -> after) -> List after
+    // mapWithIndex : List before, (before, Nat -> after) -> List after
     {
         let_tvars! { cvar, before, after};
         add_top_level_function_type!(
             Symbol::LIST_MAP_WITH_INDEX,
             vec![
                 list_type(flex(before)),
-                closure(vec![nat_type(), flex(before)], cvar, Box::new(flex(after))),
+                closure(vec![flex(before), nat_type()], cvar, Box::new(flex(after))),
             ],
             Box::new(list_type(flex(after))),
         )
@@ -1264,10 +1264,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1)))
     );
 
-    // repeat : Nat, elem -> List elem
+    // repeat : elem, Nat -> List elem
     add_top_level_function_type!(
         Symbol::LIST_REPEAT,
-        vec![nat_type(), flex(TVAR1)],
+        vec![flex(TVAR1), nat_type()],
         Box::new(list_type(flex(TVAR1))),
     );
 

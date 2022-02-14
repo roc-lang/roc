@@ -5014,7 +5014,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListMapWithIndex { xs } => {
-            // List.mapWithIndex : List before, (Nat, before -> after) -> List after
+            // List.mapWithIndex : List before, (before, Nat -> after) -> List after
             let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
@@ -5024,7 +5024,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let argument_layouts = &[Layout::usize(env.target_info), **element_layout];
+                    let argument_layouts = &[**element_layout, Layout::usize(env.target_info)];
 
                     let roc_function_call = roc_function_call(
                         env,
@@ -5484,13 +5484,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_single(env, arg, arg_layout)
         }
         ListRepeat => {
-            // List.repeat : Int, elem -> List elem
+            // List.repeat : elem, Nat -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let list_len = load_symbol(scope, &args[0]).into_int_value();
-            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[0]);
+            let list_len = load_symbol(scope, &args[1]).into_int_value();
 
-            list_repeat(env, layout_ids, list_len, elem, elem_layout)
+            list_repeat(env, layout_ids, elem, elem_layout, list_len)
         }
         ListReverse => {
             // List.reverse : List elem -> List elem

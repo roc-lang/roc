@@ -207,7 +207,7 @@ empty : List *
 ## Returns a list with the given length, where every element is the given value.
 ##
 ##
-repeat : Nat, elem -> List elem
+repeat : elem, Nat -> List elem
 
 ## Returns a list of all the integers between one and another,
 ## including both of the given numbers.
@@ -279,7 +279,7 @@ map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
 
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
-mapWithIndex : List before, (Nat, before -> after) -> List after
+mapWithIndex : List before, (before, Nat -> after) -> List after
 
 ## This works like [List.map], except at any time you can return `Err` to
 ## cancel the entire operation immediately, and return that #Err.
