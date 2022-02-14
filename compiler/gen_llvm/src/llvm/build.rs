@@ -5024,7 +5024,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let argument_layouts = &[Layout::usize(env.target_info), **element_layout];
+                    let argument_layouts = &[**element_layout, Layout::usize(env.target_info)];
 
                     let roc_function_call = roc_function_call(
                         env,
