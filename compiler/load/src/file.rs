@@ -6,7 +6,7 @@ use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::std::StdLib;
 use roc_can::constraint::Constraint;
-use roc_can::def::{Declaration, Def};
+use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
@@ -765,18 +765,14 @@ fn enqueue_task<'a>(
     Ok(())
 }
 
-pub fn load_and_typecheck<'a, F>(
+pub fn load_and_typecheck<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
     target_info: TargetInfo,
-    look_up_builtin: F,
-) -> Result<LoadedModule, LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, filename)?;
@@ -789,7 +785,6 @@ where
         exposed_types,
         Phase::SolveTypes,
         target_info,
-        look_up_builtin,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
@@ -797,18 +792,14 @@ where
 }
 
 /// Main entry point to the compiler from the CLI and tests
-pub fn load_and_monomorphize<'a, F>(
+pub fn load_and_monomorphize<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
     target_info: TargetInfo,
-    look_up_builtin: F,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, filename)?;
@@ -821,7 +812,6 @@ where
         exposed_types,
         Phase::MakeSpecializations,
         target_info,
-        look_up_builtin,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -829,7 +819,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn load_and_monomorphize_from_str<'a, F>(
+pub fn load_and_monomorphize_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     src: &'a str,
@@ -837,11 +827,7 @@ pub fn load_and_monomorphize_from_str<'a, F>(
     src_dir: &Path,
     exposed_types: SubsByModule,
     target_info: TargetInfo,
-    look_up_builtin: F,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_str(arena, filename, src)?;
@@ -854,7 +840,6 @@ where
         exposed_types,
         Phase::MakeSpecializations,
         target_info,
-        look_up_builtin,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -1001,7 +986,7 @@ enum LoadResult<'a> {
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
 #[allow(clippy::too_many_arguments)]
-fn load<'a, F>(
+fn load<'a>(
     arena: &'a Bump,
     //filename: PathBuf,
     load_start: LoadStart<'a>,
@@ -1010,11 +995,7 @@ fn load<'a, F>(
     exposed_types: SubsByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
-    look_up_builtins: F,
-) -> Result<LoadResult<'a>, LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
         ident_ids_by_module,
@@ -1126,7 +1107,6 @@ where
                                             src_dir,
                                             msg_tx.clone(),
                                             target_info,
-                                            look_up_builtins,
                                         );
 
                                         match result {
@@ -2992,18 +2972,14 @@ fn fabricate_pkg_config_module<'a>(
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::unnecessary_wraps)]
-fn canonicalize_and_constrain<'a, F>(
+fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
     dep_idents: MutMap<ModuleId, IdentIds>,
     exposed_symbols: MutSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     parsed: ParsedModule<'a>,
-    look_up_builtins: F,
-) -> Result<Msg<'a>, LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let canonicalize_start = SystemTime::now();
 
     let ParsedModule {
@@ -3031,7 +3007,6 @@ where
         exposed_imports,
         &exposed_symbols,
         &mut var_store,
-        look_up_builtins,
     );
 
     let canonicalize_end = SystemTime::now();
@@ -3512,17 +3487,13 @@ fn add_def_to_module<'a>(
     }
 }
 
-fn run_task<'a, F>(
+fn run_task<'a>(
     task: BuildTask<'a>,
     arena: &'a Bump,
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
     target_info: TargetInfo,
-    look_up_builtins: F,
-) -> Result<(), LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<(), LoadingProblem<'a>> {
     use BuildTask::*;
 
     let msg = match task {
@@ -3554,7 +3525,6 @@ where
             exposed_symbols,
             aliases,
             parsed,
-            look_up_builtins,
         ),
         Solve {
             module,

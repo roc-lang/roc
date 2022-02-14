@@ -67,7 +67,7 @@ fn validate_generate_with<'a>(
 
 // TODO trim these down
 #[allow(clippy::too_many_arguments)]
-pub fn canonicalize_module_defs<'a, F>(
+pub fn canonicalize_module_defs<'a>(
     arena: &Bump,
     loc_defs: &'a [Loc<ast::Def<'a>>],
     header_for: &roc_parse::header::HeaderFor,
@@ -79,11 +79,7 @@ pub fn canonicalize_module_defs<'a, F>(
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &MutSet<Symbol>,
     var_store: &mut VarStore,
-    look_up_builtin: F,
-) -> Result<ModuleOutput, RuntimeError>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home, var_store);
     let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
@@ -482,7 +478,7 @@ where
             for symbol in references.iter() {
                 if symbol.is_builtin() {
                     // this can fail when the symbol is for builtin types, or has no implementation yet
-                    if let Some(def) = look_up_builtin(*symbol, var_store) {
+                    if let Some(def) = crate::builtins::builtin_defs_map(*symbol, var_store) {
                         declarations.push(Declaration::Builtin(def));
                     }
                 }

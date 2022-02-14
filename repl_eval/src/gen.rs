@@ -1,7 +1,6 @@
 use bumpalo::Bump;
 use std::path::{Path, PathBuf};
 
-use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
@@ -65,7 +64,6 @@ pub fn compile_to_mono<'a>(
         src_dir,
         exposed_types,
         target_info,
-        builtin_defs_map,
     );
 
     let mut loaded = match loaded {
