@@ -11,8 +11,6 @@ pub use linking::SymInfo;
 use roc_error_macros::internal_error;
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
-use crate::wasm_module::serialize::SkipBytes;
-
 use self::linking::{LinkingSection, RelocationSection};
 use self::sections::{
     CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
@@ -146,8 +144,7 @@ impl<'a> WasmModule<'a> {
 
         let global = GlobalSection::preload(arena, bytes, &mut cursor);
 
-        ExportSection::skip_bytes(bytes, &mut cursor);
-        let export = ExportSection::empty(arena);
+        let export = ExportSection::preload_globals(arena, bytes, &mut cursor);
 
         let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
 

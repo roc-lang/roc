@@ -646,11 +646,36 @@ pub enum ExportType {
     Global = 3,
 }
 
+impl From<u8> for ExportType {
+    fn from(x: u8) -> Self {
+        match x {
+            0 => Self::Func,
+            1 => Self::Table,
+            2 => Self::Mem,
+            3 => Self::Global,
+            _ => internal_error!("invalid ExportType {:2x?}", x),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Export<'a> {
     pub name: &'a [u8],
     pub ty: ExportType,
     pub index: u32,
+}
+
+impl<'a> Export<'a> {
+    fn parse_type(bytes: &[u8], cursor: &mut usize) -> ExportType {
+        String::skip_bytes(bytes, cursor); // name
+
+        let ty = ExportType::from(bytes[*cursor]);
+        *cursor += 1;
+
+        u32::skip_bytes(bytes, cursor); // index
+
+        ty
+    }
 }
 
 impl Serialize for Export<'_> {
@@ -683,18 +708,32 @@ impl<'a> ExportSection<'a> {
         section_size(&self.bytes)
     }
 
-    pub fn empty(arena: &'a Bump) -> Self {
+    fn empty(arena: &'a Bump) -> Self {
         ExportSection {
             count: 0,
             bytes: Vec::with_capacity_in(256, arena),
             function_indices: Vec::with_capacity_in(4, arena),
         }
     }
-}
 
-impl SkipBytes for ExportSection<'_> {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        parse_section(Self::ID, bytes, cursor);
+    /// Preload from object file. Keep only the Global exports, ignore the rest.
+    pub fn preload_globals(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+        let (num_exports, body_bytes) = parse_section(Self::ID, module_bytes, cursor);
+
+        let mut export_section = ExportSection::empty(arena);
+
+        let mut body_cursor = 0;
+        for _ in 0..num_exports {
+            let export_start = body_cursor;
+            let export_type = Export::parse_type(body_bytes, &mut body_cursor);
+            if matches!(export_type, ExportType::Global) {
+                let global_bytes = &body_bytes[export_start..body_cursor];
+                export_section.bytes.extend_from_slice(global_bytes);
+                export_section.count += 1;
+            }
+        }
+
+        export_section
     }
 }
 
