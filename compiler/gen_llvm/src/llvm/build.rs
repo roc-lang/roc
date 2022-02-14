@@ -5692,7 +5692,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     match arg_builtin {
                         Int(int_width) => {
                             let int_type = convert::int_type_from_int_width(env, *int_width);
-                            build_int_unary_op(env, arg.into_int_value(), int_type, op)
+                            build_int_unary_op(env, arg.into_int_value(), int_type, op, layout)
                         }
                         Float(float_width) => build_float_unary_op(
                             env,
@@ -6924,6 +6924,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
     arg: IntValue<'ctx>,
     int_type: IntType<'ctx>,
     op: LowLevel,
+    return_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
 
@@ -6939,12 +6940,19 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             int_abs_raise_on_overflow(env, arg, int_type)
         }
         NumToFloat => {
-            // TODO: Handle different sized numbers
             // This is an Int, so we need to convert it.
+
+            let target_float_type = match return_layout {
+                Layout::Builtin(Builtin::Float(float_width)) => {
+                    convert::float_type_from_float_width(env, *float_width)
+                }
+                _ => internal_error!("There can only be floats here!"),
+            };
+
             bd.build_cast(
                 InstructionOpcode::SIToFP,
                 arg,
-                env.context.f64_type(),
+                target_float_type,
                 "i64_to_f64",
             )
         }

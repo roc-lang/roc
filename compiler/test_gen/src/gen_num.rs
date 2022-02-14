@@ -2490,3 +2490,41 @@ fn monomorphized_ints_aliased() {
         u8
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_float_f32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            n : U8
+            n = 100
+
+            f : F32
+            f = Num.toFloat n
+            f
+            "#
+        ),
+        100.,
+        f32
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_float_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            n : U8
+            n = 100
+
+            f : F64
+            f = Num.toFloat n
+            f
+            "#
+        ),
+        100.,
+        f64
+    )
+}
