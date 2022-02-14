@@ -40,6 +40,7 @@ use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::iter;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
@@ -64,7 +65,7 @@ const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
-const SHOW_MESSAGE_LOG: bool = false;
+const SHOW_MESSAGE_LOG: bool = true;
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -1006,6 +1007,192 @@ fn load<'a>(
     let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
     let (msg_tx, msg_rx) = bounded(1024);
+
+    msg_tx
+        .send(root_msg)
+        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+
+    let mut state = State {
+        root_id,
+        target_info,
+        platform_data: None,
+        goal_phase,
+        stdlib,
+        output_path: None,
+        platform_path: PlatformPath::NotSpecified,
+        module_cache: ModuleCache::default(),
+        dependencies: Dependencies::default(),
+        procedures: MutMap::default(),
+        exposed_to_host: ExposedToHost::default(),
+        exposed_types,
+        arc_modules,
+        arc_shorthands,
+        constrained_ident_ids: IdentIds::exposed_builtins(0),
+        ident_ids_by_module,
+        declarations_by_id: MutMap::default(),
+        exposed_symbols_by_module: MutMap::default(),
+        timings: MutMap::default(),
+        layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
+    };
+
+    // We'll add tasks to this, and then worker threads will take tasks from it.
+    let injector = Injector::new();
+
+    let (worker_msg_tx, worker_msg_rx) = bounded(1024);
+    let worker_listener = worker_msg_tx;
+    let worker_listeners = arena.alloc([worker_listener]);
+
+    let worker = Worker::new_lifo();
+    let stealer = worker.stealer();
+    let stealers = &[stealer];
+
+    loop {
+        match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx) {
+            Ok(ControlFlow::Break(done)) => return Ok(done),
+            Ok(ControlFlow::Continue(new_state)) => {
+                state = new_state;
+            }
+            Err(e) => return Err(e),
+        }
+
+        match worker_task_step(
+            arena,
+            &worker,
+            &injector,
+            stealers,
+            &worker_msg_rx,
+            &msg_tx,
+            src_dir,
+            target_info,
+        ) {
+            Ok(ControlFlow::Break(())) => panic!("the worker should not break!"),
+            Ok(ControlFlow::Continue(())) => {
+                // progress was made
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn state_thread_step<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    worker_listeners: &'a [Sender<WorkerMsg>],
+    injector: &Injector<BuildTask<'a>>,
+    msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
+    msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
+) -> Result<ControlFlow<LoadResult<'a>, State<'a>>, LoadingProblem<'a>> {
+    match msg_rx.try_recv() {
+        Ok(msg) => {
+            match msg {
+                Msg::FinishedAllTypeChecking {
+                    solved_subs,
+                    exposed_vars_by_symbol,
+                    exposed_aliases_by_symbol,
+                    exposed_values,
+                    dep_idents,
+                    documentation,
+                } => {
+                    // We're done! There should be no more messages pending.
+                    debug_assert!(msg_rx.is_empty());
+
+                    return Ok(ControlFlow::Break(LoadResult::TypeChecked(finish(
+                        state,
+                        solved_subs,
+                        exposed_values,
+                        exposed_aliases_by_symbol,
+                        exposed_vars_by_symbol,
+                        dep_idents,
+                        documentation,
+                    ))));
+                }
+                Msg::FinishedAllSpecialization {
+                    subs,
+                    exposed_to_host,
+                } => {
+                    // We're done! There should be no more messages pending.
+                    debug_assert!(msg_rx.is_empty());
+
+                    return Ok(ControlFlow::Break(LoadResult::Monomorphized(
+                        finish_specialization(state, subs, exposed_to_host)?,
+                    )));
+                }
+                Msg::FailedToReadFile { filename, error } => {
+                    let buf = to_file_problem_report(&filename, error);
+                    return Err(LoadingProblem::FormattedReport(buf));
+                }
+
+                Msg::FailedToParse(problem) => {
+                    let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
+                    let buf =
+                        to_parse_problem_report(problem, module_ids, state.constrained_ident_ids);
+                    return Err(LoadingProblem::FormattedReport(buf));
+                }
+                msg => {
+                    // This is where most of the main thread's work gets done.
+                    // Everything up to this point has been setting up the threading
+                    // system which lets this logic work efficiently.
+                    let constrained_ident_ids = state.constrained_ident_ids.clone();
+                    let arc_modules = state.arc_modules.clone();
+
+                    let res_state = update(
+                        state,
+                        msg,
+                        msg_tx.clone(),
+                        injector,
+                        worker_listeners,
+                        arena,
+                    );
+
+                    match res_state {
+                        Ok(new_state) => Ok(ControlFlow::Continue(new_state)),
+                        Err(LoadingProblem::ParsingFailed(problem)) => {
+                            let module_ids = Arc::try_unwrap(arc_modules)
+                                .unwrap_or_else(|_| {
+                                    panic!(
+                                        r"There were still outstanding Arc references to module_ids"
+                                    )
+                                })
+                                .into_inner()
+                                .into_module_ids();
+
+                            let buf =
+                                to_parse_problem_report(problem, module_ids, constrained_ident_ids);
+                            return Err(LoadingProblem::FormattedReport(buf));
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+        }
+        Err(err) => match err {
+            crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(state)),
+            crossbeam::channel::TryRecvError::Disconnected => panic!(""),
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_multithreaded<'a>(
+    arena: &'a Bump,
+    //filename: PathBuf,
+    load_start: LoadStart<'a>,
+    stdlib: &'a StdLib,
+    src_dir: &Path,
+    exposed_types: SubsByModule,
+    goal_phase: Phase,
+    target_info: TargetInfo,
+) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
+    let LoadStart {
+        arc_modules,
+        ident_ids_by_module,
+        root_id,
+        root_msg,
+    } = load_start;
+
+    let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
+
+    let (msg_tx, msg_rx) = bounded(1024);
     msg_tx
         .send(root_msg)
         .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -1253,6 +1440,71 @@ fn load<'a>(
         })
     }
     .unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn worker_task_step<'a>(
+    worker_arena: &'a Bump,
+    worker: &Worker<BuildTask<'a>>,
+    injector: &Injector<BuildTask<'a>>,
+    stealers: &[Stealer<BuildTask<'a>>],
+    worker_msg_rx: &crossbeam::channel::Receiver<WorkerMsg>,
+    msg_tx: &MsgSender<'a>,
+    src_dir: &Path,
+    target_info: TargetInfo,
+) -> Result<ControlFlow<(), ()>, LoadingProblem<'a>> {
+    match worker_msg_rx.try_recv() {
+        Ok(msg) => {
+            match msg {
+                WorkerMsg::Shutdown => {
+                    // We've finished all our work. It's time to
+                    // shut down the thread, so when the main thread
+                    // blocks on joining with all the worker threads,
+                    // it can finally exit too!
+                    return Ok(ControlFlow::Break(()));
+                }
+                WorkerMsg::TaskAdded => {
+                    // Find a task - either from this thread's queue,
+                    // or from the main queue, or from another worker's
+                    // queue - and run it.
+                    //
+                    // There might be no tasks to work on! That could
+                    // happen if another thread is working on a task
+                    // which will later result in more tasks being
+                    // added. In that case, do nothing, and keep waiting
+                    // until we receive a Shutdown message.
+                    if let Some(task) = find_task(&worker, injector, stealers) {
+                        let result =
+                            run_task(task, worker_arena, src_dir, msg_tx.clone(), target_info);
+
+                        match result {
+                            Ok(()) => {}
+                            Err(LoadingProblem::MsgChannelDied) => {
+                                panic!("Msg channel closed unexpectedly.")
+                            }
+                            Err(LoadingProblem::ParsingFailed(problem)) => {
+                                msg_tx.send(Msg::FailedToParse(problem)).unwrap();
+                            }
+                            Err(LoadingProblem::FileProblem { filename, error }) => {
+                                msg_tx
+                                    .send(Msg::FailedToReadFile { filename, error })
+                                    .unwrap();
+                            }
+                            Err(other) => {
+                                return Err(other);
+                            }
+                        }
+                    }
+
+                    Ok(ControlFlow::Continue(()))
+                }
+            }
+        }
+        Err(err) => match err {
+            crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(())),
+            crossbeam::channel::TryRecvError::Disconnected => Ok(ControlFlow::Break(())),
+        },
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
