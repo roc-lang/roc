@@ -1,0 +1,8 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Roc
+Upstream-Contact: Richard Feldman <oss@rtfeldman.com>
+Source: https://github.com/rtfeldman/roc
+
+Files: *
+Copyright: © The Roc Contributors
+License: UPL-1.0
