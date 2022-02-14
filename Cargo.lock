@@ -3584,6 +3584,7 @@ dependencies = [
  "roc_unify",
  "tempfile",
  "ven_pretty",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -3698,6 +3699,7 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -3763,6 +3765,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "tempfile",
+ "wasm-bindgen",
 ]
 
 [[package]]

@@ -17,7 +17,9 @@ WWW_DIR="repl_www/build"
 mkdir -p $WWW_DIR
 cp repl_www/public/* $WWW_DIR
 
-# Pass all script arguments through to wasm-pack (such as --release)
+# Pass all script arguments through to wasm-pack
+# For debugging, pass the --profiling option, which enables optimizations + debug info
+# (We need optimizations to get rid of dead code that otherwise causes compile errors!)
 wasm-pack build --target web "$@" repl_wasm
 
 cp repl_wasm/pkg/*.wasm $WWW_DIR

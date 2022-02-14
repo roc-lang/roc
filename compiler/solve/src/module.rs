@@ -7,6 +7,20 @@ use roc_types::solved_types::{Solved, SolvedType};
 use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::Alias;
 
+use wasm_bindgen::prelude::wasm_bindgen;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+}
+
+// In-browser debugging
+#[allow(unused_macros)]
+macro_rules! console_log {
+    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+}
+
 #[derive(Debug)]
 pub struct SolvedModule {
     pub solved_types: MutMap<Symbol, SolvedType>,
@@ -22,16 +36,20 @@ pub fn run_solve(
     constraint: Constraint,
     var_store: VarStore,
 ) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
+    console_log!("run_solve");
+
     let env = solve::Env {
         vars_by_symbol: MutMap::default(),
         aliases,
     };
 
     let mut subs = Subs::new_from_varstore(var_store);
+    console_log!("after new_from_varstore");
 
     for (var, name) in rigid_variables {
         subs.rigid_var(var, name);
     }
+    console_log!("after rigid_var");
 
     // Now that the module is parsed, canonicalized, and constrained,
     // we need to type check it.
@@ -39,6 +57,7 @@ pub fn run_solve(
 
     // Run the solver to populate Subs.
     let (solved_subs, solved_env) = solve::run(&env, &mut problems, subs, &constraint);
+    console_log!("after solve::run");
 
     (solved_subs, solved_env, problems)
 }

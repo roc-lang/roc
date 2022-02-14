@@ -8,8 +8,21 @@ use roc_load::file::{LoadingProblem, MonomorphizedModule};
 use roc_parse::ast::Expr;
 use roc_region::all::LineInfo;
 use roc_target::TargetInfo;
+use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::eval::ToAstProblem;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+}
+
+// In-browser debugging
+#[allow(unused_macros)]
+macro_rules! console_log {
+    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+}
 
 pub enum ReplOutput {
     Problems(Vec<String>),
@@ -45,6 +58,8 @@ pub fn compile_to_mono<'a>(
     src: &str,
     target_info: TargetInfo,
 ) -> Result<MonomorphizedModule<'a>, Vec<String>> {
+    console_log!("compile_to_mono");
+
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };
@@ -56,6 +71,9 @@ pub fn compile_to_mono<'a>(
     let module_src = arena.alloc(promote_expr_to_module(src));
 
     let exposed_types = MutMap::default();
+
+    console_log!("before load_and_monomorphize_from_str");
+
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
