@@ -51,7 +51,7 @@ use crate::work::{Dependencies, Phase};
 #[cfg(not(target_family = "wasm"))]
 use std::time::{Duration, SystemTime};
 #[cfg(target_family = "wasm")]
-use wasm_system_time::{Duration, SystemTime};
+use crate::wasm_system_time::{Duration, SystemTime};
 
 /// Default name for the binary generated for an app, if an invalid one was specified.
 const DEFAULT_APP_OUTPUT_PATH: &str = "app";
@@ -650,7 +650,7 @@ impl ModuleTiming {
             end_time,
         } = self;
 
-        let calculate = |t: Result<Duration, std::time::SystemTimeError>| -> Option<Duration> {
+        let calculate = |t: Result<Duration, _>| -> Option<Duration> {
             t.ok()?
                 .checked_sub(*make_specializations)?
                 .checked_sub(*find_specializations)?
