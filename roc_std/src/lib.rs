@@ -140,7 +140,6 @@ impl<T> RocList<T> {
         assert!(capacity > 0);
         assert!(slice.len() <= capacity);
 
-        let ptr = slice.as_ptr();
         let element_bytes = capacity * core::mem::size_of::<T>();
 
         let padding = {
@@ -165,25 +164,11 @@ impl<T> RocList<T> {
             let refcount_ptr = raw_ptr as *mut isize;
             *(refcount_ptr.offset(-1)) = isize::MIN;
 
-            {
-                // NOTE: using a memcpy here causes weird issues
-                let target_ptr = raw_ptr as *mut T;
-                let source_ptr = ptr as *const T;
-                for index in 0..slice.len() {
-                    let source = &*source_ptr.add(index);
-                    let target = &mut *target_ptr.add(index);
-
-                    // NOTE for a weird reason, it's important that we clone onto the stack
-                    // and explicitly forget the swapped-in value
-                    // cloning directly from source to target causes some garbage memory (cast to a
-                    // RocStr) to end up in the drop implementation of RocStr and cause havoc by
-                    // freeing NULL
-                    let mut temporary = source.clone();
-
-                    core::mem::swap(target, &mut temporary);
-
-                    core::mem::forget(temporary);
-                }
+            // Clone the elements into the new array.
+            let target_ptr = raw_ptr;
+            for (i, value) in slice.iter().cloned().enumerate() {
+                let target_ptr = target_ptr.add(i);
+                target_ptr.write(value);
             }
 
             raw_ptr
