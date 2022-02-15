@@ -1374,9 +1374,19 @@ pub struct CallSpecId {
     id: u32,
 }
 
+impl Default for CallSpecId {
+    fn default() -> Self {
+        Self { id: 1 }
+    }
+}
+
 impl CallSpecId {
     pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
+    }
+
+    pub fn next(self) -> Self {
+        Self { id: self.id + 1 }
     }
 
     /// Dummy value for generating refcount helper procs in the backends
@@ -1389,9 +1399,19 @@ pub struct UpdateModeId {
     id: u32,
 }
 
+impl Default for UpdateModeId {
+    fn default() -> Self {
+        Self { id: 1 }
+    }
+}
+
 impl UpdateModeId {
     pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
+    }
+
+    pub fn next(self) -> Self {
+        Self { id: self.id + 1 }
     }
 
     /// Dummy value for generating refcount helper procs in the backends

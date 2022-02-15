@@ -51,7 +51,7 @@ struct Module<'a> {
     strings: String<'a>,
     big_numbers: Vec<'a, i128>,
     // unique things
-    call_specialization_counter: u32,
+    call_specialization_counter: CallSpecId,
     update_mode_ids: UpdateModeIds,
 }
 
@@ -72,7 +72,7 @@ impl<'a> Module<'a> {
             parameters: Vec::new_in(arena),
             strings: String::new_in(arena),
             big_numbers: Vec::new_in(arena),
-            call_specialization_counter: 1,
+            call_specialization_counter: CallSpecId::default(),
             update_mode_ids: UpdateModeIds::new(),
         }
     }
@@ -82,11 +82,10 @@ impl<'a> Module<'a> {
     }
 
     pub fn next_call_specialization_id(&mut self) -> CallSpecId {
-        let id = CallSpecId {
-            id: self.call_specialization_counter,
-        };
+        let id = self.call_specialization_counter;
+        let next = id.next();
 
-        self.call_specialization_counter += 1;
+        self.call_specialization_counter = next;
 
         id
     }
@@ -100,12 +99,14 @@ impl<'a> Module<'a> {
     fn push_expr(&mut self, expr: Expr) -> Index<Expr> {
         let index = Index::new(self.exprs.len() as u32);
         self.exprs.push(expr);
+        self.expr_symbols.push(Symbol::MONO_TMP);
         index
     }
 
     fn push_stmt(&mut self, stmt: Stmt) -> Index<Stmt> {
         let index = Index::new(self.stmts.len() as u32);
         self.stmts.push(stmt);
+        self.stmt_symbols.push(Symbol::MONO_TMP);
         index
     }
 
@@ -133,11 +134,26 @@ impl<'a> Module<'a> {
         self.push_stmt(Stmt::Reserved)
     }
 
+    fn reserve_expr(&mut self) -> Index<Expr> {
+        self.push_expr(Expr::Reserved)
+    }
+
+    fn reserve_stmt_slice(&mut self, length: usize) -> Slice<Stmt> {
+        let start = self.stmts.len() as u32;
+
+        for _ in 0..length {
+            self.reserve_stmt();
+        }
+
+        Slice::new(start, length as u16)
+    }
+
     fn reserve_expr_slice(&mut self, length: usize) -> Slice<Expr> {
         let start = self.exprs.len() as u32;
 
-        let it = std::iter::repeat(Expr::Reserved).take(length);
-        self.exprs.extend(it);
+        for _ in 0..length {
+            self.reserve_expr();
+        }
 
         Slice::new(start, length as u16)
     }
@@ -154,18 +170,27 @@ impl<'a> Module<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UpdateModeIds {
-    next: u32,
+    next: UpdateModeId,
 }
 
 impl UpdateModeIds {
-    pub const fn new() -> Self {
-        Self { next: 0 }
+    pub fn new() -> Self {
+        Self {
+            next: UpdateModeId::default(),
+        }
     }
 
     pub fn next_id(&mut self) -> UpdateModeId {
-        let id = UpdateModeId { id: self.next };
-        self.next += 1;
+        let id = self.next;
+        let next = id.next();
+        self.next = next;
         id
+    }
+}
+
+impl Default for UpdateModeIds {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -520,20 +545,56 @@ impl Stmt {
                     roc_can::expr::Expr::Var(symbol) if is_toplevel => {
                         // the simple case, we know exactly what function to call
 
-                        let specialization_id = module.fresh_specialization_id();
+                        let specialization_id = module.next_call_specialization_id();
+
+                        let arguments_slice = module.reserve_stmt_slice(arguments.len());
+                        let call_stmt_id = module.reserve_stmt();
+                        let layouts_slice =
+                            module.layouts.reserve_layout_slice(arguments.len() + 1);
+
+                        let continue_with_it = arguments_slice
+                            .indices()
+                            .skip(1)
+                            .chain(std::iter::once(call_stmt_id.index as usize));
+
+                        let it = arguments_slice.indices().zip(continue_with_it);
+
+                        for ((argument_index, continue_with), (_, argument)) in it.zip(arguments) {
+                            Self::from_can_expr_dps(
+                                module,
+                                subs,
+                                &argument.value,
+                                EndBlock::Continue(Index::new(continue_with as u32)),
+                                Index::new(argument_index as u32),
+                            );
+                        }
+
+                        let it = layouts_slice.indices().zip(arguments);
+                        for (layout_index, (variable, _)) in it {
+                            let argument_layout = layout_from_var!(*variable);
+                            module.layouts.layouts[layout_index] = argument_layout;
+                        }
+
+                        let return_layout = layout_from_var!(*return_var);
+                        module.layouts.layouts[layouts_slice.indices().end] = return_layout;
+                        let return_layout_index = Index::new(layouts_slice.indices().end as u32);
 
                         let expr = Expr::CallByName {
-                            arguments: todo!(),
-                            layouts: todo!(),
+                            arguments: arguments_slice,
+                            layouts: layouts_slice,
                             specialization_id,
                         };
 
                         let expr = module.push_expr(expr);
 
                         let index = module.reserve_stmt();
-                        let return_layout =
-                            module.layouts.push_layout(layout_from_var!(*return_var));
-                        Self::end_block_with_expr(module, end_block, index, expr, return_layout)
+                        Self::end_block_with_expr(
+                            module,
+                            end_block,
+                            index,
+                            expr,
+                            return_layout_index,
+                        )
                     }
                     _ => {
                         // the more complicated case; we need to look at the lambda lambda_set_var
@@ -601,7 +662,7 @@ pub enum Expr {
     // Functions
     CallByName {
         // name: Symbol, is implicit
-        arguments: Slice<Index<Stmt>>,
+        arguments: Slice<Stmt>,
         layouts: Slice<Layout>, // final element of the slice is the return type
         specialization_id: CallSpecId,
     },

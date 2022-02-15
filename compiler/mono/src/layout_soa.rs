@@ -120,7 +120,7 @@ impl Reserve for Slice<Slice<Layout>> {
 static_assertions::assert_eq_size!([u8; 12], Layout);
 
 pub struct Layouts<'a> {
-    layouts: Vec<'a, Layout>,
+    pub layouts: Vec<'a, Layout>,
     layout_slices: Vec<'a, Slice<Layout>>,
     // function_layouts: Vec<(Slice<Layout>, Index<LambdaSet>)>,
     lambda_sets: Vec<'a, LambdaSet>,

@@ -883,6 +883,9 @@ define_builtins! {
 
         // used in dev backend
         26 DEV_TMP: "#dev_tmp"
+
+        // used in mono
+        27 MONO_TMP: "#mono_tmp"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
