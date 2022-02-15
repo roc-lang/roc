@@ -3,6 +3,7 @@ window.js_create_app = js_create_app;
 window.js_run_app = js_run_app;
 window.js_get_result_and_memory = js_get_result_and_memory;
 import * as roc_repl_wasm from "./roc_repl_wasm.js";
+import { getMockWasiImports } from "./wasi.js";
 
 // ----------------------------------------------------------------------------
 // REPL state
@@ -74,7 +75,13 @@ async function processInputQueue() {
 // Create an executable Wasm instance from an array of bytes
 // (Browser validates the module and does the final compilation to the host's machine code.)
 async function js_create_app(wasm_module_bytes) {
-  const { instance } = await WebAssembly.instantiate(wasm_module_bytes);
+  const wasiLinkObject = {}; // gives the WASI functions a reference to the app so they can write to its memory
+  const importObj = getMockWasiImports(wasiLinkObject);
+  const { instance } = await WebAssembly.instantiate(
+    wasm_module_bytes,
+    importObj
+  );
+  wasiLinkObject.instance = instance;
   repl.app = instance;
 }
 
