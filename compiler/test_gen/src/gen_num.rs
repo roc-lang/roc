@@ -2053,21 +2053,76 @@ fn max_u8() {
     );
 }
 
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_i8() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toI8 TODO
-                "#
-        ),
-        i8::MAX, // TODO
-        i8
-    );
+macro_rules! to_int_tests {
+    ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr)*))*) => {$($(
+        #[test]
+        #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+        fn $test_name() {
+            let input = format!("{} {}", $fn, $input);
+            assert_evals_to!(&input, $output, $typ)
+        }
+    )*)*}
+}
+
+to_int_tests! {
+    "Num.toI8", i8, (
+        to_i8_same_width, "15u8", 15
+        to_i8_truncate, "115i32", 115
+        to_i8_truncate_wraps, "500i32", -12
+    )
+    "Num.toI16", i16, (
+        to_i16_same_width, "15u16", 15
+        to_i16_extend, "15i8", 15
+        to_i16_truncate, "115i32", 115
+        to_i16_truncate_wraps, "60000i32", -5536
+    )
+    "Num.toI32", i32, (
+        to_i32_same_width, "15u32", 15
+        to_i32_extend, "15i8", 15
+        to_i32_truncate, "115i64", 115
+        to_i32_truncate_wraps, "5000000000i64", 705032704
+    )
+    "Num.toI64", i64, (
+        to_i64_same_width, "15u64", 15
+        to_i64_extend, "15i8", 15
+        to_i64_truncate, "115i128", 115
+        to_i64_truncate_wraps, "10_000_000_000_000_000_000i128", -8446744073709551616
+    )
+    "Num.toI128", i128, (
+        to_i128_same_width, "15u128", 15
+        to_i128_extend, "15i8", 15
+    )
+    "Num.toU8", u8, (
+        to_u8_same_width, "15i8", 15
+        to_u8_truncate, "115i32", 115
+        to_u8_truncate_wraps, "500i32", 20
+    )
+    "Num.toU16", u16, (
+        to_u16_same_width, "15i16", 15
+        to_u16_extend, "15i8", 15
+        to_u16_truncate, "115i32", 115
+        to_u16_truncate_wraps, "60000i32", 10
+    )
+    "Num.toU32", u32, (
+        to_u32_same_width, "15i32", 15
+        to_u32_extend, "15i8", 15
+        to_u32_truncate, "115i64", 115
+        to_u32_truncate_wraps, "5000000000i64", 10
+    )
+    "Num.toU64", u64, (
+        to_u64_same_width, "15i64", 15
+        to_u64_extend, "15i8", 15
+        to_u64_truncate, "115i128", 115
+        to_u64_truncate_wraps, "10_000_000_000_000_000_000i128", 10
+    )
+    "Num.toU128", u128, (
+        to_u128_same_width, "15i128", 15
+        to_u128_extend, "15i8", 15
+    )
 }
 
 #[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_i8_checked() {
     assert_evals_to!(
@@ -2082,20 +2137,7 @@ fn to_i8_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_i16() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toI16 TODO
-                "#
-        ),
-        i16::MAX, // TODO
-        i16
-    );
-}
-
-#[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_i16_checked() {
     assert_evals_to!(
@@ -2110,20 +2152,7 @@ fn to_i16_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_i32() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toI32 TODO
-                "#
-        ),
-        i32::MAX, // TODO
-        i32
-    );
-}
-
-#[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_i32_checked() {
     assert_evals_to!(
@@ -2138,20 +2167,7 @@ fn to_i32_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_i64() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toI64 TODO
-                "#
-        ),
-        i64::MAX, // TODO
-        i64
-    );
-}
-
-#[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_i64_checked() {
     assert_evals_to!(
@@ -2166,20 +2182,7 @@ fn to_i64_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_i128() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toI128 TODO
-                "#
-        ),
-        i128::MAX, // TODO
-        i128
-    );
-}
-
-#[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_i128_checked() {
     assert_evals_to!(
@@ -2194,20 +2197,7 @@ fn to_i128_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_u8() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toU8 TODO
-                "#
-        ),
-        u8::MAX, // TODO
-        u8
-    );
-}
-
-#[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_u8_checked() {
     assert_evals_to!(
@@ -2222,20 +2212,7 @@ fn to_u8_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_u16() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toU16 TODO
-                "#
-        ),
-        u16::MAX, // TODO
-        u16
-    );
-}
-
-#[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_u16_checked() {
     assert_evals_to!(
@@ -2250,20 +2227,7 @@ fn to_u16_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_u32() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toU32 TODO
-                "#
-        ),
-        u32::MAX, // TODO
-        u32
-    );
-}
-
-#[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_u32_checked() {
     assert_evals_to!(
@@ -2278,20 +2242,7 @@ fn to_u32_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_u64() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toU64 TODO
-                "#
-        ),
-        u64::MAX, // TODO
-        u64
-    );
-}
-
-#[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_u64_checked() {
     assert_evals_to!(
@@ -2306,20 +2257,7 @@ fn to_u64_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_u128() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toU128 TODO
-                "#
-        ),
-        u128::MAX, // TODO
-        u128
-    );
-}
-
-#[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_u128_checked() {
     assert_evals_to!(

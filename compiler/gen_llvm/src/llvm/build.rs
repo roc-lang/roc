@@ -6922,7 +6922,7 @@ fn int_type_signed_min(int_type: IntType) -> IntValue {
 fn build_int_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: IntValue<'ctx>,
-    int_type: IntType<'ctx>,
+    arg_int_type: IntType<'ctx>,
     op: LowLevel,
     return_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -6933,11 +6933,11 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
     match op {
         NumNeg => {
             // integer abs overflows when applied to the minimum value of a signed type
-            int_neg_raise_on_overflow(env, arg, int_type)
+            int_neg_raise_on_overflow(env, arg, arg_int_type)
         }
         NumAbs => {
             // integer abs overflows when applied to the minimum value of a signed type
-            int_abs_raise_on_overflow(env, arg, int_type)
+            int_abs_raise_on_overflow(env, arg, arg_int_type)
         }
         NumToFloat => {
             // This is an Int, so we need to convert it.
