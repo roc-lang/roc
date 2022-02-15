@@ -1,12 +1,12 @@
-use crate::graphics::primitives::rect::Rect;
+use crate::graphics::primitives::rect::RectElt;
 use crate::graphics::primitives::text::{owned_section_from_text, Text};
 
 #[derive(Debug)]
 pub struct RectsAndTexts {
     pub text_sections_behind: Vec<glyph_brush::OwnedSection>, // displayed in front of rect_behind, behind everything else
     pub text_sections_front: Vec<glyph_brush::OwnedSection>,  // displayed in front of everything
-    pub rects_behind: Vec<Rect>,                              // displayed at lowest depth
-    pub rects_front: Vec<Rect>, // displayed in front of text_sections_behind, behind text_sections_front
+    pub rects_behind: Vec<RectElt>,                              // displayed at lowest depth
+    pub rects_front: Vec<RectElt>, // displayed in front of text_sections_behind, behind text_sections_front
 }
 
 impl RectsAndTexts {
@@ -19,7 +19,7 @@ impl RectsAndTexts {
         }
     }
 
-    pub fn init(rects_behind: Vec<Rect>, texts_behind: Vec<Text>, rects_front: Vec<Rect>, texts_front: Vec<Text>) -> Self {
+    pub fn init(rects_behind: Vec<RectElt>, texts_behind: Vec<Text>, rects_front: Vec<RectElt>, texts_front: Vec<Text>) -> Self {
         Self {
             text_sections_behind: texts_behind.iter().map(|txt| owned_section_from_text(txt)).collect(),
             text_sections_front: texts_front.iter().map(|txt| owned_section_from_text(txt)).collect(),
@@ -36,15 +36,15 @@ impl RectsAndTexts {
         self.text_sections_front.push(new_text_section);
     }
 
-    pub fn add_rect_behind(&mut self, new_rect: Rect) {
+    pub fn add_rect_behind(&mut self, new_rect: RectElt) {
         self.rects_behind.push(new_rect);
     }
 
-    pub fn add_rects_behind(&mut self, new_rects: Vec<Rect>) {
+    pub fn add_rects_behind(&mut self, new_rects: Vec<RectElt>) {
         self.rects_behind.extend(new_rects);
     }
 
-    pub fn add_rect_front(&mut self, new_rect: Rect) {
+    pub fn add_rect_front(&mut self, new_rect: RectElt) {
         self.rects_front.push(new_rect);
     }
 

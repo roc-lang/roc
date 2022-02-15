@@ -5,7 +5,7 @@ struct VertexOutput {
 };
 
 struct Globals {
-    ortho: mat4x4<f32>;
+    ortho: mat4x4<f32>; // The ortho transformation keeps everything the same size when the window size is changed.
 };
 
 [[group(0), binding(0)]]

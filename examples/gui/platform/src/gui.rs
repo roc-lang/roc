@@ -2,10 +2,9 @@ use crate::{
     graphics::{
         colors::{self, from_hsb, to_wgpu_color},
         lowlevel::buffer::create_rect_buffers,
-        lowlevel::ortho::update_ortho_buffer,
-        lowlevel::pipelines,
-        primitives::rect::Rect,
-        primitives::text::{build_glyph_brush, Text},
+        lowlevel::{ortho::update_ortho_buffer, buffer::MAX_QUADS},
+        lowlevel::{pipelines, buffer::QUAD_INDICES},
+        primitives::{text::{build_glyph_brush, Text}, rect::{Rect, RectElt}},
     },
     rects_and_texts::RectsAndTexts,
 };
@@ -184,8 +183,8 @@ fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box
             }
             Event::MainEventsCleared => window.request_redraw(),
             Event::RedrawRequested { .. } => {
-                // Get a command encoder for the current frame
-                let mut encoder =
+                // Get a command cmd_encoder for the current frame
+                let mut cmd_encoder =
                     gpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("Redraw"),
                     });
@@ -200,7 +199,7 @@ fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box
 
                 draw_rects(
                     &rects_and_texts.rects_behind,
-                    &mut encoder,
+                    &mut cmd_encoder,
                     &view,
                     &gpu_device,
                     &rect_resources,
@@ -218,7 +217,7 @@ fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box
                     .draw_queued(
                         &gpu_device,
                         &mut staging_belt,
-                        &mut encoder,
+                        &mut cmd_encoder,
                         &view,
                         size.width,
                         size.height,
@@ -228,7 +227,7 @@ fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box
                 // draw rects on top of first text layer
                 draw_rects(
                     &rects_and_texts.rects_front,
-                    &mut encoder,
+                    &mut cmd_encoder,
                     &view,
                     &gpu_device,
                     &rect_resources,
@@ -246,7 +245,7 @@ fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box
                     .draw_queued(
                         &gpu_device,
                         &mut staging_belt,
-                        &mut encoder,
+                        &mut cmd_encoder,
                         &view,
                         size.width,
                         size.height,
@@ -254,7 +253,7 @@ fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box
                     .expect("Failed to draw queued text.");
 
                 staging_belt.finish();
-                cmd_queue.submit(Some(encoder.finish()));
+                cmd_queue.submit(Some(cmd_encoder.finish()));
                 surface_texture.present();
 
                 // Recall unused staging buffers
@@ -276,33 +275,37 @@ fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box
 }
 
 fn draw_rects(
-    all_rects: &[Rect],
-    encoder: &mut CommandEncoder,
+    all_rects: &[RectElt],
+    cmd_encoder: &mut CommandEncoder,
     texture_view: &TextureView,
     gpu_device: &wgpu::Device,
     rect_resources: &RectResources,
     load_op: LoadOp<wgpu::Color>,
 ) {
-    let rect_buffers = create_rect_buffers(gpu_device, encoder, all_rects);
+    let rect_buffers = create_rect_buffers(gpu_device, cmd_encoder, all_rects);
 
-    let mut render_pass = begin_render_pass(encoder, texture_view, load_op);
+    let mut render_pass = begin_render_pass(cmd_encoder, texture_view, load_op);
 
     render_pass.set_pipeline(&rect_resources.pipeline);
     render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
+
     render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+    render_pass.set_vertex_buffer(1, rect_buffers.quad_buffer.slice(..));
+
     render_pass.set_index_buffer(
         rect_buffers.index_buffer.slice(..),
-        wgpu::IndexFormat::Uint32,
+        wgpu::IndexFormat::Uint16,
     );
-    render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
+
+    render_pass.draw_indexed(0..QUAD_INDICES.len() as u32, 0, 0..MAX_QUADS as u32);
 }
 
 fn begin_render_pass<'a>(
-    encoder: &'a mut CommandEncoder,
+    cmd_encoder: &'a mut CommandEncoder,
     texture_view: &'a TextureView,
     load_op: LoadOp<wgpu::Color>,
 ) -> RenderPass<'a> {
-    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+    cmd_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         color_attachments: &[wgpu::RenderPassColorAttachment {
             view: texture_view,
             resolve_target: None,
@@ -318,11 +321,15 @@ fn begin_render_pass<'a>(
 
 pub fn render(title: RocStr) {
     let rects_behind = vec![
-        Rect {
-            top_left_coords: (20.0, 20.0).into(),
-            width: 200.0,
-            height: 100.0,
+        RectElt {
+            rect: Rect {
+                top_left_coords: (20.0, 20.0).into(),
+                width: 200.0,
+                height: 100.0
+            },
             color: (0.4, 0.2, 0.5, 1.0),
+            border_width: 5.0,
+            border_color: (0.75, 0.5, 0.5, 1.0)
         }
     ];
 
@@ -337,11 +344,15 @@ pub fn render(title: RocStr) {
     ];
 
     let rects_front = vec![
-        Rect {
-            top_left_coords: (30.0, 30.0).into(),
-            width: 70.0,
-            height: 70.0,
+        RectElt {
+            rect: Rect {
+                top_left_coords: (30.0, 30.0).into(),
+                width: 70.0,
+                height: 70.0
+            },
             color: (0.7, 0.2, 0.2, 0.6),
+            border_width: 10.0,
+            border_color: (0.75, 0.5, 0.5, 1.0)
         }
     ];
 

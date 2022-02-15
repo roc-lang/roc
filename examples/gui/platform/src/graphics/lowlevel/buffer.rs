@@ -1,168 +1,100 @@
-// Adapted from https://github.com/sotrh/learn-wgpu
-// by Benjamin Hansen - license information can be found in the COPYRIGHT
+// Contains parts of https://github.com/sotrh/learn-wgpu
+// by Benjamin Hansen - license information can be found in the LEGAL_DETAILS
 // file in the root directory of this distribution.
 //
 // Thank you, Benjamin!
-use super::vertex::Vertex;
-use crate::graphics::colors::to_slice;
-use crate::graphics::primitives::rect::Rect;
-use wgpu::util::{BufferInitDescriptor, DeviceExt};
 
-pub struct QuadBufferBuilder {
-    vertex_data: Vec<Vertex>,
-    index_data: Vec<u32>,
-    current_quad: u32,
-}
 
-impl QuadBufferBuilder {
-    pub fn new() -> Self {
-        Self {
-            vertex_data: Vec::new(),
-            index_data: Vec::new(),
-            current_quad: 0,
-        }
-    }
+// Contains parts of https://github.com/iced-rs/iced/blob/adce9e04213803bd775538efddf6e7908d1c605e/wgpu/src/shader/quad.wgsl
+// By Héctor Ramón, Iced contributors Licensed under the MIT license.
+// The license is included in the LEGAL_DETAILS file in the root directory of this distribution.
 
-    pub fn push_rect(self, rect: &Rect) -> Self {
-        let coords = rect.top_left_coords;
-        self.push_quad(
-            coords.x,
-            coords.y,
-            coords.x + rect.width,
-            coords.y + rect.height,
-            to_slice(rect.color),
-        )
-    }
+// Thank you Héctor Ramón and Iced contributors!
 
-    pub fn push_quad(
-        mut self,
-        min_x: f32,
-        min_y: f32,
-        max_x: f32,
-        max_y: f32,
-        color: [f32; 4],
-    ) -> Self {
-        self.vertex_data.extend(&[
-            Vertex {
-                position: (min_x, min_y).into(),
-                color,
-            },
-            Vertex {
-                position: (max_x, min_y).into(),
-                color,
-            },
-            Vertex {
-                position: (max_x, max_y).into(),
-                color,
-            },
-            Vertex {
-                position: (min_x, max_y).into(),
-                color,
-            },
-        ]);
-        self.index_data.extend(&[
-            self.current_quad * 4,
-            self.current_quad * 4 + 1,
-            self.current_quad * 4 + 2,
-            self.current_quad * 4,
-            self.current_quad * 4 + 2,
-            self.current_quad * 4 + 3,
-        ]);
-        self.current_quad += 1;
-        self
-    }
+use std::mem;
 
-    pub fn build(self, device: &wgpu::Device) -> (StagingBuffer, StagingBuffer, u32) {
-        (
-            StagingBuffer::new(device, &self.vertex_data),
-            StagingBuffer::new(device, &self.index_data),
-            self.index_data.len() as u32,
-        )
-    }
-}
-
-impl Default for QuadBufferBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+use super::{vertex::Vertex, quad::Quad};
+use crate::graphics::{colors::to_slice, primitives::rect::RectElt};
+use wgpu::util::{ DeviceExt};
 
 pub struct RectBuffers {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
-    pub num_rects: u32,
+    pub quad_buffer: wgpu::Buffer,
 }
+
+pub const QUAD_INDICES: [u16; 6] = [0, 1, 2, 0, 2, 3];
+
+const QUAD_VERTS: [Vertex; 4] = [
+    Vertex {
+        _position: [0.0, 0.0],
+    },
+    Vertex {
+        _position: [1.0, 0.0],
+    },
+    Vertex {
+        _position: [1.0, 1.0],
+    },
+    Vertex {
+        _position: [0.0, 1.0],
+    },
+];
+
+pub const MAX_QUADS: usize = 100_000;
 
 pub fn create_rect_buffers(
     gpu_device: &wgpu::Device,
-    encoder: &mut wgpu::CommandEncoder,
-    rects: &[Rect],
+    cmd_encoder: &mut wgpu::CommandEncoder,
+    rects: &[RectElt],
 ) -> RectBuffers {
-    let nr_of_rects = rects.len() as u64;
 
-    let vertex_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
+    let vertex_buffer = gpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
-        size: Vertex::SIZE * 4 * nr_of_rects,
+        contents: bytemuck::cast_slice(&QUAD_VERTS),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+
+    let index_buffer = gpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&QUAD_INDICES),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+
+    let quad_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("iced_wgpu::quad instance buffer"),
+        size: mem::size_of::<Quad>() as u64 * MAX_QUADS as u64,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
-    let u32_size = std::mem::size_of::<u32>() as wgpu::BufferAddress;
+    
+    let quads: Vec<Quad> = rects.iter().map(|rect| {to_quad(rect)}).collect();
 
-    let index_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
+    let buffer_size = (quads.len() as u64 ) * Quad::SIZE;
+
+    let staging_buffer = gpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
-        size: u32_size * 6 * nr_of_rects,
-        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
+        contents: bytemuck::cast_slice(&quads),
+        usage: wgpu::BufferUsages::COPY_SRC,
     });
 
-    let num_rects = {
-        let mut quad_buffer_builder = QuadBufferBuilder::new();
-        for rect in rects {
-            quad_buffer_builder = quad_buffer_builder.push_rect(rect);
-        }
-
-        let (stg_vertex, stg_index, num_indices) = quad_buffer_builder.build(gpu_device);
-
-        stg_vertex.copy_to_buffer(encoder, &vertex_buffer);
-        stg_index.copy_to_buffer(encoder, &index_buffer);
-        num_indices
-    };
+    cmd_encoder.copy_buffer_to_buffer(&staging_buffer, 0, &quad_buffer, 0, buffer_size);
+    
 
     RectBuffers {
         vertex_buffer,
         index_buffer,
-        num_rects,
+        quad_buffer,
     }
 }
 
-pub struct StagingBuffer {
-    buffer: wgpu::Buffer,
-    size: wgpu::BufferAddress,
-}
-
-impl StagingBuffer {
-    pub fn new<T: bytemuck::Pod + Sized>(device: &wgpu::Device, data: &[T]) -> StagingBuffer {
-        StagingBuffer {
-            buffer: device.create_buffer_init(&BufferInitDescriptor {
-                contents: bytemuck::cast_slice(data),
-                usage: wgpu::BufferUsages::COPY_SRC,
-                label: Some("Staging Buffer"),
-            }),
-            size: size_of_slice(data) as wgpu::BufferAddress,
-        }
+pub fn to_quad(rect_elt: &RectElt) -> Quad {
+    Quad {
+        position: rect_elt.rect.top_left_coords.into(),
+        width: rect_elt.rect.width,
+        height: rect_elt.rect.height,
+        color: to_slice(rect_elt.color),
+        border_color: to_slice(rect_elt.border_color),
+        border_width: rect_elt.border_width,
     }
-
-    pub fn copy_to_buffer(&self, encoder: &mut wgpu::CommandEncoder, other: &wgpu::Buffer) {
-        encoder.copy_buffer_to_buffer(&self.buffer, 0, other, 0, self.size)
-    }
-}
-
-// Taken from https://github.com/sotrh/learn-wgpu
-// by Benjamin Hansen - license information can be found in the COPYRIGHT
-// file in the root directory of this distribution.
-//
-// Thank you, Benjamin!
-pub fn size_of_slice<T: Sized>(slice: &[T]) -> usize {
-    std::mem::size_of::<T>() * slice.len()
 }

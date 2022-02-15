@@ -4,7 +4,6 @@
 //
 // Thank you, Benjamin!
 
-use super::rect::Rect;
 use crate::graphics::colors;
 use crate::graphics::colors::RgbaTup;
 use crate::graphics::style::DEFAULT_FONT_SIZE;
@@ -12,6 +11,8 @@ use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
 use glyph_brush::OwnedSection;
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
+
+use super::rect::Rect;
 
 #[derive(Debug)]
 pub struct Text<'a> {
@@ -136,7 +137,6 @@ fn glyph_to_rect(glyph: &wgpu_glyph::SectionGlyph) -> Rect {
         top_left_coords: [position.x, top_y].into(),
         width,
         height,
-        color: colors::WHITE,
     }
 }
 
