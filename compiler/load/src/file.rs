@@ -1100,7 +1100,7 @@ fn load_single_threaded<'a>(
     let worker_listener = worker_msg_tx;
     let worker_listeners = arena.alloc([worker_listener]);
 
-    let worker = Worker::new_lifo();
+    let worker = Worker::new_fifo();
     let stealer = worker.stealer();
     let stealers = &[stealer];
 
@@ -1249,6 +1249,16 @@ fn load_multi_threaded<'a>(
         root_msg,
     } = load_start;
 
+    let mut state = State::new(
+        root_id,
+        target_info,
+        goal_phase,
+        stdlib,
+        exposed_types,
+        arc_modules,
+        ident_ids_by_module,
+    );
+
     let (msg_tx, msg_rx) = bounded(1024);
     msg_tx
         .send(root_msg)
@@ -1269,14 +1279,9 @@ fn load_multi_threaded<'a>(
         Err(_) => default_num_workers,
     };
 
-    let worker_arenas = arena.alloc(bumpalo::collections::Vec::with_capacity_in(
-        num_workers,
-        arena,
-    ));
-
-    for _ in 0..num_workers {
-        worker_arenas.push(Bump::new());
-    }
+    // an arena for every worker, stored in an arena-allocated bumpalo vec to make the lifetimes work
+    let arenas = std::iter::repeat_with(Bump::new).take(num_workers);
+    let worker_arenas = arena.alloc(bumpalo::collections::Vec::from_iter_in(arenas, arena));
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
     let injector = Injector::new();
@@ -1288,20 +1293,8 @@ fn load_multi_threaded<'a>(
     let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
     let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
-    let it = worker_arenas.iter_mut();
-
-    let mut state = State::new(
-        root_id,
-        target_info,
-        goal_phase,
-        stdlib,
-        exposed_types,
-        arc_modules,
-        ident_ids_by_module,
-    );
-
     for _ in 0..num_workers {
-        let worker = Worker::new_lifo();
+        let worker = Worker::new_fifo();
 
         stealers.push(worker.stealer());
         worker_queues.push(worker);
@@ -1311,6 +1304,7 @@ fn load_multi_threaded<'a>(
     // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
     let stealers = stealers.into_bump_slice();
 
+    let it = worker_arenas.iter_mut();
     {
         thread::scope(|thread_scope| {
 
@@ -1320,16 +1314,14 @@ fn load_multi_threaded<'a>(
             for worker_arena in it {
                 let msg_tx = msg_tx.clone();
                 let worker = worker_queues.pop().unwrap();
-                let (worker_msg_tx, worker_msg_rx) = bounded(1024);
 
+                let (worker_msg_tx, worker_msg_rx) = bounded(1024);
                 worker_listeners.push(worker_msg_tx);
 
                 // We only want to move a *reference* to the main task queue's
                 // injector in the thread, not the injector itself
                 // (since other threads need to reference it too).
                 let injector = &injector;
-
-
 
                 // Record this thread's handle so the main thread can join it later.
                 let res_join_handle = thread_scope
@@ -1508,7 +1500,7 @@ fn worker_task_step<'a>(
                     // shut down the thread, so when the main thread
                     // blocks on joining with all the worker threads,
                     // it can finally exit too!
-                    return Ok(ControlFlow::Break(()));
+                    Ok(ControlFlow::Break(()))
                 }
                 WorkerMsg::TaskAdded => {
                     // Find a task - either from this thread's queue,
