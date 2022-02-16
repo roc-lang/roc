@@ -44,9 +44,9 @@ and : Bool, Bool -> Bool
 ## `a || b` is shorthand for `Bool.or a b`.
 ##
 ## >>> True || True
-#
+##
 ## >>> True || False
-#
+##
 ## >>> False || True
 ##
 ## >>> False || False

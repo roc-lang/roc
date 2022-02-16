@@ -1,4 +1,5 @@
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
+use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{ClosureData, Expr, Output};
 use crate::operator::desugar_def;
@@ -6,15 +7,16 @@ use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet, SendMap};
-use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
+use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
+use roc_parse::header::HeaderFor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::Alias;
+use roc_types::types::{Alias, Type};
 
 #[derive(Debug)]
 pub struct Module {
@@ -39,11 +41,36 @@ pub struct ModuleOutput {
     pub scope: Scope,
 }
 
+fn validate_generate_with<'a>(
+    generate_with: &'a [Loc<roc_parse::header::ExposedName<'a>>],
+) -> (HostedGeneratedFunctions, Vec<Loc<Ident>>) {
+    let mut functions = HostedGeneratedFunctions::default();
+    let mut unknown = Vec::new();
+
+    for generated in generate_with {
+        match generated.value.as_str() {
+            "after" => functions.after = true,
+            "map" => functions.map = true,
+            "always" => functions.always = true,
+            "loop" => functions.loop_ = true,
+            "forever" => functions.forever = true,
+            other => {
+                // we don't know how to generate this function
+                let ident = Ident::from(other);
+                unknown.push(Loc::at(generated.region, ident));
+            }
+        }
+    }
+
+    (functions, unknown)
+}
+
 // TODO trim these down
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a, F>(
     arena: &Bump,
     loc_defs: &'a [Loc<ast::Def<'a>>],
+    header_for: &roc_parse::header::HeaderFor,
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
@@ -59,11 +86,65 @@ where
 {
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home, var_store);
+    let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
         scope.add_alias(name, alias.region, alias.type_variables, alias.typ);
     }
+
+    struct Hosted {
+        effect_symbol: Symbol,
+        generated_functions: HostedGeneratedFunctions,
+    }
+
+    let hosted_info = if let HeaderFor::Hosted {
+        generates,
+        generates_with,
+    } = header_for
+    {
+        let name: &str = generates.into();
+        let (generated_functions, unknown_generated) = validate_generate_with(generates_with);
+
+        for unknown in unknown_generated {
+            env.problem(Problem::UnknownGeneratesWith(unknown));
+        }
+
+        let effect_symbol = scope
+            .introduce(
+                name.into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap();
+
+        let effect_tag_name = TagName::Private(effect_symbol);
+
+        {
+            let a_var = var_store.fresh();
+
+            let actual = crate::effect_module::build_effect_actual(
+                effect_tag_name,
+                Type::Variable(a_var),
+                var_store,
+            );
+
+            scope.add_alias(
+                effect_symbol,
+                Region::zero(),
+                vec![Loc::at_zero(("a".into(), a_var))],
+                actual,
+            );
+        }
+
+        Some(Hosted {
+            effect_symbol,
+            generated_functions,
+        })
+    } else {
+        None
+    };
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -82,7 +163,6 @@ where
         }));
     }
 
-    let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
     let mut lookups = Vec::with_capacity(num_deps);
     let mut rigid_variables = MutMap::default();
 
@@ -124,7 +204,11 @@ where
             // This is a type alias
 
             // the symbol should already be added to the scope when this module is canonicalized
-            debug_assert!(scope.contains_alias(symbol));
+            debug_assert!(
+                scope.contains_alias(symbol),
+                "apparently, {:?} is not actually a type alias",
+                symbol
+            );
 
             // but now we know this symbol by a different identifier, so we still need to add it to
             // the scope
@@ -139,7 +223,7 @@ where
         }
     }
 
-    let (defs, scope, output, symbols_introduced) = canonicalize_defs(
+    let (defs, mut scope, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
@@ -181,6 +265,17 @@ where
         references.insert(*symbol);
     }
 
+    // add any builtins used by other builtins
+    let transitive_builtins: Vec<Symbol> = references
+        .iter()
+        .filter(|s| s.is_builtin())
+        .map(|s| crate::builtins::builtin_dependencies(*s))
+        .flatten()
+        .copied()
+        .collect();
+
+    references.extend(transitive_builtins);
+
     // NOTE previously we inserted builtin defs into the list of defs here
     // this is now done later, in file.rs.
 
@@ -193,7 +288,26 @@ where
         (Ok(mut declarations), output) => {
             use crate::def::Declaration::*;
 
-            for decl in declarations.iter() {
+            if let Some(Hosted {
+                effect_symbol,
+                generated_functions,
+            }) = hosted_info
+            {
+                let mut exposed_symbols = MutSet::default();
+
+                // NOTE this currently builds all functions, not just the ones that the user requested
+                crate::effect_module::build_effect_builtins(
+                    &mut env,
+                    &mut scope,
+                    effect_symbol,
+                    var_store,
+                    &mut exposed_symbols,
+                    &mut declarations,
+                    generated_functions,
+                );
+            }
+
+            for decl in declarations.iter_mut() {
                 match decl {
                     Declare(def) => {
                         for (symbol, _) in def.pattern_vars.iter() {
@@ -204,6 +318,59 @@ where
                                 // exposed symbols which did not have
                                 // corresponding defs.
                                 exposed_but_not_defined.remove(symbol);
+                            }
+                        }
+
+                        // Temporary hack: we don't know exactly what symbols are hosted symbols,
+                        // and which are meant to be normal definitions without a body. So for now
+                        // we just assume they are hosted functions (meant to be provided by the platform)
+                        if let Some(Hosted { effect_symbol, .. }) = hosted_info {
+                            macro_rules! make_hosted_def {
+                                () => {
+                                    let symbol = def.pattern_vars.iter().next().unwrap().0;
+                                    let ident_id = symbol.ident_id();
+                                    let ident =
+                                        env.ident_ids.get_name(ident_id).unwrap().to_string();
+                                    let def_annotation = def.annotation.clone().unwrap();
+                                    let annotation = crate::annotation::Annotation {
+                                        typ: def_annotation.signature,
+                                        introduced_variables: def_annotation.introduced_variables,
+                                        references: Default::default(),
+                                        aliases: Default::default(),
+                                    };
+
+                                    let hosted_def = crate::effect_module::build_host_exposed_def(
+                                        &mut env,
+                                        &mut scope,
+                                        *symbol,
+                                        &ident,
+                                        TagName::Private(effect_symbol),
+                                        var_store,
+                                        annotation,
+                                    );
+
+                                    *def = hosted_def;
+                                };
+                            }
+
+                            match &def.loc_expr.value {
+                                Expr::RuntimeError(RuntimeError::NoImplementationNamed {
+                                    ..
+                                }) => {
+                                    make_hosted_def!();
+                                }
+                                Expr::Closure(closure_data)
+                                    if matches!(
+                                        closure_data.loc_body.value,
+                                        Expr::RuntimeError(
+                                            RuntimeError::NoImplementationNamed { .. }
+                                        )
+                                    ) =>
+                                {
+                                    make_hosted_def!();
+                                }
+
+                                _ => {}
                             }
                         }
                     }
@@ -238,6 +405,18 @@ where
 
             let mut aliases = MutMap::default();
 
+            if let Some(Hosted { effect_symbol, .. }) = hosted_info {
+                // Remove this from exposed_symbols,
+                // so that at the end of the process,
+                // we can see if there were any
+                // exposed symbols which did not have
+                // corresponding defs.
+                exposed_but_not_defined.remove(&effect_symbol);
+
+                let hosted_alias = scope.lookup_alias(effect_symbol).unwrap().clone();
+                aliases.insert(effect_symbol, hosted_alias);
+            }
+
             for (symbol, alias) in output.aliases {
                 // Remove this from exposed_symbols,
                 // so that at the end of the process,
@@ -263,8 +442,8 @@ where
 
                 let runtime_error = RuntimeError::ExposedButNotDefined(symbol);
                 let def = Def {
-                    loc_pattern: Loc::new(0, 0, 0, 0, Pattern::Identifier(symbol)),
-                    loc_expr: Loc::new(0, 0, 0, 0, Expr::RuntimeError(runtime_error)),
+                    loc_pattern: Loc::at(Region::zero(), Pattern::Identifier(symbol)),
+                    loc_expr: Loc::at(Region::zero(), Expr::RuntimeError(runtime_error)),
                     expr_var: var_store.fresh(),
                     pattern_vars,
                     annotation: None,
@@ -382,12 +561,12 @@ fn fix_values_captured_in_closure_pattern(
             }
         }
         Identifier(_)
-        | NumLiteral(_, _, _)
-        | IntLiteral(_, _, _)
-        | FloatLiteral(_, _, _)
+        | NumLiteral(..)
+        | IntLiteral(..)
+        | FloatLiteral(..)
         | StrLiteral(_)
         | Underscore
-        | Shadowed(_, _)
+        | Shadowed(..)
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => (),
     }
@@ -438,9 +617,9 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_expr(&mut loc_body.value, no_capture_symbols);
         }
 
-        Num(_, _, _)
-        | Int(_, _, _, _)
-        | Float(_, _, _, _)
+        Num(..)
+        | Int(..)
+        | Float(..)
         | Str(_)
         | Var(_)
         | EmptyRecord

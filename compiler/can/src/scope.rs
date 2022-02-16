@@ -110,15 +110,21 @@ impl Scope {
         exposed_ident_ids: &IdentIds,
         all_ident_ids: &mut IdentIds,
         region: Region,
-    ) -> Result<Symbol, (Region, Loc<Ident>)> {
+    ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
         match self.idents.get(&ident) {
-            Some((_, original_region)) => {
+            Some(&(_, original_region)) => {
                 let shadow = Loc {
-                    value: ident,
+                    value: ident.clone(),
                     region,
                 };
 
-                Err((*original_region, shadow))
+                let ident_id = all_ident_ids.add(ident.clone());
+                let symbol = Symbol::new(self.home, ident_id);
+
+                self.symbols.insert(symbol, region);
+                self.idents.insert(ident, (symbol, region));
+
+                Err((original_region, shadow, symbol))
             }
             None => {
                 // If this IdentId was already added previously
@@ -175,46 +181,54 @@ impl Scope {
         vars: Vec<Loc<(Lowercase, Variable)>>,
         typ: Type,
     ) {
-        let roc_types::types::VariableDetail {
-            type_variables,
-            lambda_set_variables,
-            recursion_variables,
-        } = typ.variables_detail();
-
-        debug_assert!({
-            let mut hidden = type_variables;
-
-            for loc_var in vars.iter() {
-                hidden.remove(&loc_var.value.1);
-            }
-
-            if !hidden.is_empty() {
-                panic!(
-                    "Found unbound type variables {:?} \n in type alias {:?} {:?} : {:?}",
-                    hidden, name, &vars, &typ
-                )
-            }
-
-            true
-        });
-
-        let lambda_set_variables: Vec<_> = lambda_set_variables
-            .into_iter()
-            .map(|v| roc_types::types::LambdaSet(Type::Variable(v)))
-            .collect();
-
-        let alias = Alias {
-            region,
-            type_variables: vars,
-            lambda_set_variables,
-            recursion_variables,
-            typ,
-        };
-
+        let alias = create_alias(name, region, vars, typ);
         self.aliases.insert(name, alias);
     }
 
     pub fn contains_alias(&mut self, name: Symbol) -> bool {
         self.aliases.contains_key(&name)
+    }
+}
+
+pub fn create_alias(
+    name: Symbol,
+    region: Region,
+    vars: Vec<Loc<(Lowercase, Variable)>>,
+    typ: Type,
+) -> Alias {
+    let roc_types::types::VariableDetail {
+        type_variables,
+        lambda_set_variables,
+        recursion_variables,
+    } = typ.variables_detail();
+
+    debug_assert!({
+        let mut hidden = type_variables;
+
+        for loc_var in vars.iter() {
+            hidden.remove(&loc_var.value.1);
+        }
+
+        if !hidden.is_empty() {
+            panic!(
+                "Found unbound type variables {:?} \n in type alias {:?} {:?} : {:?}",
+                hidden, name, &vars, &typ
+            )
+        }
+
+        true
+    });
+
+    let lambda_set_variables: Vec<_> = lambda_set_variables
+        .into_iter()
+        .map(|v| roc_types::types::LambdaSet(Type::Variable(v)))
+        .collect();
+
+    Alias {
+        region,
+        type_variables: vars,
+        lambda_set_variables,
+        recursion_variables,
+        typ,
     }
 }

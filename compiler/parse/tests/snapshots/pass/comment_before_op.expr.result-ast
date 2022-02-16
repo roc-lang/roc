@@ -1,7 +1,7 @@
 BinOps(
     [
         (
-            |L 0-0, C 0-1| SpaceAfter(
+            @0-1 SpaceAfter(
                 Num(
                     "3",
                 ),
@@ -11,10 +11,10 @@ BinOps(
                     ),
                 ],
             ),
-            |L 1-1, C 0-1| Plus,
+            @11-12 Plus,
         ),
     ],
-    |L 1-1, C 2-3| Num(
+    @13-14 Num(
         "4",
     ),
 )

@@ -85,7 +85,7 @@ impl SolvedType {
         match typ {
             EmptyRec => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Apply(symbol, types) => {
+            Apply(symbol, types, _) => {
                 let mut solved_types = Vec::with_capacity(types.len());
 
                 for typ in types {
@@ -231,6 +231,7 @@ impl SolvedType {
                 }
             }
             Variable(var) => Self::from_var(solved_subs.inner(), *var),
+            RangedNumber(typ, _) => Self::from_type(solved_subs, typ),
         }
     }
 
@@ -284,6 +285,7 @@ impl SolvedType {
 
                 SolvedType::Alias(*symbol, new_args, solved_lambda_sets, Box::new(aliased_to))
             }
+            RangedNumber(typ, _range_vars) => Self::from_var_help(subs, recursion_vars, *typ),
             Error => SolvedType::Error,
         }
     }
@@ -454,7 +456,7 @@ pub fn to_type(
                 new_args.push(to_type(arg, free_vars, var_store));
             }
 
-            Type::Apply(*symbol, new_args)
+            Type::Apply(*symbol, new_args, Region::zero())
         }
         Rigid(lowercase) => {
             if let Some(var) = free_vars.named_vars.get(lowercase) {

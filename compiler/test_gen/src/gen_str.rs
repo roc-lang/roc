@@ -36,7 +36,7 @@ fn str_split_empty_delimiter() {
                             Str.countGraphemes str
 
                         _ ->
-                            -1
+                            1729
 
                 "#
         ),
@@ -66,7 +66,7 @@ fn str_split_bigger_delimiter_small_str() {
                             Str.countGraphemes str
 
                         _ ->
-                            -1
+                            1729
 
                 "#
         ),

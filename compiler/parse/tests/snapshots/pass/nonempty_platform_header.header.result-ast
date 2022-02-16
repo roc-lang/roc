@@ -1,19 +1,18 @@
 Platform {
     header: PlatformHeader {
-        name: |L 0-0, C 9-21| PackageName(
+        name: @9-21 PackageName(
             "foo/barbaz",
         ),
         requires: PlatformRequires {
             rigids: [
-                |L 1-1, C 14-26| PlatformRigid {
-                    rigid: "model",
-                    alias: "Model",
-                },
+                @36-41 UppercaseIdent(
+                    "Model",
+                ),
             ],
-            signature: |L 1-1, C 30-39| TypedIdent {
-                ident: |L 1-1, C 30-34| "main",
+            signature: @45-54 TypedIdent {
+                ident: @45-49 "main",
                 spaces_before_colon: [],
-                ann: |L 1-1, C 37-39| Record {
+                ann: @52-54 Record {
                     fields: [],
                     ext: None,
                 },
@@ -21,30 +20,20 @@ Platform {
         },
         exposes: [],
         packages: [
-            |L 3-3, C 15-27| PackageEntry {
+            @87-99 PackageEntry {
                 shorthand: "foo",
                 spaces_after_shorthand: [],
-                package_name: |L 3-3, C 20-27| PackageName(
+                package_name: @92-99 PackageName(
                     "./foo",
                 ),
             },
         ],
         imports: [],
         provides: [
-            |L 5-5, C 15-26| ExposedName(
+            @132-143 ExposedName(
                 "mainForHost",
             ),
         ],
-        effects: Effects {
-            spaces_before_effects_keyword: [
-                Newline,
-            ],
-            spaces_after_effects_keyword: [],
-            spaces_after_type_name: [],
-            effect_shortname: "fx",
-            effect_type_name: "Effect",
-            entries: [],
-        },
         before_header: [],
         after_platform_keyword: [],
         before_requires: [

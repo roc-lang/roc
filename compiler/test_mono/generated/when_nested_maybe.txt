@@ -1,28 +1,28 @@
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Test.8 = lowlevel NumAdd #Attr.2 #Attr.3;
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Test.8 : Builtin(Int(I64)) = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Test.8;
 
 procedure Test.0 ():
-    let Test.20 = 41i64;
-    let Test.19 = Just Test.20;
-    let Test.2 = Just Test.19;
+    let Test.20 : Builtin(Int(I64)) = 41i64;
+    let Test.19 : Union(NonRecursive([[Builtin(Int(I64))], []])) = Just Test.20;
+    let Test.2 : Union(NonRecursive([[Union(NonRecursive([[Builtin(Int(I64))], []]))], []])) = Just Test.19;
     joinpoint Test.16:
-        let Test.9 = 1i64;
+        let Test.9 : Builtin(Int(I64)) = 1i64;
         ret Test.9;
     in
-    let Test.14 = 0i64;
-    let Test.15 = GetTagId Test.2;
-    let Test.18 = lowlevel Eq Test.14 Test.15;
+    let Test.14 : Builtin(Int(U8)) = 0i64;
+    let Test.15 : Builtin(Int(U8)) = GetTagId Test.2;
+    let Test.18 : Builtin(Bool) = lowlevel Eq Test.14 Test.15;
     if Test.18 then
-        let Test.11 = UnionAtIndex (Id 0) (Index 0) Test.2;
-        let Test.12 = 0i64;
-        let Test.13 = GetTagId Test.11;
-        let Test.17 = lowlevel Eq Test.12 Test.13;
+        let Test.11 : Union(NonRecursive([[Builtin(Int(I64))], []])) = UnionAtIndex (Id 0) (Index 0) Test.2;
+        let Test.12 : Builtin(Int(U8)) = 0i64;
+        let Test.13 : Builtin(Int(U8)) = GetTagId Test.11;
+        let Test.17 : Builtin(Bool) = lowlevel Eq Test.12 Test.13;
         if Test.17 then
-            let Test.10 = UnionAtIndex (Id 0) (Index 0) Test.2;
-            let Test.5 = UnionAtIndex (Id 0) (Index 0) Test.10;
-            let Test.7 = 1i64;
-            let Test.6 = CallByName Num.24 Test.5 Test.7;
+            let Test.10 : Union(NonRecursive([[Builtin(Int(I64))], []])) = UnionAtIndex (Id 0) (Index 0) Test.2;
+            let Test.5 : Builtin(Int(I64)) = UnionAtIndex (Id 0) (Index 0) Test.10;
+            let Test.7 : Builtin(Int(I64)) = 1i64;
+            let Test.6 : Builtin(Int(I64)) = CallByName Num.22 Test.5 Test.7;
             ret Test.6;
         else
             jump Test.16;

@@ -18,21 +18,16 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
+use roc_target::TargetInfo;
 
 /// "Infinite" reference count, for static values
 /// Ref counts are encoded as negative numbers where isize::MIN represents 1
 pub const REFCOUNT_MAX: usize = 0_usize;
 
-pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
-    match ptr_bytes {
-        1 => ctx.i8_type().const_int(i8::MIN as u64, false),
-        2 => ctx.i16_type().const_int(i16::MIN as u64, false),
-        4 => ctx.i32_type().const_int(i32::MIN as u64, false),
-        8 => ctx.i64_type().const_int(i64::MIN as u64, false),
-        _ => panic!(
-            "Invalid target: Roc does't support compiling to {}-bit systems.",
-            ptr_bytes * 8
-        ),
+pub fn refcount_1(ctx: &Context, target_info: TargetInfo) -> IntValue<'_> {
+    match target_info.ptr_width() {
+        roc_target::PtrWidth::Bytes4 => ctx.i32_type().const_int(i32::MIN as u64, false),
+        roc_target::PtrWidth::Bytes8 => ctx.i64_type().const_int(i64::MIN as u64, false),
     }
 }
 
@@ -98,7 +93,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     pub fn is_1<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         let current = self.get_refcount(env);
-        let one = refcount_1(env.context, env.ptr_bytes);
+        let one = refcount_1(env.context, env.target_info);
 
         env.builder
             .build_int_compare(IntPredicate::EQ, current, one, "is_one")
@@ -163,8 +158,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     pub fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
         let alignment = layout
-            .allocation_alignment_bytes(env.ptr_bytes)
-            .max(env.ptr_bytes);
+            .allocation_alignment_bytes(env.target_info)
+            .max(env.target_info.ptr_width() as u32);
 
         let context = env.context;
         let block = env.builder.get_insert_block().expect("to be in a function");
@@ -1192,7 +1187,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     debug_assert!(arg_val.is_pointer_value());
     let current_tag_id = get_tag_id(env, fn_val, &union_layout, arg_val);
-    let value_ptr = if union_layout.stores_tag_id_in_pointer(env.ptr_bytes) {
+    let value_ptr = if union_layout.stores_tag_id_in_pointer(env.target_info) {
         tag_pointer_clear_tag_id(env, arg_val.into_pointer_value())
     } else {
         arg_val.into_pointer_value()

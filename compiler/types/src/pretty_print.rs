@@ -1,4 +1,4 @@
-use crate::subs::{Content, FlatType, GetSubsSlice, Subs, UnionTags, Variable};
+use crate::subs::{AliasVariables, Content, FlatType, GetSubsSlice, Subs, UnionTags, Variable};
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
@@ -206,6 +206,13 @@ fn find_names_needed(
             // TODO should we also look in the actual variable?
             // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
         }
+        &RangedNumber(typ, vars) => {
+            find_names_needed(typ, subs, roots, root_appearances, names_taken);
+            for var_index in vars {
+                let var = subs[var_index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            }
+        }
         Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
         }
@@ -289,6 +296,17 @@ pub fn content_to_string(
     buf
 }
 
+pub fn get_single_arg<'a>(subs: &'a Subs, args: &'a AliasVariables) -> &'a Content {
+    debug_assert_eq!(args.len(), 1);
+
+    let arg_var_index = args
+        .into_iter()
+        .next()
+        .expect("Num was not applied to a type argument!");
+    let arg_var = subs[arg_var_index];
+    subs.get_content_without_compacting(arg_var)
+}
+
 fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, parens: Parens) {
     use crate::subs::Content::*;
 
@@ -306,18 +324,19 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
 
             match *symbol {
                 Symbol::NUM_NUM => {
-                    debug_assert_eq!(args.len(), 1);
-
-                    let arg_var_index = args
-                        .into_iter()
-                        .next()
-                        .expect("Num was not applied to a type argument!");
-                    let arg_var = subs[arg_var_index];
-                    let content = subs.get_content_without_compacting(arg_var);
-
-                    match &content {
-                        Alias(nested, _, _) => match *nested {
-                            Symbol::NUM_INTEGER => buf.push_str("I64"),
+                    let content = get_single_arg(subs, args);
+                    match *content {
+                        Alias(nested, args, _actual) => match nested {
+                            Symbol::NUM_INTEGER => {
+                                write_integer(
+                                    env,
+                                    get_single_arg(subs, &args),
+                                    subs,
+                                    buf,
+                                    parens,
+                                    false,
+                                );
+                            }
                             Symbol::NUM_FLOATINGPOINT => buf.push_str("F64"),
 
                             _ => write_parens!(write_parens, buf, {
@@ -328,6 +347,33 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
 
                         _ => write_parens!(write_parens, buf, {
                             buf.push_str("Num ");
+                            write_content(env, content, subs, buf, parens);
+                        }),
+                    }
+                }
+
+                Symbol::NUM_INT => {
+                    let content = get_single_arg(subs, args);
+
+                    write_integer(env, content, subs, buf, parens, write_parens)
+                }
+
+                Symbol::NUM_FLOAT => {
+                    debug_assert_eq!(args.len(), 1);
+
+                    let arg_var_index = args
+                        .into_iter()
+                        .next()
+                        .expect("Num was not applied to a type argument!");
+                    let arg_var = subs[arg_var_index];
+                    let content = subs.get_content_without_compacting(arg_var);
+
+                    match content {
+                        Alias(Symbol::NUM_BINARY32, _, _) => buf.push_str("F32"),
+                        Alias(Symbol::NUM_BINARY64, _, _) => buf.push_str("F64"),
+                        Alias(Symbol::NUM_DECIMAL, _, _) => buf.push_str("Dec"),
+                        _ => write_parens!(write_parens, buf, {
+                            buf.push_str("Float ");
                             write_content(env, content, subs, buf, parens);
                         }),
                     }
@@ -358,7 +404,59 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                 }),
             }
         }
+        RangedNumber(typ, _range_vars) => write_content(
+            env,
+            subs.get_content_without_compacting(*typ),
+            subs,
+            buf,
+            parens,
+        ),
         Error => buf.push_str("<type mismatch>"),
+    }
+}
+
+fn write_integer(
+    env: &Env,
+    content: &Content,
+    subs: &Subs,
+    buf: &mut String,
+    parens: Parens,
+    write_parens: bool,
+) {
+    use crate::subs::Content::*;
+
+    macro_rules! derive_num_writes {
+        ($($lit:expr, $tag:path)*) => {
+            write_parens!(
+                write_parens,
+                buf,
+                match content {
+                    $(
+                    &Alias($tag, _, _) => {
+                        buf.push_str($lit)
+                    },
+                    )*
+                    actual => {
+                        buf.push_str("Int ");
+                        write_content(env, actual, subs, buf, parens);
+                    }
+                }
+            )
+        }
+    }
+
+    derive_num_writes! {
+        "U8", Symbol::NUM_UNSIGNED8
+        "U16", Symbol::NUM_UNSIGNED16
+        "U32", Symbol::NUM_UNSIGNED32
+        "U64", Symbol::NUM_UNSIGNED64
+        "U128", Symbol::NUM_UNSIGNED128
+        "I8", Symbol::NUM_SIGNED8
+        "I16", Symbol::NUM_SIGNED16
+        "I32", Symbol::NUM_SIGNED32
+        "I64", Symbol::NUM_SIGNED64
+        "I128", Symbol::NUM_SIGNED128
+        "Nat", Symbol::NUM_NATURAL
     }
 }
 
@@ -406,8 +504,8 @@ fn write_sorted_tags2<'a>(
     ext_var: Variable,
 ) -> ExtContent<'a> {
     // Sort the fields so they always end up in the same order.
-    let (it, new_ext_var) = tags.unsorted_iterator_and_ext(subs, ext_var);
-    let mut sorted_fields: Vec<_> = it.collect();
+    let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
+    let mut sorted_fields = tags.tags;
 
     let interns = &env.interns;
     let home = env.home;

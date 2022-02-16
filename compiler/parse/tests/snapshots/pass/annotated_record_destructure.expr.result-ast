@@ -1,47 +1,47 @@
 Defs(
     [
-        |L 1-1, C 0-34| AnnotatedBody {
-            ann_pattern: |L 0-0, C 0-8| RecordDestructure(
+        @15-49 AnnotatedBody {
+            ann_pattern: @0-8 RecordDestructure(
                 [
-                    |L 0-0, C 2-3| Identifier(
+                    @2-3 Identifier(
                         "x",
                     ),
-                    |L 0-0, C 5-7| Identifier(
+                    @5-7 Identifier(
                         "y",
                     ),
                 ],
             ),
-            ann_type: |L 0-0, C 11-14| Apply(
+            ann_type: @11-14 Apply(
                 "",
                 "Foo",
                 [],
             ),
             comment: None,
-            body_pattern: |L 1-1, C 0-8| RecordDestructure(
+            body_pattern: @15-23 RecordDestructure(
                 [
-                    |L 1-1, C 2-3| Identifier(
+                    @17-18 Identifier(
                         "x",
                     ),
-                    |L 1-1, C 5-6| Identifier(
+                    @20-21 Identifier(
                         "y",
                     ),
                 ],
             ),
-            body_expr: |L 1-1, C 11-34| Record(
+            body_expr: @26-49 Record(
                 [
-                    |L 1-1, C 13-22| RequiredValue(
-                        |L 1-1, C 13-14| "x",
+                    @28-37 RequiredValue(
+                        @28-29 "x",
                         [],
-                        |L 1-1, C 17-22| Str(
+                        @32-37 Str(
                             PlainLine(
                                 "foo",
                             ),
                         ),
                     ),
-                    |L 1-1, C 24-32| RequiredValue(
-                        |L 1-1, C 24-25| "y",
+                    @39-47 RequiredValue(
+                        @39-40 "y",
                         [],
-                        |L 1-1, C 28-32| Float(
+                        @43-47 Float(
                             "3.14",
                         ),
                     ),
@@ -49,7 +49,7 @@ Defs(
             ),
         },
     ],
-    |L 3-3, C 0-1| SpaceBefore(
+    @51-52 SpaceBefore(
         Var {
             module_name: "",
             ident: "x",

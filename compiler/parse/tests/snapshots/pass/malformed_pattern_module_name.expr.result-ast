@@ -1,12 +1,12 @@
 When(
-    |L 0-0, C 5-6| Var {
+    @5-6 Var {
         module_name: "",
         ident: "x",
     },
     [
         WhenBranch {
             patterns: [
-                |L 1-1, C 4-11| SpaceBefore(
+                @14-21 SpaceBefore(
                     Malformed(
                         "Foo.and",
                     ),
@@ -15,14 +15,14 @@ When(
                     ],
                 ),
             ],
-            value: |L 1-1, C 15-16| Num(
+            value: @25-26 Num(
                 "1",
             ),
             guard: None,
         },
         WhenBranch {
             patterns: [
-                |L 2-2, C 4-5| SpaceBefore(
+                @31-32 SpaceBefore(
                     Underscore(
                         "",
                     ),
@@ -31,7 +31,7 @@ When(
                     ],
                 ),
             ],
-            value: |L 2-2, C 9-10| Num(
+            value: @36-37 Num(
                 "4",
             ),
             guard: None,

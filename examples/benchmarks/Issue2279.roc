@@ -4,6 +4,10 @@ app "issue2279"
     provides [ main ] to pf
 
 main =
-    text = Issue2279Help.text
+    text =
+        if True then
+            Issue2279Help.text
+        else
+            Issue2279Help.asText 42
 
     Task.putLine text

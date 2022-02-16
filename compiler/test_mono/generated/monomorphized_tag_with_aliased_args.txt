@@ -1,0 +1,10 @@
+procedure Test.4 (Test.8):
+    let Test.11 : Builtin(Int(U64)) = 1i64;
+    ret Test.11;
+
+procedure Test.0 ():
+    let Test.13 : Builtin(Bool) = false;
+    let Test.12 : Builtin(Bool) = false;
+    let Test.10 : Struct([Builtin(Bool), Builtin(Bool)]) = Struct {Test.12, Test.13};
+    let Test.9 : Builtin(Int(U64)) = CallByName Test.4 Test.10;
+    ret Test.9;

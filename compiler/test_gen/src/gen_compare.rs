@@ -499,6 +499,48 @@ fn eq_rosetree() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn eq_different_rosetrees() {
+    // Requires two different equality procedures for `List (Rose I64)` and `List (Rose Str)`
+    // even though both appear in the mono Layout as `List(RecursivePointer)`
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Rose a : [ Rose a (List (Rose a)) ]
+
+                a1 : Rose I64
+                a1 = Rose 999 []
+                a2 : Rose I64
+                a2 = Rose 0 [a1]
+
+                b1 : Rose I64
+                b1 = Rose 999 []
+                b2 : Rose I64
+                b2 = Rose 0 [b1]
+
+                ab = a2 == b2
+
+                c1 : Rose Str
+                c1 = Rose "hello" []
+                c2 : Rose Str
+                c2 = Rose "" [c1]
+
+                d1 : Rose Str
+                d1 = Rose "hello" []
+                d2 : Rose Str
+                d2 = Rose "" [d1]
+
+                cd = c2 == d2
+
+                ab && cd
+        "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn rosetree_with_tag() {
@@ -509,10 +551,10 @@ fn rosetree_with_tag() {
             r#"
                 Rose a : [ Rose (Result (List (Rose a)) I64) ]
 
-                x : Rose I64 
+                x : Rose I64
                 x = (Rose (Ok []))
 
-                y : Rose I64 
+                y : Rose I64
                 y = (Rose (Ok []))
 
                 x == y
@@ -595,10 +637,10 @@ fn compare_recursive_union_same_content() {
             r#"
                 Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64 ]
 
-                v1 : Expr 
+                v1 : Expr
                 v1 = Val1 42
 
-                v2 : Expr 
+                v2 : Expr
                 v2 = Val2 42
 
                 v1 == v2
@@ -617,10 +659,10 @@ fn compare_nullable_recursive_union_same_content() {
             r#"
                 Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64, Empty ]
 
-                v1 : Expr 
+                v1 : Expr
                 v1 = Val1 42
 
-                v2 : Expr 
+                v2 : Expr
                 v2 = Val2 42
 
                 v1 == v2

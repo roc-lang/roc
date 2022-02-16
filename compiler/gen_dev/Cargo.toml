@@ -16,7 +16,8 @@ roc_builtins = { path = "../builtins" }
 roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
-roc_reporting = { path = "../../reporting" }
+roc_target = { path = "../roc_target" }
+roc_error_macros = { path = "../../error_macros" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 target-lexicon = "0.12.2"
 # TODO: Deal with the update of object to 0.27.

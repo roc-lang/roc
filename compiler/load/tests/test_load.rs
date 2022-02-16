@@ -28,6 +28,8 @@ mod test_load {
     use roc_types::subs::Subs;
     use std::collections::HashMap;
 
+    const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
+
     // HELPERS
 
     fn multiple_modules(files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
@@ -64,7 +66,7 @@ mod test_load {
         arena: &'a Bump,
         mut files: Vec<(&str, &str)>,
     ) -> Result<Result<LoadedModule, roc_load::file::LoadingProblem<'a>>, std::io::Error> {
-        use std::fs::File;
+        use std::fs::{self, File};
         use std::io::Write;
         use std::path::PathBuf;
         use tempfile::tempdir;
@@ -78,17 +80,15 @@ mod test_load {
         let dir = tempdir()?;
 
         let app_module = files.pop().unwrap();
-        let interfaces = files;
 
-        debug_assert!(
-            app_module.1.starts_with("app"),
-            "The final module should be the application module"
-        );
-
-        for (name, source) in interfaces {
+        for (name, source) in files {
             let mut filename = PathBuf::from(name);
             filename.set_extension("roc");
             let file_path = dir.path().join(filename.clone());
+
+            // Create any necessary intermediate directories (e.g. /platform)
+            fs::create_dir_all(file_path.parent().unwrap())?;
+
             let mut file = File::create(file_path)?;
             writeln!(file, "{}", source)?;
             file_handles.push(file);
@@ -110,7 +110,7 @@ mod test_load {
                 arena.alloc(stdlib),
                 dir.path(),
                 exposed_types,
-                8,
+                TARGET_INFO,
                 builtin_defs_map,
             )
         };
@@ -134,7 +134,7 @@ mod test_load {
             arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
-            8,
+            TARGET_INFO,
             builtin_defs_map,
         );
         let mut loaded_module = match loaded {
@@ -276,15 +276,10 @@ mod test_load {
                 "Main",
                 indoc!(
                     r#"
-                        app "test-app" 
-                            packages { blah: "./blah" } 
-                            imports [ RBTree ] 
-                            provides [ main ] to blah
+                        interface Other exposes [ empty ] imports [ RBTree ]
 
                         empty : RBTree.RedBlackTree I64 I64
                         empty = RBTree.empty
-
-                        main = empty
                     "#
                 ),
             ),
@@ -305,7 +300,7 @@ mod test_load {
             arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
-            8,
+            TARGET_INFO,
             builtin_defs_map,
         );
 
@@ -379,7 +374,7 @@ mod test_load {
                 "floatTest" => "Float *",
                 "divisionFn" => "Float a, Float a -> Result (Float a) [ DivByZero ]*",
                 "divisionTest" => "Result (Float *) [ DivByZero ]*",
-                "intTest" => "Int *",
+                "intTest" => "I64",
                 "x" => "Float *",
                 "constantNum" => "Num *",
                 "divDep1ByDep2" => "Result (Float *) [ DivByZero ]*",
@@ -528,10 +523,10 @@ mod test_load {
             "Main",
             indoc!(
                 r#"
-                        app "test-app" packages { blah: "./blah" } provides [ main ] to blah
+                interface Main exposes [ main ] imports []
 
-                        main = [
-                    "#
+                main = [
+                "#
             ),
         )];
 
@@ -541,7 +536,7 @@ mod test_load {
                 indoc!(
                     "
             \u{1b}[36m── UNFINISHED LIST ─────────────────────────────────────────────────────────────\u{1b}[0m
-            
+
             I cannot find the end of this list:
 
             \u{1b}[36m3\u{1b}[0m\u{1b}[36m│\u{1b}[0m  \u{1b}[37mmain = [\u{1b}[0m
@@ -559,9 +554,7 @@ mod test_load {
     }
 
     #[test]
-    #[should_panic(
-        expected = "FileProblem { filename: \"tests/fixtures/build/interface_with_deps/invalid$name.roc\", error: NotFound }"
-    )]
+    #[should_panic(expected = "FILE NOT FOUND")]
     fn file_not_found() {
         let subs_by_module = MutMap::default();
         let loaded_module = load_fixture("interface_with_deps", "invalid$name", subs_by_module);
@@ -586,5 +579,111 @@ mod test_load {
                 "str" => "Str",
             },
         );
+    }
+
+    #[test]
+    fn platform_does_not_exist() {
+        let modules = vec![(
+            "Main",
+            indoc!(
+                r#"
+                app "example"
+                    packages { pf: "./zzz-does-not-exist" }
+                    imports [ ]
+                    provides [ main ] to pf
+
+                main = ""
+                "#
+            ),
+        )];
+
+        match multiple_modules(modules) {
+            Err(report) => {
+                assert!(report.contains("FILE NOT FOUND"));
+                assert!(report.contains("zzz-does-not-exist/Package-Config.roc"));
+            }
+            Ok(_) => unreachable!("we expect failure here"),
+        }
+    }
+
+    #[test]
+    fn platform_parse_error() {
+        let modules = vec![
+            (
+                "platform/Package-Config.roc",
+                indoc!(
+                    r#"
+                        platform "examples/hello-world"
+                            requires {} { main : Str }
+                            exposes []
+                            packages {}
+                            imports []
+                            provides [ mainForHost ]
+                            blah 1 2 3 # causing a parse error on purpose
+
+                        mainForHost : Str
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                        app "hello-world"
+                            packages { pf: "platform" }
+                            imports []
+                            provides [ main ] to pf
+
+                        main = "Hello, World!\n"
+                    "#
+                ),
+            ),
+        ];
+
+        match multiple_modules(modules) {
+            Err(report) => {
+                assert!(report.contains("NOT END OF FILE"));
+                assert!(report.contains("blah 1 2 3 # causing a parse error on purpose"));
+            }
+            Ok(_) => unreachable!("we expect failure here"),
+        }
+    }
+
+    #[test]
+    // See https://github.com/rtfeldman/roc/issues/2413
+    fn platform_exposes_main_return_by_pointer_issue() {
+        let modules = vec![
+            (
+                "platform/Package-Config.roc",
+                indoc!(
+                    r#"
+                    platform "examples/hello-world"
+                        requires {} { main : { content: Str, other: Str } }
+                        exposes []
+                        packages {}
+                        imports []
+                        provides [ mainForHost ]
+
+                    mainForHost : { content: Str, other: Str }
+                    mainForHost = main
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                    app "hello-world"
+                        packages { pf: "platform" }
+                        imports []
+                        provides [ main ] to pf
+
+                    main = { content: "Hello, World!\n", other: "" }
+                    "#
+                ),
+            ),
+        ];
+
+        assert!(multiple_modules(modules).is_ok());
     }
 }

@@ -87,7 +87,7 @@ pub fn layout_width<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     env.ptr_int()
-        .const_int(layout.stack_size(env.ptr_bytes) as u64, false)
+        .const_int(layout.stack_size(env.target_info) as u64, false)
         .into()
 }
 
@@ -119,13 +119,13 @@ pub fn list_single<'a, 'ctx, 'env>(
     )
 }
 
-/// List.repeat : Int, elem -> List elem
+/// List.repeat : elem, Nat -> List elem
 pub fn list_repeat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    list_len: IntValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
+    list_len: IntValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let inc_element_fn = build_inc_n_wrapper(env, layout_ids, element_layout);
 
@@ -687,7 +687,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     )
 }
 
-/// List.mapWithIndex : List before, (Nat, before -> after) -> List after
+/// List.mapWithIndex : List before, (before, Nat -> after) -> List after
 pub fn list_map_with_index<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function_call: RocFunctionCall<'ctx>,
@@ -1254,17 +1254,17 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     let ctx = env.context;
 
     let len_type = env.ptr_int();
-    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+    let elem_bytes = elem_layout.stack_size(env.target_info) as u64;
     let bytes_per_element = len_type.const_int(elem_bytes, false);
     let number_of_data_bytes =
         builder.build_int_mul(bytes_per_element, number_of_elements, "data_length");
 
     // the refcount of a new list is initially 1
     // we assume that the list is indeed used (dead variables are eliminated)
-    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
+    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.target_info);
 
     let basic_type = basic_type_from_layout(env, elem_layout);
-    let alignment_bytes = elem_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_bytes = elem_layout.alignment_bytes(env.target_info);
     allocate_with_refcount_help(env, basic_type, alignment_bytes, number_of_data_bytes, rc1)
 }
 

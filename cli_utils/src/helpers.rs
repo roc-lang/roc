@@ -4,7 +4,6 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
-use roc_cli::repl::{INSTRUCTIONS, WELCOME_MESSAGE};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -295,86 +294,14 @@ pub fn fixture_file(dir_name: &str, file_name: &str) -> PathBuf {
 }
 
 #[allow(dead_code)]
-pub fn repl_eval(input: &str) -> Out {
-    let mut cmd = Command::new(path_to_roc_binary());
+pub fn known_bad_file(file_name: &str) -> PathBuf {
+    let mut path = root_dir();
 
-    cmd.arg("repl");
+    // Descend into cli/tests/known_bad/{file_name}
+    path.push("cli");
+    path.push("tests");
+    path.push("known_bad");
+    path.push(file_name);
 
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("failed to execute compiled `roc` binary in CLI test");
-
-    {
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-
-        // Send the input expression
-        stdin
-            .write_all(input.as_bytes())
-            .expect("Failed to write input to stdin");
-
-        // Evaluate the expression
-        stdin
-            .write_all(b"\n")
-            .expect("Failed to write newline to stdin");
-
-        // Gracefully exit the repl
-        stdin
-            .write_all(b":exit\n")
-            .expect("Failed to write :exit to stdin");
-    }
-
-    let output = child
-        .wait_with_output()
-        .expect("Error waiting for REPL child process to exit.");
-
-    // Remove the initial instructions from the output.
-
-    let expected_instructions = format!("{}{}", WELCOME_MESSAGE, INSTRUCTIONS);
-    let stdout = String::from_utf8(output.stdout).unwrap();
-
-    assert!(
-        stdout.starts_with(&expected_instructions),
-        "Unexpected repl output: {}",
-        stdout
-    );
-
-    let (_, answer) = stdout.split_at(expected_instructions.len());
-    let answer = if answer.is_empty() {
-        // The repl crashed before completing the evaluation.
-        // This is most likely due to a segfault.
-        if output.status.to_string() == "signal: 11" {
-            panic!(
-                "repl segfaulted during the test. Stderr was {:?}",
-                String::from_utf8(output.stderr).unwrap()
-            );
-        } else {
-            panic!("repl exited unexpectedly before finishing evaluation. Exit status was {:?} and stderr was {:?}", output.status, String::from_utf8(output.stderr).unwrap());
-        }
-    } else {
-        let expected_after_answer = "\n".to_string();
-
-        assert!(
-            answer.ends_with(&expected_after_answer),
-            "Unexpected repl output after answer: {}",
-            answer
-        );
-
-        // Use [1..] to trim the leading '\n'
-        // and (len - 1) to trim the trailing '\n'
-        let (answer, _) = answer[1..].split_at(answer.len() - expected_after_answer.len() - 1);
-
-        // Remove ANSI escape codes from the answer - for example:
-        //
-        //     Before: "42 \u{1b}[35m:\u{1b}[0m Num *"
-        //     After:  "42 : Num *"
-        strip_ansi_escapes::strip(answer).unwrap()
-    };
-
-    Out {
-        stdout: String::from_utf8(answer).unwrap(),
-        stderr: String::from_utf8(output.stderr).unwrap(),
-        status: output.status,
-    }
+    path
 }

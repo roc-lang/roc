@@ -1,6 +1,8 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 #[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::assert_expect_failed;
+#[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_llvm_evals_to;
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_non_opt_evals_to;
@@ -8,12 +10,16 @@ use crate::helpers::llvm::assert_non_opt_evals_to;
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
 // #[cfg(feature = "gen-dev")]
+// use crate::helpers::dev::assert_expect_failed;
+// #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to as assert_llvm_evals_to;
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to as assert_non_opt_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
+// #[cfg(feature = "gen-wasm")]
+// use crate::helpers::dev::assert_expect_failed;
 // #[cfg(feature = "gen-wasm")]
 // use crate::helpers::wasm::assert_evals_to as assert_llvm_evals_to;
 // #[cfg(feature = "gen-wasm")]
@@ -1972,7 +1978,7 @@ fn hof_conditional() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(
-    expected = "Roc failed with message: \"Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 6-6, C 8-9| Ident"
+    expected = "Roc failed with message: \"Shadowing { original_region: @57-58, shadow: @90-91 Ident"
 )]
 fn pattern_shadowing() {
     assert_evals_to!(
@@ -2448,9 +2454,7 @@ fn backpassing_result() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(
-    expected = "Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 5-5, C 6-7| Ident"
-)]
+#[should_panic(expected = "Shadowing { original_region: @57-58, shadow: @74-75 Ident")]
 fn function_malformed_pattern() {
     assert_evals_to!(
         indoc!(
@@ -2487,9 +2491,9 @@ fn call_invalid_layout() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = "An expectation failed!")]
+#[should_panic(expected = "Failed with 1 failures. Failures: ")]
 fn expect_fail() {
-    assert_evals_to!(
+    assert_expect_failed!(
         indoc!(
             r#"
             expect 1 == 2
@@ -3137,4 +3141,92 @@ fn alias_defined_out_of_order() {
         RocStr::from_slice(b"foo"),
         RocStr
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn recursively_build_effect() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            greeting =
+                hi = "Hello"
+                name = "World"
+
+                "\(hi), \(name)!"
+
+            main =
+                when nestHelp 4 is
+                    _ -> greeting
+
+            nestHelp : I64 -> XEffect {}
+            nestHelp = \m ->
+                when m is
+                    0 ->
+                        always {}
+
+                    _ ->
+                        always {} |> after \_ -> nestHelp (m - 1)
+
+
+            XEffect a : [ @XEffect ({} -> a) ]
+
+            always : a -> XEffect a
+            always = \x -> @XEffect (\{} -> x)
+
+            after : XEffect a, (a -> XEffect b) -> XEffect b
+            after = \(@XEffect e), toB ->
+                @XEffect \{} ->
+                    when toB (e {}) is
+                        @XEffect e2 ->
+                            e2 {}
+            "#
+        ),
+        RocStr::from_slice(b"Hello, World!"),
+        RocStr
+    );
+}
+
+#[test]
+#[ignore = "TODO; currently generates bad code because `a` isn't specialized inside the closure."]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymophic_expression_captured_inside_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            asU8 : U8 -> U8
+            asU8 = \_ -> 30
+
+            main =
+                a = 15
+                f = \{} ->
+                    asU8 a
+
+                f {}
+            "#
+        ),
+        30,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2322() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            double = \x -> x * 2
+            doubleBind = \x -> (\_ -> double x)
+            doubleThree = doubleBind 3
+            doubleThree {}
+            "#
+        ),
+        6,
+        i64
+    )
 }

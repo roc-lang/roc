@@ -206,7 +206,7 @@ fn solve(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected, Mode::Eq) {
+            match unify(subs, actual, expected, Mode::EQ) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -241,7 +241,7 @@ fn solve(
             let actual = type_to_var(subs, rank, pools, cached_aliases, source);
             let target = *target;
 
-            match unify(subs, actual, target, Mode::Eq) {
+            match unify(subs, actual, target, Mode::EQ) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -254,7 +254,7 @@ fn solve(
 
                     state
                 }
-                BadType(vars, _problem) => {
+                BadType(vars, _) => {
                     introduce(subs, rank, pools, &vars);
 
                     // ERROR NOT REPORTED
@@ -295,7 +295,7 @@ fn solve(
                         cached_aliases,
                         expectation.get_type_ref(),
                     );
-                    match unify(subs, actual, expected, Mode::Eq) {
+                    match unify(subs, actual, expected, Mode::EQ) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);
 
@@ -362,8 +362,8 @@ fn solve(
             );
 
             let mode = match constraint {
-                Present(_, _) => Mode::Present,
-                _ => Mode::Eq,
+                Present(_, _) => Mode::PRESENT,
+                _ => Mode::EQ,
             };
 
             match unify(subs, actual, expected, mode) {
@@ -659,7 +659,7 @@ fn solve(
             );
             let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
 
-            match unify(subs, actual, includes, Mode::Present) {
+            match unify(subs, actual, includes, Mode::PRESENT) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -771,7 +771,14 @@ fn type_to_variable<'a>(
 
     match typ {
         Variable(var) => *var,
-        Apply(symbol, arguments) => {
+        RangedNumber(typ, vars) => {
+            let ty_var = type_to_variable(subs, rank, pools, arena, typ);
+            let vars = VariableSubsSlice::insert_into_subs(subs, vars.iter().copied());
+            let content = Content::RangedNumber(ty_var, vars);
+
+            register(subs, rank, pools, content)
+        }
+        Apply(symbol, arguments, _) => {
             let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
             for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
                 let var = type_to_variable(subs, rank, pools, arena, var_index);
@@ -1591,6 +1598,8 @@ fn adjust_rank_content(
 
             rank
         }
+
+        RangedNumber(typ, _) => adjust_rank(subs, young_mark, visit_mark, group_rank, *typ),
     }
 }
 
@@ -1725,6 +1734,11 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                 stack.extend(var_slice!(args.variables()));
 
                 stack.push(var);
+            }
+            &RangedNumber(typ, vars) => {
+                stack.push(typ);
+
+                stack.extend(var_slice!(vars));
             }
         }
     }
@@ -1977,6 +1991,23 @@ fn deep_copy_var_help(
             let new_real_type_var =
                 deep_copy_var_help(subs, max_rank, pools, visited, real_type_var);
             let new_content = Alias(symbol, new_arguments, new_real_type_var);
+
+            subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+
+        RangedNumber(typ, range_vars) => {
+            let new_type_var = deep_copy_var_help(subs, max_rank, pools, visited, typ);
+
+            let new_vars = SubsSlice::reserve_into_subs(subs, range_vars.len());
+            for (target_index, var_index) in (new_vars.indices()).zip(range_vars) {
+                let var = subs[var_index];
+                let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
+                subs.variables[target_index] = copy_var;
+            }
+
+            let new_content = RangedNumber(new_type_var, new_vars);
 
             subs.set(copy, make_descriptor(new_content));
 

@@ -54,6 +54,7 @@ pub enum Pattern {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Literal {
     Int(i128),
+    U128(u128),
     Bit(bool),
     Byte(u8),
     Float(u64),
@@ -66,6 +67,7 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
 
     match pattern {
         IntLiteral(v, _) => Literal(Literal::Int(*v)),
+        U128Literal(v) => Literal(Literal::U128(*v)),
         FloatLiteral(v, _) => Literal(Literal::Float(*v)),
         DecimalLiteral(v) => Literal(Literal::Decimal(*v)),
         StrLiteral(v) => Literal(Literal::Str(v.clone())),
@@ -498,7 +500,7 @@ fn specialize_row_by_ctor2(
                 patterns.extend(args);
                 matrix.push(patterns);
             } else {
-                // do nothing 
+                // do nothing
             }
         Some(Anything) => {
             // TODO order!

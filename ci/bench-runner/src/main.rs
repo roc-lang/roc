@@ -65,7 +65,7 @@ fn finish(all_regressed_benches: HashSet<String>, nr_repeat_benchmarks: usize) {
             r#"
 
     FAILED: The following benchmarks have shown a regression {:?} times: {:?}
-    
+
     "#,
             nr_repeat_benchmarks, all_regressed_benches
         );

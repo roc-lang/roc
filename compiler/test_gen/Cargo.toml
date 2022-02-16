@@ -9,6 +9,9 @@ edition = "2018"
 name = "test_gen"
 path = "src/tests.rs"
 
+[build-dependencies]
+roc_builtins = { path = "../builtins" }
+
 [dev-dependencies]
 roc_gen_llvm = { path = "../gen_llvm" }
 roc_gen_dev = { path = "../gen_dev" }
@@ -28,6 +31,7 @@ roc_load = { path = "../load" }
 roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
 roc_build = { path = "../build" }
+roc_target = { path = "../roc_target" }
 roc_std = { path = "../../roc_std" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 either = "1.6.1"

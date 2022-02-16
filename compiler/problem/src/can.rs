@@ -25,6 +25,7 @@ pub enum Problem {
     UnusedDef(Symbol, Region),
     UnusedImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
+    UnknownGeneratesWith(Loc<Ident>),
     /// First symbol is the name of the closure with that argument
     /// Second symbol is the name of the argument that is unused
     UnusedArgument(Symbol, Symbol, Region),
@@ -78,6 +79,11 @@ pub enum Problem {
     InvalidInterpolation(Region),
     InvalidHexadecimal(Region),
     InvalidUnicodeCodePt(Region),
+    NestedDatatype {
+        alias: Symbol,
+        def_region: Region,
+        differing_recursion_region: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -102,6 +108,18 @@ pub enum IntErrorKind {
     Overflow,
     /// Integer is too small to store in target integer type.
     Underflow,
+    /// This is an integer, but it has a float numeric suffix.
+    FloatSuffix,
+    /// The integer literal overflows the width of the suffix associated with it.
+    OverflowsSuffix {
+        suffix_type: &'static str,
+        max_value: u128,
+    },
+    /// The integer literal underflows the width of the suffix associated with it.
+    UnderflowsSuffix {
+        suffix_type: &'static str,
+        min_value: i128,
+    },
 }
 
 /// Enum to store the various types of errors that can cause parsing a float to fail.
@@ -113,6 +131,8 @@ pub enum FloatErrorKind {
     NegativeInfinity,
     /// the literal is too large for f64
     PositiveInfinity,
+    /// This is a float, but it has an integer numeric suffix.
+    IntSuffix,
 }
 
 #[derive(Clone, Debug, PartialEq)]

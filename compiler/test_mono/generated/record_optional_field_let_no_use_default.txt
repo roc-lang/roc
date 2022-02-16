@@ -1,16 +1,16 @@
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Test.8 = lowlevel NumAdd #Attr.2 #Attr.3;
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Test.8 : Builtin(Int(I64)) = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Test.8;
 
 procedure Test.1 (Test.2):
-    let Test.3 = StructAtIndex 0 Test.2;
-    let Test.4 = StructAtIndex 1 Test.2;
-    let Test.7 = CallByName Num.24 Test.3 Test.4;
+    let Test.3 : Builtin(Int(I64)) = StructAtIndex 0 Test.2;
+    let Test.4 : Builtin(Int(I64)) = StructAtIndex 1 Test.2;
+    let Test.7 : Builtin(Int(I64)) = CallByName Num.22 Test.3 Test.4;
     ret Test.7;
 
 procedure Test.0 ():
-    let Test.9 = 4i64;
-    let Test.10 = 9i64;
-    let Test.6 = Struct {Test.9, Test.10};
-    let Test.5 = CallByName Test.1 Test.6;
+    let Test.9 : Builtin(Int(I64)) = 4i64;
+    let Test.10 : Builtin(Int(I64)) = 9i64;
+    let Test.6 : Struct([Builtin(Int(I64)), Builtin(Int(I64))]) = Struct {Test.9, Test.10};
+    let Test.5 : Builtin(Int(I64)) = CallByName Test.1 Test.6;
     ret Test.5;

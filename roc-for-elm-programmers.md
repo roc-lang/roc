@@ -1267,7 +1267,7 @@ So Roc does not use `number`, but rather uses `Num` - which works more like `Lis
 Either way, you get `+` being able to work on both integers and floats!
 
 Separately, there's also `Int a`, which is a type alias for `Num (Integer a)`,
-and `Float a`, which is a type alias for `Num (Float a)`. These allow functions
+and `Float a`, which is a type alias for `Num (FloatingPoint a)`. These allow functions
 that can work on any integer or any float. For example,
 `Num.bitwiseAnd : Int a, Int a -> Int a`.
 

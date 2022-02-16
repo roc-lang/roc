@@ -6,7 +6,7 @@ use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
-    AssignedField, Base, Collection, CommentOrNewline, Expr, Pattern, WhenBranch,
+    AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_region::all::Loc;
@@ -27,8 +27,8 @@ impl<'a> Formattable for Expr<'a> {
             }
 
             // These expressions never have newlines
-            Float(_)
-            | Num(_)
+            Float(..)
+            | Num(..)
             | NonBase10Int { .. }
             | Access(_, _)
             | AccessorFunction(_)
@@ -196,17 +196,25 @@ impl<'a> Formattable for Expr<'a> {
                     buf.push(')');
                 }
             }
-            Num(string) | Float(string) | GlobalTag(string) | PrivateTag(string) => {
+            &Num(string) => {
+                buf.indent(indent);
+                buf.push_str(string);
+            }
+            &Float(string) => {
+                buf.indent(indent);
+                buf.push_str(string);
+            }
+            GlobalTag(string) | PrivateTag(string) => {
                 buf.indent(indent);
                 buf.push_str(string)
             }
-            NonBase10Int {
+            &NonBase10Int {
                 base,
                 string,
                 is_negative,
             } => {
                 buf.indent(indent);
-                if *is_negative {
+                if is_negative {
                     buf.push('-');
                 }
 
@@ -514,11 +522,15 @@ fn fmt_when<'a, 'buf>(
         let patterns = &branch.patterns;
         let expr = &branch.value;
         let (first_pattern, rest) = patterns.split_first().unwrap();
-        let is_multiline = match rest.last() {
-            None => false,
-            Some(last_pattern) => {
-                first_pattern.region.start().line != last_pattern.region.end().line
-            }
+        let is_multiline = if let Some((last_pattern, inner_patterns)) = rest.split_last() {
+            !first_pattern.value.extract_spaces().after.is_empty()
+                || !last_pattern.value.extract_spaces().before.is_empty()
+                || inner_patterns.iter().any(|p| {
+                    let spaces = p.value.extract_spaces();
+                    !spaces.before.is_empty() || !spaces.after.is_empty()
+                })
+        } else {
+            false
         };
 
         fmt_pattern(
