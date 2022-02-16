@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eux
+set -ex
 
 if [[ ! -d repl_www ]]
 then
@@ -17,12 +17,15 @@ WWW_DIR="repl_www/build"
 mkdir -p $WWW_DIR
 cp repl_www/public/* $WWW_DIR
 
-# Pass all script arguments through to wasm-pack
 # For debugging, pass the --profiling option, which enables optimizations + debug info
 # (We need optimizations to get rid of dead code that otherwise causes compile errors!)
-cargo build --target wasm32-unknown-unknown -p roc_repl_wasm --release
-wasm-bindgen --target web --keep-debug target/wasm32-unknown-unknown/release/roc_repl_wasm.wasm --out-dir repl_wasm/pkg/
-# wasm-pack build --target web "$@" repl_wasm
+if [ -n "$REPL_DEBUG" ]
+then
+    cargo build --target wasm32-unknown-unknown -p roc_repl_wasm --release
+    wasm-bindgen --target web --keep-debug target/wasm32-unknown-unknown/release/roc_repl_wasm.wasm --out-dir repl_wasm/pkg/
+else
+    wasm-pack build --target web repl_wasm
+fi
 
 cp repl_wasm/pkg/*.wasm $WWW_DIR
 
