@@ -14,7 +14,6 @@ roc_can = { path = "../can" }
 roc_unify = { path = "../unify" }
 arrayvec = "0.7.2"
 bumpalo = { version = "3.8.0", features = ["collections"] }
-wasm-bindgen = "0.2.79"
 
 [dev-dependencies]
 roc_load = { path = "../load" }

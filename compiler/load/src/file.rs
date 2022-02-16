@@ -755,7 +755,6 @@ enum BuildTask<'a> {
     },
 }
 
-#[derive(Debug)]
 enum WorkerMsg {
     Shutdown,
     TaskAdded,
@@ -1404,8 +1403,7 @@ fn worker_task_step<'a>(
     src_dir: &Path,
     target_info: TargetInfo,
 ) -> Result<ControlFlow<(), ()>, LoadingProblem<'a>> {
-    let recv = worker_msg_rx.try_recv();
-    match recv {
+    match worker_msg_rx.try_recv() {
         Ok(msg) => {
             match msg {
                 WorkerMsg::Shutdown => {

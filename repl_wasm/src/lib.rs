@@ -31,7 +31,7 @@ extern "C" {
     fn js_get_result_and_memory(buffer_alloc_addr: *mut u8) -> usize;
 
     #[wasm_bindgen(js_namespace = console)]
-    pub fn log(s: &str);
+    fn log(s: &str);
 }
 
 // In-browser debugging
@@ -158,10 +158,8 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
 
 #[wasm_bindgen]
 pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
-    console_log!("entrypoint_from_js");
     let arena = &Bump::new();
     let pre_linked_binary: &'static [u8] = include_bytes!("../data/pre_linked_binary.o");
-    console_log!("pre_linked_binary {}", pre_linked_binary.len());
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
