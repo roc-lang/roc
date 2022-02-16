@@ -1290,18 +1290,29 @@ fn load_multi_threaded<'a>(
 
     let it = worker_arenas.iter_mut();
 
+    let mut state = State::new(
+        root_id,
+        target_info,
+        goal_phase,
+        stdlib,
+        exposed_types,
+        arc_modules,
+        ident_ids_by_module,
+    );
+
+    for _ in 0..num_workers {
+        let worker = Worker::new_lifo();
+
+        stealers.push(worker.stealer());
+        worker_queues.push(worker);
+    }
+
+    // Get a reference to the completed stealers, so we can send that
+    // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
+    let stealers = stealers.into_bump_slice();
+
     {
         thread::scope(|thread_scope| {
-            for _ in 0..num_workers {
-                let worker = Worker::new_lifo();
-
-                stealers.push(worker.stealer());
-                worker_queues.push(worker);
-            }
-
-            // Get a reference to the completed stealers, so we can send that
-            // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
-            let stealers = stealers.into_bump_slice();
 
             let mut worker_listeners =
                 bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
@@ -1341,15 +1352,6 @@ fn load_multi_threaded<'a>(
                 res_join_handle.unwrap();
             }
 
-            let mut state = State::new(
-                root_id,
-                target_info,
-                goal_phase,
-                stdlib,
-                exposed_types,
-                arc_modules,
-                ident_ids_by_module,
-            );
 
             // We've now distributed one worker queue to each thread.
             // There should be no queues left to distribute!
