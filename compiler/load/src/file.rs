@@ -45,19 +45,6 @@ use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 use std::{env, fs};
-use wasm_bindgen::prelude::wasm_bindgen;
-
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
-
-// In-browser debugging
-#[allow(unused_macros)]
-macro_rules! console_log {
-    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
-}
 
 use crate::work::{Dependencies, Phase};
 
@@ -611,6 +598,43 @@ struct State<'a> {
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 }
 
+impl<'a> State<'a> {
+    fn new(
+        root_id: ModuleId,
+        target_info: TargetInfo,
+        goal_phase: Phase,
+        stdlib: &'a StdLib,
+        exposed_types: SubsByModule,
+        arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
+        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ) -> Self {
+        let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
+
+        Self {
+            root_id,
+            target_info,
+            platform_data: None,
+            goal_phase,
+            stdlib,
+            output_path: None,
+            platform_path: PlatformPath::NotSpecified,
+            module_cache: ModuleCache::default(),
+            dependencies: Dependencies::default(),
+            procedures: MutMap::default(),
+            exposed_to_host: ExposedToHost::default(),
+            exposed_types,
+            arc_modules,
+            arc_shorthands,
+            constrained_ident_ids: IdentIds::exposed_builtins(0),
+            ident_ids_by_module,
+            declarations_by_id: MutMap::default(),
+            exposed_symbols_by_module: MutMap::default(),
+            timings: MutMap::default(),
+            layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ModuleTiming {
     pub read_roc_file: Duration,
@@ -845,8 +869,6 @@ pub fn load_and_monomorphize_from_str<'a>(
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    console_log!("load_and_monomorphize_from_str");
-
     let load_start = LoadStart::from_str(arena, filename, src)?;
 
     match load(
@@ -1005,7 +1027,6 @@ enum LoadResult<'a> {
 #[allow(clippy::too_many_arguments)]
 fn load<'a>(
     arena: &'a Bump,
-    //filename: PathBuf,
     load_start: LoadStart<'a>,
     stdlib: &'a StdLib,
     src_dir: &Path,
@@ -1013,8 +1034,42 @@ fn load<'a>(
     goal_phase: Phase,
     target_info: TargetInfo,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
-    console_log!("load start");
+    // When compiling to wasm, we cannot spawn extra threads
+    // so we have a single-threaded implementation
+    if cfg!(target_family = "wasm") {
+        load_single_threaded(
+            arena,
+            load_start,
+            stdlib,
+            src_dir,
+            exposed_types,
+            goal_phase,
+            target_info,
+        )
+    } else {
+        load_multi_threaded(
+            arena,
+            load_start,
+            stdlib,
+            src_dir,
+            exposed_types,
+            goal_phase,
+            target_info,
+        )
+    }
+}
 
+/// Load using only a single thread; used when compiling to webassembly
+#[allow(clippy::too_many_arguments)]
+fn load_single_threaded<'a>(
+    arena: &'a Bump,
+    load_start: LoadStart<'a>,
+    stdlib: &'a StdLib,
+    src_dir: &Path,
+    exposed_types: SubsByModule,
+    goal_phase: Phase,
+    target_info: TargetInfo,
+) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
         ident_ids_by_module,
@@ -1022,59 +1077,34 @@ fn load<'a>(
         root_msg,
     } = load_start;
 
-    let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
-
     let (msg_tx, msg_rx) = bounded(1024);
-
-    console_log!("before msg_tx.send");
 
     msg_tx
         .send(root_msg)
         .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
-    console_log!("after msg_tx.send");
-
-    let mut state = State {
+    let mut state = State::new(
         root_id,
         target_info,
-        platform_data: None,
         goal_phase,
         stdlib,
-        output_path: None,
-        platform_path: PlatformPath::NotSpecified,
-        module_cache: ModuleCache::default(),
-        dependencies: Dependencies::default(),
-        procedures: MutMap::default(),
-        exposed_to_host: ExposedToHost::default(),
         exposed_types,
         arc_modules,
-        arc_shorthands,
-        constrained_ident_ids: IdentIds::exposed_builtins(0),
         ident_ids_by_module,
-        declarations_by_id: MutMap::default(),
-        exposed_symbols_by_module: MutMap::default(),
-        timings: MutMap::default(),
-        layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
-    };
+    );
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
     let injector = Injector::new();
-
-    console_log!("after injector");
 
     let (worker_msg_tx, worker_msg_rx) = bounded(1024);
     let worker_listener = worker_msg_tx;
     let worker_listeners = arena.alloc([worker_listener]);
 
-    console_log!("before Worker lifo");
-
     let worker = Worker::new_lifo();
     let stealer = worker.stealer();
     let stealers = &[stealer];
 
-    console_log!("before loop");
     loop {
-        console_log!("inside loop");
         match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx) {
             Ok(ControlFlow::Break(done)) => return Ok(done),
             Ok(ControlFlow::Continue(new_state)) => {
@@ -1082,7 +1112,6 @@ fn load<'a>(
             }
             Err(e) => return Err(e),
         }
-        console_log!("after match");
 
         let control_flow = worker_task_step(
             arena,
@@ -1094,8 +1123,6 @@ fn load<'a>(
             src_dir,
             target_info,
         );
-
-        console_log!("control flow {:?}", control_flow);
 
         match control_flow {
             Ok(ControlFlow::Break(())) => panic!("the worker should not break!"),
@@ -1193,7 +1220,7 @@ fn state_thread_step<'a>(
                                 to_parse_problem_report(problem, module_ids, constrained_ident_ids);
                             return Err(LoadingProblem::FormattedReport(buf));
                         }
-                        Err(e) => return Err(e),
+                        Err(e) => Err(e),
                     }
                 }
             }
@@ -1206,9 +1233,8 @@ fn state_thread_step<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn load_multithreaded<'a>(
+fn load_multi_threaded<'a>(
     arena: &'a Bump,
-    //filename: PathBuf,
     load_start: LoadStart<'a>,
     stdlib: &'a StdLib,
     src_dir: &Path,
@@ -1222,8 +1248,6 @@ fn load_multithreaded<'a>(
         root_id,
         root_msg,
     } = load_start;
-
-    let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
     let (msg_tx, msg_rx) = bounded(1024);
     msg_tx
@@ -1317,28 +1341,15 @@ fn load_multithreaded<'a>(
                 res_join_handle.unwrap();
             }
 
-            let mut state = State {
+            let mut state = State::new(
                 root_id,
                 target_info,
-                platform_data: None,
                 goal_phase,
                 stdlib,
-                output_path: None,
-                platform_path: PlatformPath::NotSpecified,
-                module_cache: ModuleCache::default(),
-                dependencies: Dependencies::default(),
-                procedures: MutMap::default(),
-                exposed_to_host: ExposedToHost::default(),
                 exposed_types,
                 arc_modules,
-                arc_shorthands,
-                constrained_ident_ids: IdentIds::exposed_builtins(0),
                 ident_ids_by_module,
-                declarations_by_id: MutMap::default(),
-                exposed_symbols_by_module: MutMap::default(),
-                timings: MutMap::default(),
-                layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
-            };
+            );
 
             // We've now distributed one worker queue to each thread.
             // There should be no queues left to distribute!
@@ -1486,9 +1497,7 @@ fn worker_task_step<'a>(
     src_dir: &Path,
     target_info: TargetInfo,
 ) -> Result<ControlFlow<(), ()>, LoadingProblem<'a>> {
-    console_log!("worker_task_step");
     let recv = worker_msg_rx.try_recv();
-    console_log!("recv {:?}", &recv);
     match recv {
         Ok(msg) => {
             match msg {
@@ -1510,10 +1519,8 @@ fn worker_task_step<'a>(
                     // added. In that case, do nothing, and keep waiting
                     // until we receive a Shutdown message.
                     if let Some(task) = find_task(&worker, injector, stealers) {
-                        console_log!("found Some task {:?}", task);
                         let result =
                             run_task(task, worker_arena, src_dir, msg_tx.clone(), target_info);
-                        console_log!("run_task result {:?}", &result);
 
                         match result {
                             Ok(()) => {}
@@ -1533,7 +1540,6 @@ fn worker_task_step<'a>(
                             }
                         }
                     }
-                    console_log!("after if let Some(task)");
 
                     Ok(ControlFlow::Continue(()))
                 }
@@ -3168,15 +3174,12 @@ fn run_solve<'a>(
     dep_idents: MutMap<ModuleId, IdentIds>,
     unused_imports: MutMap<ModuleId, Region>,
 ) -> Msg<'a> {
-
-    console_log!("run_solve");
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
 
     // Finish constraining the module by wrapping the existing Constraint
     // in the ones we just computed. We can do this off the main thread.
     let constraint = constrain_imports(imported_symbols, constraint, &mut var_store);
-    console_log!("after constrain_imports");
 
     let constrain_end = SystemTime::now();
 
@@ -3196,15 +3199,11 @@ fn run_solve<'a>(
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
 
-    console_log!("after run_solve");
-
     let mut exposed_vars_by_symbol: MutMap<Symbol, Variable> = solved_env.vars_by_symbol.clone();
     exposed_vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));
 
     let solved_types =
         roc_solve::module::make_solved_types(&solved_env, &solved_subs, &exposed_vars_by_symbol);
-
-    console_log!("after make_solved_types");
 
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
@@ -3220,8 +3219,6 @@ fn run_solve<'a>(
 
     module_timing.constrain += constrain_elapsed;
     module_timing.solve = solve_end.duration_since(constrain_end).unwrap();
-
-    console_log!("creating Msg::SolvedTypes");
 
     // Send the subs to the main thread for processing,
     Msg::SolvedTypes {

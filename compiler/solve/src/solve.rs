@@ -15,22 +15,6 @@ use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, 
 use roc_unify::unify::{unify, Mode, Unified::*};
 use std::collections::hash_map::Entry;
 
-
-use wasm_bindgen::prelude::wasm_bindgen;
-
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
-
-// In-browser debugging
-#[allow(unused_macros)]
-macro_rules! console_log {
-    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
-}
-
-
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
 // Thank you, Evan!
@@ -171,7 +155,6 @@ pub fn run_in_place(
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> Env {
-    console_log!("run_in_place");
     let mut pools = Pools::default();
     let state = State {
         env: env.clone(),
@@ -203,7 +186,6 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
-    console_log!("solve constraint {:?}", constraint);
     match constraint {
         True => state,
         SaveTheEnvironment => {
