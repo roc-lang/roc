@@ -56,6 +56,7 @@ fn generateLlvmIrFile(
     obj.setBuildMode(mode);
     obj.strip = true;
     obj.emit_llvm_ir = .emit;
+    obj.emit_llvm_bc = .emit;
     obj.emit_bin = .no_emit;
     obj.target = target;
 
