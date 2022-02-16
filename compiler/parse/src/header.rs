@@ -255,11 +255,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
                 specialize(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
                 word1(b':', EPackageEntry::Colon)
             ),
-            space0_e(
-                min_indent,
-                EPackageEntry::Space,
-                EPackageEntry::IndentPackage
-            )
+            space0_e(min_indent, EPackageEntry::IndentPackage)
         ))
         .parse(arena, state)?;
 
