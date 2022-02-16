@@ -75,8 +75,7 @@ fn loc_tag_pattern_arg<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>,
     // If we encounter one, we're done parsing function args!
     move |arena, state| {
         let (_, spaces, state) =
-            backtrackable(space0_e(min_indent, EPattern::Space, EPattern::IndentStart))
-                .parse(arena, state)?;
+            backtrackable(space0_e(min_indent, EPattern::IndentStart)).parse(arena, state)?;
 
         let (_, loc_pat, state) = loc_parse_tag_pattern_arg(min_indent, arena, state)?;
 
@@ -123,7 +122,6 @@ fn loc_pattern_in_parens_help<'a>(
             move |arena, state| specialize_ref(PInParens::Pattern, loc_pattern_help(min_indent))
                 .parse(arena, state),
             min_indent,
-            PInParens::Space,
             PInParens::IndentOpen,
             PInParens::IndentEnd,
         ),
@@ -321,7 +319,6 @@ fn record_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Pattern<'a>, PRec
             word1(b'}', PRecord::End),
             min_indent,
             PRecord::Open,
-            PRecord::Space,
             PRecord::IndentEnd,
             Pattern::SpaceBefore
         )
@@ -347,8 +344,7 @@ fn record_pattern_field<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>
         .parse(arena, state)?;
         debug_assert_eq!(progress, MadeProgress);
 
-        let (_, spaces, state) =
-            space0_e(min_indent, PRecord::Space, PRecord::IndentEnd).parse(arena, state)?;
+        let (_, spaces, state) = space0_e(min_indent, PRecord::IndentEnd).parse(arena, state)?;
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
@@ -362,7 +358,7 @@ fn record_pattern_field<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>
             Some(First(_)) => {
                 let val_parser = specialize_ref(PRecord::Pattern, loc_pattern_help(min_indent));
                 let (_, loc_val, state) =
-                    space0_before_e(val_parser, min_indent, PRecord::Space, PRecord::IndentColon)
+                    space0_before_e(val_parser, min_indent, PRecord::IndentColon)
                         .parse(arena, state)?;
 
                 let Loc {
@@ -392,7 +388,7 @@ fn record_pattern_field<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>
                 });
 
                 let (_, loc_val, state) =
-                    space0_before_e(val_parser, min_indent, PRecord::Space, PRecord::IndentColon)
+                    space0_before_e(val_parser, min_indent, PRecord::IndentColon)
                         .parse(arena, state)?;
 
                 let Loc {
