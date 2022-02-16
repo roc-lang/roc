@@ -65,7 +65,7 @@ const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
-const SHOW_MESSAGE_LOG: bool = true;
+const SHOW_MESSAGE_LOG: bool = false;
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -1307,7 +1307,6 @@ fn load_multi_threaded<'a>(
     let it = worker_arenas.iter_mut();
     {
         thread::scope(|thread_scope| {
-
             let mut worker_listeners =
                 bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
@@ -1344,7 +1343,6 @@ fn load_multi_threaded<'a>(
                 res_join_handle.unwrap();
             }
 
-
             // We've now distributed one worker queue to each thread.
             // There should be no queues left to distribute!
             debug_assert!(worker_queues.is_empty());
@@ -1367,114 +1365,25 @@ fn load_multi_threaded<'a>(
 
             // The root module will have already queued up messages to process,
             // and processing those messages will in turn queue up more messages.
-            for msg in msg_rx.iter() {
-                match msg {
-                    Msg::FinishedAllTypeChecking {
-                        solved_subs,
-                        exposed_vars_by_symbol,
-                        exposed_aliases_by_symbol,
-                        exposed_values,
-                        dep_idents,
-                        documentation,
-                    } => {
-                        // We're done! There should be no more messages pending.
-                        debug_assert!(msg_rx.is_empty());
-
-                        // Shut down all the worker threads.
-                        for listener in worker_listeners {
-                            listener
-                                .send(WorkerMsg::Shutdown)
-                                .map_err(|_| LoadingProblem::MsgChannelDied)?;
-                        }
-
-                        return Ok(LoadResult::TypeChecked(finish(
-                            state,
-                            solved_subs,
-                            exposed_values,
-                            exposed_aliases_by_symbol,
-                            exposed_vars_by_symbol,
-                            dep_idents,
-                            documentation,
-                        )));
-                    }
-                    Msg::FinishedAllSpecialization {
-                        subs,
-                        exposed_to_host,
-                    } => {
-                        // We're done! There should be no more messages pending.
-                        debug_assert!(msg_rx.is_empty());
-
+            loop {
+                match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx)
+                {
+                    Ok(ControlFlow::Break(load_result)) => {
                         shut_down_worker_threads!();
 
-                        return Ok(LoadResult::Monomorphized(finish_specialization(
-                            state,
-                            subs,
-                            exposed_to_host,
-                        )?));
+                        return Ok(load_result);
                     }
-                    Msg::FailedToReadFile { filename, error } => {
+                    Ok(ControlFlow::Continue(new_state)) => {
+                        state = new_state;
+                        continue;
+                    }
+                    Err(e) => {
                         shut_down_worker_threads!();
 
-                        let buf = to_file_problem_report(&filename, error);
-                        return Err(LoadingProblem::FormattedReport(buf));
-                    }
-
-                    Msg::FailedToParse(problem) => {
-                        shut_down_worker_threads!();
-
-                        let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
-                        let buf = to_parse_problem_report(
-                            problem,
-                            module_ids,
-                            state.constrained_ident_ids,
-                        );
-                        return Err(LoadingProblem::FormattedReport(buf));
-                    }
-                    msg => {
-                        // This is where most of the main thread's work gets done.
-                        // Everything up to this point has been setting up the threading
-                        // system which lets this logic work efficiently.
-                        let constrained_ident_ids = state.constrained_ident_ids.clone();
-                        let arc_modules = state.arc_modules.clone();
-
-                        let res_state = update(
-                            state,
-                            msg,
-                            msg_tx.clone(),
-                            &injector,
-                            worker_listeners,
-                            arena,
-                        );
-
-                        match res_state {
-                            Ok(new_state) => {
-                                state = new_state;
-                            }
-                            Err(LoadingProblem::ParsingFailed(problem)) => {
-                                shut_down_worker_threads!();
-
-                                let module_ids = Arc::try_unwrap(arc_modules)
-                                    .unwrap_or_else(|_| {
-                                        panic!(r"There were still outstanding Arc references to module_ids")
-                                    })
-                                    .into_inner()
-                                    .into_module_ids();
-
-                                let buf = to_parse_problem_report(
-                                    problem,
-                                    module_ids,
-                                    constrained_ident_ids,
-                                );
-                                return Err(LoadingProblem::FormattedReport(buf));
-                            }
-                            Err(e) => return Err(e),
-                        }
+                        return Err(e);
                     }
                 }
             }
-
-            // The msg_rx receiver closed unexpectedly before we finished solving everything
-            Err(LoadingProblem::MsgChannelDied)
         })
     }
     .unwrap()
@@ -1512,7 +1421,7 @@ fn worker_task_step<'a>(
                     // which will later result in more tasks being
                     // added. In that case, do nothing, and keep waiting
                     // until we receive a Shutdown message.
-                    if let Some(task) = find_task(&worker, injector, stealers) {
+                    if let Some(task) = find_task(worker, injector, stealers) {
                         let result =
                             run_task(task, worker_arena, src_dir, msg_tx.clone(), target_info);
 
