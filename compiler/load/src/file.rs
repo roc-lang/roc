@@ -1104,6 +1104,7 @@ fn load_single_threaded<'a>(
     let stealer = worker.stealer();
     let stealers = &[stealer];
 
+    // now we just manually interleave stepping the state "thread" and the worker "thread"
     loop {
         match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx) {
             Ok(ControlFlow::Break(done)) => return Ok(done),
@@ -1113,6 +1114,7 @@ fn load_single_threaded<'a>(
             Err(e) => return Err(e),
         }
 
+        // then check if the worker can step
         let control_flow = worker_task_step(
             arena,
             &worker,
@@ -1156,7 +1158,7 @@ fn state_thread_step<'a>(
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
 
-                    return Ok(ControlFlow::Break(LoadResult::TypeChecked(finish(
+                    let typechecked = finish(
                         state,
                         solved_subs,
                         exposed_values,
@@ -1164,7 +1166,9 @@ fn state_thread_step<'a>(
                         exposed_vars_by_symbol,
                         dep_idents,
                         documentation,
-                    ))));
+                    );
+
+                    Ok(ControlFlow::Break(LoadResult::TypeChecked(typechecked)))
                 }
                 Msg::FinishedAllSpecialization {
                     subs,
@@ -1173,20 +1177,20 @@ fn state_thread_step<'a>(
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
 
-                    return Ok(ControlFlow::Break(LoadResult::Monomorphized(
-                        finish_specialization(state, subs, exposed_to_host)?,
-                    )));
+                    let monomorphized = finish_specialization(state, subs, exposed_to_host)?;
+
+                    Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
                 Msg::FailedToReadFile { filename, error } => {
                     let buf = to_file_problem_report(&filename, error);
-                    return Err(LoadingProblem::FormattedReport(buf));
+                    Err(LoadingProblem::FormattedReport(buf))
                 }
 
                 Msg::FailedToParse(problem) => {
                     let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
                     let buf =
                         to_parse_problem_report(problem, module_ids, state.constrained_ident_ids);
-                    return Err(LoadingProblem::FormattedReport(buf));
+                    Err(LoadingProblem::FormattedReport(buf))
                 }
                 msg => {
                     // This is where most of the main thread's work gets done.
@@ -1218,7 +1222,7 @@ fn state_thread_step<'a>(
 
                             let buf =
                                 to_parse_problem_report(problem, module_ids, constrained_ident_ids);
-                            return Err(LoadingProblem::FormattedReport(buf));
+                            Err(LoadingProblem::FormattedReport(buf))
                         }
                         Err(e) => Err(e),
                     }
@@ -1227,7 +1231,7 @@ fn state_thread_step<'a>(
         }
         Err(err) => match err {
             crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(state)),
-            crossbeam::channel::TryRecvError::Disconnected => panic!(""),
+            crossbeam::channel::TryRecvError::Disconnected => Err(LoadingProblem::MsgChannelDied),
         },
     }
 }
