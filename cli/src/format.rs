@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::FormatMode;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_error_macros::{internal_error, user_error};
@@ -24,7 +25,7 @@ use roc_parse::{
 };
 use roc_region::all::{Loc, Region};
 
-pub fn format(files: std::vec::Vec<PathBuf>) {
+pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
     for file in files {
         let arena = Bump::new();
 
@@ -99,9 +100,22 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
                 unstable_2_file.display());
         }
 
-        // If all the checks above passed, actually write out the new file.
-        std::fs::write(&file, buf.as_str()).unwrap();
+        match mode {
+            FormatMode::CheckOnly => {
+                // If we notice that this file needs to be formatted, return early
+                if buf.as_str() != src {
+                    return Err("One or more files need to be reformatted.".to_string());
+                }
+            }
+
+            FormatMode::Format => {
+                // If all the checks above passed, actually write out the new file.
+                std::fs::write(&file, buf.as_str()).unwrap();
+            }
+        }
     }
+
+    Ok(())
 }
 
 #[derive(Debug, PartialEq)]
