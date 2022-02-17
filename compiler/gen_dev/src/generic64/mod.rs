@@ -11,6 +11,7 @@ use roc_target::TargetInfo;
 use std::marker::PhantomData;
 
 pub mod aarch64;
+mod storage;
 pub mod x86_64;
 
 const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
