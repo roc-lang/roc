@@ -1,6 +1,6 @@
 use crate::generic64::{Assembler, CallConv, RegTrait};
 use crate::Env;
-use bumpalo::collections::Vec;
+use bumpalo::{collections::Vec, Bump};
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
@@ -421,6 +421,29 @@ impl<
             }
         } else {
             internal_error!("Ran out of stack space");
+        }
+    }
+
+    pub fn push_used_caller_saved_regs_to_stack(&mut self, buf: &mut Vec<'a, u8>, arena: &'a Bump) {
+        let old_general_used_regs =
+            std::mem::replace(&mut self.general_used_regs, bumpalo::vec![in arena]);
+        for (reg, saved_sym) in old_general_used_regs.into_iter() {
+            if CC::general_caller_saved(&reg) {
+                self.general_free_regs.push(reg);
+                self.free_to_stack(buf, &saved_sym, General(reg));
+            } else {
+                self.general_used_regs.push((reg, saved_sym));
+            }
+        }
+        let old_float_used_regs =
+            std::mem::replace(&mut self.float_used_regs, bumpalo::vec![in arena]);
+        for (reg, saved_sym) in old_float_used_regs.into_iter() {
+            if CC::float_caller_saved(&reg) {
+                self.float_free_regs.push(reg);
+                self.free_to_stack(buf, &saved_sym, Float(reg));
+            } else {
+                self.float_used_regs.push((reg, saved_sym));
+            }
         }
     }
 }
