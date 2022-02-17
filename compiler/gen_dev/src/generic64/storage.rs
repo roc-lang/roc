@@ -21,7 +21,7 @@ enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum StackStorage<'a, GeneralReg: RegTrait, FloatReg: RegTrait> {
+enum StackStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     // Primitives are 8 bytes or less. That generally live in registers but can move stored on the stack.
     // Their data must always be 8 byte aligned and will be moved as a block.
     // They are never part of a struct, union, or more complex value.
@@ -31,23 +31,25 @@ enum StackStorage<'a, GeneralReg: RegTrait, FloatReg: RegTrait> {
         // Optional register also holding the value.
         reg: Option<RegStorage<GeneralReg, FloatReg>>,
     },
+    // Complex data (lists, unions, structs, str) stored on the stack.
+    // Note, this is also used for referencing a value within a struct/union.
+    // It has no alignment guarantees.
+    // When a primitive value is being loaded from this, it should be moved into a register.
     Complex {
         // Offset from the base pointer in bytes.
         base_offset: i32,
         // Size on the stack in bytes.
         size: u32,
-        // Values of this storage currently loaded into registers.
-        // This is stored in tuples of (offset from start of this storage, register).
-        // This save on constantly reloading a list pointer for example.
-        // TODO: add small vec optimization most of the time this should be 0 or 1 items.
-        refs: Vec<'a, (u32, RegStorage<GeneralReg, FloatReg>)>,
+        // TODO: investigate if storing a reg here for special values is worth it.
+        // For example, the ptr in list.get/list.set
+        // Instead, it would probably be better to change the incoming IR to load the pointer once and then use it multiple times.
     },
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Storage<'a, GeneralReg: RegTrait, FloatReg: RegTrait> {
+enum Storage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     Reg(RegStorage<GeneralReg, FloatReg>),
-    Stack(StackStorage<'a, GeneralReg, FloatReg>),
+    Stack(StackStorage<GeneralReg, FloatReg>),
     NoData,
 }
 
@@ -63,7 +65,7 @@ pub struct StorageManager<
     env: &'a Env<'a>,
     target_info: TargetInfo,
     // Data about where each symbol is stored.
-    symbol_storage_map: MutMap<Symbol, Storage<'a, GeneralReg, FloatReg>>,
+    symbol_storage_map: MutMap<Symbol, Storage<GeneralReg, FloatReg>>,
 
     // A map from child to parent storage.
     // In the case that subdata is still referenced from an overall structure,
@@ -345,7 +347,6 @@ impl<
             Stack(Complex {
                 base_offset,
                 size: struct_size,
-                refs: bumpalo::vec![in self.env.arena],
             }),
         );
 
@@ -455,32 +456,7 @@ impl<
             Stack(Primitive { reg: None, .. }) => {
                 internal_error!("Cannot free reg from symbol without a reg: {}", sym)
             }
-            Stack(Complex {
-                base_offset,
-                size,
-                mut refs,
-            }) => {
-                match refs
-                    .iter()
-                    .position(|(_, reg_storage)| *reg_storage == wanted_reg)
-                {
-                    Some(pos) => {
-                        refs.remove(pos);
-                        self.symbol_storage_map.insert(
-                            *sym,
-                            Stack(Complex {
-                                base_offset,
-                                size,
-                                refs,
-                            }),
-                        );
-                    }
-                    None => {
-                        internal_error!("Cannot free reg from symbol without a reg: {}", sym)
-                    }
-                }
-            }
-            NoData => {
+            NoData | Stack(Complex { .. }) => {
                 internal_error!("Cannot free reg from symbol without a reg: {}", sym)
             }
         }
