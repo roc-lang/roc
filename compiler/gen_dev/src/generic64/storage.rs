@@ -1,4 +1,5 @@
 use crate::generic64::{Assembler, CallConv, RegTrait};
+use crate::Env;
 use bumpalo::collections::Vec;
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
@@ -46,7 +47,7 @@ enum Storage<'a, GeneralReg: RegTrait, FloatReg: RegTrait> {
     Stack(StackStorage<'a, GeneralReg, FloatReg>),
 }
 
-struct StorageManager<
+pub struct StorageManager<
     'a,
     GeneralReg: RegTrait,
     FloatReg: RegTrait,
@@ -84,6 +85,31 @@ struct StorageManager<
     stack_size: u32,
 }
 
+pub fn new_storage_manager<
+    'a,
+    GeneralReg: RegTrait,
+    FloatReg: RegTrait,
+    ASM: Assembler<GeneralReg, FloatReg>,
+    CC: CallConv<GeneralReg, FloatReg>,
+>(
+    env: &'a Env,
+) -> StorageManager<'a, GeneralReg, FloatReg, ASM, CC> {
+    StorageManager {
+        phantom_asm: PhantomData,
+        phantom_cc: PhantomData,
+        symbol_storage_map: MutMap::default(),
+        reference_map: MutMap::default(),
+        general_free_regs: bumpalo::vec![in env.arena],
+        general_used_regs: bumpalo::vec![in env.arena],
+        general_used_callee_saved_regs: MutSet::default(),
+        float_free_regs: bumpalo::vec![in env.arena],
+        float_used_regs: bumpalo::vec![in env.arena],
+        float_used_callee_saved_regs: MutSet::default(),
+        free_stack_chunks: bumpalo::vec![in env.arena],
+        stack_size: 0,
+    }
+}
+
 impl<
         'a,
         FloatReg: RegTrait,
@@ -92,6 +118,23 @@ impl<
         CC: CallConv<GeneralReg, FloatReg>,
     > StorageManager<'a, GeneralReg, FloatReg, ASM, CC>
 {
+    pub fn reset(&mut self) {
+        self.symbol_storage_map.clear();
+        self.reference_map.clear();
+        self.general_used_callee_saved_regs.clear();
+        self.general_free_regs.clear();
+        self.general_used_regs.clear();
+        self.general_free_regs
+            .extend_from_slice(CC::GENERAL_DEFAULT_FREE_REGS);
+        self.float_used_callee_saved_regs.clear();
+        self.float_free_regs.clear();
+        self.float_used_regs.clear();
+        self.float_free_regs
+            .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
+        self.free_stack_chunks.clear();
+        self.stack_size = 0;
+    }
+
     // Get a general register from the free list.
     // Will free data to the stack if necessary to get the register.
     fn get_general_reg(&mut self, _buf: &mut Vec<'a, u8>) -> GeneralReg {
@@ -111,7 +154,7 @@ impl<
 
     // Claims a general reg for a specific symbol.
     // They symbol should not already have storage.
-    fn claim_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
+    pub fn claim_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
         debug_assert_eq!(
             self.symbol_storage_map.get(sym),
             None,
@@ -126,7 +169,7 @@ impl<
 
     // This claims a temporary register and enables is used in the passed in function.
     // Temporary registers are not safe across call instructions.
-    fn with_tmp_general_reg<F: FnOnce(&mut Self, &mut Vec<'a, u8>, GeneralReg)>(
+    pub fn with_tmp_general_reg<F: FnOnce(&mut Self, &mut Vec<'a, u8>, GeneralReg)>(
         &mut self,
         buf: &mut Vec<'a, u8>,
         callback: F,
@@ -140,7 +183,7 @@ impl<
     // The symbol must already be stored somewhere.
     // Will fail on values stored in float regs.
     // Will fail for values that don't fit in a single register.
-    fn to_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
+    pub fn to_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
         let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
             storage
         } else {

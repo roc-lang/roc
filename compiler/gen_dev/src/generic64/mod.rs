@@ -14,6 +14,8 @@ pub mod aarch64;
 mod storage;
 pub mod x86_64;
 
+use storage::StorageManager;
+
 const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
@@ -269,9 +271,11 @@ pub struct Backend64Bit<
     layout_map: MutMap<Symbol, Layout<'a>>,
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
 
-    symbol_storage_map: MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
     literal_map: MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>,
     join_map: MutMap<JoinPointId, u64>,
+
+    storage_manager: StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
+    symbol_storage_map: MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
 
     // This should probably be smarter than a vec.
     // There are certain registers we should always use first. With pushing and popping, this could get mixed.
@@ -331,6 +335,7 @@ pub fn new_backend_64bit<
         free_stack_chunks: bumpalo::vec![in env.arena],
         stack_size: 0,
         fn_call_stack_size: 0,
+        storage_manager: storage::new_storage_manager(env),
     }
 }
 
@@ -384,6 +389,7 @@ impl<
         self.float_free_regs
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
         self.helper_proc_symbols.clear();
+        self.storage_manager.reset();
     }
 
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)> {
