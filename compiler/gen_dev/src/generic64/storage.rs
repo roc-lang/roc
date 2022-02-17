@@ -1,4 +1,4 @@
-use crate::generic64::{CallConv, RegTrait};
+use crate::generic64::{Assembler, CallConv, RegTrait};
 use bumpalo::collections::Vec;
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
@@ -20,12 +20,10 @@ enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
 enum StackStorage<'a, GeneralReg: RegTrait, FloatReg: RegTrait> {
     // Small Values are 8 bytes or less.
     // They are used for smaller primitives and values that fit in single registers.
-    // Their data must always be 8 byte aligned.
+    // Their data must always be 8 byte aligned. An will be moved as a block.
     SmallValue {
         // Offset from the base pointer in bytes.
         base_offset: i32,
-        // Size on the stack in bytes.
-        size: u8,
         // Optional register also holding the value.
         reg: Option<RegStorage<GeneralReg, FloatReg>>,
     },
@@ -52,9 +50,11 @@ struct StorageManager<
     'a,
     GeneralReg: RegTrait,
     FloatReg: RegTrait,
+    ASM: Assembler<GeneralReg, FloatReg>,
     CC: CallConv<GeneralReg, FloatReg>,
 > {
     phantom_cc: PhantomData<CC>,
+    phantom_asm: PhantomData<ASM>,
     // Data about where each symbol is stored.
     symbol_storage_map: MutMap<Symbol, Storage<'a, GeneralReg, FloatReg>>,
 
@@ -84,12 +84,17 @@ struct StorageManager<
     stack_size: u32,
 }
 
-impl<'a, FloatReg: RegTrait, GeneralReg: RegTrait, CC: CallConv<GeneralReg, FloatReg>>
-    StorageManager<'a, GeneralReg, FloatReg, CC>
+impl<
+        'a,
+        FloatReg: RegTrait,
+        GeneralReg: RegTrait,
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg>,
+    > StorageManager<'a, GeneralReg, FloatReg, ASM, CC>
 {
     // Get a general register from the free list.
     // Will free data to the stack if necessary to get the register.
-    fn get_general_reg(&mut self) -> GeneralReg {
+    fn get_general_reg(&mut self, _buf: &mut Vec<'a, u8>) -> GeneralReg {
         if let Some(reg) = self.general_free_regs.pop() {
             if CC::general_callee_saved(&reg) {
                 self.general_used_callee_saved_regs.insert(reg);
@@ -106,14 +111,14 @@ impl<'a, FloatReg: RegTrait, GeneralReg: RegTrait, CC: CallConv<GeneralReg, Floa
 
     // Claims a general reg for a specific symbol.
     // They symbol should not already have storage.
-    fn claim_general_reg(&mut self, sym: &Symbol) -> GeneralReg {
+    fn claim_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
         debug_assert_eq!(
             self.symbol_storage_map.get(sym),
             None,
             "unknown symbol: {}",
             sym
         );
-        let reg = self.get_general_reg();
+        let reg = self.get_general_reg(buf);
         self.general_used_regs.push((reg, *sym));
         self.symbol_storage_map.insert(*sym, Reg(General(reg)));
         reg
@@ -121,9 +126,13 @@ impl<'a, FloatReg: RegTrait, GeneralReg: RegTrait, CC: CallConv<GeneralReg, Floa
 
     // This claims a temporary register and enables is used in the passed in function.
     // Temporary registers are not safe across call instructions.
-    fn with_tmp_general_reg<F: FnOnce(&mut Self, GeneralReg)>(&mut self, callback: F) {
-        let reg = self.get_general_reg();
-        callback(self, reg);
+    fn with_tmp_general_reg<F: FnOnce(&mut Self, &mut Vec<'a, u8>, GeneralReg)>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        callback: F,
+    ) {
+        let reg = self.get_general_reg(buf);
+        callback(self, buf, reg);
         self.general_free_regs.push(reg);
     }
 
@@ -131,7 +140,7 @@ impl<'a, FloatReg: RegTrait, GeneralReg: RegTrait, CC: CallConv<GeneralReg, Floa
     // The symbol must already be stored somewhere.
     // Will fail on values stored in float regs.
     // Will fail for values that don't fit in a single register.
-    fn to_general_reg(&mut self, sym: &Symbol) -> GeneralReg {
+    fn to_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
         let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
             storage
         } else {
@@ -142,7 +151,10 @@ impl<'a, FloatReg: RegTrait, GeneralReg: RegTrait, CC: CallConv<GeneralReg, Floa
             | Stack(SmallValue {
                 reg: Some(General(reg)),
                 ..
-            }) => reg,
+            }) => {
+                self.symbol_storage_map.insert(*sym, storage);
+                reg
+            }
             Reg(Float(_))
             | Stack(SmallValue {
                 reg: Some(Float(_)),
@@ -153,14 +165,22 @@ impl<'a, FloatReg: RegTrait, GeneralReg: RegTrait, CC: CallConv<GeneralReg, Floa
             Stack(SmallValue {
                 reg: None,
                 base_offset,
-                size,
             }) => {
                 debug_assert_eq!(
                     base_offset % 8,
                     0,
                     "Small values on the stack must be aligned to 8 bytes"
                 );
-                todo!("loading small value to a reg");
+                let reg = self.get_general_reg(buf);
+                ASM::mov_reg64_base32(buf, reg, base_offset);
+                self.symbol_storage_map.insert(
+                    *sym,
+                    Stack(SmallValue {
+                        base_offset,
+                        reg: Some(General(reg)),
+                    }),
+                );
+                reg
             }
             Stack(LargeValue { .. }) => {
                 internal_error!("Cannot load large values into general registers: {}", sym)
