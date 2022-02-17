@@ -1,4 +1,4 @@
-use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage, TARGET_INFO};
+use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage};
 use crate::{
     single_register_builtins, single_register_floats, single_register_integers, Relocation,
 };
@@ -8,6 +8,9 @@ use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
+use roc_target::TargetInfo;
+
+const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
 
 // Not sure exactly how I want to represent registers.
 // If we want max speed, we would likely make them structs that impl the same trait to avoid ifs.

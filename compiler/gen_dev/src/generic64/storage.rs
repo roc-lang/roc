@@ -1,9 +1,11 @@
 use crate::generic64::{Assembler, CallConv, RegTrait};
 use crate::Env;
-use bumpalo::{collections::Vec, Bump};
+use bumpalo::collections::Vec;
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
+use roc_mono::layout::Layout;
+use roc_target::TargetInfo;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -19,16 +21,16 @@ enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
 
 #[derive(Clone, Debug, PartialEq)]
 enum StackStorage<'a, GeneralReg: RegTrait, FloatReg: RegTrait> {
-    // Small Values are 8 bytes or less.
-    // They are used for smaller primitives and values that fit in single registers.
-    // Their data must always be 8 byte aligned. An will be moved as a block.
-    SmallValue {
+    // Primitives are 8 bytes or less. That generally live in registers but can move stored on the stack.
+    // Their data must always be 8 byte aligned and will be moved as a block.
+    // They are never part of a struct, union, or more complex value.
+    Primitive {
         // Offset from the base pointer in bytes.
         base_offset: i32,
         // Optional register also holding the value.
         reg: Option<RegStorage<GeneralReg, FloatReg>>,
     },
-    LargeValue {
+    Complex {
         // Offset from the base pointer in bytes.
         base_offset: i32,
         // Size on the stack in bytes.
@@ -45,6 +47,7 @@ enum StackStorage<'a, GeneralReg: RegTrait, FloatReg: RegTrait> {
 enum Storage<'a, GeneralReg: RegTrait, FloatReg: RegTrait> {
     Reg(RegStorage<GeneralReg, FloatReg>),
     Stack(StackStorage<'a, GeneralReg, FloatReg>),
+    NoData,
 }
 
 pub struct StorageManager<
@@ -56,6 +59,8 @@ pub struct StorageManager<
 > {
     phantom_cc: PhantomData<CC>,
     phantom_asm: PhantomData<ASM>,
+    env: &'a Env<'a>,
+    target_info: TargetInfo,
     // Data about where each symbol is stored.
     symbol_storage_map: MutMap<Symbol, Storage<'a, GeneralReg, FloatReg>>,
 
@@ -93,10 +98,13 @@ pub fn new_storage_manager<
     CC: CallConv<GeneralReg, FloatReg>,
 >(
     env: &'a Env,
+    target_info: TargetInfo,
 ) -> StorageManager<'a, GeneralReg, FloatReg, ASM, CC> {
     StorageManager {
         phantom_asm: PhantomData,
         phantom_cc: PhantomData,
+        env,
+        target_info,
         symbol_storage_map: MutMap::default(),
         reference_map: MutMap::default(),
         general_free_regs: bumpalo::vec![in env.arena],
@@ -225,7 +233,7 @@ impl<
         };
         match storage {
             Reg(General(reg))
-            | Stack(SmallValue {
+            | Stack(Primitive {
                 reg: Some(General(reg)),
                 ..
             }) => {
@@ -233,13 +241,13 @@ impl<
                 reg
             }
             Reg(Float(_))
-            | Stack(SmallValue {
+            | Stack(Primitive {
                 reg: Some(Float(_)),
                 ..
             }) => {
                 internal_error!("Cannot load floating point symbol into GeneralReg: {}", sym)
             }
-            Stack(SmallValue {
+            Stack(Primitive {
                 reg: None,
                 base_offset,
             }) => {
@@ -249,15 +257,18 @@ impl<
                 self.general_used_regs.push((reg, *sym));
                 self.symbol_storage_map.insert(
                     *sym,
-                    Stack(SmallValue {
+                    Stack(Primitive {
                         base_offset,
                         reg: Some(General(reg)),
                     }),
                 );
                 reg
             }
-            Stack(LargeValue { .. }) => {
+            Stack(Complex { .. }) => {
                 internal_error!("Cannot load large values into general registers: {}", sym)
+            }
+            NoData => {
+                internal_error!("Cannot load no data into general registers: {}", sym)
             }
         }
     }
@@ -274,7 +285,7 @@ impl<
         };
         match storage {
             Reg(Float(reg))
-            | Stack(SmallValue {
+            | Stack(Primitive {
                 reg: Some(Float(reg)),
                 ..
             }) => {
@@ -282,13 +293,13 @@ impl<
                 reg
             }
             Reg(General(_))
-            | Stack(SmallValue {
+            | Stack(Primitive {
                 reg: Some(General(_)),
                 ..
             }) => {
                 internal_error!("Cannot load general symbol into FloatReg: {}", sym)
             }
-            Stack(SmallValue {
+            Stack(Primitive {
                 reg: None,
                 base_offset,
             }) => {
@@ -298,16 +309,56 @@ impl<
                 self.float_used_regs.push((reg, *sym));
                 self.symbol_storage_map.insert(
                     *sym,
-                    Stack(SmallValue {
+                    Stack(Primitive {
                         base_offset,
                         reg: Some(Float(reg)),
                     }),
                 );
                 reg
             }
-            Stack(LargeValue { .. }) => {
+            Stack(Complex { .. }) => {
                 internal_error!("Cannot load large values into float registers: {}", sym)
             }
+            NoData => {
+                internal_error!("Cannot load no data into general registers: {}", sym)
+            }
+        }
+    }
+
+    // Creates a struct on the stack, moving the data in fields into the struct.
+    pub fn create_struct(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+        fields: &'a [Symbol],
+    ) {
+        let struct_size = layout.stack_size(self.target_info);
+        if struct_size == 0 {
+            self.symbol_storage_map.insert(*sym, NoData);
+            return;
+        }
+        let base_offset = self.claim_stack_size(struct_size);
+        self.symbol_storage_map.insert(
+            *sym,
+            Stack(Complex {
+                base_offset,
+                size: struct_size,
+                refs: bumpalo::vec![in self.env.arena],
+            }),
+        );
+
+        if let Layout::Struct(field_layouts) = layout {
+            let mut current_offset = base_offset;
+            for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
+                // self.copy_symbol_to_stack_offset(current_offset, field, field_layout);
+                let field_size = field_layout.stack_size(self.target_info);
+                current_offset += field_size as i32;
+            }
+        } else {
+            // This is a single element struct. Just copy the single field to the stack.
+            debug_assert_eq!(fields.len(), 1);
+            // self.copy_symbol_to_stack_offset(offset, &fields[0], layout);
         }
     }
 
@@ -333,29 +384,29 @@ impl<
                 }
                 self.symbol_storage_map.insert(
                     *sym,
-                    Stack(SmallValue {
+                    Stack(Primitive {
                         base_offset,
                         reg: None,
                     }),
                 );
             }
-            Stack(SmallValue {
+            Stack(Primitive {
                 reg: Some(reg_storage),
                 base_offset,
             }) => {
                 debug_assert_eq!(reg_storage, wanted_reg);
                 self.symbol_storage_map.insert(
                     *sym,
-                    Stack(SmallValue {
+                    Stack(Primitive {
                         base_offset,
                         reg: None,
                     }),
                 );
             }
-            Stack(SmallValue { reg: None, .. }) => {
+            Stack(Primitive { reg: None, .. }) => {
                 internal_error!("Cannot free reg from symbol without a reg: {}", sym)
             }
-            Stack(LargeValue {
+            Stack(Complex {
                 base_offset,
                 size,
                 mut refs,
@@ -368,7 +419,7 @@ impl<
                         refs.remove(pos);
                         self.symbol_storage_map.insert(
                             *sym,
-                            Stack(LargeValue {
+                            Stack(Complex {
                                 base_offset,
                                 size,
                                 refs,
@@ -380,6 +431,7 @@ impl<
                     }
                 }
             }
+            NoData => {}
         }
     }
 
@@ -424,9 +476,11 @@ impl<
         }
     }
 
-    pub fn push_used_caller_saved_regs_to_stack(&mut self, buf: &mut Vec<'a, u8>, arena: &'a Bump) {
-        let old_general_used_regs =
-            std::mem::replace(&mut self.general_used_regs, bumpalo::vec![in arena]);
+    pub fn push_used_caller_saved_regs_to_stack(&mut self, buf: &mut Vec<'a, u8>) {
+        let old_general_used_regs = std::mem::replace(
+            &mut self.general_used_regs,
+            bumpalo::vec![in self.env.arena],
+        );
         for (reg, saved_sym) in old_general_used_regs.into_iter() {
             if CC::general_caller_saved(&reg) {
                 self.general_free_regs.push(reg);
@@ -436,7 +490,7 @@ impl<
             }
         }
         let old_float_used_regs =
-            std::mem::replace(&mut self.float_used_regs, bumpalo::vec![in arena]);
+            std::mem::replace(&mut self.float_used_regs, bumpalo::vec![in self.env.arena]);
         for (reg, saved_sym) in old_float_used_regs.into_iter() {
             if CC::float_caller_saved(&reg) {
                 self.float_free_regs.push(reg);

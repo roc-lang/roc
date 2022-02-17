@@ -16,8 +16,6 @@ pub mod x86_64;
 
 use storage::StorageManager;
 
-const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
-
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
     const BASE_PTR_REG: GeneralReg;
     const STACK_PTR_REG: GeneralReg;
@@ -259,6 +257,7 @@ pub struct Backend64Bit<
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
+    target_info: TargetInfo,
     interns: &'a mut Interns,
     helper_proc_gen: CodeGenHelp<'a>,
     helper_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
@@ -307,14 +306,16 @@ pub fn new_backend_64bit<
     CC: CallConv<GeneralReg, FloatReg>,
 >(
     env: &'a Env,
+    target_info: TargetInfo,
     interns: &'a mut Interns,
 ) -> Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC> {
     Backend64Bit {
         phantom_asm: PhantomData,
         phantom_cc: PhantomData,
         env,
+        target_info,
         interns,
-        helper_proc_gen: CodeGenHelp::new(env.arena, TARGET_INFO, env.module_id),
+        helper_proc_gen: CodeGenHelp::new(env.arena, target_info, env.module_id),
         helper_proc_symbols: bumpalo::vec![in env.arena],
         proc_name: None,
         is_self_recursive: None,
@@ -335,7 +336,7 @@ pub fn new_backend_64bit<
         free_stack_chunks: bumpalo::vec![in env.arena],
         stack_size: 0,
         fn_call_stack_size: 0,
-        storage_manager: storage::new_storage_manager(env),
+        storage_manager: storage::new_storage_manager(env, target_info),
     }
 }
 
@@ -551,7 +552,7 @@ impl<
         }
         // Save used caller saved regs.
         self.storage_manager
-            .push_used_caller_saved_regs_to_stack(&mut self.buf, self.env.arena);
+            .push_used_caller_saved_regs_to_stack(&mut self.buf);
 
         // Put values in param regs or on top of the stack.
         let tmp_stack_size = CC::store_args(
@@ -576,24 +577,24 @@ impl<
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
             }
-            Layout::Builtin(Builtin::Str) => {
-                if CC::returns_via_arg_pointer(ret_layout) {
-                    // This will happen on windows, return via pointer here.
-                    todo!("FnCall: Returning strings via pointer");
-                } else {
-                    let offset = self.claim_stack_size(16);
-                    self.symbol_storage_map.insert(
-                        *dst,
-                        SymbolStorage::Base {
-                            offset,
-                            size: 16,
-                            owned: true,
-                        },
-                    );
-                    ASM::mov_base32_reg64(&mut self.buf, offset, CC::GENERAL_RETURN_REGS[0]);
-                    ASM::mov_base32_reg64(&mut self.buf, offset + 8, CC::GENERAL_RETURN_REGS[1]);
-                }
-            }
+            // Layout::Builtin(Builtin::Str) => {
+            //     if CC::returns_via_arg_pointer(ret_layout) {
+            //         // This will happen on windows, return via pointer here.
+            //         todo!("FnCall: Returning strings via pointer");
+            //     } else {
+            //         let offset = self.claim_stack_size(16);
+            //         self.symbol_storage_map.insert(
+            //             *dst,
+            //             SymbolStorage::Base {
+            //                 offset,
+            //                 size: 16,
+            //                 owned: true,
+            //             },
+            //         );
+            //         ASM::mov_base32_reg64(&mut self.buf, offset, CC::GENERAL_RETURN_REGS[0]);
+            //         ASM::mov_base32_reg64(&mut self.buf, offset + 8, CC::GENERAL_RETURN_REGS[1]);
+            //     }
+            // }
             Layout::Struct([]) => {
                 // Nothing needs to be done to load a returned empty struct.
             }
@@ -680,8 +681,11 @@ impl<
         // This section can essentially be seen as a sub function within the main function.
         // Thus we build using a new backend with some minor extra synchronization.
         {
-            let mut sub_backend =
-                new_backend_64bit::<GeneralReg, FloatReg, ASM, CC>(self.env, self.interns);
+            let mut sub_backend = new_backend_64bit::<GeneralReg, FloatReg, ASM, CC>(
+                self.env,
+                self.target_info,
+                self.interns,
+            );
             sub_backend.reset(
                 self.proc_name.as_ref().unwrap().clone(),
                 self.is_self_recursive.as_ref().unwrap().clone(),
@@ -764,7 +768,7 @@ impl<
         // Treat this like a function call, but with a jump instead of a call instruction at the end.
 
         self.storage_manager
-            .push_used_caller_saved_regs_to_stack(&mut self.buf, self.env.arena);
+            .push_used_caller_saved_regs_to_stack(&mut self.buf);
 
         let tmp_stack_size = CC::store_args(
             &mut self.buf,
@@ -1014,49 +1018,9 @@ impl<
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
-        let struct_size = layout.stack_size(TARGET_INFO);
-
-        if let Layout::Struct(field_layouts) = layout {
-            if struct_size > 0 {
-                let offset = self.claim_stack_size(struct_size);
-                self.symbol_storage_map.insert(
-                    *sym,
-                    SymbolStorage::Base {
-                        offset,
-                        size: struct_size,
-                        owned: true,
-                    },
-                );
-
-                let mut current_offset = offset;
-                for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
-                    self.copy_symbol_to_stack_offset(current_offset, field, field_layout);
-                    let field_size = field_layout.stack_size(TARGET_INFO);
-                    current_offset += field_size as i32;
-                }
-            } else {
-                self.symbol_storage_map.insert(
-                    *sym,
-                    SymbolStorage::Base {
-                        offset: 0,
-                        size: 0,
-                        owned: false,
-                    },
-                );
-            }
-        } else {
-            // This is a single element struct. Just copy the single field to the stack.
-            let offset = self.claim_stack_size(struct_size);
-            self.symbol_storage_map.insert(
-                *sym,
-                SymbolStorage::Base {
-                    offset,
-                    size: struct_size,
-                    owned: true,
-                },
-            );
-            self.copy_symbol_to_stack_offset(offset, &fields[0], layout);
-        }
+        return self
+            .storage_manager
+            .create_struct(&mut self.buf, sym, layout, fields);
     }
 
     fn load_struct_at_index(
@@ -1069,14 +1033,14 @@ impl<
         if let Some(SymbolStorage::Base { offset, .. }) = self.symbol_storage_map.get(structure) {
             let mut data_offset = *offset;
             for i in 0..index {
-                let field_size = field_layouts[i as usize].stack_size(TARGET_INFO);
+                let field_size = field_layouts[i as usize].stack_size(self.target_info);
                 data_offset += field_size as i32;
             }
             self.symbol_storage_map.insert(
                 *sym,
                 SymbolStorage::Base {
                     offset: data_offset,
-                    size: field_layouts[index as usize].stack_size(TARGET_INFO),
+                    size: field_layouts[index as usize].stack_size(self.target_info),
                     owned: false,
                 },
             );
@@ -1319,41 +1283,6 @@ impl<
         CC: CallConv<GeneralReg, FloatReg>,
     > Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
 {
-    /// claim_stack_size claims `amount` bytes from the stack.
-    /// This may be free space in the stack or result in increasing the stack size.
-    /// It returns base pointer relative offset of the new data.
-    fn claim_stack_size(&mut self, amount: u32) -> i32 {
-        debug_assert!(amount > 0);
-        if let Some(fitting_chunk) = self
-            .free_stack_chunks
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, size))| *size >= amount)
-            .min_by_key(|(_, (_, size))| size)
-        {
-            let (pos, (offset, size)) = fitting_chunk;
-            let (offset, size) = (*offset, *size);
-            if size == amount {
-                self.free_stack_chunks.remove(pos);
-                offset
-            } else {
-                let (prev_offset, prev_size) = self.free_stack_chunks[pos];
-                self.free_stack_chunks[pos] = (prev_offset + amount as i32, prev_size - amount);
-                prev_offset
-            }
-        } else if let Some(new_size) = self.stack_size.checked_add(amount) {
-            // Since stack size is u32, but the max offset is i32, if we pass i32 max, we have overflowed.
-            if new_size > i32::MAX as u32 {
-                internal_error!("Ran out of stack space");
-            } else {
-                self.stack_size = new_size;
-                -(self.stack_size as i32)
-            }
-        } else {
-            internal_error!("Ran out of stack space");
-        }
-    }
-
     fn copy_symbol_to_stack_offset(&mut self, to_offset: i32, sym: &Symbol, layout: &Layout<'a>) {
         match layout {
             Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
@@ -1374,10 +1303,10 @@ impl<
             //     // {
             //     //     debug_assert_eq!(
             //     //         *size,
-            //     //         layout.stack_size(TARGET_INFO),
+            //     //         layout.stack_size(self.target_info),
             //     //         "expected struct to have same size as data being stored in it"
             //     //     );
-            //     //     for i in 0..layout.stack_size(TARGET_INFO) as i32 {
+            //     //     for i in 0..layout.stack_size(self.target_info) as i32 {
             //     //         ASM::mov_reg64_base32(&mut self.buf, tmp_reg, from_offset + i);
             //     //         ASM::mov_base32_reg64(&mut self.buf, to_offset + i, tmp_reg);
             //     //     }
