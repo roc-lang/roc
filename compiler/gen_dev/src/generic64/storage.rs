@@ -173,6 +173,7 @@ impl<
                 );
                 let reg = self.get_general_reg(buf);
                 ASM::mov_reg64_base32(buf, reg, base_offset);
+                self.general_used_regs.push((reg, *sym));
                 self.symbol_storage_map.insert(
                     *sym,
                     Stack(SmallValue {
@@ -185,6 +186,119 @@ impl<
             Stack(LargeValue { .. }) => {
                 internal_error!("Cannot load large values into general registers: {}", sym)
             }
+        }
+    }
+
+    // Frees `wanted_reg` which is currently owned by `sym` by making sure the value is loaded on the stack.
+    fn free_to_stack(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        sym: &Symbol,
+        wanted_reg: RegStorage<GeneralReg, FloatReg>,
+    ) {
+        let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
+            storage
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
+        };
+        match storage {
+            Reg(reg_storage) => {
+                debug_assert_eq!(reg_storage, wanted_reg);
+                let base_offset = self.claim_stack_size(8);
+                match reg_storage {
+                    General(reg) => ASM::mov_base32_reg64(buf, base_offset, reg),
+                    Float(reg) => ASM::mov_base32_freg64(buf, base_offset, reg),
+                }
+                self.symbol_storage_map.insert(
+                    *sym,
+                    Stack(SmallValue {
+                        base_offset,
+                        reg: None,
+                    }),
+                );
+            }
+            Stack(SmallValue {
+                reg: Some(reg_storage),
+                base_offset,
+            }) => {
+                debug_assert_eq!(reg_storage, wanted_reg);
+                self.symbol_storage_map.insert(
+                    *sym,
+                    Stack(SmallValue {
+                        base_offset,
+                        reg: None,
+                    }),
+                );
+            }
+            Stack(SmallValue { reg: None, .. }) => {
+                internal_error!("Cannot free reg from symbol without a reg: {}", sym)
+            }
+            Stack(LargeValue {
+                base_offset,
+                size,
+                mut refs,
+            }) => {
+                match refs
+                    .iter()
+                    .position(|(_, reg_storage)| *reg_storage == wanted_reg)
+                {
+                    Some(pos) => {
+                        refs.remove(pos);
+                        self.symbol_storage_map.insert(
+                            *sym,
+                            Stack(LargeValue {
+                                base_offset,
+                                size,
+                                refs,
+                            }),
+                        );
+                    }
+                    None => {
+                        internal_error!("Cannot free reg from symbol without a reg: {}", sym)
+                    }
+                }
+            }
+        }
+    }
+
+    /// claim_stack_size claims `amount` bytes from the stack alignind to 8.
+    /// This may be free space in the stack or result in increasing the stack size.
+    /// It returns base pointer relative offset of the new data.
+    fn claim_stack_size(&mut self, amount: u32) -> i32 {
+        debug_assert!(amount > 0);
+        // round value to 8 byte alignment.
+        let amount = if amount % 8 != 0 {
+            amount + 8 - (amount % 8)
+        } else {
+            amount
+        };
+        if let Some(fitting_chunk) = self
+            .free_stack_chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, size))| *size >= amount)
+            .min_by_key(|(_, (_, size))| size)
+        {
+            let (pos, (offset, size)) = fitting_chunk;
+            let (offset, size) = (*offset, *size);
+            if size == amount {
+                self.free_stack_chunks.remove(pos);
+                offset
+            } else {
+                let (prev_offset, prev_size) = self.free_stack_chunks[pos];
+                self.free_stack_chunks[pos] = (prev_offset + amount as i32, prev_size - amount);
+                prev_offset
+            }
+        } else if let Some(new_size) = self.stack_size.checked_add(amount) {
+            // Since stack size is u32, but the max offset is i32, if we pass i32 max, we have overflowed.
+            if new_size > i32::MAX as u32 {
+                internal_error!("Ran out of stack space");
+            } else {
+                self.stack_size = new_size;
+                -(self.stack_size as i32)
+            }
+        } else {
+            internal_error!("Ran out of stack space");
         }
     }
 }
