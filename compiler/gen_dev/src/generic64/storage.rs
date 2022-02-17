@@ -137,16 +137,33 @@ impl<
 
     // Get a general register from the free list.
     // Will free data to the stack if necessary to get the register.
-    fn get_general_reg(&mut self, _buf: &mut Vec<'a, u8>) -> GeneralReg {
+    fn get_general_reg(&mut self, buf: &mut Vec<'a, u8>) -> GeneralReg {
         if let Some(reg) = self.general_free_regs.pop() {
             if CC::general_callee_saved(&reg) {
                 self.general_used_callee_saved_regs.insert(reg);
             }
             reg
         } else if !self.general_used_regs.is_empty() {
-            let (_reg, _sym) = self.general_used_regs.remove(0);
-            // self.free_to_stack(&sym);
-            todo!("freeing symbols to the stack");
+            let (reg, sym) = self.general_used_regs.remove(0);
+            self.free_to_stack(buf, &sym, General(reg));
+            reg
+        } else {
+            internal_error!("completely out of general purpose registers");
+        }
+    }
+
+    // Get a float register from the free list.
+    // Will free data to the stack if necessary to get the register.
+    fn get_float_reg(&mut self, buf: &mut Vec<'a, u8>) -> FloatReg {
+        if let Some(reg) = self.float_free_regs.pop() {
+            if CC::float_callee_saved(&reg) {
+                self.float_used_callee_saved_regs.insert(reg);
+            }
+            reg
+        } else if !self.float_used_regs.is_empty() {
+            let (reg, sym) = self.float_used_regs.remove(0);
+            self.free_to_stack(buf, &sym, Float(reg));
+            reg
         } else {
             internal_error!("completely out of general purpose registers");
         }
@@ -155,19 +172,24 @@ impl<
     // Claims a general reg for a specific symbol.
     // They symbol should not already have storage.
     pub fn claim_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
-        debug_assert_eq!(
-            self.symbol_storage_map.get(sym),
-            None,
-            "unknown symbol: {}",
-            sym
-        );
+        debug_assert_eq!(self.symbol_storage_map.get(sym), None);
         let reg = self.get_general_reg(buf);
         self.general_used_regs.push((reg, *sym));
         self.symbol_storage_map.insert(*sym, Reg(General(reg)));
         reg
     }
 
-    // This claims a temporary register and enables is used in the passed in function.
+    // Claims a float reg for a specific symbol.
+    // They symbol should not already have storage.
+    pub fn claim_float_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> FloatReg {
+        debug_assert_eq!(self.symbol_storage_map.get(sym), None);
+        let reg = self.get_float_reg(buf);
+        self.float_used_regs.push((reg, *sym));
+        self.symbol_storage_map.insert(*sym, Reg(Float(reg)));
+        reg
+    }
+
+    // This claims a temporary general register and enables is used in the passed in function.
     // Temporary registers are not safe across call instructions.
     pub fn with_tmp_general_reg<F: FnOnce(&mut Self, &mut Vec<'a, u8>, GeneralReg)>(
         &mut self,
@@ -177,6 +199,18 @@ impl<
         let reg = self.get_general_reg(buf);
         callback(self, buf, reg);
         self.general_free_regs.push(reg);
+    }
+
+    // This claims a temporary float register and enables is used in the passed in function.
+    // Temporary registers are not safe across call instructions.
+    pub fn with_tmp_float_reg<F: FnOnce(&mut Self, &mut Vec<'a, u8>, FloatReg)>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        callback: F,
+    ) {
+        let reg = self.get_float_reg(buf);
+        callback(self, buf, reg);
+        self.float_free_regs.push(reg);
     }
 
     // Loads a symbol into a general reg and returns that register.
@@ -209,11 +243,7 @@ impl<
                 reg: None,
                 base_offset,
             }) => {
-                debug_assert_eq!(
-                    base_offset % 8,
-                    0,
-                    "Small values on the stack must be aligned to 8 bytes"
-                );
+                debug_assert_eq!(base_offset % 8, 0);
                 let reg = self.get_general_reg(buf);
                 ASM::mov_reg64_base32(buf, reg, base_offset);
                 self.general_used_regs.push((reg, *sym));
@@ -228,6 +258,55 @@ impl<
             }
             Stack(LargeValue { .. }) => {
                 internal_error!("Cannot load large values into general registers: {}", sym)
+            }
+        }
+    }
+
+    // Loads a symbol into a float reg and returns that register.
+    // The symbol must already be stored somewhere.
+    // Will fail on values stored in general regs.
+    // Will fail for values that don't fit in a single register.
+    pub fn to_float_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> FloatReg {
+        let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
+            storage
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
+        };
+        match storage {
+            Reg(Float(reg))
+            | Stack(SmallValue {
+                reg: Some(Float(reg)),
+                ..
+            }) => {
+                self.symbol_storage_map.insert(*sym, storage);
+                reg
+            }
+            Reg(General(_))
+            | Stack(SmallValue {
+                reg: Some(General(_)),
+                ..
+            }) => {
+                internal_error!("Cannot load general symbol into FloatReg: {}", sym)
+            }
+            Stack(SmallValue {
+                reg: None,
+                base_offset,
+            }) => {
+                debug_assert_eq!(base_offset % 8, 0);
+                let reg = self.get_float_reg(buf);
+                ASM::mov_freg64_base32(buf, reg, base_offset);
+                self.float_used_regs.push((reg, *sym));
+                self.symbol_storage_map.insert(
+                    *sym,
+                    Stack(SmallValue {
+                        base_offset,
+                        reg: Some(Float(reg)),
+                    }),
+                );
+                reg
+            }
+            Stack(LargeValue { .. }) => {
+                internal_error!("Cannot load large values into float registers: {}", sym)
             }
         }
     }
