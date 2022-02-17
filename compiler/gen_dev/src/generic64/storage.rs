@@ -480,7 +480,9 @@ impl<
                     }
                 }
             }
-            NoData => {}
+            NoData => {
+                internal_error!("Cannot free reg from symbol without a reg: {}", sym)
+            }
         }
     }
 
