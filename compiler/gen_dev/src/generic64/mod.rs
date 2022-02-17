@@ -16,10 +16,11 @@ pub mod x86_64;
 
 // TODO: StorageManager is still not fully integrated.
 // General pieces needed:
-// - loading and Storing args iwht storage manager
+// - loading and Storing args into storage manager
 // - returning data (note: remove return struct send everything to CC)
 // - function call stack? (maybe can stay here)
 // - re-enabling some commented out things
+// - remove data that is duplicated here and in storage manager
 // - ensure storage map doesn't leak out of storage, try to make it clean and generic
 // - Look into Complex values on the stack and reference. They may not work well.
 // - look into fixing join to no longer use multiple backends???
@@ -1120,97 +1121,7 @@ impl<
     }
 
     fn free_symbol(&mut self, sym: &Symbol) {
-        match self.symbol_storage_map.remove(sym) {
-            Some(
-                SymbolStorage::Base {
-                    offset,
-                    size,
-                    owned: true,
-                }
-                | SymbolStorage::BaseAndGeneralReg {
-                    offset,
-                    size,
-                    owned: true,
-                    ..
-                }
-                | SymbolStorage::BaseAndFloatReg {
-                    offset,
-                    size,
-                    owned: true,
-                    ..
-                },
-            ) => {
-                let loc = (offset, size);
-                // Note: this position current points to the offset following the specified location.
-                // If loc was inserted at this position, it would shift the data at this position over by 1.
-                let pos = self
-                    .free_stack_chunks
-                    .binary_search(&loc)
-                    .unwrap_or_else(|e| e);
-
-                // Check for overlap with previous and next free chunk.
-                let merge_with_prev = if pos > 0 {
-                    if let Some((prev_offset, prev_size)) = self.free_stack_chunks.get(pos - 1) {
-                        let prev_end = *prev_offset + *prev_size as i32;
-                        if prev_end > offset {
-                            internal_error!("Double free? A previously freed stack location overlaps with the currently freed stack location.");
-                        }
-                        prev_end == offset
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-                let merge_with_next = if let Some((next_offset, _)) =
-                    self.free_stack_chunks.get(pos)
-                {
-                    let current_end = offset + size as i32;
-                    if current_end > *next_offset {
-                        internal_error!("Double free? A previously freed stack location overlaps with the currently freed stack location.");
-                    }
-                    current_end == *next_offset
-                } else {
-                    false
-                };
-
-                match (merge_with_prev, merge_with_next) {
-                    (true, true) => {
-                        let (prev_offset, prev_size) = self.free_stack_chunks[pos - 1];
-                        let (_, next_size) = self.free_stack_chunks[pos];
-                        self.free_stack_chunks[pos - 1] =
-                            (prev_offset, prev_size + size + next_size);
-                        self.free_stack_chunks.remove(pos);
-                    }
-                    (true, false) => {
-                        let (prev_offset, prev_size) = self.free_stack_chunks[pos - 1];
-                        self.free_stack_chunks[pos - 1] = (prev_offset, prev_size + size);
-                    }
-                    (false, true) => {
-                        let (_, next_size) = self.free_stack_chunks[pos];
-                        self.free_stack_chunks[pos] = (offset, next_size + size);
-                    }
-                    (false, false) => self.free_stack_chunks.insert(pos, loc),
-                }
-            }
-            Some(_) | None => {}
-        }
-        for i in 0..self.general_used_regs.len() {
-            let (reg, saved_sym) = self.general_used_regs[i];
-            if saved_sym == *sym {
-                self.general_free_regs.push(reg);
-                self.general_used_regs.remove(i);
-                break;
-            }
-        }
-        for i in 0..self.float_used_regs.len() {
-            let (reg, saved_sym) = self.float_used_regs[i];
-            if saved_sym == *sym {
-                self.float_free_regs.push(reg);
-                self.float_used_regs.remove(i);
-                break;
-            }
-        }
+        self.storage_manager.free_symbol(sym);
     }
 
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>) {

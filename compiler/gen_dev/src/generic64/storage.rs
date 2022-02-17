@@ -527,6 +527,99 @@ impl<
         }
     }
 
+    pub fn free_symbol(&mut self, sym: &Symbol) {
+        let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
+            storage
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
+        };
+        let rc_sym = if let Some(rc_sym) = self.reference_map.remove(sym) {
+            rc_sym
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
+        };
+        match storage {
+            // Free stack chunck if this is the last reference to the chunk.
+            Stack(Primitive { base_offset, .. }) if Rc::strong_count(&rc_sym) == 1 => {
+                self.free_stack_chunk(base_offset, 8);
+            }
+            Stack(Complex {
+                base_offset, size, ..
+            }) if Rc::strong_count(&rc_sym) == 1 => {
+                self.free_stack_chunk(base_offset, size);
+            }
+            _ => {}
+        }
+        for i in 0..self.general_used_regs.len() {
+            let (reg, saved_sym) = self.general_used_regs[i];
+            if saved_sym == *sym {
+                self.general_free_regs.push(reg);
+                self.general_used_regs.remove(i);
+                break;
+            }
+        }
+        for i in 0..self.float_used_regs.len() {
+            let (reg, saved_sym) = self.float_used_regs[i];
+            if saved_sym == *sym {
+                self.float_free_regs.push(reg);
+                self.float_used_regs.remove(i);
+                break;
+            }
+        }
+    }
+
+    fn free_stack_chunk(&mut self, base_offset: i32, size: u32) {
+        let loc = (base_offset, size);
+        // Note: this position current points to the offset following the specified location.
+        // If loc was inserted at this position, it would shift the data at this position over by 1.
+        let pos = self
+            .free_stack_chunks
+            .binary_search(&loc)
+            .unwrap_or_else(|e| e);
+
+        // Check for overlap with previous and next free chunk.
+        let merge_with_prev = if pos > 0 {
+            if let Some((prev_offset, prev_size)) = self.free_stack_chunks.get(pos - 1) {
+                let prev_end = *prev_offset + *prev_size as i32;
+                if prev_end > base_offset {
+                    internal_error!("Double free? A previously freed stack location overlaps with the currently freed stack location.");
+                }
+                prev_end == base_offset
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        let merge_with_next = if let Some((next_offset, _)) = self.free_stack_chunks.get(pos) {
+            let current_end = base_offset + size as i32;
+            if current_end > *next_offset {
+                internal_error!("Double free? A previously freed stack location overlaps with the currently freed stack location.");
+            }
+            current_end == *next_offset
+        } else {
+            false
+        };
+
+        match (merge_with_prev, merge_with_next) {
+            (true, true) => {
+                let (prev_offset, prev_size) = self.free_stack_chunks[pos - 1];
+                let (_, next_size) = self.free_stack_chunks[pos];
+                self.free_stack_chunks[pos - 1] = (prev_offset, prev_size + size + next_size);
+                self.free_stack_chunks.remove(pos);
+            }
+            (true, false) => {
+                let (prev_offset, prev_size) = self.free_stack_chunks[pos - 1];
+                self.free_stack_chunks[pos - 1] = (prev_offset, prev_size + size);
+            }
+            (false, true) => {
+                let (_, next_size) = self.free_stack_chunks[pos];
+                self.free_stack_chunks[pos] = (base_offset, next_size + size);
+            }
+            (false, false) => self.free_stack_chunks.insert(pos, loc),
+        }
+    }
+
     pub fn push_used_caller_saved_regs_to_stack(&mut self, buf: &mut Vec<'a, u8>) {
         let old_general_used_regs = std::mem::replace(
             &mut self.general_used_regs,
