@@ -14,6 +14,15 @@ pub mod aarch64;
 mod storage;
 pub mod x86_64;
 
+// TODO: StorageManager is still not fully integrated.
+// General pieces needed:
+// - loading and Storing args iwht storage manager
+// - returning data (note: remove return struct send everything to CC)
+// - function call stack? (maybe can stay here)
+// - re-enabling some commented out things
+// - ensure storage map doesn't leak out of storage, try to make it clean and generic
+// - Look into Complex values on the stack and reference. They may not work well.
+// - look into fixing join to no longer use multiple backends???
 use storage::StorageManager;
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
