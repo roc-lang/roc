@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use RegStorage::*;
+use StackStorage::*;
 use Storage::*;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -16,20 +17,29 @@ enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct StackStorage<'a, GeneralReg: RegTrait, FloatReg: RegTrait> {
-    // The parent of this stack storage.
-    // If the data is owned, there is none.
-    // If this is nested in another stack storage, it will have a parent.
-    parent: Option<Rc<StackStorage<'a, GeneralReg, FloatReg>>>,
-    // Offset from the base pointer in bytes.
-    base_offset: i32,
-    // Size on the stack in bytes.
-    size: u32,
-    // Values of this storage currently loaded into registers.
-    // This is stored in tuples of (offset from start of this storage, register).
-    // This save on constantly reloading a list pointer for example.
-    // TODO: add small vec optimization most of the time this should be 0 or 1 items.
-    refs: Vec<'a, (u32, RegStorage<GeneralReg, FloatReg>)>,
+enum StackStorage<'a, GeneralReg: RegTrait, FloatReg: RegTrait> {
+    // Small Values are 8 bytes or less.
+    // They are used for smaller primitives and values that fit in single registers.
+    // Their data must always be 8 byte aligned.
+    SmallValue {
+        // Offset from the base pointer in bytes.
+        base_offset: i32,
+        // Size on the stack in bytes.
+        size: u8,
+        // Optional register also holding the value.
+        reg: Option<RegStorage<GeneralReg, FloatReg>>,
+    },
+    LargeValue {
+        // Offset from the base pointer in bytes.
+        base_offset: i32,
+        // Size on the stack in bytes.
+        size: u32,
+        // Values of this storage currently loaded into registers.
+        // This is stored in tuples of (offset from start of this storage, register).
+        // This save on constantly reloading a list pointer for example.
+        // TODO: add small vec optimization most of the time this should be 0 or 1 items.
+        refs: Vec<'a, (u32, RegStorage<GeneralReg, FloatReg>)>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -45,7 +55,15 @@ struct StorageManager<
     CC: CallConv<GeneralReg, FloatReg>,
 > {
     phantom_cc: PhantomData<CC>,
-    symbol_storage_map: MutMap<Symbol, Rc<Storage<'a, GeneralReg, FloatReg>>>,
+    // Data about where each symbol is stored.
+    symbol_storage_map: MutMap<Symbol, Storage<'a, GeneralReg, FloatReg>>,
+
+    // A map from child to parent storage.
+    // In the case that subdata is still referenced from an overall structure,
+    // We can't free the entire structure until the subdata is no longer needed.
+    // If a symbol has no parent, it points to itself.
+    // This in only used for data on the stack.
+    reference_map: MutMap<Symbol, Rc<Symbol>>,
 
     // This should probably be smarter than a vec.
     // There are certain registers we should always use first. With pushing and popping, this could get mixed.
@@ -78,9 +96,9 @@ impl<'a, FloatReg: RegTrait, GeneralReg: RegTrait, CC: CallConv<GeneralReg, Floa
             }
             reg
         } else if !self.general_used_regs.is_empty() {
-            let (reg, sym) = self.general_used_regs.remove(0);
+            let (_reg, _sym) = self.general_used_regs.remove(0);
             // self.free_to_stack(&sym);
-            reg
+            todo!("freeing symbols to the stack");
         } else {
             internal_error!("completely out of general purpose registers");
         }
@@ -89,11 +107,15 @@ impl<'a, FloatReg: RegTrait, GeneralReg: RegTrait, CC: CallConv<GeneralReg, Floa
     // Claims a general reg for a specific symbol.
     // They symbol should not already have storage.
     fn claim_general_reg(&mut self, sym: &Symbol) -> GeneralReg {
-        debug_assert_eq!(self.symbol_storage_map.get(sym), None);
+        debug_assert_eq!(
+            self.symbol_storage_map.get(sym),
+            None,
+            "unknown symbol: {}",
+            sym
+        );
         let reg = self.get_general_reg();
         self.general_used_regs.push((reg, *sym));
-        self.symbol_storage_map
-            .insert(*sym, Rc::new(Reg(General(reg))));
+        self.symbol_storage_map.insert(*sym, Reg(General(reg)));
         reg
     }
 
@@ -103,5 +125,46 @@ impl<'a, FloatReg: RegTrait, GeneralReg: RegTrait, CC: CallConv<GeneralReg, Floa
         let reg = self.get_general_reg();
         callback(self, reg);
         self.general_free_regs.push(reg);
+    }
+
+    // Loads a symbol into a general reg and returns that register.
+    // The symbol must already be stored somewhere.
+    // Will fail on values stored in float regs.
+    // Will fail for values that don't fit in a single register.
+    fn to_general_reg(&mut self, sym: &Symbol) -> GeneralReg {
+        let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
+            storage
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
+        };
+        match storage {
+            Reg(General(reg))
+            | Stack(SmallValue {
+                reg: Some(General(reg)),
+                ..
+            }) => reg,
+            Reg(Float(_))
+            | Stack(SmallValue {
+                reg: Some(Float(_)),
+                ..
+            }) => {
+                internal_error!("Cannot load floating point symbol into GeneralReg: {}", sym)
+            }
+            Stack(SmallValue {
+                reg: None,
+                base_offset,
+                size,
+            }) => {
+                debug_assert_eq!(
+                    base_offset % 8,
+                    0,
+                    "Small values on the stack must be aligned to 8 bytes"
+                );
+                todo!("loading small value to a reg");
+            }
+            Stack(LargeValue { .. }) => {
+                internal_error!("Cannot load large values into general registers: {}", sym)
+            }
+        }
     }
 }
