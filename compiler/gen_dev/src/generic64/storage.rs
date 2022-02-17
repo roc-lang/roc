@@ -6,6 +6,9 @@ use roc_module::symbol::Symbol;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use RegStorage::*;
+use Storage::*;
+
 #[derive(Clone, Debug, PartialEq)]
 enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     General(GeneralReg),
@@ -66,10 +69,10 @@ struct StorageManager<
 impl<'a, FloatReg: RegTrait, GeneralReg: RegTrait, CC: CallConv<GeneralReg, FloatReg>>
     StorageManager<'a, GeneralReg, FloatReg, CC>
 {
-    // This claims a temporary register and enables is used in the passed in function.
-    // Temporary registers are not safe across call instructions.
-    fn with_tmp_general_reg<F: FnOnce(&mut Self, GeneralReg)>(&mut self, callback: F) {
-        let reg = if let Some(reg) = self.general_free_regs.pop() {
+    // Get a general register from the free list.
+    // Will free data to the stack if necessary to get the register.
+    fn get_general_reg(&mut self) -> GeneralReg {
+        if let Some(reg) = self.general_free_regs.pop() {
             if CC::general_callee_saved(&reg) {
                 self.general_used_callee_saved_regs.insert(reg);
             }
@@ -80,7 +83,24 @@ impl<'a, FloatReg: RegTrait, GeneralReg: RegTrait, CC: CallConv<GeneralReg, Floa
             reg
         } else {
             internal_error!("completely out of general purpose registers");
-        };
+        }
+    }
+
+    // Claims a general reg for a specific symbol.
+    // They symbol should not already have storage.
+    fn claim_general_reg(&mut self, sym: &Symbol) -> GeneralReg {
+        debug_assert_eq!(self.symbol_storage_map.get(sym), None);
+        let reg = self.get_general_reg();
+        self.general_used_regs.push((reg, *sym));
+        self.symbol_storage_map
+            .insert(*sym, Rc::new(Reg(General(reg))));
+        reg
+    }
+
+    // This claims a temporary register and enables is used in the passed in function.
+    // Temporary registers are not safe across call instructions.
+    fn with_tmp_general_reg<F: FnOnce(&mut Self, GeneralReg)>(&mut self, callback: F) {
+        let reg = self.get_general_reg();
         callback(self, reg);
         self.general_free_regs.push(reg);
     }
