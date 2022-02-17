@@ -1283,42 +1283,6 @@ impl<
         CC: CallConv<GeneralReg, FloatReg>,
     > Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
 {
-    fn copy_symbol_to_stack_offset(&mut self, to_offset: i32, sym: &Symbol, layout: &Layout<'a>) {
-        match layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
-                let reg = self.storage_manager.load_to_general_reg(&mut self.buf, sym);
-                ASM::mov_base32_reg64(&mut self.buf, to_offset, reg);
-            }
-            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                let reg = self.storage_manager.load_to_float_reg(&mut self.buf, sym);
-                ASM::mov_base32_freg64(&mut self.buf, to_offset, reg);
-            }
-            // Layout::Struct(_) if layout.safe_to_memcpy() => {
-            //     // self.storage_manager.with_tmp_float_reg(&mut self.buf, |buf, storage, )
-            //     // if let Some(SymbolStorage::Base {
-            //     //     offset: from_offset,
-            //     //     size,
-            //     //     ..
-            //     // }) = self.symbol_storage_map.get(sym)
-            //     // {
-            //     //     debug_assert_eq!(
-            //     //         *size,
-            //     //         layout.stack_size(self.target_info),
-            //     //         "expected struct to have same size as data being stored in it"
-            //     //     );
-            //     //     for i in 0..layout.stack_size(self.target_info) as i32 {
-            //     //         ASM::mov_reg64_base32(&mut self.buf, tmp_reg, from_offset + i);
-            //     //         ASM::mov_base32_reg64(&mut self.buf, to_offset + i, tmp_reg);
-            //     //     }
-            //     todo!()
-            //     } else {
-            //         internal_error!("unknown struct: {:?}", sym);
-            //     }
-            // }
-            x => todo!("copying data to the stack with layout, {:?}", x),
-        }
-    }
-
     // Updates a jump instruction to a new offset and returns the number of bytes written.
     fn update_jmp_imm32_offset(
         &mut self,

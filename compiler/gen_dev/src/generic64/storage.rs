@@ -1,10 +1,11 @@
 use crate::generic64::{Assembler, CallConv, RegTrait};
 use crate::Env;
 use bumpalo::collections::Vec;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::Layout;
+use roc_mono::layout::{Builtin, Layout};
 use roc_target::TargetInfo;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -351,14 +352,62 @@ impl<
         if let Layout::Struct(field_layouts) = layout {
             let mut current_offset = base_offset;
             for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
-                // self.copy_symbol_to_stack_offset(current_offset, field, field_layout);
+                self.copy_symbol_to_stack_offset(buf, current_offset, field, field_layout);
                 let field_size = field_layout.stack_size(self.target_info);
                 current_offset += field_size as i32;
             }
         } else {
             // This is a single element struct. Just copy the single field to the stack.
             debug_assert_eq!(fields.len(), 1);
-            // self.copy_symbol_to_stack_offset(offset, &fields[0], layout);
+            self.copy_symbol_to_stack_offset(buf, base_offset, &fields[0], layout);
+        }
+    }
+
+    // Copies a symbol to the specified stack offset. This is used for things like filling structs.
+    // The offset is not guarenteed to be perfectly aligned, it follows Roc's alignment plan.
+    // This means that, for example 2 I32s might be back to back on the stack.
+    // Always interact with the stack using aligned 64bit movement.
+    fn copy_symbol_to_stack_offset(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        to_offset: i32,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+    ) {
+        match layout {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+                debug_assert_eq!(to_offset % 8, 0);
+                let reg = self.load_to_general_reg(buf, sym);
+                ASM::mov_base32_reg64(buf, to_offset, reg);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                debug_assert_eq!(to_offset % 8, 0);
+                let reg = self.load_to_float_reg(buf, sym);
+                ASM::mov_base32_freg64(buf, to_offset, reg);
+            }
+            // Layout::Struct(_) if layout.safe_to_memcpy() => {
+            //     // self.storage_manager.with_tmp_float_reg(&mut self.buf, |buf, storage, )
+            //     // if let Some(SymbolStorage::Base {
+            //     //     offset: from_offset,
+            //     //     size,
+            //     //     ..
+            //     // }) = self.symbol_storage_map.get(sym)
+            //     // {
+            //     //     debug_assert_eq!(
+            //     //         *size,
+            //     //         layout.stack_size(self.target_info),
+            //     //         "expected struct to have same size as data being stored in it"
+            //     //     );
+            //     //     for i in 0..layout.stack_size(self.target_info) as i32 {
+            //     //         ASM::mov_reg64_base32(&mut self.buf, tmp_reg, from_offset + i);
+            //     //         ASM::mov_base32_reg64(&mut self.buf, to_offset + i, tmp_reg);
+            //     //     }
+            //     todo!()
+            //     } else {
+            //         internal_error!("unknown struct: {:?}", sym);
+            //     }
+            // }
+            x => todo!("copying data to the stack with layout, {:?}", x),
         }
     }
 
