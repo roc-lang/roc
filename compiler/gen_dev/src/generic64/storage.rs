@@ -217,7 +217,7 @@ impl<
     // The symbol must already be stored somewhere.
     // Will fail on values stored in float regs.
     // Will fail for values that don't fit in a single register.
-    pub fn to_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
+    pub fn load_to_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
         let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
             storage
         } else {
@@ -266,7 +266,7 @@ impl<
     // The symbol must already be stored somewhere.
     // Will fail on values stored in general regs.
     // Will fail for values that don't fit in a single register.
-    pub fn to_float_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> FloatReg {
+    pub fn load_to_float_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> FloatReg {
         let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
             storage
         } else {
