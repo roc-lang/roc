@@ -42,7 +42,7 @@ struct StorageManager<
     CC: CallConv<GeneralReg, FloatReg>,
 > {
     phantom_cc: PhantomData<CC>,
-    symbol_storage_map: MutMap<Symbol, Storage<'a, GeneralReg, FloatReg>>,
+    symbol_storage_map: MutMap<Symbol, Rc<Storage<'a, GeneralReg, FloatReg>>>,
 
     // This should probably be smarter than a vec.
     // There are certain registers we should always use first. With pushing and popping, this could get mixed.
