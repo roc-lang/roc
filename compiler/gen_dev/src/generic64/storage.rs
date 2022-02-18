@@ -294,6 +294,17 @@ impl<
                 );
                 reg
             }
+            Stack(ReferencedPrimitive { base_offset, size })
+                if base_offset % 8 == 0 && size == 8 =>
+            {
+                // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
+                let reg = self.get_general_reg(buf);
+                ASM::mov_reg64_base32(buf, reg, base_offset);
+                self.general_used_regs.push((reg, *sym));
+                self.symbol_storage_map.insert(*sym, Reg(General(reg)));
+                self.free_reference(sym);
+                reg
+            }
             Stack(ReferencedPrimitive { .. }) => {
                 todo!("loading referenced primitives")
             }
@@ -349,6 +360,17 @@ impl<
                 );
                 reg
             }
+            Stack(ReferencedPrimitive { base_offset, size })
+                if base_offset % 8 == 0 && size == 8 =>
+            {
+                // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
+                let reg = self.get_float_reg(buf);
+                ASM::mov_freg64_base32(buf, reg, base_offset);
+                self.float_used_regs.push((reg, *sym));
+                self.symbol_storage_map.insert(*sym, Reg(Float(reg)));
+                self.free_reference(sym);
+                reg
+            }
             Stack(ReferencedPrimitive { .. }) => {
                 todo!("loading referenced primitives")
             }
@@ -402,6 +424,12 @@ impl<
                 debug_assert_eq!(base_offset % 8, 0);
                 ASM::mov_reg64_base32(buf, reg, *base_offset);
             }
+            Stack(ReferencedPrimitive { base_offset, size })
+                if base_offset % 8 == 0 && *size == 8 =>
+            {
+                // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
+                ASM::mov_reg64_base32(buf, reg, *base_offset);
+            }
             Stack(ReferencedPrimitive { .. }) => {
                 todo!("loading referenced primitives")
             }
@@ -448,6 +476,12 @@ impl<
                 base_offset,
             }) => {
                 debug_assert_eq!(base_offset % 8, 0);
+                ASM::mov_freg64_base32(buf, reg, *base_offset);
+            }
+            Stack(ReferencedPrimitive { base_offset, size })
+                if base_offset % 8 == 0 && *size == 8 =>
+            {
+                // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
                 ASM::mov_freg64_base32(buf, reg, *base_offset);
             }
             Stack(ReferencedPrimitive { .. }) => {
@@ -766,14 +800,7 @@ impl<
                 self.free_stack_chunk(base_offset, 8);
             }
             Stack(Complex { .. } | ReferencedPrimitive { .. }) => {
-                let owned_data = if let Some(owned_data) = self.allocation_map.remove(sym) {
-                    owned_data
-                } else {
-                    internal_error!("Unknown symbol: {}", sym);
-                };
-                if Rc::strong_count(&owned_data) == 1 {
-                    self.free_stack_chunk(owned_data.0, owned_data.1);
-                }
+                self.free_reference(sym);
             }
             _ => {}
         }
@@ -792,6 +819,18 @@ impl<
                 self.float_used_regs.remove(i);
                 break;
             }
+        }
+    }
+
+    // Frees an reference and release an allocation if it is no longer used.
+    fn free_reference(&mut self, sym: &Symbol) {
+        let owned_data = if let Some(owned_data) = self.allocation_map.remove(sym) {
+            owned_data
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
+        };
+        if Rc::strong_count(&owned_data) == 1 {
+            self.free_stack_chunk(owned_data.0, owned_data.1);
         }
     }
 
