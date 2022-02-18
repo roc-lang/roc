@@ -695,7 +695,7 @@ impl<
             }
             _ => {
                 internal_error!(
-                    "Data no on the stack for sym ({}) with storage ({:?})",
+                    "Data not on the stack for sym ({}) with storage ({:?})",
                     sym,
                     storage
                 )
