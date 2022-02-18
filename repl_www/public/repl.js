@@ -88,8 +88,8 @@ async function js_create_app(wasm_module_bytes) {
 // Call the main function of the app, via the test wrapper
 // Cache the result and return the size of the app's memory
 function js_run_app() {
-  const { run, memory } = repl.app.exports;
-  const addr = run();
+  const { wrapper, memory } = repl.app.exports;
+  const addr = wrapper();
   const { buffer } = memory;
   repl.result = { addr, buffer };
 
