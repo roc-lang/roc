@@ -243,7 +243,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                         todo!("loading lists and strings args on the stack");
                     }
                 }
-                Layout::Struct(&[]) => {}
+                x if x.stack_size(TARGET_INFO) == 0 => {}
                 x => {
                     todo!("Loading args with layout {:?}", x);
                 }
@@ -341,7 +341,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                         todo!("calling functions with strings on the stack");
                     }
                 }
-                Layout::Struct(&[]) => {}
+                x if x.stack_size(TARGET_INFO) == 0 => {}
                 x => {
                     todo!("calling with arg type, {:?}", x);
                 }
@@ -366,7 +366,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            Layout::Struct([]) => {}
             Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
                 let (base_offset, _size) = storage_manager.stack_offset_and_size(sym);
                 debug_assert_eq!(base_offset % 8, 0);
@@ -377,6 +376,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                     base_offset + 8,
                 );
             }
+            x if x.stack_size(TARGET_INFO) == 0 => {}
             x => todo!("returning complex type, {:?}", x),
         }
     }
@@ -397,12 +397,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            Layout::Struct([]) => {}
             Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
                 let offset = storage_manager.claim_stack_area(sym, 16);
                 X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
                 X86_64Assembler::mov_base32_reg64(buf, offset + 8, Self::GENERAL_RETURN_REGS[1]);
             }
+            x if x.stack_size(TARGET_INFO) == 0 => {}
             x => todo!("receiving complex return type, {:?}", x),
         }
     }
@@ -565,7 +565,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         // I think this just needs to be passed on the stack, so not a huge deal.
                         todo!("Passing str args with Windows fast call");
                     }
-                    Layout::Struct(&[]) => {}
+                    x if x.stack_size(TARGET_INFO) == 0 => {}
                     x => {
                         todo!("Loading args with layout {:?}", x);
                     }
@@ -655,7 +655,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                     // I think this just needs to be passed on the stack, so not a huge deal.
                     todo!("Passing str args with Windows fast call");
                 }
-                Layout::Struct(&[]) => {}
+                x if x.stack_size(TARGET_INFO) == 0 => {}
                 x => {
                     todo!("calling with arg type, {:?}", x);
                 }

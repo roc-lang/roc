@@ -764,17 +764,22 @@ impl<
         self.fn_call_stack_size = max(self.fn_call_stack_size, tmp_size);
     }
 
-    /// Setups a join piont.
-    /// To do this, each of the join pionts params are loaded into a single location (either stack or reg).
+    /// Setups a join point.
+    /// To do this, each of the join pionts params are given a storage location.
     /// Then those locations are stored.
     /// Later jumps to the join point can overwrite the stored locations to pass parameters.
-    pub fn setup_joinpoint(&mut self, id: &JoinPointId, params: &'a [Param<'a>]) {
+    pub fn setup_joinpoint(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        id: &JoinPointId,
+        params: &'a [Param<'a>],
+    ) {
         let mut param_storage = bumpalo::vec![in self.env.arena];
         param_storage.reserve(params.len());
         for Param {
             symbol,
             borrow,
-            layout: _,
+            layout,
         } in params
         {
             if *borrow {
@@ -782,25 +787,21 @@ impl<
                 // Otherwise, we probably need to copy back to the param at the end of the joinpoint.
                 todo!("joinpoints with borrowed parameters");
             }
-            // move to single location.
-            // TODO: this may be wrong, params may be a list of new symbols.
-            // In that case, this should be claiming storage for each symbol.
-            match self.remove_storage_for_sym(symbol) {
-                // Only values that might be in 2 locations are primitives.
-                // They can be in a reg and on the stack.
-                Stack(Primitive {
-                    reg: Some(reg),
-                    base_offset,
-                }) => {
-                    // Only care about the value in the register and reload to that.
-                    // free the associated stack space.
-                    self.free_stack_chunk(base_offset, 8);
-                    self.symbol_storage_map.insert(*symbol, Reg(reg));
-                    param_storage.push(Reg(reg));
+            // Claim a location for every join point parameter to be loaded at.
+            match layout {
+                single_register_integers!() => {
+                    self.claim_general_reg(buf, symbol);
                 }
-                storage => {
-                    self.symbol_storage_map.insert(*symbol, storage);
-                    param_storage.push(storage);
+                single_register_floats!() => {
+                    self.claim_float_reg(buf, symbol);
+                }
+                _ => {
+                    let stack_size = layout.stack_size(self.target_info);
+                    if stack_size == 0 {
+                        self.symbol_storage_map.insert(*symbol, NoData);
+                    } else {
+                        self.claim_stack_area(symbol, stack_size);
+                    }
                 }
             }
         }

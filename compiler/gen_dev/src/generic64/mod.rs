@@ -657,15 +657,17 @@ impl<
         remainder: &'a Stmt<'a>,
         ret_layout: &Layout<'a>,
     ) {
+        // Ensure all the joinpoint parameters have storage locations.
+        // On jumps to the joinpoint, we will overwrite those locations as a way to "pass parameters" to the joinpoint.
+        self.storage_manager
+            .setup_joinpoint(&mut self.buf, id, parameters);
+
         // Create jump to remaining.
         let jmp_location = self.buf.len();
         let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
 
-        // Ensure all the joinpoint parameters are loaded in only one location.
-        // On jumps to the joinpoint, we will overwrite those locations as a way to "pass parameters" to the joinpoint.
-        self.storage_manager.setup_joinpoint(id, parameters);
-
         // Build all statements in body.
+        self.join_map.insert(*id, self.buf.len() as u64);
         self.build_stmt(body, ret_layout);
 
         // Overwrite the original jump with the correct offset.
