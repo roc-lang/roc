@@ -646,6 +646,29 @@ impl<
         }
     }
 
+    // gets the stack offset and size of the specified symbol.
+    // the symbol must already be stored on the stack.
+    pub fn stack_offset_and_size(&self, sym: &Symbol) -> (i32, u32) {
+        let storage = if let Some(storage) = self.symbol_storage_map.get(sym) {
+            storage
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
+        };
+        match storage {
+            Stack(Primitive { base_offset, .. }) => (*base_offset, 8),
+            Stack(ReferencedPrimitive { base_offset, size } | Complex { base_offset, size }) => {
+                (*base_offset, *size)
+            }
+            _ => {
+                internal_error!(
+                    "Data no on the stack for sym ({}) with storage ({:?})",
+                    sym,
+                    storage
+                )
+            }
+        }
+    }
+
     /// claim_stack_area is the public wrapper around claim_stack_size.
     /// It also deals with updating symbol storage.
     /// It returns the base offset of the stack area.

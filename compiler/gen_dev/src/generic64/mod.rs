@@ -1,7 +1,4 @@
-use crate::{
-    single_register_floats, single_register_integers, single_register_layouts, Backend, Env,
-    Relocation,
-};
+use crate::{single_register_floats, single_register_integers, Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
@@ -601,9 +598,6 @@ impl<
             single_register_floats!() => {
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
-            }
-            Layout::Struct([]) => {
-                // Nothing needs to be done to load a returned empty struct.
             }
             _ => {
                 CC::load_returned_complex_symbol(
