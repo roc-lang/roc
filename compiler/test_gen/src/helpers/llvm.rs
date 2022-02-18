@@ -3,13 +3,10 @@ use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
-use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
-use roc_module::symbol::Symbol;
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
-use roc_types::subs::VarStore;
 use target_lexicon::Triple;
 
 fn promote_expr_to_module(src: &str) -> String {
