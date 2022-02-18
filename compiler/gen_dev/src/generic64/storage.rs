@@ -1,5 +1,7 @@
-use crate::generic64::{Assembler, CallConv, RegTrait};
-use crate::Env;
+use crate::{
+    generic64::{Assembler, CallConv, RegTrait},
+    single_register_floats, single_register_integers, single_register_layouts, Env,
+};
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
@@ -25,11 +27,22 @@ enum StackStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     // Primitives are 8 bytes or less. That generally live in registers but can move stored on the stack.
     // Their data must always be 8 byte aligned and will be moved as a block.
     // They are never part of a struct, union, or more complex value.
+    // The rest of the bytes should be zero due to how these are loaded.
     Primitive {
         // Offset from the base pointer in bytes.
         base_offset: i32,
         // Optional register also holding the value.
         reg: Option<RegStorage<GeneralReg, FloatReg>>,
+    },
+    // Referenced Primitives are primitives within a complex structure.
+    // They have no guarentees about alignment or zeroed bits.
+    // When they are loaded, they should be aligned and zeroed.
+    // After loading, they should just be stored in a register.
+    ReferencedPrimitive {
+        // Offset from the base pointer in bytes.
+        base_offset: i32,
+        // Size on the stack in bytes.
+        size: u32,
     },
     // Complex data (lists, unions, structs, str) stored on the stack.
     // Note, this is also used for referencing a value within a struct/union.
@@ -67,12 +80,12 @@ pub struct StorageManager<
     // Data about where each symbol is stored.
     symbol_storage_map: MutMap<Symbol, Storage<GeneralReg, FloatReg>>,
 
-    // A map from child to parent storage.
+    // A map from symbol to its owning allocation.
+    // This is only used for complex data on the stack and its references.
     // In the case that subdata is still referenced from an overall structure,
     // We can't free the entire structure until the subdata is no longer needed.
-    // If a symbol has no parent, it points to itself.
-    // This in only used for data on the stack.
-    reference_map: MutMap<Symbol, Rc<Symbol>>,
+    // If a symbol has only one reference, we can free it.
+    allocation_map: MutMap<Symbol, Rc<(i32, u32)>>,
 
     // This should probably be smarter than a vec.
     // There are certain registers we should always use first. With pushing and popping, this could get mixed.
@@ -109,7 +122,7 @@ pub fn new_storage_manager<
         env,
         target_info,
         symbol_storage_map: MutMap::default(),
-        reference_map: MutMap::default(),
+        allocation_map: MutMap::default(),
         general_free_regs: bumpalo::vec![in env.arena],
         general_used_regs: bumpalo::vec![in env.arena],
         general_used_callee_saved_regs: MutSet::default(),
@@ -131,7 +144,7 @@ impl<
 {
     pub fn reset(&mut self) {
         self.symbol_storage_map.clear();
-        self.reference_map.clear();
+        self.allocation_map.clear();
         self.general_used_callee_saved_regs.clear();
         self.general_free_regs.clear();
         self.general_used_regs.clear();
@@ -267,6 +280,9 @@ impl<
                 );
                 reg
             }
+            Stack(ReferencedPrimitive { .. }) => {
+                todo!("loading referenced primitives")
+            }
             Stack(Complex { .. }) => {
                 internal_error!("Cannot load large values into general registers: {}", sym)
             }
@@ -319,11 +335,73 @@ impl<
                 );
                 reg
             }
+            Stack(ReferencedPrimitive { .. }) => {
+                todo!("loading referenced primitives")
+            }
             Stack(Complex { .. }) => {
                 internal_error!("Cannot load large values into float registers: {}", sym)
             }
             NoData => {
                 internal_error!("Cannot load no data into general registers: {}", sym)
+            }
+        }
+    }
+
+    // Loads a field from a struct or tag union.
+    // This is lazy by default. It will not copy anything around.
+    pub fn load_field_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        index: u64,
+        field_layouts: &'a [Layout<'a>],
+    ) {
+        debug_assert!(index < field_layouts.len());
+        let storage = if let Some(storage) = self.symbol_storage_map.get(structure) {
+            storage
+        } else {
+            internal_error!("Unknown symbol: {}", structure);
+        };
+        // This must be removed and reinserted for ownership and mutability reasons.
+        let owned_data = if let Some(owned_data) = self.allocation_map.remove(structure) {
+            owned_data
+        } else {
+            internal_error!("Unknown symbol: {}", structure);
+        };
+        self.allocation_map
+            .insert(*structure, Rc::clone(&owned_data));
+        match storage {
+            Stack(Complex { base_offset, size }) => {
+                let (base_offset, size) = (*base_offset, *size);
+                let mut data_offset = base_offset;
+                for i in 0..index as usize {
+                    let field_size = field_layouts[i].stack_size(self.target_info);
+                    data_offset += field_size as i32;
+                }
+                debug_assert!(data_offset < base_offset + size as i32);
+                self.allocation_map.insert(*sym, owned_data);
+                let layout = field_layouts[index as usize];
+                let size = layout.stack_size(self.target_info);
+                self.symbol_storage_map.insert(
+                    *sym,
+                    Stack(if is_primitive(&layout) {
+                        ReferencedPrimitive {
+                            base_offset: data_offset,
+                            size,
+                        }
+                    } else {
+                        Complex {
+                            base_offset: data_offset,
+                            size,
+                        }
+                    }),
+                );
+            }
+            _ => {
+                internal_error!(
+                    "Cannot load field from data with storage type: {:?}",
+                    storage
+                );
             }
         }
     }
@@ -349,6 +427,8 @@ impl<
                 size: struct_size,
             }),
         );
+        self.allocation_map
+            .insert(*sym, Rc::new((base_offset, struct_size)));
 
         if let Layout::Struct(field_layouts) = layout {
             let mut current_offset = base_offset;
@@ -453,10 +533,8 @@ impl<
                     }),
                 );
             }
-            Stack(Primitive { reg: None, .. }) => {
-                internal_error!("Cannot free reg from symbol without a reg: {}", sym)
-            }
-            NoData | Stack(Complex { .. }) => {
+            NoData
+            | Stack(Complex { .. } | Primitive { reg: None, .. } | ReferencedPrimitive { .. }) => {
                 internal_error!("Cannot free reg from symbol without a reg: {}", sym)
             }
         }
@@ -509,20 +587,20 @@ impl<
         } else {
             internal_error!("Unknown symbol: {}", sym);
         };
-        let rc_sym = if let Some(rc_sym) = self.reference_map.remove(sym) {
-            rc_sym
-        } else {
-            internal_error!("Unknown symbol: {}", sym);
-        };
         match storage {
             // Free stack chunck if this is the last reference to the chunk.
-            Stack(Primitive { base_offset, .. }) if Rc::strong_count(&rc_sym) == 1 => {
+            Stack(Primitive { base_offset, .. }) => {
                 self.free_stack_chunk(base_offset, 8);
             }
-            Stack(Complex {
-                base_offset, size, ..
-            }) if Rc::strong_count(&rc_sym) == 1 => {
-                self.free_stack_chunk(base_offset, size);
+            Stack(Complex { .. } | ReferencedPrimitive { .. }) => {
+                let owned_data = if let Some(owned_data) = self.allocation_map.remove(sym) {
+                    owned_data
+                } else {
+                    internal_error!("Unknown symbol: {}", sym);
+                };
+                if Rc::strong_count(&owned_data) == 1 {
+                    self.free_stack_chunk(owned_data.0, owned_data.1);
+                }
             }
             _ => {}
         }
@@ -620,4 +698,8 @@ impl<
             }
         }
     }
+}
+
+fn is_primitive<'a>(layout: &Layout<'a>) -> bool {
+    matches!(layout, single_register_layouts!())
 }

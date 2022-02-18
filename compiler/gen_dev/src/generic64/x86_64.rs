@@ -1,6 +1,6 @@
 use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage};
 use crate::{
-    single_register_builtins, single_register_floats, single_register_integers, Relocation,
+    single_register_floats, single_register_integers, single_register_layouts, Relocation,
 };
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -294,7 +294,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         // For most return layouts we will do nothing.
         // In some cases, we need to put the return address as the first arg.
         match ret_layout {
-            single_register_builtins!() | Layout::Builtin(Builtin::Str) | Layout::Struct([]) => {
+            single_register_layouts!() | Layout::Builtin(Builtin::Str) | Layout::Struct([]) => {
                 // Nothing needs to be done for any of these cases.
             }
             x => {
@@ -613,7 +613,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                 }
             } else {
                 arg_offset += match layout {
-                    single_register_builtins!() => 8,
+                    single_register_layouts!() => 8,
                     x => {
                         todo!("Loading args with layout {:?}", x);
                     }
@@ -643,7 +643,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         // For most return layouts we will do nothing.
         // In some cases, we need to put the return address as the first arg.
         match ret_layout {
-            single_register_builtins!() | Layout::Struct([]) => {
+            single_register_layouts!() | Layout::Struct([]) => {
                 // Nothing needs to be done for any of these cases.
             }
             x => {

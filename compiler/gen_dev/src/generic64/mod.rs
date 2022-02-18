@@ -1040,23 +1040,8 @@ impl<
         index: u64,
         field_layouts: &'a [Layout<'a>],
     ) {
-        if let Some(SymbolStorage::Base { offset, .. }) = self.symbol_storage_map.get(structure) {
-            let mut data_offset = *offset;
-            for i in 0..index {
-                let field_size = field_layouts[i as usize].stack_size(self.target_info);
-                data_offset += field_size as i32;
-            }
-            self.symbol_storage_map.insert(
-                *sym,
-                SymbolStorage::Base {
-                    offset: data_offset,
-                    size: field_layouts[index as usize].stack_size(self.target_info),
-                    owned: false,
-                },
-            );
-        } else {
-            internal_error!("unknown struct: {:?}", structure);
-        }
+        self.storage_manager
+            .load_field_at_index(sym, structure, index, field_layouts);
     }
 
     fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>) {
@@ -1247,7 +1232,7 @@ macro_rules! single_register_floats {
 }
 
 #[macro_export]
-macro_rules! single_register_builtins {
+macro_rules! single_register_layouts {
     () => {
         single_register_integers!() | single_register_floats!()
     };
