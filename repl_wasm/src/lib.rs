@@ -94,6 +94,23 @@ impl<'a> ReplAppMemory for WasmMemory<'a> {
     }
 }
 
+impl<'a> WasmReplApp<'a> {
+    /// Allocate a buffer to copy the app memory into
+    /// Buffer is aligned to 64 bits to preserve the original alignment of all Wasm numbers
+    fn allocate_buffer(&self, size: usize) -> &'a mut [u8] {
+        let size64 = (size / size_of::<u64>()) + 1;
+        let buffer64: &mut [u64] = self.arena.alloc_slice_fill_default(size64);
+
+        // Note: Need `from_raw_parts_mut` as well as `transmute` to ensure slice has correct length!
+        let buffer: &mut [u8] = unsafe {
+            let ptr8: *mut u8 = std::mem::transmute(buffer64.as_mut_ptr());
+            std::slice::from_raw_parts_mut(ptr8, size)
+        };
+
+        buffer
+    }
+}
+
 impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     type Memory = WasmMemory<'a>;
 
@@ -108,19 +125,16 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     {
         let app_final_memory_size: usize = js_run_app();
 
-        // Allocate a buffer to copy the app memory into
-        // Aligning it to 64 bits will preserve the original alignment of all Wasm numbers
-        let copy_buffer_aligned: &mut [u64] = self
-            .arena
-            .alloc_slice_fill_default((app_final_memory_size / size_of::<u64>()) + 1);
-        let copied_bytes: &mut [u8] = unsafe { std::mem::transmute(copy_buffer_aligned) };
+        let copied_bytes: &mut [u8] = self.allocate_buffer(app_final_memory_size);
 
         let app_result_addr = js_get_result_and_memory(copied_bytes.as_mut_ptr());
 
+        let result_bytes = &copied_bytes[app_result_addr..];
         let result: Return = unsafe {
-            let ptr: *const Return = std::mem::transmute(&copied_bytes[app_result_addr]);
+            let ptr: *const Return = std::mem::transmute(result_bytes.as_ptr());
             ptr.read()
         };
+
         let mem = self.arena.alloc(WasmMemory { copied_bytes });
 
         transform(mem, result)
@@ -142,12 +156,7 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     {
         let app_final_memory_size: usize = js_run_app();
 
-        // Allocate a buffer to copy the app memory into
-        // Aligning it to 64 bits will preserve the original alignment of all Wasm numbers
-        let copy_buffer_aligned: &mut [u64] = self
-            .arena
-            .alloc_slice_fill_default((app_final_memory_size / size_of::<u64>()) + 1);
-        let copied_bytes: &mut [u8] = unsafe { std::mem::transmute(copy_buffer_aligned) };
+        let copied_bytes: &mut [u8] = self.allocate_buffer(app_final_memory_size);
 
         let app_result_addr = js_get_result_and_memory(copied_bytes.as_mut_ptr());
         let mem = self.arena.alloc(WasmMemory { copied_bytes });
