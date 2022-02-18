@@ -16,13 +16,13 @@ use RegStorage::*;
 use StackStorage::*;
 use Storage::*;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     General(GeneralReg),
     Float(FloatReg),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum StackStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     // Primitives are 8 bytes or less. That generally live in registers but can move stored on the stack.
     // Their data must always be 8 byte aligned and will be moved as a block.
@@ -59,7 +59,7 @@ enum StackStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Storage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     Reg(RegStorage<GeneralReg, FloatReg>),
     Stack(StackStorage<GeneralReg, FloatReg>),
@@ -356,7 +356,7 @@ impl<
         index: u64,
         field_layouts: &'a [Layout<'a>],
     ) {
-        debug_assert!(index < field_layouts.len());
+        debug_assert!(index < field_layouts.len() as u64);
         let storage = if let Some(storage) = self.symbol_storage_map.get(structure) {
             storage
         } else {
