@@ -107,9 +107,6 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         sym: &Symbol,
         layout: &Layout<'a>,
     );
-
-    // returns true if the layout should be returned via an argument pointer.
-    fn returns_via_arg_pointer(ret_layout: &Layout) -> bool;
 }
 
 /// Assembler contains calls to the backend assembly generator.

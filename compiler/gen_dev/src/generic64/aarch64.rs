@@ -297,10 +297,6 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     ) {
         todo!("Loading returned complex symbols for AArch64");
     }
-
-    fn returns_via_arg_pointer(_ret_layout: &Layout) -> bool {
-        todo!("Returning via arg pointer for AArch64");
-    }
 }
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {

@@ -496,9 +496,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             x => todo!("receiving complex return type, {:?}", x),
         }
     }
+}
 
+impl X86_64SystemV {
     fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
-        // TODO: This may need to be more complex/extended to fully support the calling convention.
+        // TODO: This will need to be more complex/extended to fully support the calling convention.
         // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
         ret_layout.stack_size(TARGET_INFO) > 16
     }
@@ -840,7 +842,9 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     ) {
         todo!("Loading returned complex symbols for X86_64");
     }
+}
 
+impl X86_64WindowsFastcall {
     fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
         // TODO: This is not fully correct there are some exceptions for "vector" types.
         // details here: https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160#return-values
