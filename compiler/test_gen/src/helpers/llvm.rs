@@ -3,7 +3,6 @@ use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
-use roc_can::builtins::builtin_defs_map;
 use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
@@ -24,9 +23,6 @@ fn promote_expr_to_module(src: &str) -> String {
     }
 
     buffer
-}
-pub fn test_builtin_defs(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
-    builtin_defs_map(symbol, var_store)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -67,7 +63,6 @@ fn create_llvm_module<'a>(
         src_dir,
         exposed_types,
         target_info,
-        test_builtin_defs,
     );
 
     let mut loaded = match loaded {
