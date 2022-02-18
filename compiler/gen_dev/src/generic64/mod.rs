@@ -16,13 +16,8 @@ pub(crate) mod x86_64;
 
 // TODO: StorageManager is still not fully integrated.
 // General pieces needed:
-// - loading and Storing args into storage manager
-// - returning data (note: remove return struct send everything to CC)
 // - function call stack? (maybe can stay here)
-// - re-enabling some commented out things
 // - remove data that is duplicated here and in storage manager
-// - ensure storage map doesn't leak out of storage, try to make it clean and generic
-// - Look into Complex values on the stack and reference. They may not work well.
 // - look into fixing join to no longer use multiple backends???
 use storage::StorageManager;
 
