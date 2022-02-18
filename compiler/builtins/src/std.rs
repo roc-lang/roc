@@ -1514,6 +1514,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1))),
     );
 
+    // oks : List (Result a *) - List a
+    add_top_level_function_type!(
+        Symbol::LIST_OKS,
+        vec![list_type(result_type(flex(TVAR1), flex(TVAR2)))],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
     // Dict module
 
     // len : Dict * * -> Nat

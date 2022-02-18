@@ -148,6 +148,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_ANY => list_any,
         LIST_ALL => list_all,
         LIST_FIND => list_find,
+        LIST_OKS => list_oks,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
         DICT_SINGLE => dict_single,
@@ -3687,6 +3688,11 @@ fn list_find(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         t_ret,
     )
+}
+
+/// List.oks : List (Result a *) -> List a
+fn list_oks(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::ListOks, var_store)
 }
 
 /// Dict.len : Dict * * -> Nat
