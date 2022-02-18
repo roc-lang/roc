@@ -33,14 +33,17 @@ fn init_blank_small_string(comptime n: usize) [n]u8 {
 pub const RocStr = extern struct {
     str_bytes: ?[*]u8,
     str_len: usize,
+    str_capacity: usize,
 
     pub const alignment = @alignOf(usize);
 
     pub inline fn empty() RocStr {
         const small_str_flag: isize = std.math.minInt(isize);
+        const length = @bitCast(usize, small_str_flag);
         return RocStr{
-            .str_len = @bitCast(usize, small_str_flag),
+            .str_len = length,
             .str_bytes = null,
+            .str_capacity = 0,
         };
     }
 
@@ -59,6 +62,7 @@ pub const RocStr = extern struct {
         return RocStr{
             .str_bytes = first_element,
             .str_len = number_of_chars,
+            .str_capacity = number_of_chars,
         };
     }
 
@@ -218,7 +222,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn isEmpty(self: RocStr) bool {
-        comptime const empty_len = RocStr.empty().str_len;
+        const empty_len = RocStr.empty().str_len;
         return self.str_len == empty_len;
     }
 
@@ -264,36 +268,6 @@ pub const RocStr = extern struct {
                 // This string was refcounted or immortal; we can't safely read
                 // the next byte, so assume the string is not null-terminated.
                 return false;
-            }
-        }
-    }
-
-    // Returns (@sizeOf(RocStr) - 1) for small strings and the empty string.
-    // Returns 0 for refcounted strings and immortal strings.
-    // Returns the stored capacity value for all other strings.
-    pub fn capacity(self: RocStr) usize {
-        const length = self.len();
-        const longest_small_str = @sizeOf(RocStr) - 1;
-
-        if (length <= longest_small_str) {
-            // Note that although empty strings technically have the full
-            // capacity of a small string available, they aren't marked as small
-            // strings, so if you want to make use of that capacity, you need
-            // to first change its flag to mark it as a small string!
-            return longest_small_str;
-        } else {
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
-            const capacity_or_refcount: isize = (ptr - 1)[0];
-
-            if (capacity_or_refcount > 0) {
-                // If capacity_or_refcount is positive, that means it's a
-                // capacity value.
-                return capacity_or_refcount;
-            } else {
-                // This is either a refcount or else this big string is stored
-                // in a readonly section; either way, it has no capacity,
-                // because we cannot mutate it in-place!
-                return 0;
             }
         }
     }
@@ -1128,7 +1102,11 @@ fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
 
                 @memcpy(new_source + arg1.len(), arg2.asU8ptr(), arg2.len());
 
-                return RocStr{ .str_bytes = new_source, .str_len = combined_length };
+                return RocStr{
+                    .str_bytes = new_source,
+                    .str_len = combined_length,
+                    .str_capacity = combined_length,
+                };
             }
         }
 
@@ -1264,9 +1242,9 @@ inline fn strToBytes(arg: RocStr) RocList {
 
         @memcpy(ptr, arg.asU8ptr(), length);
 
-        return RocList{ .length = length, .bytes = ptr };
+        return RocList{ .length = length, .bytes = ptr, .capacity = length };
     } else {
-        return RocList{ .length = arg.len(), .bytes = arg.str_bytes };
+        return RocList{ .length = arg.len(), .bytes = arg.str_bytes, .capacity = arg.str_capacity };
     }
 }
 
@@ -1308,7 +1286,11 @@ inline fn fromUtf8(arg: RocList, update_mode: UpdateMode) FromUtf8Result {
         } else {
             const byte_list = arg.makeUniqueExtra(RocStr.alignment, @sizeOf(u8), update_mode);
 
-            const string = RocStr{ .str_bytes = byte_list.bytes, .str_len = byte_list.length };
+            const string = RocStr{
+                .str_bytes = byte_list.bytes,
+                .str_len = byte_list.length,
+                .str_capacity = byte_list.capacity,
+            };
 
             return FromUtf8Result{
                 .is_ok = true,

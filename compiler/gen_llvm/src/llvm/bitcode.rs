@@ -14,6 +14,8 @@ use inkwell::AddressSpace;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{LambdaSet, Layout, LayoutIds, UnionLayout};
 
+use super::build::create_entry_block_alloca;
+
 pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
@@ -51,15 +53,24 @@ pub fn call_str_bitcode_fn<'a, 'ctx, 'env>(
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_help(env, args, fn_name)
-        .try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| {
-            panic!(
-                "LLVM error: Did not get return value from bitcode function {:?}",
-                fn_name
-            )
-        })
+    use bumpalo::collections::Vec;
+
+    let parent = env
+        .builder
+        .get_insert_block()
+        .and_then(|b| b.get_parent())
+        .unwrap();
+
+    let str_type = super::convert::zig_str_type(env);
+    let result = create_entry_block_alloca(env, parent, str_type.into(), "str_alloca");
+    let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len() + 1, env.arena);
+
+    arguments.extend(args);
+    arguments.push(result.into());
+
+    call_void_bitcode_fn(env, &arguments, fn_name);
+
+    env.builder.build_load(result, "load_str")
 }
 
 pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(

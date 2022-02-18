@@ -543,7 +543,14 @@ pub fn elementsRc(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     }
 }
 
-pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_width: usize, inc_key: Inc, output: *RocList) callconv(.C) void {
+pub fn dictKeys(
+    dict: RocDict,
+    alignment: Alignment,
+    key_width: usize,
+    value_width: usize,
+    inc_key: Inc,
+    output: *RocList,
+) callconv(.C) void {
     const size = dict.capacity();
 
     var length: usize = 0;
@@ -581,7 +588,7 @@ pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_wid
         }
     }
 
-    output.* = RocList{ .bytes = ptr, .length = length };
+    output.* = RocList{ .bytes = ptr, .length = length, .capacity = length };
 }
 
 pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_width: usize, inc_value: Inc, output: *RocList) callconv(.C) void {
@@ -622,14 +629,25 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
         }
     }
 
-    output.* = RocList{ .bytes = ptr, .length = length };
+    output.* = RocList{ .bytes = ptr, .length = length, .capacity = length };
 }
 
 fn doNothing(_: Opaque) callconv(.C) void {
     return;
 }
 
-pub fn dictUnion(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_key: Inc, inc_value: Inc, output: *RocDict) callconv(.C) void {
+pub fn dictUnion(
+    dict1: RocDict,
+    dict2: RocDict,
+    alignment: Alignment,
+    key_width: usize,
+    value_width: usize,
+    hash_fn: HashFn,
+    is_eq: EqFn,
+    inc_key: Inc,
+    inc_value: Inc,
+    output: *RocDict,
+) callconv(.C) void {
     output.* = dict1.makeUnique(alignment, key_width, value_width);
 
     var i: usize = 0;

@@ -464,6 +464,7 @@ impl<T> Drop for RocList<T> {
 pub struct RocStr {
     elements: *mut u8,
     length: usize,
+    capacity: usize,
 }
 
 impl RocStr {
@@ -621,6 +622,7 @@ impl RocStr {
             Self {
                 length: slice.len(),
                 elements,
+                capacity: slice.len(),
             }
         }
     }
@@ -698,6 +700,7 @@ impl Default for RocStr {
         Self {
             length: isize::MIN as usize,
             elements: core::ptr::null_mut(),
+            capacity: isize::MIN as usize,
         }
     }
 }
@@ -749,6 +752,7 @@ impl Clone for RocStr {
             Self {
                 elements: self.elements,
                 length: self.length,
+                capacity: self.capacity,
             }
         } else {
             let capacity_size = core::mem::size_of::<usize>();
@@ -775,6 +779,7 @@ impl Clone for RocStr {
             Self {
                 elements,
                 length: self.length,
+                capacity: self.capacity,
             }
         }
     }

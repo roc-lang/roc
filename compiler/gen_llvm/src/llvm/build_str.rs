@@ -12,7 +12,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 use roc_target::PtrWidth;
 
-use super::build::load_symbol;
+use super::build::{create_entry_block_alloca, load_symbol};
 
 pub static CHAR_LAYOUT: Layout = Layout::u8();
 
@@ -77,15 +77,29 @@ fn str_symbol_to_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     symbol: Symbol,
-) -> IntValue<'ctx> {
-    let string = load_symbol(scope, &symbol);
-
+) -> PointerValue<'ctx> {
+    /*
     let target_type = match env.target_info.ptr_width() {
         PtrWidth::Bytes8 => env.context.i128_type().into(),
         PtrWidth::Bytes4 => env.context.i64_type().into(),
     };
 
     complex_bitcast(env.builder, string, target_type, "str_to_c_abi").into_int_value()
+    */
+
+    let parent = env
+        .builder
+        .get_insert_block()
+        .and_then(|b| b.get_parent())
+        .unwrap();
+
+    let str_type = super::convert::zig_str_type(env);
+    let string_alloca = create_entry_block_alloca(env, parent, str_type.into(), "str_alloca");
+
+    let string = load_symbol(scope, &symbol);
+    env.builder.build_store(string_alloca, string);
+
+    string_alloca
 }
 
 pub fn str_to_c_abi<'a, 'ctx, 'env>(
@@ -255,6 +269,21 @@ pub fn str_trim<'a, 'ctx, 'env>(
     str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
+
+    /*
+    let parent = env
+        .builder
+        .get_insert_block()
+        .and_then(|b| b.get_parent())
+        .unwrap();
+
+    let str_type = super::convert::zig_str_type(env);
+    let string_alloca = create_entry_block_alloca(env, parent, str_type.into(), "str_alloca");
+
+    let string = load_symbol(scope, &str_symbol);
+    env.builder.build_store(string_alloca, string);
+    */
+
     call_str_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM)
 }
 
