@@ -895,8 +895,11 @@ fn type_to_variable<'a>(
 
             let tag_union_var = register(subs, rank, pools, content);
 
-            subs.set_content(
+            register_with_known_var(
+                subs,
                 *rec_var,
+                rank,
+                pools,
                 Content::RecursionVar {
                     opt_name: None,
                     structure: tag_union_var,
@@ -2029,4 +2032,23 @@ fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) ->
     pools.get_mut(rank).push(var);
 
     var
+}
+
+fn register_with_known_var(
+    subs: &mut Subs,
+    var: Variable,
+    rank: Rank,
+    pools: &mut Pools,
+    content: Content,
+) {
+    let descriptor = Descriptor {
+        content,
+        rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
+
+    subs.set(var, descriptor);
+
+    pools.get_mut(rank).push(var);
 }
