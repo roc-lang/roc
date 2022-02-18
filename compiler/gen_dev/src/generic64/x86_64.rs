@@ -442,16 +442,16 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     }
 
     fn return_complex_symbol<'a>(
-        buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<
             'a,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
             X86_64SystemV,
         >,
-        sym: &Symbol,
-        layout: &Layout<'a>,
+        _sym: &Symbol,
+        _layout: &Layout<'a>,
     ) {
         // Complex types.
         //     let val = self.symbol_storage_map.get(sym);
@@ -523,14 +523,30 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         todo!("Returning complex symbols for X86_64");
     }
 
-    fn return_struct<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _struct_offset: i32,
-        _struct_size: u32,
-        _field_layouts: &[Layout<'a>],
-        _ret_reg: Option<X86_64GeneralReg>,
+    fn load_returned_complex_symbol<'a>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64SystemV,
+        >,
+        sym: &Symbol,
+        layout: &Layout<'a>,
     ) {
-        todo!("Returning structs for X86_64");
+        match layout {
+            single_register_layouts!() => {
+                internal_error!("single register layouts are not complex symbols");
+            }
+            Layout::Struct([]) => {}
+            Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
+                let offset = storage_manager.claim_stack_area(sym, 16);
+                X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+                X86_64Assembler::mov_base32_reg64(buf, offset + 8, Self::GENERAL_RETURN_REGS[1]);
+            }
+            x => todo!("receiving complex return type, {:?}", x),
+        }
     }
 
     fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
@@ -848,28 +864,33 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     }
 
     fn return_complex_symbol<'a>(
-        buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<
             'a,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
             X86_64WindowsFastcall,
         >,
-        sym: &Symbol,
-        layout: &Layout<'a>,
+        _sym: &Symbol,
+        _layout: &Layout<'a>,
     ) {
-        todo!("Returning symbols for X86_64");
+        todo!("Returning complex symbols for X86_64");
     }
 
-    fn return_struct<'a>(
+    fn load_returned_complex_symbol<'a>(
         _buf: &mut Vec<'a, u8>,
-        _struct_offset: i32,
-        _struct_size: u32,
-        _field_layouts: &[Layout<'a>],
-        _ret_reg: Option<X86_64GeneralReg>,
+        _storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64WindowsFastcall,
+        >,
+        _sym: &Symbol,
+        _layout: &Layout<'a>,
     ) {
-        todo!("Returning structs for X86_64WindowsFastCall");
+        todo!("Loading returned complex symbols for X86_64");
     }
 
     fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {

@@ -102,14 +102,13 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         layout: &Layout<'a>,
     );
 
-    // return_struct returns a struct currently on the stack at `struct_offset`.
-    // It does so using registers and stack as necessary.
-    fn return_struct<'a>(
+    /// load_returned_complex_symbol loads a complex symbol that was returned from a function call.
+    /// It uses the layout to determine how the data should be loaded into the symbol.
+    fn load_returned_complex_symbol<'a>(
         buf: &mut Vec<'a, u8>,
-        struct_offset: i32,
-        struct_size: u32,
-        field_layouts: &[Layout<'a>],
-        ret_reg: Option<GeneralReg>,
+        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
+        sym: &Symbol,
+        layout: &Layout<'a>,
     );
 
     // returns true if the layout should be returned via an argument pointer.
@@ -595,36 +594,25 @@ impl<
 
         // move return value to dst.
         match ret_layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64) | Builtin::Bool) => {
+            single_register_integers!() => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 ASM::mov_reg64_reg64(&mut self.buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
             }
-            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+            single_register_floats!() => {
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
             }
-            // Layout::Builtin(Builtin::Str) => {
-            //     if CC::returns_via_arg_pointer(ret_layout) {
-            //         // This will happen on windows, return via pointer here.
-            //         todo!("FnCall: Returning strings via pointer");
-            //     } else {
-            //         let offset = self.claim_stack_size(16);
-            //         self.symbol_storage_map.insert(
-            //             *dst,
-            //             SymbolStorage::Base {
-            //                 offset,
-            //                 size: 16,
-            //                 owned: true,
-            //             },
-            //         );
-            //         ASM::mov_base32_reg64(&mut self.buf, offset, CC::GENERAL_RETURN_REGS[0]);
-            //         ASM::mov_base32_reg64(&mut self.buf, offset + 8, CC::GENERAL_RETURN_REGS[1]);
-            //     }
-            // }
             Layout::Struct([]) => {
                 // Nothing needs to be done to load a returned empty struct.
             }
-            x => todo!("FnCall: receiving return type, {:?}", x),
+            _ => {
+                CC::load_returned_complex_symbol(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    dst,
+                    ret_layout,
+                );
+            }
         }
     }
 

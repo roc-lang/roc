@@ -269,28 +269,33 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     }
 
     fn return_complex_symbol<'a>(
-        buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<
             'a,
             AArch64GeneralReg,
             AArch64FloatReg,
             AArch64Assembler,
             AArch64Call,
         >,
-        sym: &Symbol,
-        layout: &Layout<'a>,
+        _sym: &Symbol,
+        _layout: &Layout<'a>,
     ) {
         todo!("Returning complex symbols for AArch64");
     }
 
-    fn return_struct<'a>(
+    fn load_returned_complex_symbol<'a>(
         _buf: &mut Vec<'a, u8>,
-        _struct_offset: i32,
-        _struct_size: u32,
-        _field_layouts: &[Layout<'a>],
-        _ret_reg: Option<AArch64GeneralReg>,
+        _storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
+        _sym: &Symbol,
+        _layout: &Layout<'a>,
     ) {
-        todo!("Returning structs for AArch64");
+        todo!("Loading returned complex symbols for AArch64");
     }
 
     fn returns_via_arg_pointer(_ret_layout: &Layout) -> bool {
