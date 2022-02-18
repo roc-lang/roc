@@ -100,6 +100,7 @@ pub struct StorageManager<
     general_used_regs: Vec<'a, (GeneralReg, Symbol)>,
     float_used_regs: Vec<'a, (FloatReg, Symbol)>,
 
+    // TODO: it probably would be faster to make these a list that linearly scans rather than hashing.
     // used callee saved regs must be tracked for pushing and popping at the beginning/end of the function.
     general_used_callee_saved_regs: MutSet<GeneralReg>,
     float_used_callee_saved_regs: MutSet<FloatReg>,
@@ -168,13 +169,8 @@ impl<
 
     // Returns true if the symbol is storing a primitive value.
     pub fn is_stored_primitive(&self, sym: &Symbol) -> bool {
-        let storage = if let Some(storage) = self.symbol_storage_map.get(sym) {
-            storage
-        } else {
-            internal_error!("Unknown symbol: {}", sym);
-        };
         matches!(
-            storage,
+            self.get_storage_for_sym(sym),
             Reg(_) | Stack(Primitive { .. } | ReferencedPrimitive { .. })
         )
     }
@@ -262,11 +258,7 @@ impl<
     // Will fail on values stored in float regs.
     // Will fail for values that don't fit in a single register.
     pub fn load_to_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
-        let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
-            storage
-        } else {
-            internal_error!("Unknown symbol: {}", sym);
-        };
+        let storage = self.remove_storage_for_sym(sym);
         match storage {
             Reg(General(reg))
             | Stack(Primitive {
@@ -328,11 +320,7 @@ impl<
     // Will fail on values stored in general regs.
     // Will fail for values that don't fit in a single register.
     pub fn load_to_float_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> FloatReg {
-        let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
-            storage
-        } else {
-            internal_error!("Unknown symbol: {}", sym);
-        };
+        let storage = self.remove_storage_for_sym(sym);
         match storage {
             Reg(Float(reg))
             | Stack(Primitive {
@@ -400,12 +388,7 @@ impl<
         sym: &Symbol,
         reg: GeneralReg,
     ) {
-        let storage = if let Some(storage) = self.symbol_storage_map.get(sym) {
-            storage
-        } else {
-            internal_error!("Unknown symbol: {}", sym);
-        };
-        match storage {
+        match self.get_storage_for_sym(sym) {
             Reg(General(old_reg))
             | Stack(Primitive {
                 reg: Some(General(old_reg)),
@@ -454,12 +437,7 @@ impl<
     // It will not try to free the register first.
     // This will not track the symbol change (it makes no assumptions about the new reg).
     pub fn load_to_specified_float_reg(&self, buf: &mut Vec<'a, u8>, sym: &Symbol, reg: FloatReg) {
-        let storage = if let Some(storage) = self.symbol_storage_map.get(sym) {
-            storage
-        } else {
-            internal_error!("Unknown symbol: {}", sym);
-        };
-        match storage {
+        match self.get_storage_for_sym(sym) {
             Reg(Float(old_reg))
             | Stack(Primitive {
                 reg: Some(Float(old_reg)),
@@ -512,11 +490,6 @@ impl<
         field_layouts: &'a [Layout<'a>],
     ) {
         debug_assert!(index < field_layouts.len() as u64);
-        let storage = if let Some(storage) = self.symbol_storage_map.get(structure) {
-            storage
-        } else {
-            internal_error!("Unknown symbol: {}", structure);
-        };
         // This must be removed and reinserted for ownership and mutability reasons.
         let owned_data = if let Some(owned_data) = self.allocation_map.remove(structure) {
             owned_data
@@ -525,7 +498,7 @@ impl<
         };
         self.allocation_map
             .insert(*structure, Rc::clone(&owned_data));
-        match storage {
+        match self.get_storage_for_sym(structure) {
             Stack(Complex { base_offset, size }) => {
                 let (base_offset, size) = (*base_offset, *size);
                 let mut data_offset = base_offset;
@@ -552,7 +525,7 @@ impl<
                     }),
                 );
             }
-            _ => {
+            storage => {
                 internal_error!(
                     "Cannot load field from data with storage type: {:?}",
                     storage
@@ -645,12 +618,7 @@ impl<
         sym: &Symbol,
         wanted_reg: RegStorage<GeneralReg, FloatReg>,
     ) {
-        let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
-            storage
-        } else {
-            internal_error!("Unknown symbol: {}", sym);
-        };
-        match storage {
+        match self.remove_storage_for_sym(sym) {
             Reg(reg_storage) => {
                 debug_assert_eq!(reg_storage, wanted_reg);
                 let base_offset = self.claim_stack_size(8);
@@ -689,17 +657,12 @@ impl<
     // gets the stack offset and size of the specified symbol.
     // the symbol must already be stored on the stack.
     pub fn stack_offset_and_size(&self, sym: &Symbol) -> (i32, u32) {
-        let storage = if let Some(storage) = self.symbol_storage_map.get(sym) {
-            storage
-        } else {
-            internal_error!("Unknown symbol: {}", sym);
-        };
-        match storage {
+        match self.get_storage_for_sym(sym) {
             Stack(Primitive { base_offset, .. }) => (*base_offset, 8),
             Stack(ReferencedPrimitive { base_offset, size } | Complex { base_offset, size }) => {
                 (*base_offset, *size)
             }
-            _ => {
+            storage => {
                 internal_error!(
                     "Data not on the stack for sym ({}) with storage ({:?})",
                     sym,
@@ -800,12 +763,7 @@ impl<
     }
 
     pub fn free_symbol(&mut self, sym: &Symbol) {
-        let storage = if let Some(storage) = self.symbol_storage_map.remove(sym) {
-            storage
-        } else {
-            internal_error!("Unknown symbol: {}", sym);
-        };
-        match storage {
+        match self.remove_storage_for_sym(sym) {
             // Free stack chunck if this is the last reference to the chunk.
             Stack(Primitive { base_offset, .. }) => {
                 self.free_stack_chunk(base_offset, 8);
@@ -919,6 +877,24 @@ impl<
             } else {
                 self.float_used_regs.push((reg, saved_sym));
             }
+        }
+    }
+
+    /// Gets a value from storage. They index symbol must be defined.
+    fn get_storage_for_sym(&self, sym: &Symbol) -> &Storage<GeneralReg, FloatReg> {
+        if let Some(storage) = self.symbol_storage_map.get(sym) {
+            storage
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
+        }
+    }
+
+    /// Removes and returns a value from storage. They index symbol must be defined.
+    fn remove_storage_for_sym(&mut self, sym: &Symbol) -> Storage<GeneralReg, FloatReg> {
+        if let Some(storage) = self.symbol_storage_map.remove(sym) {
+            storage
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
         }
     }
 }
