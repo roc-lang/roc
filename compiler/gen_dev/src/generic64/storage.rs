@@ -48,6 +48,7 @@ enum StackStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     // Note, this is also used for referencing a value within a struct/union.
     // It has no alignment guarantees.
     // When a primitive value is being loaded from this, it should be moved into a register.
+    // To start, the primitive can just be loaded as a ReferencePrimitive.
     Complex {
         // Offset from the base pointer in bytes.
         base_offset: i32,
@@ -419,16 +420,7 @@ impl<
             self.symbol_storage_map.insert(*sym, NoData);
             return;
         }
-        let base_offset = self.claim_stack_size(struct_size);
-        self.symbol_storage_map.insert(
-            *sym,
-            Stack(Complex {
-                base_offset,
-                size: struct_size,
-            }),
-        );
-        self.allocation_map
-            .insert(*sym, Rc::new((base_offset, struct_size)));
+        let base_offset = self.claim_stack_area(sym, struct_size);
 
         if let Layout::Struct(field_layouts) = layout {
             let mut current_offset = base_offset;
@@ -538,6 +530,19 @@ impl<
                 internal_error!("Cannot free reg from symbol without a reg: {}", sym)
             }
         }
+    }
+
+    /// claim_stack_area is the public wrapper around claim_stack_size.
+    /// It also deals with updating symbol storage.
+    /// It returns the base offset of the stack area.
+    /// It should only be used for complex data and not primitives.
+    pub fn claim_stack_area(&mut self, sym: &Symbol, size: u32) -> i32 {
+        let base_offset = self.claim_stack_size(size);
+        self.symbol_storage_map
+            .insert(*sym, Stack(Complex { base_offset, size }));
+        self.allocation_map
+            .insert(*sym, Rc::new((base_offset, size)));
+        base_offset
     }
 
     /// claim_stack_size claims `amount` bytes from the stack alignind to 8.

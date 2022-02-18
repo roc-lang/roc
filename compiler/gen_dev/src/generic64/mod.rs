@@ -1073,34 +1073,29 @@ impl<
                 let val = *x as f32;
                 ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, reg, val);
             }
-            // (Literal::Str(x), Layout::Builtin(Builtin::Str)) if x.len() < 16 => {
-            // Load small string.
-            // let reg = self.get_tmp_general_reg();
+            (Literal::Str(x), Layout::Builtin(Builtin::Str)) if x.len() < 16 => {
+                // Load small string.
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |storage_manager, buf, reg| {
+                        let base_offset = storage_manager.claim_stack_area(sym, 16);
+                        let mut bytes = [0; 16];
+                        bytes[..x.len()].copy_from_slice(x.as_bytes());
+                        bytes[15] = (x.len() as u8) | 0b1000_0000;
 
-            // let offset = self.claim_stack_size(16);
-            // self.symbol_storage_map.insert(
-            //     *sym,
-            //     SymbolStorage::Base {
-            //         offset,
-            //         size: 16,
-            //         owned: true,
-            //     },
-            // );
-            // let mut bytes = [0; 16];
-            // bytes[..x.len()].copy_from_slice(x.as_bytes());
-            // bytes[15] = (x.len() as u8) | 0b1000_0000;
+                        let mut num_bytes = [0; 8];
+                        num_bytes.copy_from_slice(&bytes[..8]);
+                        let num = i64::from_ne_bytes(num_bytes);
+                        ASM::mov_reg64_imm64(buf, reg, num);
+                        ASM::mov_base32_reg64(buf, base_offset, reg);
 
-            // let mut num_bytes = [0; 8];
-            // num_bytes.copy_from_slice(&bytes[..8]);
-            // let num = i64::from_ne_bytes(num_bytes);
-            // ASM::mov_reg64_imm64(&mut self.buf, reg, num);
-            // ASM::mov_base32_reg64(&mut self.buf, offset, reg);
-
-            // num_bytes.copy_from_slice(&bytes[8..]);
-            // let num = i64::from_ne_bytes(num_bytes);
-            // ASM::mov_reg64_imm64(&mut self.buf, reg, num);
-            // ASM::mov_base32_reg64(&mut self.buf, offset + 8, reg);
-            // }
+                        num_bytes.copy_from_slice(&bytes[8..]);
+                        let num = i64::from_ne_bytes(num_bytes);
+                        ASM::mov_reg64_imm64(buf, reg, num);
+                        ASM::mov_base32_reg64(buf, base_offset + 8, reg);
+                    },
+                );
+            }
             x => todo!("loading literal, {:?}", x),
         }
     }
