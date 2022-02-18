@@ -30,6 +30,38 @@ pub fn call_bitcode_fn<'a, 'ctx, 'env>(
         })
 }
 
+pub fn call_list_bitcode_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn_help(env, args, fn_name)
+        .try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| {
+            panic!(
+                "LLVM error: Did not get return value from bitcode function {:?}",
+                fn_name
+            )
+        })
+}
+
+pub fn call_str_bitcode_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn_help(env, args, fn_name)
+        .try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| {
+            panic!(
+                "LLVM error: Did not get return value from bitcode function {:?}",
+                fn_name
+            )
+        })
+}
+
 pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],

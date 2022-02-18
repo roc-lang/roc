@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
     build_dec_wrapper, build_eq_wrapper, build_has_tag_id, build_inc_n_wrapper, build_inc_wrapper,
-    call_bitcode_fn, call_void_bitcode_fn,
+    call_bitcode_fn, call_list_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, RocFunctionCall,
@@ -27,29 +27,6 @@ pub fn pass_update_mode<'a, 'ctx, 'env>(
         UpdateMode::Immutable => env.context.i8_type().const_zero().into(),
         UpdateMode::InPlace => env.context.i8_type().const_int(1, false).into(),
     }
-}
-
-fn list_returned_from_zig<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    output: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    // per the C ABI, our list objects are passed between functions as an i128/i64
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_str_list_int",
-    )
-}
-
-pub fn call_bitcode_fn_returns_list<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-) -> BasicValueEnum<'ctx> {
-    let value = call_bitcode_fn(env, args, fn_name);
-
-    list_returned_from_zig(env, value)
 }
 
 fn pass_element_as_opaque<'a, 'ctx, 'env>(
@@ -108,7 +85,7 @@ pub fn list_single<'a, 'ctx, 'env>(
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             env.alignment_intvalue(element_layout),
@@ -129,7 +106,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let inc_element_fn = build_inc_n_wrapper(env, layout_ids, element_layout);
 
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             list_len.into(),
@@ -148,7 +125,7 @@ pub fn list_join<'a, 'ctx, 'env>(
     outer_list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, outer_list),
@@ -166,7 +143,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, list),
@@ -213,7 +190,7 @@ pub fn list_append<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, original_wrapper.into()),
@@ -233,7 +210,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, original_wrapper.into()),
@@ -254,7 +231,7 @@ pub fn list_swap<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, original_wrapper.into()),
@@ -278,7 +255,7 @@ pub fn list_sublist<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, original_wrapper.into()),
@@ -301,7 +278,7 @@ pub fn list_drop_at<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, original_wrapper.into()),
@@ -543,7 +520,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
 
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, list),
@@ -672,7 +649,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, list),
@@ -695,7 +672,7 @@ pub fn list_map_with_index<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     return_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, list),
@@ -719,7 +696,7 @@ pub fn list_map<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     return_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, list),
@@ -784,7 +761,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
     let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
     let dec_c = build_dec_wrapper(env, layout_ids, element3_layout);
 
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, list1),
@@ -826,7 +803,7 @@ pub fn list_map4<'a, 'ctx, 'env>(
     let dec_c = build_dec_wrapper(env, layout_ids, element3_layout);
     let dec_d = build_dec_wrapper(env, layout_ids, element4_layout);
 
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, list1),
@@ -859,7 +836,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
     second_list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_returns_list(
+    call_list_bitcode_fn(
         env,
         &[
             pass_list_cc(env, first_list),
