@@ -1,10 +1,9 @@
-use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait, SymbolStorage};
+use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
 use crate::{
     single_register_floats, single_register_integers, single_register_layouts, Relocation,
 };
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
@@ -255,150 +254,88 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     #[inline(always)]
     fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
-        symbol_map: &MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64SystemV,
+        >,
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
-    ) -> u32 {
-        let mut stack_offset = Self::SHADOW_SPACE_SIZE as i32;
+    ) {
+        let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
+        if Self::returns_via_arg_pointer(ret_layout) {
+            // Save space on the stack for the arg we will return.
+            storage_manager
+                .claim_stack_area(&Symbol::RET_POINTER, ret_layout.stack_size(TARGET_INFO));
+            todo!("claim first parama reg for the address");
+        }
         let mut general_i = 0;
         let mut float_i = 0;
-        // For most return layouts we will do nothing.
-        // In some cases, we need to put the return address as the first arg.
-        match ret_layout {
-            single_register_layouts!() | Layout::Builtin(Builtin::Str) | Layout::Struct([]) => {
-                // Nothing needs to be done for any of these cases.
-            }
-            x => {
-                todo!("receiving return type, {:?}", x);
-            }
-        }
-        for (i, layout) in arg_layouts.iter().enumerate() {
+        for (i, (sym, layout)) in args.iter().zip(arg_layouts.iter()).enumerate() {
             match layout {
                 single_register_integers!() => {
-                    let storage = match symbol_map.get(&args[i]) {
-                        Some(storage) => storage,
-                        None => {
-                            internal_error!("function argument does not reference any symbol")
-                        }
-                    };
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
-                        // Load the value to the param reg.
-                        let dst = Self::GENERAL_PARAM_REGS[general_i];
-                        match storage {
-                            SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
-                                X86_64Assembler::mov_reg64_reg64(buf, dst, *reg);
-                            }
-                            SymbolStorage::Base { offset, .. } => {
-                                X86_64Assembler::mov_reg64_base32(buf, dst, *offset);
-                            }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
-                                internal_error!("Cannot load floating point symbol into GeneralReg")
-                            }
-                        }
+                        storage_manager.load_to_specified_general_reg(
+                            buf,
+                            sym,
+                            Self::GENERAL_PARAM_REGS[i],
+                        );
                         general_i += 1;
                     } else {
-                        // Load the value to the stack.
-                        match storage {
-                            SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
-                                X86_64Assembler::mov_stack32_reg64(buf, stack_offset, *reg);
-                            }
-                            SymbolStorage::Base { offset, .. } => {
-                                // Use RAX as a tmp reg because it will be free before function calls.
-                                X86_64Assembler::mov_reg64_base32(
-                                    buf,
-                                    X86_64GeneralReg::RAX,
-                                    *offset,
-                                );
-                                X86_64Assembler::mov_stack32_reg64(
-                                    buf,
-                                    stack_offset,
-                                    X86_64GeneralReg::RAX,
-                                );
-                            }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
-                                internal_error!("Cannot load floating point symbol into GeneralReg")
-                            }
-                        }
-                        stack_offset += 8;
+                        // Copy to stack using return reg as buffer.
+                        storage_manager.load_to_specified_general_reg(
+                            buf,
+                            sym,
+                            Self::GENERAL_RETURN_REGS[0],
+                        );
+                        X86_64Assembler::mov_stack32_reg64(
+                            buf,
+                            tmp_stack_offset,
+                            Self::GENERAL_RETURN_REGS[0],
+                        );
+                        tmp_stack_offset += 8;
                     }
                 }
                 single_register_floats!() => {
-                    let storage = match symbol_map.get(&args[i]) {
-                        Some(storage) => storage,
-                        None => {
-                            internal_error!("function argument does not reference any symbol")
-                        }
-                    };
                     if float_i < Self::FLOAT_PARAM_REGS.len() {
-                        // Load the value to the param reg.
-                        let dst = Self::FLOAT_PARAM_REGS[float_i];
-                        match storage {
-                            SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg { reg, .. } => {
-                                X86_64Assembler::mov_freg64_freg64(buf, dst, *reg);
-                            }
-                            SymbolStorage::Base { offset, .. } => {
-                                X86_64Assembler::mov_freg64_base32(buf, dst, *offset);
-                            }
-                            SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg { .. } => {
-                                internal_error!("Cannot load general symbol into FloatReg")
-                            }
-                        }
+                        storage_manager.load_to_specified_float_reg(
+                            buf,
+                            sym,
+                            Self::FLOAT_PARAM_REGS[i],
+                        );
                         float_i += 1;
                     } else {
-                        // Load the value to the stack.
-                        match storage {
-                            SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg { reg, .. } => {
-                                X86_64Assembler::mov_stack32_freg64(buf, stack_offset, *reg);
-                            }
-                            SymbolStorage::Base { offset, .. } => {
-                                // Use XMM0 as a tmp reg because it will be free before function calls.
-                                X86_64Assembler::mov_freg64_base32(
-                                    buf,
-                                    X86_64FloatReg::XMM0,
-                                    *offset,
-                                );
-                                X86_64Assembler::mov_stack32_freg64(
-                                    buf,
-                                    stack_offset,
-                                    X86_64FloatReg::XMM0,
-                                );
-                            }
-                            SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg { .. } => {
-                                internal_error!("Cannot load general symbol into FloatReg")
-                            }
-                        }
-                        stack_offset += 8;
+                        // Copy to stack using return reg as buffer.
+                        storage_manager.load_to_specified_float_reg(
+                            buf,
+                            sym,
+                            Self::FLOAT_RETURN_REGS[0],
+                        );
+                        X86_64Assembler::mov_stack32_freg64(
+                            buf,
+                            tmp_stack_offset,
+                            Self::FLOAT_RETURN_REGS[0],
+                        );
+                        tmp_stack_offset += 8;
                     }
                 }
                 Layout::Builtin(Builtin::Str) => {
-                    let storage = match symbol_map.get(&args[i]) {
-                        Some(storage) => storage,
-                        None => {
-                            internal_error!("function argument does not reference any symbol")
-                        }
-                    };
                     if general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
-                        // Load the value to the param reg.
-                        let dst1 = Self::GENERAL_PARAM_REGS[general_i];
-                        let dst2 = Self::GENERAL_PARAM_REGS[general_i + 1];
-                        match storage {
-                            SymbolStorage::Base { offset, .. } => {
-                                X86_64Assembler::mov_reg64_base32(buf, dst1, *offset);
-                                X86_64Assembler::mov_reg64_base32(buf, dst2, *offset + 8);
-                            }
-                            _ => {
-                                internal_error!(
-                                    "Strings only support being loaded from base offsets"
-                                );
-                            }
-                        }
+                        let (base_offset, _size) = storage_manager.stack_offset_and_size(sym);
+                        debug_assert_eq!(base_offset % 8, 0);
+                        X86_64Assembler::mov_reg64_base32(
+                            buf,
+                            Self::GENERAL_PARAM_REGS[general_i],
+                            base_offset,
+                        );
+                        X86_64Assembler::mov_reg64_base32(
+                            buf,
+                            Self::GENERAL_PARAM_REGS[general_i + 1],
+                            base_offset + 8,
+                        );
                         general_i += 2;
                     } else {
                         todo!("calling functions with strings on the stack");
@@ -410,7 +347,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                 }
             }
         }
-        stack_offset as u32
+        storage_manager.update_fn_call_stack_size(tmp_stack_offset as u32);
     }
 
     fn return_complex_symbol<'a>(
@@ -431,7 +368,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             }
             Layout::Struct([]) => {}
             Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
-                let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
+                let (base_offset, _size) = storage_manager.stack_offset_and_size(sym);
                 debug_assert_eq!(base_offset % 8, 0);
                 X86_64Assembler::mov_reg64_base32(buf, Self::GENERAL_RETURN_REGS[0], base_offset);
                 X86_64Assembler::mov_reg64_base32(
@@ -650,122 +587,68 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     #[inline(always)]
     fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
-        symbol_map: &MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64WindowsFastcall,
+        >,
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
-    ) -> u32 {
-        let mut stack_offset = Self::SHADOW_SPACE_SIZE as i32;
-        // For most return layouts we will do nothing.
-        // In some cases, we need to put the return address as the first arg.
-        match ret_layout {
-            single_register_layouts!() | Layout::Struct([]) => {
-                // Nothing needs to be done for any of these cases.
-            }
-            x => {
-                todo!("receiving return type, {:?}", x);
-            }
+    ) {
+        let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
+        if Self::returns_via_arg_pointer(ret_layout) {
+            // Save space on the stack for the arg we will return.
+            storage_manager
+                .claim_stack_area(&Symbol::RET_POINTER, ret_layout.stack_size(TARGET_INFO));
+            todo!("claim first parama reg for the address");
         }
-        for (i, layout) in arg_layouts.iter().enumerate() {
+        for (i, (sym, layout)) in args.iter().zip(arg_layouts.iter()).enumerate() {
             match layout {
                 single_register_integers!() => {
-                    let storage = match symbol_map.get(&args[i]) {
-                        Some(storage) => storage,
-                        None => {
-                            internal_error!("function argument does not reference any symbol")
-                        }
-                    };
                     if i < Self::GENERAL_PARAM_REGS.len() {
-                        // Load the value to the param reg.
-                        let dst = Self::GENERAL_PARAM_REGS[i];
-                        match storage {
-                            SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
-                                X86_64Assembler::mov_reg64_reg64(buf, dst, *reg);
-                            }
-                            SymbolStorage::Base { offset, .. } => {
-                                X86_64Assembler::mov_reg64_base32(buf, dst, *offset);
-                            }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
-                                internal_error!("Cannot load floating point symbol into GeneralReg")
-                            }
-                        }
+                        storage_manager.load_to_specified_general_reg(
+                            buf,
+                            sym,
+                            Self::GENERAL_PARAM_REGS[i],
+                        );
                     } else {
-                        // Load the value to the stack.
-                        match storage {
-                            SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
-                                X86_64Assembler::mov_stack32_reg64(buf, stack_offset, *reg);
-                            }
-                            SymbolStorage::Base { offset, .. } => {
-                                // Use RAX as a tmp reg because it will be free before function calls.
-                                X86_64Assembler::mov_reg64_base32(
-                                    buf,
-                                    X86_64GeneralReg::RAX,
-                                    *offset,
-                                );
-                                X86_64Assembler::mov_stack32_reg64(
-                                    buf,
-                                    stack_offset,
-                                    X86_64GeneralReg::RAX,
-                                );
-                            }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
-                                internal_error!("Cannot load floating point symbol into GeneralReg")
-                            }
-                        }
-                        stack_offset += 8;
+                        // Copy to stack using return reg as buffer.
+                        storage_manager.load_to_specified_general_reg(
+                            buf,
+                            sym,
+                            Self::GENERAL_RETURN_REGS[0],
+                        );
+                        X86_64Assembler::mov_stack32_reg64(
+                            buf,
+                            tmp_stack_offset,
+                            Self::GENERAL_RETURN_REGS[0],
+                        );
+                        tmp_stack_offset += 8;
                     }
                 }
                 single_register_floats!() => {
-                    let storage = match symbol_map.get(&args[i]) {
-                        Some(storage) => storage,
-                        None => {
-                            internal_error!("function argument does not reference any symbol")
-                        }
-                    };
                     if i < Self::FLOAT_PARAM_REGS.len() {
-                        // Load the value to the param reg.
-                        let dst = Self::FLOAT_PARAM_REGS[i];
-                        match storage {
-                            SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg { reg, .. } => {
-                                X86_64Assembler::mov_freg64_freg64(buf, dst, *reg);
-                            }
-                            SymbolStorage::Base { offset, .. } => {
-                                X86_64Assembler::mov_freg64_base32(buf, dst, *offset);
-                            }
-                            SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg { .. } => {
-                                internal_error!("Cannot load general symbol into FloatReg")
-                            }
-                        }
+                        storage_manager.load_to_specified_float_reg(
+                            buf,
+                            sym,
+                            Self::FLOAT_PARAM_REGS[i],
+                        );
                     } else {
-                        // Load the value to the stack.
-                        match storage {
-                            SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg { reg, .. } => {
-                                X86_64Assembler::mov_stack32_freg64(buf, stack_offset, *reg);
-                            }
-                            SymbolStorage::Base { offset, .. } => {
-                                // Use XMM0 as a tmp reg because it will be free before function calls.
-                                X86_64Assembler::mov_freg64_base32(
-                                    buf,
-                                    X86_64FloatReg::XMM0,
-                                    *offset,
-                                );
-                                X86_64Assembler::mov_stack32_freg64(
-                                    buf,
-                                    stack_offset,
-                                    X86_64FloatReg::XMM0,
-                                );
-                            }
-                            SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg { .. } => {
-                                internal_error!("Cannot load general symbol into FloatReg")
-                            }
-                        }
-                        stack_offset += 8;
+                        // Copy to stack using return reg as buffer.
+                        storage_manager.load_to_specified_float_reg(
+                            buf,
+                            sym,
+                            Self::FLOAT_RETURN_REGS[0],
+                        );
+                        X86_64Assembler::mov_stack32_freg64(
+                            buf,
+                            tmp_stack_offset,
+                            Self::FLOAT_RETURN_REGS[0],
+                        );
+                        tmp_stack_offset += 8;
                     }
                 }
                 Layout::Builtin(Builtin::Str) => {
@@ -778,7 +661,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                 }
             }
         }
-        stack_offset as u32
+        storage_manager.update_fn_call_stack_size(tmp_stack_offset as u32);
     }
 
     fn return_complex_symbol<'a>(

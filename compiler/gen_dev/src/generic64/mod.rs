@@ -82,12 +82,12 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
     // It returns the amount of stack space needed to temporarily store the args.
     fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
-        symbol_map: &MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
+        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
         ret_layout: &Layout<'a>,
-    ) -> u32;
+    );
 
     /// return_complex_symbol returns the specified complex/non-primative symbol.
     /// It uses the layout to determine how the data should be returned.
@@ -553,14 +553,13 @@ impl<
             .push_used_caller_saved_regs_to_stack(&mut self.buf);
 
         // Put values in param regs or on top of the stack.
-        let tmp_stack_size = CC::store_args(
+        CC::store_args(
             &mut self.buf,
-            &self.symbol_storage_map,
+            &mut self.storage_manager,
             args,
             arg_layouts,
             ret_layout,
         );
-        self.fn_call_stack_size = std::cmp::max(self.fn_call_stack_size, tmp_stack_size);
 
         // Call function and generate reloc.
         ASM::call(&mut self.buf, &mut self.relocs, fn_name);
@@ -754,14 +753,13 @@ impl<
         self.storage_manager
             .push_used_caller_saved_regs_to_stack(&mut self.buf);
 
-        let tmp_stack_size = CC::store_args(
+        CC::store_args(
             &mut self.buf,
-            &self.symbol_storage_map,
+            &mut self.storage_manager,
             args,
             arg_layouts,
             ret_layout,
         );
-        self.fn_call_stack_size = std::cmp::max(self.fn_call_stack_size, tmp_stack_size);
 
         let jmp_location = self.buf.len();
         let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);

@@ -1,8 +1,7 @@
-use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait, SymbolStorage};
+use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
 use crate::Relocation;
 use bumpalo::collections::Vec;
 use packed_struct::prelude::*;
-use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::Layout;
@@ -265,11 +264,17 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     #[inline(always)]
     fn store_args<'a>(
         _buf: &mut Vec<'a, u8>,
-        _symbol_map: &MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
+        _storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
         _args: &'a [Symbol],
         _arg_layouts: &[Layout<'a>],
         _ret_layout: &Layout<'a>,
-    ) -> u32 {
+    ) {
         todo!("Storing args for AArch64");
     }
 

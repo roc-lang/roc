@@ -9,6 +9,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 use roc_target::TargetInfo;
+use std::cmp::max;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -105,6 +106,9 @@ pub struct StorageManager<
 
     free_stack_chunks: Vec<'a, (i32, u32)>,
     stack_size: u32,
+
+    // The amount of extra stack space needed to pass args for function calling.
+    fn_call_stack_size: u32,
 }
 
 pub fn new_storage_manager<
@@ -132,6 +136,7 @@ pub fn new_storage_manager<
         float_used_callee_saved_regs: MutSet::default(),
         free_stack_chunks: bumpalo::vec![in env.arena],
         stack_size: 0,
+        fn_call_stack_size: 0,
     }
 }
 
@@ -158,6 +163,7 @@ impl<
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
         self.free_stack_chunks.clear();
         self.stack_size = 0;
+        self.fn_call_stack_size = 0;
     }
 
     // Returns true if the symbol is storing a primitive value.
@@ -732,6 +738,11 @@ impl<
     pub fn ret_pionter_arg(&mut self, reg: GeneralReg) {
         self.symbol_storage_map
             .insert(Symbol::RET_POINTER, Reg(General(reg)));
+    }
+
+    // updates the function call stack size to the max of its current value and the size need for this call.
+    pub fn update_fn_call_stack_size(&mut self, tmp_size: u32) {
+        self.fn_call_stack_size = max(self.fn_call_stack_size, tmp_size);
     }
 
     /// claim_stack_area is the public wrapper around claim_stack_size.
