@@ -72,7 +72,7 @@ pub struct StorageManager<
     GeneralReg: RegTrait,
     FloatReg: RegTrait,
     ASM: Assembler<GeneralReg, FloatReg>,
-    CC: CallConv<GeneralReg, FloatReg>,
+    CC: CallConv<GeneralReg, FloatReg, ASM>,
 > {
     phantom_cc: PhantomData<CC>,
     phantom_asm: PhantomData<ASM>,
@@ -112,7 +112,7 @@ pub fn new_storage_manager<
     GeneralReg: RegTrait,
     FloatReg: RegTrait,
     ASM: Assembler<GeneralReg, FloatReg>,
-    CC: CallConv<GeneralReg, FloatReg>,
+    CC: CallConv<GeneralReg, FloatReg, ASM>,
 >(
     env: &'a Env,
     target_info: TargetInfo,
@@ -140,7 +140,7 @@ impl<
         FloatReg: RegTrait,
         GeneralReg: RegTrait,
         ASM: Assembler<GeneralReg, FloatReg>,
-        CC: CallConv<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>,
     > StorageManager<'a, GeneralReg, FloatReg, ASM, CC>
 {
     pub fn reset(&mut self) {
@@ -158,6 +158,19 @@ impl<
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
         self.free_stack_chunks.clear();
         self.stack_size = 0;
+    }
+
+    // Returns true if the symbol is storing a primitive value.
+    pub fn is_stored_primitive(&self, sym: &Symbol) -> bool {
+        let storage = if let Some(storage) = self.symbol_storage_map.get(sym) {
+            storage
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
+        };
+        matches!(
+            storage,
+            Reg(_) | Stack(Primitive { .. } | ReferencedPrimitive { .. })
+        )
     }
 
     // Get a general register from the free list.
@@ -335,6 +348,103 @@ impl<
                     }),
                 );
                 reg
+            }
+            Stack(ReferencedPrimitive { .. }) => {
+                todo!("loading referenced primitives")
+            }
+            Stack(Complex { .. }) => {
+                internal_error!("Cannot load large values into float registers: {}", sym)
+            }
+            NoData => {
+                internal_error!("Cannot load no data into general registers: {}", sym)
+            }
+        }
+    }
+
+    // Loads the symbol to the specified register.
+    // It will fail if the symbol is stored in a float register.
+    // This is only made to be used in special cases where exact regs are needed (function args and returns).
+    // It will not try to free the register first.
+    // This will not track the symbol change (it makes no assumptions about the new reg).
+    pub fn load_to_specified_general_reg(
+        &self,
+        buf: &mut Vec<'a, u8>,
+        sym: &Symbol,
+        reg: GeneralReg,
+    ) {
+        let storage = if let Some(storage) = self.symbol_storage_map.get(sym) {
+            storage
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
+        };
+        match storage {
+            Reg(General(old_reg))
+            | Stack(Primitive {
+                reg: Some(General(old_reg)),
+                ..
+            }) => {
+                debug_assert_ne!(*old_reg, reg);
+                ASM::mov_reg64_reg64(buf, reg, *old_reg);
+            }
+            Reg(Float(_))
+            | Stack(Primitive {
+                reg: Some(Float(_)),
+                ..
+            }) => {
+                internal_error!("Cannot load floating point symbol into GeneralReg: {}", sym)
+            }
+            Stack(Primitive {
+                reg: None,
+                base_offset,
+            }) => {
+                debug_assert_eq!(base_offset % 8, 0);
+                ASM::mov_reg64_base32(buf, reg, *base_offset);
+            }
+            Stack(ReferencedPrimitive { .. }) => {
+                todo!("loading referenced primitives")
+            }
+            Stack(Complex { .. }) => {
+                internal_error!("Cannot load large values into general registers: {}", sym)
+            }
+            NoData => {
+                internal_error!("Cannot load no data into general registers: {}", sym)
+            }
+        }
+    }
+
+    // Loads the symbol to the specified register.
+    // It will fail if the symbol is stored in a general register.
+    // This is only made to be used in special cases where exact regs are needed (function args and returns).
+    // It will not try to free the register first.
+    // This will not track the symbol change (it makes no assumptions about the new reg).
+    pub fn load_to_specified_float_reg(&self, buf: &mut Vec<'a, u8>, sym: &Symbol, reg: FloatReg) {
+        let storage = if let Some(storage) = self.symbol_storage_map.get(sym) {
+            storage
+        } else {
+            internal_error!("Unknown symbol: {}", sym);
+        };
+        match storage {
+            Reg(Float(old_reg))
+            | Stack(Primitive {
+                reg: Some(Float(old_reg)),
+                ..
+            }) => {
+                debug_assert_ne!(*old_reg, reg);
+                ASM::mov_freg64_freg64(buf, reg, *old_reg);
+            }
+            Reg(General(_))
+            | Stack(Primitive {
+                reg: Some(General(_)),
+                ..
+            }) => {
+                internal_error!("Cannot load general symbol into FloatReg: {}", sym)
+            }
+            Stack(Primitive {
+                reg: None,
+                base_offset,
+            }) => {
+                debug_assert_eq!(base_offset % 8, 0);
+                ASM::mov_freg64_base32(buf, reg, *base_offset);
             }
             Stack(ReferencedPrimitive { .. }) => {
                 todo!("loading referenced primitives")

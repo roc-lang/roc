@@ -1,4 +1,4 @@
-use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage};
+use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait, SymbolStorage};
 use crate::Relocation;
 use bumpalo::collections::Vec;
 use packed_struct::prelude::*;
@@ -75,7 +75,7 @@ pub struct AArch64Call {}
 
 const STACK_ALIGNMENT: u8 = 16;
 
-impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
+impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64Call {
     const BASE_PTR_REG: AArch64GeneralReg = AArch64GeneralReg::FP;
     const STACK_PTR_REG: AArch64GeneralReg = AArch64GeneralReg::ZRSP;
 
@@ -266,6 +266,21 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         _ret_layout: &Layout<'a>,
     ) -> u32 {
         todo!("Storing args for AArch64");
+    }
+
+    fn return_complex_symbol<'a>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+    ) {
+        todo!("Returning complex symbols for AArch64");
     }
 
     fn return_struct<'a>(

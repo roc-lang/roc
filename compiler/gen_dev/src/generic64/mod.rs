@@ -1,4 +1,7 @@
-use crate::{Backend, Env, Relocation};
+use crate::{
+    single_register_floats, single_register_integers, single_register_layouts, Backend, Env,
+    Relocation,
+};
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
@@ -10,9 +13,9 @@ use roc_mono::layout::{Builtin, Layout};
 use roc_target::TargetInfo;
 use std::marker::PhantomData;
 
-pub mod aarch64;
-mod storage;
-pub mod x86_64;
+pub(crate) mod aarch64;
+pub(crate) mod storage;
+pub(crate) mod x86_64;
 
 // TODO: StorageManager is still not fully integrated.
 // General pieces needed:
@@ -26,7 +29,9 @@ pub mod x86_64;
 // - look into fixing join to no longer use multiple backends???
 use storage::StorageManager;
 
-pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
+pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<GeneralReg, FloatReg>>:
+    Sized
+{
     const BASE_PTR_REG: GeneralReg;
     const STACK_PTR_REG: GeneralReg;
 
@@ -53,12 +58,14 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
 
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
+        // TODO: This should deal with float regs as well.
         general_saved_regs: &[GeneralReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
     ) -> i32;
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
+        // TODO: This should deal with float regs as well.
         general_saved_regs: &[GeneralReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
@@ -86,6 +93,15 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
         ret_layout: &Layout<'a>,
     ) -> u32;
 
+    /// return_complex_symbol returns the specified complex/non-primative symbol.
+    /// It uses the layout to determine how the data should be returned.
+    fn return_complex_symbol<'a>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+    );
+
     // return_struct returns a struct currently on the stack at `struct_offset`.
     // It does so using registers and stack as necessary.
     fn return_struct<'a>(
@@ -106,7 +122,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
 /// Thus, some backends will need to use mulitiple instructions to preform a single one of this calls.
 /// Generally, I prefer explicit sources, as opposed to dst being one of the sources. Ex: `x = x + y` would be `add x, x, y` instead of `add x, y`.
 /// dst should always come before sources.
-pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
+pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized {
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
     fn abs_freg64_freg64(
         buf: &mut Vec<'_, u8>,
@@ -262,7 +278,7 @@ pub struct Backend64Bit<
     GeneralReg: RegTrait,
     FloatReg: RegTrait,
     ASM: Assembler<GeneralReg, FloatReg>,
-    CC: CallConv<GeneralReg, FloatReg>,
+    CC: CallConv<GeneralReg, FloatReg, ASM>,
 > {
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
@@ -313,7 +329,7 @@ pub fn new_backend_64bit<
     GeneralReg: RegTrait,
     FloatReg: RegTrait,
     ASM: Assembler<GeneralReg, FloatReg>,
-    CC: CallConv<GeneralReg, FloatReg>,
+    CC: CallConv<GeneralReg, FloatReg, ASM>,
 >(
     env: &'a Env,
     target_info: TargetInfo,
@@ -355,7 +371,7 @@ impl<
         GeneralReg: RegTrait,
         FloatReg: RegTrait,
         ASM: Assembler<GeneralReg, FloatReg>,
-        CC: CallConv<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>,
     > Backend<'a> for Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
 {
     fn env(&self) -> &Env<'a> {
@@ -1104,71 +1120,30 @@ impl<
     }
 
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>) {
-        let val = self.symbol_storage_map.get(sym);
-        match val {
-            Some(SymbolStorage::GeneralReg(reg)) if *reg == CC::GENERAL_RETURN_REGS[0] => {}
-            Some(SymbolStorage::GeneralReg(reg)) => {
-                // If it fits in a general purpose register, just copy it over to.
-                // Technically this can be optimized to produce shorter instructions if less than 64bits.
-                ASM::mov_reg64_reg64(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *reg);
-            }
-            Some(SymbolStorage::FloatReg(reg)) if *reg == CC::FLOAT_RETURN_REGS[0] => {}
-            Some(SymbolStorage::FloatReg(reg)) => {
-                ASM::mov_freg64_freg64(&mut self.buf, CC::FLOAT_RETURN_REGS[0], *reg);
-            }
-            Some(SymbolStorage::Base { offset, size, .. }) => match layout {
-                Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
-                    ASM::mov_reg64_base32(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *offset);
+        if self.storage_manager.is_stored_primitive(sym) {
+            // Just load it to the correct type of reg as a stand alone value.
+            match layout {
+                single_register_integers!() => {
+                    self.storage_manager.load_to_specified_general_reg(
+                        &mut self.buf,
+                        sym,
+                        CC::GENERAL_RETURN_REGS[0],
+                    );
                 }
-                Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                    ASM::mov_freg64_base32(&mut self.buf, CC::FLOAT_RETURN_REGS[0], *offset);
+                single_register_floats!() => {
+                    self.storage_manager.load_to_specified_float_reg(
+                        &mut self.buf,
+                        sym,
+                        CC::FLOAT_RETURN_REGS[0],
+                    );
                 }
-                Layout::Builtin(Builtin::Str) => {
-                    if self.symbol_storage_map.contains_key(&Symbol::RET_POINTER) {
-                        // This will happen on windows, return via pointer here.
-                        todo!("Returning strings via pointer");
-                    } else {
-                        ASM::mov_reg64_base32(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *offset);
-                        ASM::mov_reg64_base32(
-                            &mut self.buf,
-                            CC::GENERAL_RETURN_REGS[1],
-                            *offset + 8,
-                        );
-                    }
+                _ => {
+                    internal_error!("All primitive valuse should fit in a single register");
                 }
-                Layout::Struct(field_layouts) => {
-                    let (offset, size) = (*offset, *size);
-                    // Nothing to do for empty struct
-                    if size > 0 {
-                        let ret_reg = if self.symbol_storage_map.contains_key(&Symbol::RET_POINTER)
-                        {
-                            Some(
-                                self.storage_manager
-                                    .load_to_general_reg(&mut self.buf, &Symbol::RET_POINTER),
-                            )
-                        } else {
-                            None
-                        };
-                        CC::return_struct(&mut self.buf, offset, size, field_layouts, ret_reg);
-                    }
-                }
-                x => todo!("returning symbol with layout, {:?}", x),
-            },
-            Some(x) => todo!("returning symbol storage, {:?}", x),
-            None if layout == &Layout::Struct(&[]) => {
-                // Empty struct is not defined and does nothing.
             }
-            None => {
-                internal_error!("Unknown return symbol: {:?}", sym);
-            }
+            return;
         }
-        let inst_loc = self.buf.len() as u64;
-        let offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678) as u64;
-        self.relocs.push(Relocation::JmpToReturn {
-            inst_loc,
-            inst_size: self.buf.len() as u64 - inst_loc,
-            offset,
-        });
+        CC::return_complex_symbol(&mut self.buf, &mut self.storage_manager, sym, layout)
     }
 }
 
@@ -1179,7 +1154,7 @@ impl<
         FloatReg: RegTrait,
         GeneralReg: RegTrait,
         ASM: Assembler<GeneralReg, FloatReg>,
-        CC: CallConv<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>,
     > Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
 {
     // Updates a jump instruction to a new offset and returns the number of bytes written.

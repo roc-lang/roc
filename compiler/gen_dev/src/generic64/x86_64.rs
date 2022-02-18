@@ -1,4 +1,4 @@
-use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage};
+use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait, SymbolStorage};
 use crate::{
     single_register_floats, single_register_integers, single_register_layouts, Relocation,
 };
@@ -70,7 +70,7 @@ pub struct X86_64SystemV {}
 
 const STACK_ALIGNMENT: u8 = 16;
 
-impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
+impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64SystemV {
     const BASE_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RBP;
     const STACK_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RSP;
 
@@ -441,6 +441,88 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         stack_offset as u32
     }
 
+    fn return_complex_symbol<'a>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64SystemV,
+        >,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+    ) {
+        // Complex types.
+        //     let val = self.symbol_storage_map.get(sym);
+        //     match val {
+        //         Some(SymbolStorage::GeneralReg(reg)) if *reg == CC::GENERAL_RETURN_REGS[0] => {}
+        //         Some(SymbolStorage::GeneralReg(reg)) => {
+        //             // If it fits in a general purpose register, just copy it over to.
+        //             // Technically this can be optimized to produce shorter instructions if less than 64bits.
+        //             ASM::mov_reg64_reg64(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *reg);
+        //         }
+        //         Some(SymbolStorage::FloatReg(reg)) if *reg == CC::FLOAT_RETURN_REGS[0] => {}
+        //         Some(SymbolStorage::FloatReg(reg)) => {
+        //             ASM::mov_freg64_freg64(&mut self.buf, CC::FLOAT_RETURN_REGS[0], *reg);
+        //         }
+        //         Some(SymbolStorage::Base { offset, size, .. }) => match layout {
+        //             Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+        //                 ASM::mov_reg64_base32(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *offset);
+        //             }
+        //             Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+        //                 ASM::mov_freg64_base32(&mut self.buf, CC::FLOAT_RETURN_REGS[0], *offset);
+        //             }
+        //             Layout::Builtin(Builtin::Str) => {
+        //                 if self.symbol_storage_map.contains_key(&Symbol::RET_POINTER) {
+        //                     // This will happen on windows, return via pointer here.
+        //                     todo!("Returning strings via pointer");
+        //                 } else {
+        //                     ASM::mov_reg64_base32(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *offset);
+        //                     ASM::mov_reg64_base32(
+        //                         &mut self.buf,
+        //                         CC::GENERAL_RETURN_REGS[1],
+        //                         *offset + 8,
+        //                     );
+        //                 }
+        //             }
+        //             Layout::Struct(field_layouts) => {
+        //                 let (offset, size) = (*offset, *size);
+        //                 // Nothing to do for empty struct
+        //                 if size > 0 {
+        //                     let ret_reg = if self.symbol_storage_map.contains_key(&Symbol::RET_POINTER)
+        //                     {
+        //                         Some(
+        //                             self.storage_manager
+        //                                 .load_to_general_reg(&mut self.buf, &Symbol::RET_POINTER),
+        //                         )
+        //                     } else {
+        //                         None
+        //                     };
+        //                     CC::return_struct(&mut self.buf, offset, size, field_layouts, ret_reg);
+        //                 }
+        //             }
+        //             x => todo!("returning symbol with layout, {:?}", x),
+        //         },
+        //         Some(x) => todo!("returning symbol storage, {:?}", x),
+        //         None if layout == &Layout::Struct(&[]) => {
+        //             // Empty struct is not defined and does nothing.
+        //         }
+        //         None => {
+        //             internal_error!("Unknown return symbol: {:?}", sym);
+        //         }
+        //     }
+        //     let inst_loc = self.buf.len() as u64;
+        //     let offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678) as u64;
+        //     self.relocs.push(Relocation::JmpToReturn {
+        //         inst_loc,
+        //         inst_size: self.buf.len() as u64 - inst_loc,
+        //         offset,
+        //     });
+        // }
+        todo!("Returning complex symbols for X86_64");
+    }
+
     fn return_struct<'a>(
         _buf: &mut Vec<'a, u8>,
         _struct_offset: i32,
@@ -458,7 +540,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
     }
 }
 
-impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
+impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64WindowsFastcall {
     const BASE_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RBP;
     const STACK_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RSP;
 
@@ -763,6 +845,21 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
             }
         }
         stack_offset as u32
+    }
+
+    fn return_complex_symbol<'a>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64WindowsFastcall,
+        >,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+    ) {
+        todo!("Returning symbols for X86_64");
     }
 
     fn return_struct<'a>(
