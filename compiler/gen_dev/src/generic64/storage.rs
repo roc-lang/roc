@@ -383,7 +383,9 @@ impl<
                 reg: Some(General(old_reg)),
                 ..
             }) => {
-                debug_assert_ne!(*old_reg, reg);
+                if *old_reg == reg {
+                    return;
+                }
                 ASM::mov_reg64_reg64(buf, reg, *old_reg);
             }
             Reg(Float(_))
@@ -429,7 +431,9 @@ impl<
                 reg: Some(Float(old_reg)),
                 ..
             }) => {
-                debug_assert_ne!(*old_reg, reg);
+                if *old_reg == reg {
+                    return;
+                }
                 ASM::mov_freg64_freg64(buf, reg, *old_reg);
             }
             Reg(General(_))
