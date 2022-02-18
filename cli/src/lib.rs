@@ -37,6 +37,7 @@ pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINK: &str = "roc-linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const FLAG_VALGRIND: &str = "valgrind";
+pub const FLAG_CHECK: &str = "check";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const BACKEND: &str = "BACKEND";
@@ -122,6 +123,12 @@ pub fn build_app<'a>() -> App<'a> {
                     .index(1)
                     .multiple_values(true)
                     .required(false))
+            .arg(
+                Arg::new(FLAG_CHECK)
+                    .long(FLAG_CHECK)
+                    .about("Checks that specified files are formatted. If formatting is needed, it will return a non-zero exit code.")
+                    .required(false),
+            )
         )
         .subcommand(App::new(CMD_VERSION)
             .about("Print version information")
@@ -240,6 +247,11 @@ pub fn docs(files: Vec<PathBuf>) {
 pub enum BuildConfig {
     BuildOnly,
     BuildAndRun { roc_file_arg_index: usize },
+}
+
+pub enum FormatMode {
+    Format,
+    CheckOnly,
 }
 
 pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
