@@ -2672,3 +2672,38 @@ fn monomorphized_lists() {
         u64
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_oks() {
+    assert_evals_to!(
+        "List.oks []",
+        RocList::from_slice(&[]),
+        RocList<()>
+    );
+    assert_evals_to!(
+        "List.oks [Ok {}, Ok {}]",
+        RocList::from_slice(&[(), ()]),
+        RocList<()>
+    );
+    assert_evals_to!(
+        "List.oks [Ok 1, Ok 2]",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.oks [Ok 1, Err 2]",
+        RocList::from_slice(&[1]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.oks [Err 1, Ok 2]",
+        RocList::from_slice(&[2]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.oks [Err 1, Err 2]",
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}

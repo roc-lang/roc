@@ -1382,3 +1382,48 @@ pub fn listFindUnsafe(
         return .{ .value = null, .found = false };
     }
 }
+
+// List.oks : List (Result a *) -> List a
+pub fn listOks(
+    list: RocList,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: u32,
+    result_width: usize,
+    elem_width: usize,
+    has_tag_id: HasTagId,
+) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        const only_oks_list = RocList.allocate(alignment, size, elem_width);
+        const target_ptr = only_oks_list.bytes orelse unreachable;
+
+        if (data_is_owned) {
+            inc_n_data(data, size);
+        }
+
+        var i: usize = 0;
+        var kept: usize = 0;
+        while (i < size) : (i += 1) {
+            const result_element = source_ptr + (i * result_width);
+
+            const answer = has_tag_id(1, result_element);
+            if (answer.matched) {
+                const contents = (answer.data orelse unreachable);
+                @memcpy(target_ptr + (kept * elem_width), contents, elem_width);
+                kept += 1;
+            }
+        }
+
+        if (kept == 0) {
+            utils.decref(only_oks_list.bytes, size * elem_width, alignment);
+            return RocList.empty();
+        }
+
+        only_oks_list.length = kept;
+        return only_oks_list;
+    }
+
+    return RocList.empty();
+}
