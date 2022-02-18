@@ -425,13 +425,13 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         sym: &Symbol,
         layout: &Layout<'a>,
     ) {
-        let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
         match layout {
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
             Layout::Struct([]) => {}
             Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
+                let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
                 debug_assert_eq!(base_offset % 8, 0);
                 X86_64Assembler::mov_reg64_base32(buf, Self::GENERAL_RETURN_REGS[0], base_offset);
                 X86_64Assembler::mov_reg64_base32(
