@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use wasmer::{Memory, WasmPtr};
 
 use crate::helpers::from_wasmer_memory::FromWasmerMemory;
-use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
@@ -94,7 +93,6 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         src_dir,
         exposed_types,
         roc_target::TargetInfo::default_wasm32(),
-        builtin_defs_map,
     );
 
     let loaded = loaded.expect("failed to load module");

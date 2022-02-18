@@ -4,7 +4,6 @@ use roc_build::{
     program,
 };
 use roc_builtins::bitcode;
-use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_load::file::LoadingProblem;
 use roc_mono::ir::OptLevel;
@@ -74,7 +73,6 @@ pub fn build_file<'a>(
         src_dir.as_path(),
         subs_by_module,
         target_info,
-        builtin_defs_map,
     )?;
 
     use target_lexicon::Architecture;
@@ -309,7 +307,9 @@ fn spawn_rebuild_thread(
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
-        print!("🔨 Rebuilding host... ");
+        if !precompiled {
+            print!("🔨 Rebuilding host... ");
+        }
 
         let rebuild_host_start = SystemTime::now();
         if !precompiled {
@@ -340,7 +340,9 @@ fn spawn_rebuild_thread(
         }
         let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
 
-        println!("Done!");
+        if !precompiled {
+            println!("Done!");
+        }
 
         rebuild_host_end.as_millis()
     })
@@ -372,7 +374,6 @@ pub fn check_file(
         src_dir.as_path(),
         subs_by_module,
         target_info,
-        builtin_defs_map,
     )?;
 
     let buf = &mut String::with_capacity(1024);

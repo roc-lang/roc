@@ -1633,7 +1633,7 @@ roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
 
 roc_error_macros::assert_sizeof_aarch64!((Variable, Option<Lowercase>), 4 * 8);
 roc_error_macros::assert_sizeof_wasm!((Variable, Option<Lowercase>), 4 * 4);
-roc_error_macros::assert_sizeof_all!((Variable, Option<Lowercase>), 4 * 8);
+roc_error_macros::assert_sizeof_default!((Variable, Option<Lowercase>), 4 * 8);
 
 #[derive(Clone, Debug)]
 pub enum Content {

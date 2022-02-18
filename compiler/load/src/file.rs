@@ -6,7 +6,7 @@ use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::std::StdLib;
 use roc_can::constraint::Constraint;
-use roc_can::def::{Declaration, Def};
+use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
@@ -40,15 +40,18 @@ use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::iter;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 use std::{env, fs};
 
+use crate::work::{Dependencies, Phase};
+
+#[cfg(target_family = "wasm")]
+use crate::wasm_system_time::{Duration, SystemTime};
 #[cfg(not(target_family = "wasm"))]
 use std::time::{Duration, SystemTime};
-#[cfg(target_family = "wasm")]
-use wasm_system_time::{Duration, SystemTime};
 
 /// Default name for the binary generated for an app, if an invalid one was specified.
 const DEFAULT_APP_OUTPUT_PATH: &str = "app";
@@ -69,253 +72,6 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 macro_rules! log {
     () => (if SHOW_MESSAGE_LOG { println!()} else {});
     ($($arg:tt)*) => (if SHOW_MESSAGE_LOG { println!($($arg)*); } else {})
-}
-
-/// NOTE the order of definition of the phases is used by the ord instance
-/// make sure they are ordered from first to last!
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Debug)]
-pub enum Phase {
-    LoadHeader,
-    Parse,
-    CanonicalizeAndConstrain,
-    SolveTypes,
-    FindSpecializations,
-    MakeSpecializations,
-}
-
-/// NOTE keep up to date manually, from ParseAndGenerateConstraints to the highest phase we support
-const PHASES: [Phase; 6] = [
-    Phase::LoadHeader,
-    Phase::Parse,
-    Phase::CanonicalizeAndConstrain,
-    Phase::SolveTypes,
-    Phase::FindSpecializations,
-    Phase::MakeSpecializations,
-];
-
-#[derive(Debug)]
-enum Status {
-    NotStarted,
-    Pending,
-    Done,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum Job<'a> {
-    Step(ModuleId, Phase),
-    ResolveShorthand(&'a str),
-}
-
-#[derive(Default, Debug)]
-struct Dependencies<'a> {
-    waiting_for: MutMap<Job<'a>, MutSet<Job<'a>>>,
-    notifies: MutMap<Job<'a>, MutSet<Job<'a>>>,
-    status: MutMap<Job<'a>, Status>,
-}
-
-impl<'a> Dependencies<'a> {
-    /// Add all the dependencies for a module, return (module, phase) pairs that can make progress
-    pub fn add_module(
-        &mut self,
-        module_id: ModuleId,
-        dependencies: &MutSet<PackageQualified<'a, ModuleId>>,
-        goal_phase: Phase,
-    ) -> MutSet<(ModuleId, Phase)> {
-        use Phase::*;
-
-        let mut output = MutSet::default();
-
-        for dep in dependencies.iter() {
-            let has_package_dependency = self.add_package_dependency(dep, Phase::LoadHeader);
-
-            let dep = *dep.as_inner();
-
-            if !has_package_dependency {
-                // loading can start immediately on this dependency
-                output.insert((dep, Phase::LoadHeader));
-            }
-
-            // to parse and generate constraints, the headers of all dependencies must be loaded!
-            // otherwise, we don't know whether an imported symbol is actually exposed
-            self.add_dependency_help(module_id, dep, Phase::Parse, Phase::LoadHeader);
-
-            // to canonicalize a module, all its dependencies must be canonicalized
-            self.add_dependency(module_id, dep, Phase::CanonicalizeAndConstrain);
-
-            // to typecheck a module, all its dependencies must be type checked already
-            self.add_dependency(module_id, dep, Phase::SolveTypes);
-
-            if goal_phase >= FindSpecializations {
-                self.add_dependency(module_id, dep, Phase::FindSpecializations);
-            }
-
-            if goal_phase >= MakeSpecializations {
-                self.add_dependency(dep, module_id, Phase::MakeSpecializations);
-            }
-        }
-
-        // add dependencies for self
-        // phase i + 1 of a file always depends on phase i being completed
-        {
-            let mut i = 0;
-            while PHASES[i] < goal_phase {
-                self.add_dependency_help(module_id, module_id, PHASES[i + 1], PHASES[i]);
-                i += 1;
-            }
-        }
-
-        self.add_to_status(module_id, goal_phase);
-
-        output
-    }
-
-    fn add_to_status(&mut self, module_id: ModuleId, goal_phase: Phase) {
-        for phase in PHASES.iter() {
-            if *phase > goal_phase {
-                break;
-            }
-
-            if let Vacant(entry) = self.status.entry(Job::Step(module_id, *phase)) {
-                entry.insert(Status::NotStarted);
-            }
-        }
-    }
-
-    /// Propagate a notification, return (module, phase) pairs that can make progress
-    pub fn notify(&mut self, module_id: ModuleId, phase: Phase) -> MutSet<(ModuleId, Phase)> {
-        self.notify_help(Job::Step(module_id, phase))
-    }
-
-    /// Propagate a notification, return (module, phase) pairs that can make progress
-    pub fn notify_package(&mut self, shorthand: &'a str) -> MutSet<(ModuleId, Phase)> {
-        self.notify_help(Job::ResolveShorthand(shorthand))
-    }
-
-    fn notify_help(&mut self, key: Job<'a>) -> MutSet<(ModuleId, Phase)> {
-        self.status.insert(key.clone(), Status::Done);
-
-        let mut output = MutSet::default();
-
-        if let Some(to_notify) = self.notifies.get(&key) {
-            for notify_key in to_notify {
-                let mut is_empty = false;
-                if let Some(waiting_for_pairs) = self.waiting_for.get_mut(notify_key) {
-                    waiting_for_pairs.remove(&key);
-                    is_empty = waiting_for_pairs.is_empty();
-                }
-
-                if is_empty {
-                    self.waiting_for.remove(notify_key);
-
-                    if let Job::Step(module, phase) = *notify_key {
-                        output.insert((module, phase));
-                    }
-                }
-            }
-        }
-
-        self.notifies.remove(&key);
-
-        output
-    }
-
-    fn add_package_dependency(
-        &mut self,
-        module: &PackageQualified<'a, ModuleId>,
-        next_phase: Phase,
-    ) -> bool {
-        match module {
-            PackageQualified::Unqualified(_) => {
-                // no dependency, we can just start loading the file
-                false
-            }
-            PackageQualified::Qualified(shorthand, module_id) => {
-                let job = Job::ResolveShorthand(shorthand);
-                let next_step = Job::Step(*module_id, next_phase);
-                match self.status.get(&job) {
-                    None | Some(Status::NotStarted) | Some(Status::Pending) => {
-                        // this shorthand is not resolved, add a dependency
-                        {
-                            let entry = self
-                                .waiting_for
-                                .entry(next_step.clone())
-                                .or_insert_with(Default::default);
-
-                            entry.insert(job.clone());
-                        }
-
-                        {
-                            let entry = self.notifies.entry(job).or_insert_with(Default::default);
-
-                            entry.insert(next_step);
-                        }
-
-                        true
-                    }
-                    Some(Status::Done) => {
-                        // shorthand is resolved; no dependency
-                        false
-                    }
-                }
-            }
-        }
-    }
-
-    /// A waits for B, and B will notify A when it completes the phase
-    fn add_dependency(&mut self, a: ModuleId, b: ModuleId, phase: Phase) {
-        self.add_dependency_help(a, b, phase, phase);
-    }
-
-    /// phase_a of module a is waiting for phase_b of module_b
-    fn add_dependency_help(&mut self, a: ModuleId, b: ModuleId, phase_a: Phase, phase_b: Phase) {
-        // no need to wait if the dependency is already done!
-        if let Some(Status::Done) = self.status.get(&Job::Step(b, phase_b)) {
-            return;
-        }
-
-        let key = Job::Step(a, phase_a);
-        let value = Job::Step(b, phase_b);
-        match self.waiting_for.get_mut(&key) {
-            Some(existing) => {
-                existing.insert(value);
-            }
-            None => {
-                let mut set = MutSet::default();
-                set.insert(value);
-                self.waiting_for.insert(key, set);
-            }
-        }
-
-        let key = Job::Step(b, phase_b);
-        let value = Job::Step(a, phase_a);
-        match self.notifies.get_mut(&key) {
-            Some(existing) => {
-                existing.insert(value);
-            }
-            None => {
-                let mut set = MutSet::default();
-                set.insert(value);
-                self.notifies.insert(key, set);
-            }
-        }
-    }
-
-    fn solved_all(&self) -> bool {
-        debug_assert_eq!(self.notifies.is_empty(), self.waiting_for.is_empty());
-
-        for status in self.status.values() {
-            match status {
-                Status::Done => {
-                    continue;
-                }
-                _ => {
-                    return false;
-                }
-            }
-        }
-
-        true
-    }
 }
 
 /// Struct storing various intermediate stages by their ModuleId
@@ -351,42 +107,22 @@ fn start_phase<'a>(
 ) -> Vec<BuildTask<'a>> {
     // we blindly assume all dependencies are met
 
-    match state
-        .dependencies
-        .status
-        .get_mut(&Job::Step(module_id, phase))
-    {
-        Some(current @ Status::NotStarted) => {
-            // start this phase!
-            *current = Status::Pending;
+    use crate::work::PrepareStartPhase::*;
+    match state.dependencies.prepare_start_phase(module_id, phase) {
+        Continue => {
+            // fall through
         }
-        Some(Status::Pending) => {
-            // don't start this task again!
+        Done => {
+            // no more work to do
             return vec![];
         }
-        Some(Status::Done) => {
-            // don't start this task again, but tell those waiting for it they can continue
-            return state
-                .dependencies
-                .notify(module_id, phase)
+        Recurse(new) => {
+            return new
                 .into_iter()
                 .map(|(module_id, phase)| start_phase(module_id, phase, arena, state))
                 .flatten()
-                .collect();
+                .collect()
         }
-        None => match phase {
-            Phase::LoadHeader => {
-                // this is fine, mark header loading as pending
-                state
-                    .dependencies
-                    .status
-                    .insert(Job::Step(module_id, Phase::LoadHeader), Status::Pending);
-            }
-            _ => unreachable!(
-                "Pair {:?} is not in dependencies.status, that should never happen!",
-                (module_id, phase)
-            ),
-        },
     }
 
     let task = {
@@ -862,6 +598,43 @@ struct State<'a> {
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 }
 
+impl<'a> State<'a> {
+    fn new(
+        root_id: ModuleId,
+        target_info: TargetInfo,
+        goal_phase: Phase,
+        stdlib: &'a StdLib,
+        exposed_types: SubsByModule,
+        arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
+        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ) -> Self {
+        let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
+
+        Self {
+            root_id,
+            target_info,
+            platform_data: None,
+            goal_phase,
+            stdlib,
+            output_path: None,
+            platform_path: PlatformPath::NotSpecified,
+            module_cache: ModuleCache::default(),
+            dependencies: Dependencies::default(),
+            procedures: MutMap::default(),
+            exposed_to_host: ExposedToHost::default(),
+            exposed_types,
+            arc_modules,
+            arc_shorthands,
+            constrained_ident_ids: IdentIds::exposed_builtins(0),
+            ident_ids_by_module,
+            declarations_by_id: MutMap::default(),
+            exposed_symbols_by_module: MutMap::default(),
+            timings: MutMap::default(),
+            layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ModuleTiming {
     pub read_roc_file: Duration,
@@ -914,7 +687,7 @@ impl ModuleTiming {
             end_time,
         } = self;
 
-        let calculate = |t: Result<Duration, std::time::SystemTimeError>| -> Option<Duration> {
+        let calculate = |t: Result<Duration, _>| -> Option<Duration> {
             t.ok()?
                 .checked_sub(*make_specializations)?
                 .checked_sub(*find_specializations)?
@@ -1030,18 +803,14 @@ fn enqueue_task<'a>(
     Ok(())
 }
 
-pub fn load_and_typecheck<'a, F>(
+pub fn load_and_typecheck<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
     target_info: TargetInfo,
-    look_up_builtin: F,
-) -> Result<LoadedModule, LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, filename)?;
@@ -1054,7 +823,6 @@ where
         exposed_types,
         Phase::SolveTypes,
         target_info,
-        look_up_builtin,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
@@ -1062,18 +830,14 @@ where
 }
 
 /// Main entry point to the compiler from the CLI and tests
-pub fn load_and_monomorphize<'a, F>(
+pub fn load_and_monomorphize<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
     target_info: TargetInfo,
-    look_up_builtin: F,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, filename)?;
@@ -1086,7 +850,6 @@ where
         exposed_types,
         Phase::MakeSpecializations,
         target_info,
-        look_up_builtin,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -1094,7 +857,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn load_and_monomorphize_from_str<'a, F>(
+pub fn load_and_monomorphize_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     src: &'a str,
@@ -1102,11 +865,7 @@ pub fn load_and_monomorphize_from_str<'a, F>(
     src_dir: &Path,
     exposed_types: SubsByModule,
     target_info: TargetInfo,
-    look_up_builtin: F,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_str(arena, filename, src)?;
@@ -1119,7 +878,6 @@ where
         exposed_types,
         Phase::MakeSpecializations,
         target_info,
-        look_up_builtin,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -1266,20 +1024,51 @@ enum LoadResult<'a> {
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
 #[allow(clippy::too_many_arguments)]
-fn load<'a, F>(
+fn load<'a>(
     arena: &'a Bump,
-    //filename: PathBuf,
     load_start: LoadStart<'a>,
     stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
-    look_up_builtins: F,
-) -> Result<LoadResult<'a>, LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
+    // When compiling to wasm, we cannot spawn extra threads
+    // so we have a single-threaded implementation
+    if cfg!(target_family = "wasm") {
+        load_single_threaded(
+            arena,
+            load_start,
+            stdlib,
+            src_dir,
+            exposed_types,
+            goal_phase,
+            target_info,
+        )
+    } else {
+        load_multi_threaded(
+            arena,
+            load_start,
+            stdlib,
+            src_dir,
+            exposed_types,
+            goal_phase,
+            target_info,
+        )
+    }
+}
+
+/// Load using only a single thread; used when compiling to webassembly
+#[allow(clippy::too_many_arguments)]
+fn load_single_threaded<'a>(
+    arena: &'a Bump,
+    load_start: LoadStart<'a>,
+    stdlib: &'a StdLib,
+    src_dir: &Path,
+    exposed_types: SubsByModule,
+    goal_phase: Phase,
+    target_info: TargetInfo,
+) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
         ident_ids_by_module,
@@ -1287,7 +1076,191 @@ where
         root_msg,
     } = load_start;
 
-    let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
+    let (msg_tx, msg_rx) = bounded(1024);
+
+    msg_tx
+        .send(root_msg)
+        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+
+    let mut state = State::new(
+        root_id,
+        target_info,
+        goal_phase,
+        stdlib,
+        exposed_types,
+        arc_modules,
+        ident_ids_by_module,
+    );
+
+    // We'll add tasks to this, and then worker threads will take tasks from it.
+    let injector = Injector::new();
+
+    let (worker_msg_tx, worker_msg_rx) = bounded(1024);
+    let worker_listener = worker_msg_tx;
+    let worker_listeners = arena.alloc([worker_listener]);
+
+    let worker = Worker::new_fifo();
+    let stealer = worker.stealer();
+    let stealers = &[stealer];
+
+    // now we just manually interleave stepping the state "thread" and the worker "thread"
+    loop {
+        match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx) {
+            Ok(ControlFlow::Break(done)) => return Ok(done),
+            Ok(ControlFlow::Continue(new_state)) => {
+                state = new_state;
+            }
+            Err(e) => return Err(e),
+        }
+
+        // then check if the worker can step
+        let control_flow = worker_task_step(
+            arena,
+            &worker,
+            &injector,
+            stealers,
+            &worker_msg_rx,
+            &msg_tx,
+            src_dir,
+            target_info,
+        );
+
+        match control_flow {
+            Ok(ControlFlow::Break(())) => panic!("the worker should not break!"),
+            Ok(ControlFlow::Continue(())) => {
+                // progress was made
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn state_thread_step<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    worker_listeners: &'a [Sender<WorkerMsg>],
+    injector: &Injector<BuildTask<'a>>,
+    msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
+    msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
+) -> Result<ControlFlow<LoadResult<'a>, State<'a>>, LoadingProblem<'a>> {
+    match msg_rx.try_recv() {
+        Ok(msg) => {
+            match msg {
+                Msg::FinishedAllTypeChecking {
+                    solved_subs,
+                    exposed_vars_by_symbol,
+                    exposed_aliases_by_symbol,
+                    exposed_values,
+                    dep_idents,
+                    documentation,
+                } => {
+                    // We're done! There should be no more messages pending.
+                    debug_assert!(msg_rx.is_empty());
+
+                    let typechecked = finish(
+                        state,
+                        solved_subs,
+                        exposed_values,
+                        exposed_aliases_by_symbol,
+                        exposed_vars_by_symbol,
+                        dep_idents,
+                        documentation,
+                    );
+
+                    Ok(ControlFlow::Break(LoadResult::TypeChecked(typechecked)))
+                }
+                Msg::FinishedAllSpecialization {
+                    subs,
+                    exposed_to_host,
+                } => {
+                    // We're done! There should be no more messages pending.
+                    debug_assert!(msg_rx.is_empty());
+
+                    let monomorphized = finish_specialization(state, subs, exposed_to_host)?;
+
+                    Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
+                }
+                Msg::FailedToReadFile { filename, error } => {
+                    let buf = to_file_problem_report(&filename, error);
+                    Err(LoadingProblem::FormattedReport(buf))
+                }
+
+                Msg::FailedToParse(problem) => {
+                    let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
+                    let buf =
+                        to_parse_problem_report(problem, module_ids, state.constrained_ident_ids);
+                    Err(LoadingProblem::FormattedReport(buf))
+                }
+                msg => {
+                    // This is where most of the main thread's work gets done.
+                    // Everything up to this point has been setting up the threading
+                    // system which lets this logic work efficiently.
+                    let constrained_ident_ids = state.constrained_ident_ids.clone();
+                    let arc_modules = state.arc_modules.clone();
+
+                    let res_state = update(
+                        state,
+                        msg,
+                        msg_tx.clone(),
+                        injector,
+                        worker_listeners,
+                        arena,
+                    );
+
+                    match res_state {
+                        Ok(new_state) => Ok(ControlFlow::Continue(new_state)),
+                        Err(LoadingProblem::ParsingFailed(problem)) => {
+                            let module_ids = Arc::try_unwrap(arc_modules)
+                                .unwrap_or_else(|_| {
+                                    panic!(
+                                        r"There were still outstanding Arc references to module_ids"
+                                    )
+                                })
+                                .into_inner()
+                                .into_module_ids();
+
+                            let buf =
+                                to_parse_problem_report(problem, module_ids, constrained_ident_ids);
+                            Err(LoadingProblem::FormattedReport(buf))
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+            }
+        }
+        Err(err) => match err {
+            crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(state)),
+            crossbeam::channel::TryRecvError::Disconnected => Err(LoadingProblem::MsgChannelDied),
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_multi_threaded<'a>(
+    arena: &'a Bump,
+    load_start: LoadStart<'a>,
+    stdlib: &'a StdLib,
+    src_dir: &Path,
+    exposed_types: SubsByModule,
+    goal_phase: Phase,
+    target_info: TargetInfo,
+) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
+    let LoadStart {
+        arc_modules,
+        ident_ids_by_module,
+        root_id,
+        root_msg,
+    } = load_start;
+
+    let mut state = State::new(
+        root_id,
+        target_info,
+        goal_phase,
+        stdlib,
+        exposed_types,
+        arc_modules,
+        ident_ids_by_module,
+    );
 
     let (msg_tx, msg_rx) = bounded(1024);
     msg_tx
@@ -1309,14 +1282,9 @@ where
         Err(_) => default_num_workers,
     };
 
-    let worker_arenas = arena.alloc(bumpalo::collections::Vec::with_capacity_in(
-        num_workers,
-        arena,
-    ));
-
-    for _ in 0..num_workers {
-        worker_arenas.push(Bump::new());
-    }
+    // an arena for every worker, stored in an arena-allocated bumpalo vec to make the lifetimes work
+    let arenas = std::iter::repeat_with(Bump::new).take(num_workers);
+    let worker_arenas = arena.alloc(bumpalo::collections::Vec::from_iter_in(arenas, arena));
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
     let injector = Injector::new();
@@ -1328,29 +1296,28 @@ where
     let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
     let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
-    let it = worker_arenas.iter_mut();
+    for _ in 0..num_workers {
+        let worker = Worker::new_fifo();
 
+        stealers.push(worker.stealer());
+        worker_queues.push(worker);
+    }
+
+    // Get a reference to the completed stealers, so we can send that
+    // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
+    let stealers = stealers.into_bump_slice();
+
+    let it = worker_arenas.iter_mut();
     {
         thread::scope(|thread_scope| {
-            for _ in 0..num_workers {
-                let worker = Worker::new_lifo();
-
-                stealers.push(worker.stealer());
-                worker_queues.push(worker);
-            }
-
-            // Get a reference to the completed stealers, so we can send that
-            // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
-            let stealers = stealers.into_bump_slice();
-
             let mut worker_listeners =
                 bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
             for worker_arena in it {
                 let msg_tx = msg_tx.clone();
                 let worker = worker_queues.pop().unwrap();
-                let (worker_msg_tx, worker_msg_rx) = bounded(1024);
 
+                let (worker_msg_tx, worker_msg_rx) = bounded(1024);
                 worker_listeners.push(worker_msg_tx);
 
                 // We only want to move a *reference* to the main task queue's
@@ -1363,94 +1330,21 @@ where
                     .builder()
                     .stack_size(EXPANDED_STACK_SIZE)
                     .spawn(move |_| {
-                        // Keep listening until we receive a Shutdown msg
-
-                        for msg in worker_msg_rx.iter() {
-                            match msg {
-                                WorkerMsg::Shutdown => {
-                                    // We've finished all our work. It's time to
-                                    // shut down the thread, so when the main thread
-                                    // blocks on joining with all the worker threads,
-                                    // it can finally exit too!
-                                    return Ok(());
-                                }
-                                WorkerMsg::TaskAdded => {
-                                    // Find a task - either from this thread's queue,
-                                    // or from the main queue, or from another worker's
-                                    // queue - and run it.
-                                    //
-                                    // There might be no tasks to work on! That could
-                                    // happen if another thread is working on a task
-                                    // which will later result in more tasks being
-                                    // added. In that case, do nothing, and keep waiting
-                                    // until we receive a Shutdown message.
-                                    if let Some(task) = find_task(&worker, injector, stealers) {
-                                        let result = run_task(
-                                            task,
-                                            worker_arena,
-                                            src_dir,
-                                            msg_tx.clone(),
-                                            target_info,
-                                            look_up_builtins,
-                                        );
-
-                                        match result {
-                                            Ok(()) => {}
-                                            Err(LoadingProblem::MsgChannelDied) => {
-                                                panic!("Msg channel closed unexpectedly.")
-                                            }
-                                            Err(LoadingProblem::ParsingFailed(problem)) => {
-                                                msg_tx.send(Msg::FailedToParse(problem)).unwrap();
-                                            }
-                                            Err(LoadingProblem::FileProblem {
-                                                filename,
-                                                error,
-                                            }) => {
-                                                msg_tx
-                                                    .send(Msg::FailedToReadFile { filename, error })
-                                                    .unwrap();
-                                            }
-                                            Err(other) => {
-                                                return Err(other);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Needed to prevent a borrow checker error about this closure
-                        // outliving its enclosing function.
-                        drop(worker_msg_rx);
-
-                        Ok(())
+                        // will process messages until we run out
+                        worker_task(
+                            worker_arena,
+                            worker,
+                            injector,
+                            stealers,
+                            worker_msg_rx,
+                            msg_tx,
+                            src_dir,
+                            target_info,
+                        )
                     });
 
                 res_join_handle.unwrap();
             }
-
-            let mut state = State {
-                root_id,
-                target_info,
-                platform_data: None,
-                goal_phase,
-                stdlib,
-                output_path: None,
-                platform_path: PlatformPath::NotSpecified,
-                module_cache: ModuleCache::default(),
-                dependencies: Dependencies::default(),
-                procedures: MutMap::default(),
-                exposed_to_host: ExposedToHost::default(),
-                exposed_types,
-                arc_modules,
-                arc_shorthands,
-                constrained_ident_ids: IdentIds::exposed_builtins(0),
-                ident_ids_by_module,
-                declarations_by_id: MutMap::default(),
-                exposed_symbols_by_module: MutMap::default(),
-                timings: MutMap::default(),
-                layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
-            };
 
             // We've now distributed one worker queue to each thread.
             // There should be no queues left to distribute!
@@ -1474,117 +1368,152 @@ where
 
             // The root module will have already queued up messages to process,
             // and processing those messages will in turn queue up more messages.
-            for msg in msg_rx.iter() {
-                match msg {
-                    Msg::FinishedAllTypeChecking {
-                        solved_subs,
-                        exposed_vars_by_symbol,
-                        exposed_aliases_by_symbol,
-                        exposed_values,
-                        dep_idents,
-                        documentation,
-                    } => {
-                        // We're done! There should be no more messages pending.
-                        debug_assert!(msg_rx.is_empty());
-
-                        // Shut down all the worker threads.
-                        for listener in worker_listeners {
-                            listener
-                                .send(WorkerMsg::Shutdown)
-                                .map_err(|_| LoadingProblem::MsgChannelDied)?;
-                        }
-
-                        return Ok(LoadResult::TypeChecked(finish(
-                            state,
-                            solved_subs,
-                            exposed_values,
-                            exposed_aliases_by_symbol,
-                            exposed_vars_by_symbol,
-                            dep_idents,
-                            documentation,
-                        )));
-                    }
-                    Msg::FinishedAllSpecialization {
-                        subs,
-                        exposed_to_host,
-                    } => {
-                        // We're done! There should be no more messages pending.
-                        debug_assert!(msg_rx.is_empty());
-
+            loop {
+                match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx)
+                {
+                    Ok(ControlFlow::Break(load_result)) => {
                         shut_down_worker_threads!();
 
-                        return Ok(LoadResult::Monomorphized(finish_specialization(
-                            state,
-                            subs,
-                            exposed_to_host,
-                        )?));
+                        return Ok(load_result);
                     }
-                    Msg::FailedToReadFile { filename, error } => {
+                    Ok(ControlFlow::Continue(new_state)) => {
+                        state = new_state;
+                        continue;
+                    }
+                    Err(e) => {
                         shut_down_worker_threads!();
 
-                        let buf = to_file_problem_report(&filename, error);
-                        return Err(LoadingProblem::FormattedReport(buf));
+                        return Err(e);
                     }
+                }
+            }
+        })
+    }
+    .unwrap()
+}
 
-                    Msg::FailedToParse(problem) => {
-                        shut_down_worker_threads!();
+#[allow(clippy::too_many_arguments)]
+fn worker_task_step<'a>(
+    worker_arena: &'a Bump,
+    worker: &Worker<BuildTask<'a>>,
+    injector: &Injector<BuildTask<'a>>,
+    stealers: &[Stealer<BuildTask<'a>>],
+    worker_msg_rx: &crossbeam::channel::Receiver<WorkerMsg>,
+    msg_tx: &MsgSender<'a>,
+    src_dir: &Path,
+    target_info: TargetInfo,
+) -> Result<ControlFlow<(), ()>, LoadingProblem<'a>> {
+    match worker_msg_rx.try_recv() {
+        Ok(msg) => {
+            match msg {
+                WorkerMsg::Shutdown => {
+                    // We've finished all our work. It's time to
+                    // shut down the thread, so when the main thread
+                    // blocks on joining with all the worker threads,
+                    // it can finally exit too!
+                    Ok(ControlFlow::Break(()))
+                }
+                WorkerMsg::TaskAdded => {
+                    // Find a task - either from this thread's queue,
+                    // or from the main queue, or from another worker's
+                    // queue - and run it.
+                    //
+                    // There might be no tasks to work on! That could
+                    // happen if another thread is working on a task
+                    // which will later result in more tasks being
+                    // added. In that case, do nothing, and keep waiting
+                    // until we receive a Shutdown message.
+                    if let Some(task) = find_task(worker, injector, stealers) {
+                        let result =
+                            run_task(task, worker_arena, src_dir, msg_tx.clone(), target_info);
 
-                        let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
-                        let buf = to_parse_problem_report(
-                            problem,
-                            module_ids,
-                            state.constrained_ident_ids,
-                        );
-                        return Err(LoadingProblem::FormattedReport(buf));
-                    }
-                    msg => {
-                        // This is where most of the main thread's work gets done.
-                        // Everything up to this point has been setting up the threading
-                        // system which lets this logic work efficiently.
-                        let constrained_ident_ids = state.constrained_ident_ids.clone();
-                        let arc_modules = state.arc_modules.clone();
-
-                        let res_state = update(
-                            state,
-                            msg,
-                            msg_tx.clone(),
-                            &injector,
-                            worker_listeners,
-                            arena,
-                        );
-
-                        match res_state {
-                            Ok(new_state) => {
-                                state = new_state;
+                        match result {
+                            Ok(()) => {}
+                            Err(LoadingProblem::MsgChannelDied) => {
+                                panic!("Msg channel closed unexpectedly.")
                             }
                             Err(LoadingProblem::ParsingFailed(problem)) => {
-                                shut_down_worker_threads!();
-
-                                let module_ids = Arc::try_unwrap(arc_modules)
-                                    .unwrap_or_else(|_| {
-                                        panic!(r"There were still outstanding Arc references to module_ids")
-                                    })
-                                    .into_inner()
-                                    .into_module_ids();
-
-                                let buf = to_parse_problem_report(
-                                    problem,
-                                    module_ids,
-                                    constrained_ident_ids,
-                                );
-                                return Err(LoadingProblem::FormattedReport(buf));
+                                msg_tx.send(Msg::FailedToParse(problem)).unwrap();
                             }
-                            Err(e) => return Err(e),
+                            Err(LoadingProblem::FileProblem { filename, error }) => {
+                                msg_tx
+                                    .send(Msg::FailedToReadFile { filename, error })
+                                    .unwrap();
+                            }
+                            Err(other) => {
+                                return Err(other);
+                            }
+                        }
+                    }
+
+                    Ok(ControlFlow::Continue(()))
+                }
+            }
+        }
+        Err(err) => match err {
+            crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(())),
+            crossbeam::channel::TryRecvError::Disconnected => Ok(ControlFlow::Break(())),
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn worker_task<'a>(
+    worker_arena: &'a Bump,
+    worker: Worker<BuildTask<'a>>,
+    injector: &Injector<BuildTask<'a>>,
+    stealers: &[Stealer<BuildTask<'a>>],
+    worker_msg_rx: crossbeam::channel::Receiver<WorkerMsg>,
+    msg_tx: MsgSender<'a>,
+    src_dir: &Path,
+    target_info: TargetInfo,
+) -> Result<(), LoadingProblem<'a>> {
+    // Keep listening until we receive a Shutdown msg
+    for msg in worker_msg_rx.iter() {
+        match msg {
+            WorkerMsg::Shutdown => {
+                // We've finished all our work. It's time to
+                // shut down the thread, so when the main thread
+                // blocks on joining with all the worker threads,
+                // it can finally exit too!
+                return Ok(());
+            }
+            WorkerMsg::TaskAdded => {
+                // Find a task - either from this thread's queue,
+                // or from the main queue, or from another worker's
+                // queue - and run it.
+                //
+                // There might be no tasks to work on! That could
+                // happen if another thread is working on a task
+                // which will later result in more tasks being
+                // added. In that case, do nothing, and keep waiting
+                // until we receive a Shutdown message.
+                if let Some(task) = find_task(&worker, injector, stealers) {
+                    let result = run_task(task, worker_arena, src_dir, msg_tx.clone(), target_info);
+
+                    match result {
+                        Ok(()) => {}
+                        Err(LoadingProblem::MsgChannelDied) => {
+                            panic!("Msg channel closed unexpectedly.")
+                        }
+                        Err(LoadingProblem::ParsingFailed(problem)) => {
+                            msg_tx.send(Msg::FailedToParse(problem)).unwrap();
+                        }
+                        Err(LoadingProblem::FileProblem { filename, error }) => {
+                            msg_tx
+                                .send(Msg::FailedToReadFile { filename, error })
+                                .unwrap();
+                        }
+                        Err(other) => {
+                            return Err(other);
                         }
                     }
                 }
             }
-
-            // The msg_rx receiver closed unexpectedly before we finished solving everything
-            Err(LoadingProblem::MsgChannelDied)
-        })
+        }
     }
-    .unwrap()
+
+    Ok(())
 }
 
 fn start_tasks<'a>(
@@ -3257,18 +3186,14 @@ fn fabricate_pkg_config_module<'a>(
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::unnecessary_wraps)]
-fn canonicalize_and_constrain<'a, F>(
+fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
     dep_idents: MutMap<ModuleId, IdentIds>,
     exposed_symbols: MutSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     parsed: ParsedModule<'a>,
-    look_up_builtins: F,
-) -> Result<Msg<'a>, LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let canonicalize_start = SystemTime::now();
 
     let ParsedModule {
@@ -3296,7 +3221,6 @@ where
         exposed_imports,
         &exposed_symbols,
         &mut var_store,
-        look_up_builtins,
     );
 
     let canonicalize_end = SystemTime::now();
@@ -3777,17 +3701,13 @@ fn add_def_to_module<'a>(
     }
 }
 
-fn run_task<'a, F>(
+fn run_task<'a>(
     task: BuildTask<'a>,
     arena: &'a Bump,
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
     target_info: TargetInfo,
-    look_up_builtins: F,
-) -> Result<(), LoadingProblem<'a>>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<(), LoadingProblem<'a>> {
     use BuildTask::*;
 
     let msg = match task {
@@ -3819,7 +3739,6 @@ where
             exposed_symbols,
             aliases,
             parsed,
-            look_up_builtins,
         ),
         Solve {
             module,

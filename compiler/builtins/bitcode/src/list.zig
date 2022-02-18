@@ -210,6 +210,7 @@ pub fn listMap(
     }
 }
 
+// List.mapWithIndex : List before, (before, Nat -> after) -> List after
 pub fn listMapWithIndex(
     list: RocList,
     caller: Caller2,
@@ -231,7 +232,8 @@ pub fn listMapWithIndex(
         }
 
         while (i < size) : (i += 1) {
-            caller(data, @ptrCast(?[*]u8, &i), source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
+            // before, Nat -> after
+            caller(data, source_ptr + (i * old_element_width), @ptrCast(?[*]u8, &i), target_ptr + (i * new_element_width));
         }
 
         return output;

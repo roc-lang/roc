@@ -1546,14 +1546,14 @@ an open record or a closed record:
 ```coffee
 # Closed record
 fullName : { firstName : Str, lastName : Str } -> Str
-fullName = \user - >
+fullName = \user ->
     "\(user.firstName) \(user.lastName)"
 ```
 
 ```coffee
 # Open record (because of the `*`)
 fullName : { firstName : Str, lastName : Str }* -> Str
-fullName = \user - >
+fullName = \user ->
     "\(user.firstName) \(user.lastName)"
 ```
 

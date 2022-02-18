@@ -11,13 +11,13 @@ Instead we use these dummy implementations, which should just disappear at compi
 pub struct SystemTime;
 
 impl SystemTime {
-    fn now() -> Self {
+    pub fn now() -> Self {
         SystemTime
     }
-    fn duration_since(&self, _: SystemTime) -> Result<Duration, String> {
+    pub fn duration_since(&self, _: SystemTime) -> Result<Duration, String> {
         Ok(Duration)
     }
-    fn elapsed(&self) -> Result<Duration, String> {
+    pub fn elapsed(&self) -> Result<Duration, String> {
         Ok(Duration)
     }
 }
@@ -26,7 +26,7 @@ impl SystemTime {
 pub struct Duration;
 
 impl Duration {
-    fn checked_sub(&self, _: Duration) -> Option<Duration> {
+    pub fn checked_sub(&self, _: Duration) -> Option<Duration> {
         Some(Duration)
     }
 }

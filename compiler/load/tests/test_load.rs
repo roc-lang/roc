@@ -16,7 +16,6 @@ mod helpers;
 mod test_load {
     use crate::helpers::fixtures_dir;
     use bumpalo::Bump;
-    use roc_can::builtins::builtin_defs_map;
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
     use roc_collections::all::MutMap;
@@ -111,7 +110,6 @@ mod test_load {
                 dir.path(),
                 exposed_types,
                 TARGET_INFO,
-                builtin_defs_map,
             )
         };
 
@@ -135,7 +133,6 @@ mod test_load {
             src_dir.as_path(),
             subs_by_module,
             TARGET_INFO,
-            builtin_defs_map,
         );
         let mut loaded_module = match loaded {
             Ok(x) => x,
@@ -301,7 +298,6 @@ mod test_load {
             src_dir.as_path(),
             subs_by_module,
             TARGET_INFO,
-            builtin_defs_map,
         );
 
         let mut loaded_module = loaded.expect("Test module failed to load");

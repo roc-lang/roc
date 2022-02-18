@@ -1474,3 +1474,83 @@ fn issue_2445() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2458() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Foo a : [ Blah (Bar a), Nothing {} ]
+            Bar a : Foo a
+
+            v : Bar {}
+            v = Blah (Blah (Nothing {}))
+
+            when v is
+                Blah (Blah (Nothing {})) -> 15
+                _ -> 25
+            "#
+        ),
+        15,
+        u8
+    )
+}
+
+#[test]
+#[ignore = "See https://github.com/rtfeldman/roc/issues/2466"]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2458_deep_recursion_var() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Foo a : [ Blah (Result (Bar a) {}) ]
+            Bar a : Foo a
+
+            v : Bar {}
+
+            when v is
+                Blah (Ok (Blah (Err {}))) -> "1"
+                _ -> "2"
+            "#
+        ),
+        15,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_1162() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+
+            balance : a, RBTree a -> RBTree a
+            balance = \key, left ->
+                  when left is
+                    Node _ _ lRight ->
+                        Node key lRight Empty
+
+                    _ ->
+                        Empty
+
+
+            tree : RBTree {}
+            tree =
+                balance {} Empty
+
+            main : U8
+            main =
+                when tree is
+                    Empty -> 15
+                    _ -> 25
+            "#
+        ),
+        15,
+        u8
+    )
+}
