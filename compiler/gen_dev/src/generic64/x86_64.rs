@@ -194,81 +194,54 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     #[inline(always)]
     fn load_args<'a>(
         buf: &mut Vec<'a, u8>,
-        symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64SystemV,
+        >,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
-        mut stack_size: u32,
-    ) -> u32 {
-        let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
+    ) {
+        let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
         let mut general_i = 0;
         let mut float_i = 0;
         if X86_64SystemV::returns_via_arg_pointer(ret_layout) {
-            symbol_map.insert(
-                Symbol::RET_POINTER,
-                SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[general_i]),
-            );
+            storage_manager.ret_pionter_arg(Self::GENERAL_PARAM_REGS[0]);
             general_i += 1;
         }
         for (layout, sym) in args.iter() {
             match layout {
                 single_register_integers!() => {
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
-                        symbol_map.insert(
-                            *sym,
-                            SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[general_i]),
-                        );
+                        storage_manager.general_reg_arg(sym, Self::GENERAL_PARAM_REGS[general_i]);
                         general_i += 1;
                     } else {
+                        storage_manager.primitive_stack_arg(sym, arg_offset);
                         arg_offset += 8;
-                        symbol_map.insert(
-                            *sym,
-                            SymbolStorage::Base {
-                                offset: arg_offset,
-                                size: 8,
-                                owned: true,
-                            },
-                        );
                     }
                 }
                 single_register_floats!() => {
                     if float_i < Self::FLOAT_PARAM_REGS.len() {
-                        symbol_map.insert(
-                            *sym,
-                            SymbolStorage::FloatReg(Self::FLOAT_PARAM_REGS[float_i]),
-                        );
+                        storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[float_i]);
                         float_i += 1;
                     } else {
+                        storage_manager.primitive_stack_arg(sym, arg_offset);
                         arg_offset += 8;
-                        symbol_map.insert(
-                            *sym,
-                            SymbolStorage::Base {
-                                offset: arg_offset,
-                                size: 8,
-                                owned: true,
-                            },
-                        );
                     }
                 }
-                Layout::Builtin(Builtin::Str) => {
+                Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
                     if general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
                         // Load the value from the param reg into a useable base offset.
                         let src1 = Self::GENERAL_PARAM_REGS[general_i];
                         let src2 = Self::GENERAL_PARAM_REGS[general_i + 1];
-                        stack_size += 16;
-                        let offset = -(stack_size as i32);
-                        X86_64Assembler::mov_base32_reg64(buf, offset, src1);
-                        X86_64Assembler::mov_base32_reg64(buf, offset + 8, src2);
-                        symbol_map.insert(
-                            *sym,
-                            SymbolStorage::Base {
-                                offset,
-                                size: 16,
-                                owned: true,
-                            },
-                        );
+                        let base_offset = storage_manager.claim_stack_area(sym, 16);
+                        X86_64Assembler::mov_base32_reg64(buf, base_offset, src1);
+                        X86_64Assembler::mov_base32_reg64(buf, base_offset + 8, src2);
                         general_i += 2;
                     } else {
-                        todo!("loading strings args on the stack");
+                        todo!("loading lists and strings args on the stack");
                     }
                 }
                 Layout::Struct(&[]) => {}
@@ -277,7 +250,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                 }
             }
         }
-        stack_size
     }
 
     #[inline(always)]
@@ -625,30 +597,31 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     #[inline(always)]
     fn load_args<'a>(
         _buf: &mut Vec<'a, u8>,
-        symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64WindowsFastcall,
+        >,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
-        stack_size: u32,
-    ) -> u32 {
-        let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
+    ) {
+        let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
         let mut i = 0;
         if X86_64WindowsFastcall::returns_via_arg_pointer(ret_layout) {
-            symbol_map.insert(
-                Symbol::RET_POINTER,
-                SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[i]),
-            );
+            storage_manager.ret_pionter_arg(Self::GENERAL_PARAM_REGS[i]);
             i += 1;
         }
         for (layout, sym) in args.iter() {
             if i < Self::GENERAL_PARAM_REGS.len() {
                 match layout {
                     single_register_integers!() => {
-                        symbol_map
-                            .insert(*sym, SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[i]));
+                        storage_manager.general_reg_arg(sym, Self::GENERAL_PARAM_REGS[i]);
                         i += 1;
                     }
                     single_register_floats!() => {
-                        symbol_map.insert(*sym, SymbolStorage::FloatReg(Self::FLOAT_PARAM_REGS[i]));
+                        storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[i]);
                         i += 1;
                     }
                     Layout::Builtin(Builtin::Str) => {
@@ -661,23 +634,17 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                     }
                 }
             } else {
-                arg_offset += match layout {
-                    single_register_layouts!() => 8,
+                match layout {
+                    single_register_layouts!() => {
+                        storage_manager.primitive_stack_arg(sym, arg_offset);
+                        arg_offset += 8;
+                    }
                     x => {
                         todo!("Loading args with layout {:?}", x);
                     }
                 };
-                symbol_map.insert(
-                    *sym,
-                    SymbolStorage::Base {
-                        offset: arg_offset,
-                        size: 8,
-                        owned: true,
-                    },
-                );
             }
         }
-        stack_size
     }
 
     #[inline(always)]

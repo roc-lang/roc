@@ -669,6 +669,37 @@ impl<
         }
     }
 
+    // Specifies a symbol is loaded at the specified general register.
+    pub fn general_reg_arg(&mut self, sym: &Symbol, reg: GeneralReg) {
+        self.symbol_storage_map.insert(*sym, Reg(General(reg)));
+        self.general_free_regs.retain(|r| *r != reg);
+        self.general_used_regs.push((reg, *sym));
+    }
+
+    // Specifies a symbol is loaded at the specified float register.
+    pub fn float_reg_arg(&mut self, sym: &Symbol, reg: FloatReg) {
+        self.symbol_storage_map.insert(*sym, Reg(Float(reg)));
+        self.float_free_regs.retain(|r| *r != reg);
+        self.float_used_regs.push((reg, *sym));
+    }
+
+    // Specifies a primitive is loaded at the specific base offset.
+    pub fn primitive_stack_arg(&mut self, sym: &Symbol, base_offset: i32) {
+        self.symbol_storage_map.insert(
+            *sym,
+            Stack(Primitive {
+                base_offset,
+                reg: None,
+            }),
+        );
+    }
+
+    // Loads the arg pointer symbol to the specified general reg.
+    pub fn ret_pionter_arg(&mut self, reg: GeneralReg) {
+        self.symbol_storage_map
+            .insert(Symbol::RET_POINTER, Reg(General(reg)));
+    }
+
     /// claim_stack_area is the public wrapper around claim_stack_size.
     /// It also deals with updating symbol storage.
     /// It returns the base offset of the stack area.

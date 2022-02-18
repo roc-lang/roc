@@ -72,12 +72,11 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
     // It returns the total stack space after loading the args.
     fn load_args<'a>(
         buf: &mut Vec<'a, u8>,
-        symbol_map: &mut MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
+        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
         args: &'a [(Layout<'a>, Symbol)],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
         ret_layout: &Layout<'a>,
-        stack_size: u32,
-    ) -> u32;
+    );
 
     // store_args stores the args in registers and on the stack for function calling.
     // It returns the amount of stack space needed to temporarily store the args.
@@ -262,7 +261,7 @@ pub enum SymbolStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     },
 }
 
-pub trait RegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {
+pub trait RegTrait: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static {
     fn value(&self) -> u8;
 }
 
@@ -525,27 +524,7 @@ impl<
     }
 
     fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)], ret_layout: &Layout<'a>) {
-        self.stack_size = CC::load_args(
-            &mut self.buf,
-            &mut self.symbol_storage_map,
-            args,
-            ret_layout,
-            self.stack_size,
-        );
-        // Update used and free regs.
-        for (sym, storage) in &self.symbol_storage_map {
-            match storage {
-                SymbolStorage::GeneralReg(reg) | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
-                    self.general_free_regs.retain(|r| *r != *reg);
-                    self.general_used_regs.push((*reg, *sym));
-                }
-                SymbolStorage::FloatReg(reg) | SymbolStorage::BaseAndFloatReg { reg, .. } => {
-                    self.float_free_regs.retain(|r| *r != *reg);
-                    self.float_used_regs.push((*reg, *sym));
-                }
-                SymbolStorage::Base { .. } => {}
-            }
-        }
+        CC::load_args(&mut self.buf, &mut self.storage_manager, args, ret_layout);
     }
 
     /// Used for generating wrappers for malloc/realloc/free

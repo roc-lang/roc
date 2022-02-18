@@ -249,11 +249,16 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     #[inline(always)]
     fn load_args<'a>(
         _buf: &mut Vec<'a, u8>,
-        _symbol_map: &mut MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
+        _storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
         _args: &'a [(Layout<'a>, Symbol)],
         _ret_layout: &Layout<'a>,
-        mut _stack_size: u32,
-    ) -> u32 {
+    ) {
         todo!("Loading args for AArch64");
     }
 
