@@ -16,9 +16,12 @@ pub(crate) mod x86_64;
 
 // TODO: StorageManager is still not fully integrated.
 // General pieces needed:
-// - function call stack? (maybe can stay here)
+// - function call stack fully moved to storage manager
 // - remove data that is duplicated here and in storage manager
-// - look into fixing join to no longer use multiple backends???
+// To make joinpoints better:
+// - consider their parameters to be alive until the last jump to them
+// - save the location of the parameters at the start of the joinpoint in a special location.
+// - When jumping to them, move the args to the location of the parameters (pushing to stack if necessary)
 use storage::StorageManager;
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<GeneralReg, FloatReg>>:
@@ -267,6 +270,8 @@ pub struct Backend64Bit<
     ASM: Assembler<GeneralReg, FloatReg>,
     CC: CallConv<GeneralReg, FloatReg, ASM>,
 > {
+    // TODO: A number of the uses of MutMap could probably be some form of linear mutmap
+    // They are likely to be small enough that it is faster to use a vec and linearly scan it or keep it sorted and binary search.
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
@@ -656,73 +661,13 @@ impl<
         let jmp_location = self.buf.len();
         let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
 
-        // This section can essentially be seen as a sub function within the main function.
-        // Thus we build using a new backend with some minor extra synchronization.
-        {
-            let mut sub_backend = new_backend_64bit::<GeneralReg, FloatReg, ASM, CC>(
-                self.env,
-                self.target_info,
-                self.interns,
-            );
-            sub_backend.reset(
-                self.proc_name.as_ref().unwrap().clone(),
-                self.is_self_recursive.as_ref().unwrap().clone(),
-            );
-            // Sync static maps of important information.
-            sub_backend.last_seen_map = self.last_seen_map.clone();
-            sub_backend.layout_map = self.layout_map.clone();
-            sub_backend.free_map = self.free_map.clone();
+        // Ensure all the joinpoint parameters are loaded in only one location.
+        // On jumps to the joinpoint, we will overwrite those locations as a way to "pass parameters" to the joinpoint.
+        self.storage_manager.setup_joinpoint(id, parameters);
 
-            // Setup join point.
-            sub_backend.join_map.insert(*id, 0);
-            self.join_map.insert(*id, self.buf.len() as u64);
+        // Build all statements in body.
+        self.build_stmt(body, ret_layout);
 
-            // Sync stack size so the "sub function" doesn't mess up our stack.
-            sub_backend.stack_size = self.stack_size;
-            sub_backend.fn_call_stack_size = self.fn_call_stack_size;
-
-            // Load params as if they were args.
-            let mut args = bumpalo::vec![in self.env.arena];
-            for param in parameters {
-                args.push((param.layout, param.symbol));
-            }
-            sub_backend.load_args(args.into_bump_slice(), ret_layout);
-
-            // Build all statements in body.
-            sub_backend.build_stmt(body, ret_layout);
-
-            // Merge the "sub function" into the main function.
-            let sub_func_offset = self.buf.len() as u64;
-            self.buf.extend_from_slice(&sub_backend.buf);
-            // Update stack based on how much was used by the sub function.
-            self.stack_size = sub_backend.stack_size;
-            self.fn_call_stack_size = sub_backend.fn_call_stack_size;
-            // Relocations must be shifted to be merged correctly.
-            self.relocs
-                .extend(sub_backend.relocs.into_iter().map(|reloc| match reloc {
-                    Relocation::LocalData { offset, data } => Relocation::LocalData {
-                        offset: offset + sub_func_offset,
-                        data,
-                    },
-                    Relocation::LinkedData { offset, name } => Relocation::LinkedData {
-                        offset: offset + sub_func_offset,
-                        name,
-                    },
-                    Relocation::LinkedFunction { offset, name } => Relocation::LinkedFunction {
-                        offset: offset + sub_func_offset,
-                        name,
-                    },
-                    Relocation::JmpToReturn {
-                        inst_loc,
-                        inst_size,
-                        offset,
-                    } => Relocation::JmpToReturn {
-                        inst_loc: inst_loc + sub_func_offset,
-                        inst_size,
-                        offset: offset + sub_func_offset,
-                    },
-                }));
-        }
         // Overwrite the original jump with the correct offset.
         let mut tmp = bumpalo::vec![in self.env.arena];
         self.update_jmp_imm32_offset(
@@ -741,20 +686,10 @@ impl<
         id: &JoinPointId,
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
-        ret_layout: &Layout<'a>,
+        _ret_layout: &Layout<'a>,
     ) {
-        // Treat this like a function call, but with a jump instead of a call instruction at the end.
-
         self.storage_manager
-            .push_used_caller_saved_regs_to_stack(&mut self.buf);
-
-        CC::store_args(
-            &mut self.buf,
-            &mut self.storage_manager,
-            args,
-            arg_layouts,
-            ret_layout,
-        );
+            .setup_jump(&mut self.buf, id, args, arg_layouts);
 
         let jmp_location = self.buf.len();
         let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);

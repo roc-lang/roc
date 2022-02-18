@@ -7,7 +7,10 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::{
+    ir::{JoinPointId, Param},
+    layout::{Builtin, Layout},
+};
 use roc_target::TargetInfo;
 use std::cmp::max;
 use std::marker::PhantomData;
@@ -89,6 +92,10 @@ pub struct StorageManager<
     // If a symbol has only one reference, we can free it.
     allocation_map: MutMap<Symbol, Rc<(i32, u32)>>,
 
+    // The storage for parameters of a join point.
+    // When jumping to the join point, the parameters should be setup to match this.
+    join_param_map: MutMap<JoinPointId, Vec<'a, Storage<GeneralReg, FloatReg>>>,
+
     // This should probably be smarter than a vec.
     // There are certain registers we should always use first. With pushing and popping, this could get mixed.
     general_free_regs: Vec<'a, GeneralReg>,
@@ -129,6 +136,7 @@ pub fn new_storage_manager<
         target_info,
         symbol_storage_map: MutMap::default(),
         allocation_map: MutMap::default(),
+        join_param_map: MutMap::default(),
         general_free_regs: bumpalo::vec![in env.arena],
         general_used_regs: bumpalo::vec![in env.arena],
         general_used_callee_saved_regs: MutSet::default(),
@@ -152,6 +160,7 @@ impl<
     pub fn reset(&mut self) {
         self.symbol_storage_map.clear();
         self.allocation_map.clear();
+        self.join_param_map.clear();
         self.general_used_callee_saved_regs.clear();
         self.general_free_regs.clear();
         self.general_used_regs.clear();
@@ -611,7 +620,54 @@ impl<
         }
     }
 
+    /// Ensures that a register is free. If it is not free, data will be moved to make it free.
+    fn ensure_reg_free(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        wanted_reg: RegStorage<GeneralReg, FloatReg>,
+    ) {
+        match wanted_reg {
+            General(reg) => {
+                if self.general_free_regs.contains(&reg) {
+                    return;
+                }
+                match self
+                    .general_used_regs
+                    .iter()
+                    .position(|(used_reg, sym)| reg == *used_reg)
+                {
+                    Some(position) => {
+                        let (_, sym) = self.general_used_regs.remove(position);
+                        self.free_to_stack(buf, &sym, wanted_reg);
+                    }
+                    None => {
+                        internal_error!("wanted register ({:?}) is not used or free", wanted_reg);
+                    }
+                }
+            }
+            Float(reg) => {
+                if self.float_free_regs.contains(&reg) {
+                    return;
+                }
+                match self
+                    .float_used_regs
+                    .iter()
+                    .position(|(used_reg, sym)| reg == *used_reg)
+                {
+                    Some(position) => {
+                        let (_, sym) = self.float_used_regs.remove(position);
+                        self.free_to_stack(buf, &sym, wanted_reg);
+                    }
+                    None => {
+                        internal_error!("wanted register ({:?}) is not used or free", wanted_reg);
+                    }
+                }
+            }
+        }
+    }
+
     // Frees `wanted_reg` which is currently owned by `sym` by making sure the value is loaded on the stack.
+    // Note, used and free regs are expected to be updated outside of this function.
     fn free_to_stack(
         &mut self,
         buf: &mut Vec<'a, u8>,
@@ -708,6 +764,101 @@ impl<
         self.fn_call_stack_size = max(self.fn_call_stack_size, tmp_size);
     }
 
+    /// Setups a join piont.
+    /// To do this, each of the join pionts params are loaded into a single location (either stack or reg).
+    /// Then those locations are stored.
+    /// Later jumps to the join point can overwrite the stored locations to pass parameters.
+    pub fn setup_joinpoint(&mut self, id: &JoinPointId, params: &'a [Param<'a>]) {
+        let mut param_storage = bumpalo::vec![in self.env.arena];
+        param_storage.reserve(params.len());
+        for Param {
+            symbol,
+            borrow,
+            layout: _,
+        } in params
+        {
+            if *borrow {
+                // These probably need to be passed by pointer/reference?
+                // Otherwise, we probably need to copy back to the param at the end of the joinpoint.
+                todo!("joinpoints with borrowed parameters");
+            }
+            // move to single location.
+            // TODO: this may be wrong, params may be a list of new symbols.
+            // In that case, this should be claiming storage for each symbol.
+            match self.remove_storage_for_sym(symbol) {
+                // Only values that might be in 2 locations are primitives.
+                // They can be in a reg and on the stack.
+                Stack(Primitive {
+                    reg: Some(reg),
+                    base_offset,
+                }) => {
+                    // Only care about the value in the register and reload to that.
+                    // free the associated stack space.
+                    self.free_stack_chunk(base_offset, 8);
+                    self.symbol_storage_map.insert(*symbol, Reg(reg));
+                    param_storage.push(Reg(reg));
+                }
+                storage => {
+                    self.symbol_storage_map.insert(*symbol, storage);
+                    param_storage.push(storage);
+                }
+            }
+        }
+        self.join_param_map.insert(*id, param_storage);
+    }
+
+    // Setup jump loads the parameters for the joinpoint.
+    // This enables the jump to correctly passe arguments to the joinpoint.
+    pub fn setup_jump(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        id: &JoinPointId,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
+    ) {
+        // TODO: remove was use here and for current_storage to deal with borrow checker.
+        // See if we can do this better.
+        let param_storage = match self.join_param_map.remove(id) {
+            Some(storages) => storages,
+            None => internal_error!("Jump: unknown point specified to jump to: {:?}", id),
+        };
+        for ((sym, layout), wanted_storage) in
+            args.iter().zip(arg_layouts).zip(param_storage.iter())
+        {
+            // Note: it is possible that the storage we want to move to is in use by one of the args we want to pass.
+            let current_storage = self.remove_storage_for_sym(sym);
+            if &current_storage == wanted_storage {
+                continue;
+            }
+            match wanted_storage {
+                Reg(General(reg)) => {
+                    // Ensure the reg is free, if not free it.
+                    self.ensure_reg_free(buf, General(*reg));
+                    // Copy the value over to the reg.
+                    self.load_to_specified_general_reg(buf, sym, *reg)
+                }
+                Reg(Float(reg)) => {
+                    // Ensure the reg is free, if not free it.
+                    self.ensure_reg_free(buf, Float(*reg));
+                    // Copy the value over to the reg.
+                    self.load_to_specified_float_reg(buf, sym, *reg)
+                }
+                Stack(ReferencedPrimitive { base_offset, .. } | Complex { base_offset, .. }) => {
+                    // TODO: This might be better not to call.
+                    // Maybe we want a more memcpy like method to directly get called here.
+                    // That would also be capable of asserting the size.
+                    // Maybe copy stack to stack or something.
+                    self.copy_symbol_to_stack_offset(buf, *base_offset, sym, layout);
+                }
+                NoData => {}
+                Stack(Primitive { .. }) => {
+                    internal_error!("Primitive stack storage is not allowed for jumping")
+                }
+            }
+            self.symbol_storage_map.insert(*sym, current_storage);
+        }
+        self.join_param_map.insert(*id, param_storage);
+    }
     /// claim_stack_area is the public wrapper around claim_stack_size.
     /// It also deals with updating symbol storage.
     /// It returns the base offset of the stack area.
