@@ -460,6 +460,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             }
             Layout::Struct([]) => {}
             Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
+                debug_assert_eq!(base_offset % 8, 0);
                 X86_64Assembler::mov_reg64_base32(buf, Self::GENERAL_RETURN_REGS[0], base_offset);
                 X86_64Assembler::mov_reg64_base32(
                     buf,
