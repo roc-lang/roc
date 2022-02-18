@@ -32,6 +32,12 @@ For NQueens, input 10 in the terminal and press enter.
 
 **Tip:** when programming in roc, we recommend to execute `./roc check myproject/Foo.roc` before `./roc myproject/Foo.roc` or `./roc build myproject/Foo.roc`. `./roc check` can produce clear error messages in cases where building/running may panic.
 
+## Sponsor
+
+We are very grateful for our sponsor [NoRedInk](https://www.noredink.com/).
+
+<img src="https://www.noredink.com/assets/logo-red-black-f6989d7567cf90b349409137595e99c52d036d755b4403d25528e0fd83a3b084.svg" height="60" alt="NoRedInk logo"/>
+
 ## Applications and Platforms
 
 Applications are often built on a *framework.* Typically, both application and framework are written in the same language.
