@@ -375,8 +375,8 @@ impl<
             Stack(Complex { base_offset, size }) => {
                 let (base_offset, size) = (*base_offset, *size);
                 let mut data_offset = base_offset;
-                for i in 0..index as usize {
-                    let field_size = field_layouts[i].stack_size(self.target_info);
+                for layout in field_layouts.iter().take(index as usize) {
+                    let field_size = layout.stack_size(self.target_info);
                     data_offset += field_size as i32;
                 }
                 debug_assert!(data_offset < base_offset + size as i32);
@@ -705,6 +705,6 @@ impl<
     }
 }
 
-fn is_primitive<'a>(layout: &Layout<'a>) -> bool {
+fn is_primitive(layout: &Layout<'_>) -> bool {
     matches!(layout, single_register_layouts!())
 }

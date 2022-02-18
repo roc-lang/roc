@@ -1028,8 +1028,7 @@ impl<
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
-        return self
-            .storage_manager
+        self.storage_manager
             .create_struct(&mut self.buf, sym, layout, fields);
     }
 
