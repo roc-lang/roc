@@ -5210,4 +5210,45 @@ mod solve_expr {
             "Bar U8",
         )
     }
+
+    // https://github.com/rtfeldman/roc/issues/2379
+    #[test]
+    fn copy_vars_referencing_copied_vars() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Job : [ Job [ Command ] (List Job) ]
+
+                job : Job
+
+                job
+                "#
+            ),
+            "Job",
+        )
+    }
+
+    #[test]
+    fn copy_vars_referencing_copied_vars_specialized() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Job a : [ Job [ Command ] (Job a) (List (Job a)) a ]
+
+                job : Job Str
+
+                when job is
+                    Job _ j lst _ ->
+                        when j is
+                            Job _ _ _ s ->
+                                { j, lst, s }
+                "#
+            ),
+            // TODO: this means that we're doing our job correctly, as now both `Job a`s have been
+            // specialized to the same type, and the second destructuring proves the reified type
+            // is `Job Str`. But we should just print the structure of the recursive type directly.
+            // See https://github.com/rtfeldman/roc/issues/2513
+            "{ j : a, lst : List a, s : Str }",
+        )
+    }
 }
