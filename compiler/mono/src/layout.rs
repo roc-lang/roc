@@ -1312,17 +1312,15 @@ impl<'a> Builtin<'a> {
     const DECIMAL_SIZE: u32 = std::mem::size_of::<i128>() as u32;
 
     /// Number of machine words in an empty one of these
-    pub const STR_WORDS: u32 = 2;
+    pub const STR_WORDS: u32 = 3;
     pub const DICT_WORDS: u32 = 3;
     pub const SET_WORDS: u32 = Builtin::DICT_WORDS; // Set is an alias for Dict with {} for value
-    pub const LIST_WORDS: u32 = 2;
+    pub const LIST_WORDS: u32 = 3;
 
-    /// Layout of collection wrapper for List and Str - a struct of (pointer, length).
-    ///
-    /// We choose this layout (with pointer first) because it's how
-    /// Rust slices are laid out, meaning we can cast to/from them for free.
+    /// Layout of collection wrapper for List and Str - a struct of (pointer, length, capacity).
     pub const WRAPPER_PTR: u32 = 0;
     pub const WRAPPER_LEN: u32 = 1;
+    pub const WRAPPER_CAPACITY: u32 = 2;
 
     pub fn stack_size(&self, target_info: TargetInfo) -> u32 {
         use Builtin::*;

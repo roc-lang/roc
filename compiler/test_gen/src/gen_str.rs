@@ -1053,7 +1053,7 @@ fn str_from_utf8_range_count_too_high_for_start() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_repeat_small() {
+fn str_repeat_small_stays_small() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "Roc" 3"#),
         RocStr::from("RocRocRoc"),
@@ -1063,10 +1063,20 @@ fn str_repeat_small() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn str_repeat_small_becomes_big() {
+    assert_evals_to!(
+        indoc!(r#"Str.repeat "less than 23 characters" 2"#),
+        RocStr::from("less than 23 charactersless than 23 characters"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_repeat_big() {
     assert_evals_to!(
-        indoc!(r#"Str.repeat "more than 16 characters" 2"#),
-        RocStr::from("more than 16 charactersmore than 16 characters"),
+        indoc!(r#"Str.repeat "more than 23 characters now" 2"#),
+        RocStr::from("more than 23 characters nowmore than 23 characters now"),
         RocStr
     );
 }
@@ -1074,7 +1084,9 @@ fn str_repeat_big() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn str_repeat_empty_string() {
-    assert_evals_to!(indoc!(r#"Str.repeat "" 3"#), RocStr::from(""), RocStr);
+    let a = indoc!(r#"Str.repeat "" 3"#);
+    let b = RocStr::from("");
+    assert_evals_to!(a, b, RocStr);
 }
 
 #[test]

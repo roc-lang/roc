@@ -18,10 +18,8 @@ const InPlace = enum(u8) {
 const MASK_ISIZE: isize = std.math.minInt(isize);
 const MASK: usize = @bitCast(usize, MASK_ISIZE);
 
-const SMALL_STR_MAX_LENGTH = small_string_size - 1;
-const small_string_size = @sizeOf(RocStr);
-const SMALL_STRING_SIZE = small_string_size;
-// const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);
+const SMALL_STR_MAX_LENGTH = SMALL_STRING_SIZE - 1;
+const SMALL_STRING_SIZE = @sizeOf(RocStr);
 
 fn init_blank_small_string(comptime n: usize) [n]u8 {
     var prime_list: [n]u8 = undefined;
@@ -70,14 +68,14 @@ pub const RocStr = extern struct {
 
     // allocate space for a (big or small) RocStr, but put nothing in it yet
     pub fn allocate(result_in_place: InPlace, number_of_chars: usize) RocStr {
-        const result_is_big = number_of_chars >= small_string_size;
+        const result_is_big = number_of_chars >= SMALL_STRING_SIZE;
 
         if (result_is_big) {
             return RocStr.initBig(result_in_place, number_of_chars);
         } else {
             var string = RocStr.empty();
 
-            string.str_capacity = SMALL_STR_MAX_LENGTH | MASK;
+            string.asSlice()[@sizeOf(RocStr) - 1] = @intCast(u8, number_of_chars) | 0b1000_0000;
 
             return string;
         }
