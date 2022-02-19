@@ -176,6 +176,26 @@ impl<
         self.fn_call_stack_size = 0;
     }
 
+    pub fn stack_size(&self) -> u32 {
+        self.stack_size
+    }
+
+    pub fn fn_call_stack_size(&self) -> u32 {
+        self.fn_call_stack_size
+    }
+
+    pub fn general_used_callee_saved_regs(&self) -> Vec<'a, GeneralReg> {
+        let mut used_regs = bumpalo::vec![in self.env.arena];
+        used_regs.extend(&self.general_used_callee_saved_regs);
+        used_regs
+    }
+
+    pub fn float_used_callee_saved_regs(&self) -> Vec<'a, FloatReg> {
+        let mut used_regs = bumpalo::vec![in self.env.arena];
+        used_regs.extend(&self.float_used_callee_saved_regs);
+        used_regs
+    }
+
     // Returns true if the symbol is storing a primitive value.
     pub fn is_stored_primitive(&self, sym: &Symbol) -> bool {
         matches!(
@@ -250,6 +270,7 @@ impl<
         self.general_free_regs.push(reg);
     }
 
+    #[allow(dead_code)]
     // This claims a temporary float register and enables is used in the passed in function.
     // Temporary registers are not safe across call instructions.
     pub fn with_tmp_float_reg<F: FnOnce(&mut Self, &mut Vec<'a, u8>, FloatReg)>(
@@ -634,7 +655,7 @@ impl<
                 match self
                     .general_used_regs
                     .iter()
-                    .position(|(used_reg, sym)| reg == *used_reg)
+                    .position(|(used_reg, _sym)| reg == *used_reg)
                 {
                     Some(position) => {
                         let (_, sym) = self.general_used_regs.remove(position);
@@ -652,7 +673,7 @@ impl<
                 match self
                     .float_used_regs
                     .iter()
-                    .position(|(used_reg, sym)| reg == *used_reg)
+                    .position(|(used_reg, _sym)| reg == *used_reg)
                 {
                     Some(position) => {
                         let (_, sym) = self.float_used_regs.remove(position);
@@ -790,7 +811,7 @@ impl<
             // Claim a location for every join point parameter to be loaded at.
             match layout {
                 single_register_integers!() => {
-                    let reg = self.claim_general_reg(buf, symbol);
+                    self.claim_general_reg(buf, symbol);
                 }
                 single_register_floats!() => {
                     self.claim_float_reg(buf, symbol);

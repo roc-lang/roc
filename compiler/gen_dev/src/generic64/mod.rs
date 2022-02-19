@@ -1,7 +1,7 @@
 use crate::{single_register_floats, single_register_integers, Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
@@ -53,15 +53,15 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
 
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        // TODO: This should deal with float regs as well.
         general_saved_regs: &[GeneralReg],
+        float_saved_regs: &[FloatReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
     ) -> i32;
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        // TODO: This should deal with float regs as well.
         general_saved_regs: &[GeneralReg],
+        float_saved_regs: &[FloatReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
     );
@@ -236,29 +236,6 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized {
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum SymbolStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
-    GeneralReg(GeneralReg),
-    FloatReg(FloatReg),
-    Base {
-        offset: i32,
-        size: u32,
-        owned: bool,
-    },
-    BaseAndGeneralReg {
-        reg: GeneralReg,
-        offset: i32,
-        size: u32,
-        owned: bool,
-    },
-    BaseAndFloatReg {
-        reg: FloatReg,
-        offset: i32,
-        size: u32,
-        owned: bool,
-    },
-}
-
 pub trait RegTrait: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static {
     fn value(&self) -> u8;
 }
@@ -275,7 +252,6 @@ pub struct Backend64Bit<
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
-    target_info: TargetInfo,
     interns: &'a mut Interns,
     helper_proc_gen: CodeGenHelp<'a>,
     helper_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
@@ -292,27 +268,6 @@ pub struct Backend64Bit<
     join_map: MutMap<JoinPointId, u64>,
 
     storage_manager: StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
-    symbol_storage_map: MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
-
-    // This should probably be smarter than a vec.
-    // There are certain registers we should always use first. With pushing and popping, this could get mixed.
-    general_free_regs: Vec<'a, GeneralReg>,
-    float_free_regs: Vec<'a, FloatReg>,
-
-    // The last major thing we need is a way to decide what reg to free when all of them are full.
-    // Theoretically we want a basic lru cache for the currently loaded symbols.
-    // For now just a vec of used registers and the symbols they contain.
-    general_used_regs: Vec<'a, (GeneralReg, Symbol)>,
-    float_used_regs: Vec<'a, (FloatReg, Symbol)>,
-
-    // used callee saved regs must be tracked for pushing and popping at the beginning/end of the function.
-    general_used_callee_saved_regs: MutSet<GeneralReg>,
-    float_used_callee_saved_regs: MutSet<FloatReg>,
-
-    free_stack_chunks: Vec<'a, (i32, u32)>,
-    stack_size: u32,
-    // The amount of stack space needed to pass args for function calling.
-    fn_call_stack_size: u32,
 }
 
 /// new creates a new backend that will output to the specific Object.
@@ -331,7 +286,6 @@ pub fn new_backend_64bit<
         phantom_asm: PhantomData,
         phantom_cc: PhantomData,
         env,
-        target_info,
         interns,
         helper_proc_gen: CodeGenHelp::new(env.arena, target_info, env.module_id),
         helper_proc_symbols: bumpalo::vec![in env.arena],
@@ -342,18 +296,8 @@ pub fn new_backend_64bit<
         last_seen_map: MutMap::default(),
         layout_map: MutMap::default(),
         free_map: MutMap::default(),
-        symbol_storage_map: MutMap::default(),
         literal_map: MutMap::default(),
         join_map: MutMap::default(),
-        general_free_regs: bumpalo::vec![in env.arena],
-        general_used_regs: bumpalo::vec![in env.arena],
-        general_used_callee_saved_regs: MutSet::default(),
-        float_free_regs: bumpalo::vec![in env.arena],
-        float_used_regs: bumpalo::vec![in env.arena],
-        float_used_callee_saved_regs: MutSet::default(),
-        free_stack_chunks: bumpalo::vec![in env.arena],
-        stack_size: 0,
-        fn_call_stack_size: 0,
         storage_manager: storage::new_storage_manager(env, target_info),
     }
 }
@@ -388,25 +332,11 @@ impl<
     fn reset(&mut self, name: String, is_self_recursive: SelfRecursive) {
         self.proc_name = Some(name);
         self.is_self_recursive = Some(is_self_recursive);
-        self.stack_size = 0;
-        self.free_stack_chunks.clear();
-        self.fn_call_stack_size = 0;
         self.last_seen_map.clear();
         self.layout_map.clear();
         self.join_map.clear();
         self.free_map.clear();
-        self.symbol_storage_map.clear();
         self.buf.clear();
-        self.general_used_callee_saved_regs.clear();
-        self.general_free_regs.clear();
-        self.general_used_regs.clear();
-        self.general_free_regs
-            .extend_from_slice(CC::GENERAL_DEFAULT_FREE_REGS);
-        self.float_used_callee_saved_regs.clear();
-        self.float_free_regs.clear();
-        self.float_used_regs.clear();
-        self.float_free_regs
-            .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
         self.helper_proc_symbols.clear();
         self.storage_manager.reset();
     }
@@ -435,13 +365,14 @@ impl<
         let mut out = bumpalo::vec![in self.env.arena];
 
         // Setup stack.
-        let mut used_regs = bumpalo::vec![in self.env.arena];
-        used_regs.extend(&self.general_used_callee_saved_regs);
+        let used_general_regs = self.storage_manager.general_used_callee_saved_regs();
+        let used_float_regs = self.storage_manager.float_used_callee_saved_regs();
         let aligned_stack_size = CC::setup_stack(
             &mut out,
-            &used_regs,
-            self.stack_size as i32,
-            self.fn_call_stack_size as i32,
+            &used_general_regs,
+            &used_float_regs,
+            self.storage_manager.stack_size() as i32,
+            self.storage_manager.fn_call_stack_size() as i32,
         );
         let setup_offset = out.len();
 
@@ -492,9 +423,10 @@ impl<
         // Cleanup stack.
         CC::cleanup_stack(
             &mut out,
-            &used_regs,
+            &used_general_regs,
+            &used_float_regs,
             aligned_stack_size,
-            self.fn_call_stack_size as i32,
+            self.storage_manager.fn_call_stack_size() as i32,
         );
         ASM::ret(&mut out);
 

@@ -163,13 +163,15 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     #[inline(always)]
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        general_saved_regs: &[X86_64GeneralReg],
+        saved_general_regs: &[X86_64GeneralReg],
+        saved_float_regs: &[X86_64FloatReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
     ) -> i32 {
         x86_64_generic_setup_stack(
             buf,
-            general_saved_regs,
+            saved_general_regs,
+            saved_float_regs,
             requested_stack_size,
             fn_call_stack_size,
         )
@@ -178,13 +180,15 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     #[inline(always)]
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        general_saved_regs: &[X86_64GeneralReg],
+        saved_general_regs: &[X86_64GeneralReg],
+        saved_float_regs: &[X86_64FloatReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
     ) {
         x86_64_generic_cleanup_stack(
             buf,
-            general_saved_regs,
+            saved_general_regs,
+            saved_float_regs,
             aligned_stack_size,
             fn_call_stack_size,
         )
@@ -514,21 +518,35 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     #[inline(always)]
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        saved_regs: &[X86_64GeneralReg],
+        saved_general_regs: &[X86_64GeneralReg],
+        saved_float_regs: &[X86_64FloatReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
     ) -> i32 {
-        x86_64_generic_setup_stack(buf, saved_regs, requested_stack_size, fn_call_stack_size)
+        x86_64_generic_setup_stack(
+            buf,
+            saved_general_regs,
+            saved_float_regs,
+            requested_stack_size,
+            fn_call_stack_size,
+        )
     }
 
     #[inline(always)]
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        saved_regs: &[X86_64GeneralReg],
+        saved_general_regs: &[X86_64GeneralReg],
+        saved_float_regs: &[X86_64FloatReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
     ) {
-        x86_64_generic_cleanup_stack(buf, saved_regs, aligned_stack_size, fn_call_stack_size)
+        x86_64_generic_cleanup_stack(
+            buf,
+            saved_general_regs,
+            saved_float_regs,
+            aligned_stack_size,
+            fn_call_stack_size,
+        )
     }
 
     #[inline(always)]
@@ -706,7 +724,8 @@ impl X86_64WindowsFastcall {
 #[inline(always)]
 fn x86_64_generic_setup_stack<'a>(
     buf: &mut Vec<'a, u8>,
-    saved_regs: &[X86_64GeneralReg],
+    saved_general_regs: &[X86_64GeneralReg],
+    saved_float_regs: &[X86_64FloatReg],
     requested_stack_size: i32,
     fn_call_stack_size: i32,
 ) -> i32 {
@@ -714,7 +733,7 @@ fn x86_64_generic_setup_stack<'a>(
     X86_64Assembler::mov_reg64_reg64(buf, X86_64GeneralReg::RBP, X86_64GeneralReg::RSP);
 
     let full_stack_size = match requested_stack_size
-        .checked_add(8 * saved_regs.len() as i32)
+        .checked_add(8 * (saved_general_regs.len() + saved_float_regs.len()) as i32)
         .and_then(|size| size.checked_add(fn_call_stack_size))
     {
         Some(size) => size,
@@ -741,8 +760,12 @@ fn x86_64_generic_setup_stack<'a>(
 
             // Put values at the top of the stack to avoid conflicts with previously saved variables.
             let mut offset = aligned_stack_size - fn_call_stack_size;
-            for reg in saved_regs {
+            for reg in saved_general_regs {
                 X86_64Assembler::mov_base32_reg64(buf, -offset, *reg);
+                offset -= 8;
+            }
+            for reg in saved_float_regs {
+                X86_64Assembler::mov_base32_freg64(buf, -offset, *reg);
                 offset -= 8;
             }
             aligned_stack_size
@@ -758,14 +781,19 @@ fn x86_64_generic_setup_stack<'a>(
 #[allow(clippy::unnecessary_wraps)]
 fn x86_64_generic_cleanup_stack<'a>(
     buf: &mut Vec<'a, u8>,
-    saved_regs: &[X86_64GeneralReg],
+    saved_general_regs: &[X86_64GeneralReg],
+    saved_float_regs: &[X86_64FloatReg],
     aligned_stack_size: i32,
     fn_call_stack_size: i32,
 ) {
     if aligned_stack_size > 0 {
         let mut offset = aligned_stack_size - fn_call_stack_size;
-        for reg in saved_regs {
+        for reg in saved_general_regs {
             X86_64Assembler::mov_reg64_base32(buf, *reg, -offset);
+            offset -= 8;
+        }
+        for reg in saved_float_regs {
+            X86_64Assembler::mov_freg64_base32(buf, *reg, -offset);
             offset -= 8;
         }
         X86_64Assembler::add_reg64_reg64_imm32(

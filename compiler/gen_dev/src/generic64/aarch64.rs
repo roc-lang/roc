@@ -159,13 +159,14 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     #[inline(always)]
     fn setup_stack(
         buf: &mut Vec<'_, u8>,
-        saved_regs: &[AArch64GeneralReg],
+        saved_general_regs: &[AArch64GeneralReg],
+        saved_float_regs: &[AArch64FloatReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
     ) -> i32 {
         // Full size is upcast to i64 to make sure we don't overflow here.
         let full_stack_size = match requested_stack_size
-            .checked_add(8 * saved_regs.len() as i32 + 8) // The extra 8 is space to store the frame pointer.
+            .checked_add(8 * (saved_general_regs.len() + saved_float_regs.len()) as i32 + 8) // The extra 8 is space to store the frame pointer.
             .and_then(|size| size.checked_add(fn_call_stack_size))
         {
             Some(size) => size,
@@ -203,9 +204,13 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
                 AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::FP);
 
                 offset = aligned_stack_size - fn_call_stack_size;
-                for reg in saved_regs {
+                for reg in saved_general_regs {
                     offset -= 8;
                     AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
+                }
+                for reg in saved_float_regs {
+                    offset -= 8;
+                    AArch64Assembler::mov_base32_freg64(buf, offset, *reg);
                 }
                 aligned_stack_size
             } else {
@@ -219,7 +224,8 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     #[inline(always)]
     fn cleanup_stack(
         buf: &mut Vec<'_, u8>,
-        saved_regs: &[AArch64GeneralReg],
+        saved_general_regs: &[AArch64GeneralReg],
+        saved_float_regs: &[AArch64FloatReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
     ) {
@@ -232,9 +238,13 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, offset);
 
             offset = aligned_stack_size - fn_call_stack_size;
-            for reg in saved_regs {
+            for reg in saved_general_regs {
                 offset -= 8;
                 AArch64Assembler::mov_reg64_base32(buf, *reg, offset);
+            }
+            for reg in saved_float_regs {
+                offset -= 8;
+                AArch64Assembler::mov_freg64_base32(buf, *reg, offset);
             }
             AArch64Assembler::add_reg64_reg64_imm32(
                 buf,
