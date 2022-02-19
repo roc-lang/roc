@@ -22,3 +22,6 @@ roc_parse = {path = "../compiler/parse"}
 roc_repl_eval = {path = "../repl_eval"}
 roc_target = {path = "../compiler/roc_target"}
 roc_types = {path = "../compiler/types"}
+
+[dev-dependencies]
+futures = "0.3.17"

@@ -3192,6 +3192,7 @@ dependencies = [
  "indoc",
  "roc_cli",
  "roc_repl_cli",
+ "roc_repl_wasm",
  "roc_test_utils",
  "strip-ansi-escapes",
 ]
@@ -3705,6 +3706,7 @@ name = "roc_repl_wasm"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "futures",
  "js-sys",
  "roc_builtins",
  "roc_collections",
