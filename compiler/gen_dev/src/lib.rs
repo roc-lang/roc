@@ -694,16 +694,8 @@ trait Backend<'a> {
     fn free_symbol(&mut self, sym: &Symbol);
 
     /// set_last_seen sets the statement a symbol was last seen in.
-    fn set_last_seen(
-        &mut self,
-        sym: Symbol,
-        stmt: &Stmt<'a>,
-        owning_symbol: &MutMap<Symbol, Symbol>,
-    ) {
+    fn set_last_seen(&mut self, sym: Symbol, stmt: &Stmt<'a>) {
         self.last_seen_map().insert(sym, stmt);
-        if let Some(parent) = owning_symbol.get(&sym) {
-            self.last_seen_map().insert(*parent, stmt);
-        }
     }
 
     /// last_seen_map gets the map from symbol to when it is last seen in the function.
@@ -749,45 +741,39 @@ trait Backend<'a> {
     /// scan_ast runs through the ast and fill the last seen map.
     /// This must iterate through the ast in the same way that build_stmt does. i.e. then before else.
     fn scan_ast(&mut self, stmt: &Stmt<'a>) {
-        // This keeps track of symbols that depend on other symbols.
-        // The main case of this is data in structures and tagged unions.
-        // This data must extend the lifetime of the original structure or tagged union.
-        // For arrays the loading is always done through low levels and does not depend on the underlying array's lifetime.
-        let mut owning_symbol: MutMap<Symbol, Symbol> = MutMap::default();
+        // Join map keeps track of join point parameters so that we can keep them around while they still might be jumped to.
+        let mut join_map: MutMap<JoinPointId, &'a [Param<'a>]> = MutMap::default();
         match stmt {
             Stmt::Let(sym, expr, _, following) => {
-                self.set_last_seen(*sym, stmt, &owning_symbol);
+                self.set_last_seen(*sym, stmt);
                 match expr {
                     Expr::Literal(_) => {}
 
-                    Expr::Call(call) => self.scan_ast_call(call, stmt, &owning_symbol),
+                    Expr::Call(call) => self.scan_ast_call(call, stmt),
 
                     Expr::Tag { arguments, .. } => {
                         for sym in *arguments {
-                            self.set_last_seen(*sym, stmt, &owning_symbol);
+                            self.set_last_seen(*sym, stmt);
                         }
                     }
                     Expr::Struct(syms) => {
                         for sym in *syms {
-                            self.set_last_seen(*sym, stmt, &owning_symbol);
+                            self.set_last_seen(*sym, stmt);
                         }
                     }
                     Expr::StructAtIndex { structure, .. } => {
-                        self.set_last_seen(*structure, stmt, &owning_symbol);
-                        owning_symbol.insert(*sym, *structure);
+                        self.set_last_seen(*structure, stmt);
                     }
                     Expr::GetTagId { structure, .. } => {
-                        self.set_last_seen(*structure, stmt, &owning_symbol);
-                        owning_symbol.insert(*sym, *structure);
+                        self.set_last_seen(*structure, stmt);
                     }
                     Expr::UnionAtIndex { structure, .. } => {
-                        self.set_last_seen(*structure, stmt, &owning_symbol);
-                        owning_symbol.insert(*sym, *structure);
+                        self.set_last_seen(*structure, stmt);
                     }
                     Expr::Array { elems, .. } => {
                         for elem in *elems {
                             if let ListLiteralElement::Symbol(sym) = elem {
-                                self.set_last_seen(*sym, stmt, &owning_symbol);
+                                self.set_last_seen(*sym, stmt);
                             }
                         }
                     }
@@ -797,22 +783,22 @@ trait Backend<'a> {
                         tag_name,
                         ..
                     } => {
-                        self.set_last_seen(*symbol, stmt, &owning_symbol);
+                        self.set_last_seen(*symbol, stmt);
                         match tag_name {
                             TagName::Closure(sym) => {
-                                self.set_last_seen(*sym, stmt, &owning_symbol);
+                                self.set_last_seen(*sym, stmt);
                             }
                             TagName::Private(sym) => {
-                                self.set_last_seen(*sym, stmt, &owning_symbol);
+                                self.set_last_seen(*sym, stmt);
                             }
                             TagName::Global(_) => {}
                         }
                         for sym in *arguments {
-                            self.set_last_seen(*sym, stmt, &owning_symbol);
+                            self.set_last_seen(*sym, stmt);
                         }
                     }
                     Expr::Reset { symbol, .. } => {
-                        self.set_last_seen(*symbol, stmt, &owning_symbol);
+                        self.set_last_seen(*symbol, stmt);
                     }
                     Expr::EmptyArray => {}
                     Expr::RuntimeErrorFunction(_) => {}
@@ -826,56 +812,59 @@ trait Backend<'a> {
                 default_branch,
                 ..
             } => {
-                self.set_last_seen(*cond_symbol, stmt, &owning_symbol);
+                self.set_last_seen(*cond_symbol, stmt);
                 for (_, _, branch) in *branches {
                     self.scan_ast(branch);
                 }
                 self.scan_ast(default_branch.1);
             }
             Stmt::Ret(sym) => {
-                self.set_last_seen(*sym, stmt, &owning_symbol);
+                self.set_last_seen(*sym, stmt);
             }
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
 
-                self.set_last_seen(sym, stmt, &owning_symbol);
+                self.set_last_seen(sym, stmt);
                 self.scan_ast(following);
             }
             Stmt::Join {
                 parameters,
                 body: continuation,
                 remainder,
+                id,
                 ..
             } => {
+                join_map.insert(*id, parameters);
                 for param in *parameters {
-                    self.set_last_seen(param.symbol, stmt, &owning_symbol);
+                    self.set_last_seen(param.symbol, stmt);
                 }
                 self.scan_ast(continuation);
                 self.scan_ast(remainder);
             }
             Stmt::Jump(JoinPointId(sym), symbols) => {
-                self.set_last_seen(*sym, stmt, &owning_symbol);
+                if let Some(parameters) = join_map.get(&JoinPointId(*sym)) {
+                    // Keep the parameters around. They will be overwritten when jumping.
+                    for param in *parameters {
+                        self.set_last_seen(param.symbol, stmt);
+                    }
+                }
+                self.set_last_seen(*sym, stmt);
                 for sym in *symbols {
-                    self.set_last_seen(*sym, stmt, &owning_symbol);
+                    self.set_last_seen(*sym, stmt);
                 }
             }
             Stmt::RuntimeError(_) => {}
         }
     }
 
-    fn scan_ast_call(
-        &mut self,
-        call: &roc_mono::ir::Call,
-        stmt: &roc_mono::ir::Stmt<'a>,
-        owning_symbol: &MutMap<Symbol, Symbol>,
-    ) {
+    fn scan_ast_call(&mut self, call: &roc_mono::ir::Call, stmt: &roc_mono::ir::Stmt<'a>) {
         let roc_mono::ir::Call {
             call_type,
             arguments,
         } = call;
 
         for sym in *arguments {
-            self.set_last_seen(*sym, stmt, owning_symbol);
+            self.set_last_seen(*sym, stmt);
         }
 
         match call_type {

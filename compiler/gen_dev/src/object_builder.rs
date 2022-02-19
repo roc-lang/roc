@@ -13,6 +13,7 @@ use roc_module::symbol;
 use roc_module::symbol::Interns;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
+use roc_target::TargetInfo;
 use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
 
 // This is used by some code below which is currently commented out.
@@ -38,7 +39,7 @@ pub fn build_module<'a>(
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            >(env, interns);
+            >(env, TargetInfo::default_x86_64(), interns);
             build_object(
                 procedures,
                 backend,
@@ -55,7 +56,7 @@ pub fn build_module<'a>(
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            >(env, interns);
+            >(env, TargetInfo::default_x86_64(), interns);
             build_object(
                 procedures,
                 backend,
@@ -76,7 +77,7 @@ pub fn build_module<'a>(
                 aarch64::AArch64FloatReg,
                 aarch64::AArch64Assembler,
                 aarch64::AArch64Call,
-            >(env, interns);
+            >(env, TargetInfo::default_aarch64(), interns);
             build_object(
                 procedures,
                 backend,
@@ -93,7 +94,7 @@ pub fn build_module<'a>(
                 aarch64::AArch64FloatReg,
                 aarch64::AArch64Assembler,
                 aarch64::AArch64Call,
-            >(env, interns);
+            >(env, TargetInfo::default_aarch64(), interns);
             build_object(
                 procedures,
                 backend,
