@@ -938,7 +938,7 @@ impl<
     }
 
     pub fn free_symbol(&mut self, sym: &Symbol) {
-        if let Some(_) = self.join_param_map.remove(&JoinPointId(*sym)) {
+        if self.join_param_map.remove(&JoinPointId(*sym)).is_some() {
             // This is a join point and will not be in the storage map.
             return;
         }

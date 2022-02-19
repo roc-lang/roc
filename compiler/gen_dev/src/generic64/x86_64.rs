@@ -278,7 +278,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         }
         let mut general_i = 0;
         let mut float_i = 0;
-        for (i, (sym, layout)) in args.iter().zip(arg_layouts.iter()).enumerate() {
+        for (sym, layout) in args.iter().zip(arg_layouts.iter()) {
             match layout {
                 single_register_integers!() => {
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
