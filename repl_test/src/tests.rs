@@ -1,9 +1,14 @@
 use indoc::indoc;
 
+#[cfg(not(feature = "wasm"))]
 mod cli;
-
-#[cfg(feature = "cli")]
+#[cfg(not(feature = "wasm"))]
 use crate::cli::{expect_failure, expect_success};
+
+#[cfg(feature = "wasm")]
+mod wasm;
+#[cfg(feature = "wasm")]
+use crate::wasm::{expect_failure, expect_success};
 
 #[test]
 fn literal_0() {
