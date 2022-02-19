@@ -90,7 +90,7 @@ pub fn create_rect_buffers(
 
 pub fn to_quad(rect_elt: &RectElt) -> Quad {
     Quad {
-        position: rect_elt.rect.top_left_coords.into(),
+        pos: rect_elt.rect.top_left_coords.into(),
         width: rect_elt.rect.width,
         height: rect_elt.rect.height,
         color: to_slice(rect_elt.color),

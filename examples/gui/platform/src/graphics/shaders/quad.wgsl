@@ -13,7 +13,7 @@ struct VertexInput {
 };
 
 struct Quad {
-    @location(1) position: vec2<f32>;
+    @location(1) pos: vec2<f32>; // can't use the name "position" twice for compatibility with metal on MacOS
     @location(2) width: f32;
     @location(3) height: f32;
     @location(4) color: vec4<f32>;
@@ -38,7 +38,7 @@ fn vs_main(
         vec4<f32>(quad.width, 0.0, 0.0, 0.0),
         vec4<f32>(0.0, quad.height, 0.0, 0.0),
         vec4<f32>(0.0, 0.0, 1.0, 0.0),
-        vec4<f32>(quad.position, 0.0, 1.0)
+        vec4<f32>(quad.pos, 0.0, 1.0)
     );
 
     var out: VertexOutput;
