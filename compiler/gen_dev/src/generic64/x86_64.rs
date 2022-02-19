@@ -1353,6 +1353,9 @@ fn mov_reg64_base64_offset32(
 /// `MOVSD xmm1,xmm2` -> Move scalar double-precision floating-point value from xmm2 to xmm1 register.
 #[inline(always)]
 fn movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    if dst == src {
+        return;
+    }
     let dst_high = dst as u8 > 7;
     let dst_mod = dst as u8 % 8;
     let src_high = src as u8 > 7;
