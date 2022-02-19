@@ -9,7 +9,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::{
     ir::{JoinPointId, Param},
-    layout::{Builtin, Layout},
+    layout::{Builtin, Layout, UnionLayout},
 };
 use roc_target::TargetInfo;
 use std::cmp::max;
@@ -522,11 +522,7 @@ impl<
     ) {
         debug_assert!(index < field_layouts.len() as u64);
         // This must be removed and reinserted for ownership and mutability reasons.
-        let owned_data = if let Some(owned_data) = self.allocation_map.remove(structure) {
-            owned_data
-        } else {
-            internal_error!("Unknown symbol: {}", structure);
-        };
+        let owned_data = self.remove_allocation_for_sym(structure);
         self.allocation_map
             .insert(*structure, Rc::clone(&owned_data));
         match self.get_storage_for_sym(structure) {
@@ -538,9 +534,9 @@ impl<
                     data_offset += field_size as i32;
                 }
                 debug_assert!(data_offset < base_offset + size as i32);
-                self.allocation_map.insert(*sym, owned_data);
                 let layout = field_layouts[index as usize];
                 let size = layout.stack_size(self.target_info);
+                self.allocation_map.insert(*sym, owned_data);
                 self.symbol_storage_map.insert(
                     *sym,
                     Stack(if is_primitive(&layout) {
@@ -562,6 +558,40 @@ impl<
                     storage
                 );
             }
+        }
+    }
+
+    pub fn load_union_tag_id(
+        &mut self,
+        _buf: &mut Vec<'a, u8>,
+        sym: &Symbol,
+        structure: &Symbol,
+        union_layout: &UnionLayout<'a>,
+    ) {
+        // This must be removed and reinserted for ownership and mutability reasons.
+        let owned_data = self.remove_allocation_for_sym(structure);
+        self.allocation_map
+            .insert(*structure, Rc::clone(&owned_data));
+        match union_layout {
+            UnionLayout::NonRecursive(_) => {
+                let (union_offset, _) = self.stack_offset_and_size(structure);
+
+                let (data_size, data_alignment) =
+                    union_layout.data_size_and_alignment(self.target_info);
+                let id_offset = data_size - data_alignment;
+                let id_builtin = union_layout.tag_id_builtin();
+
+                let size = id_builtin.stack_size(self.target_info);
+                self.allocation_map.insert(*sym, owned_data);
+                self.symbol_storage_map.insert(
+                    *sym,
+                    Stack(ReferencedPrimitive {
+                        base_offset: union_offset + id_offset as i32,
+                        size,
+                    }),
+                );
+            }
+            x => todo!("getting tag id of union with layout ({:?})", x),
         }
     }
 
@@ -973,11 +1003,7 @@ impl<
 
     /// Frees an reference and release an allocation if it is no longer used.
     fn free_reference(&mut self, sym: &Symbol) {
-        let owned_data = if let Some(owned_data) = self.allocation_map.remove(sym) {
-            owned_data
-        } else {
-            internal_error!("Unknown symbol: {:?}", sym);
-        };
+        let owned_data = self.remove_allocation_for_sym(sym);
         if Rc::strong_count(&owned_data) == 1 {
             self.free_stack_chunk(owned_data.0, owned_data.1);
         }
@@ -1060,7 +1086,26 @@ impl<
         }
     }
 
-    /// Gets a value from storage. They index symbol must be defined.
+    #[allow(dead_code)]
+    /// Gets the allocated area for a symbol. The index symbol must be defined.
+    fn get_allocation_for_sym(&self, sym: &Symbol) -> &Rc<(i32, u32)> {
+        if let Some(allocation) = self.allocation_map.get(sym) {
+            allocation
+        } else {
+            internal_error!("Unknown symbol: {:?}", sym);
+        }
+    }
+
+    /// Removes and returns the allocated area for a symbol. They index symbol must be defined.
+    fn remove_allocation_for_sym(&mut self, sym: &Symbol) -> Rc<(i32, u32)> {
+        if let Some(allocation) = self.allocation_map.remove(sym) {
+            allocation
+        } else {
+            internal_error!("Unknown symbol: {:?}", sym);
+        }
+    }
+
+    /// Gets a value from storage. The index symbol must be defined.
     fn get_storage_for_sym(&self, sym: &Symbol) -> &Storage<GeneralReg, FloatReg> {
         if let Some(storage) = self.symbol_storage_map.get(sym) {
             storage

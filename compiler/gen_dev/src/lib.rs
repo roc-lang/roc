@@ -14,7 +14,7 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds};
+use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds, UnionLayout};
 
 mod generic64;
 mod object_builder;
@@ -314,6 +314,12 @@ trait Backend<'a> {
                 structure,
             } => {
                 self.load_struct_at_index(sym, structure, *index, field_layouts);
+            }
+            Expr::GetTagId {
+                structure,
+                union_layout,
+            } => {
+                self.get_tag_id(sym, structure, union_layout);
             }
             x => todo!("the expression, {:?}", x),
         }
@@ -679,6 +685,9 @@ trait Backend<'a> {
         index: u64,
         field_layouts: &'a [Layout<'a>],
     );
+
+    /// get_tag_id loads the tag id from a the union.
+    fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>);
 
     /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>);

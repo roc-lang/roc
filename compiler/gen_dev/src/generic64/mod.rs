@@ -6,7 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_target::TargetInfo;
 use std::marker::PhantomData;
 
@@ -868,6 +868,11 @@ impl<
     ) {
         self.storage_manager
             .load_field_at_index(sym, structure, index, field_layouts);
+    }
+
+    fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>) {
+        self.storage_manager
+            .load_union_tag_id(&mut self.buf, sym, structure, union_layout);
     }
 
     fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>) {
