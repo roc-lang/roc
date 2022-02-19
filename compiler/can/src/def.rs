@@ -15,7 +15,7 @@ use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
-use roc_parse::ast::AliasHeader;
+use roc_parse::ast::TypeHeader;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -1442,7 +1442,7 @@ fn to_pending_def<'a>(
         }
 
         Alias {
-            header: AliasHeader { name, vars },
+            header: TypeHeader { name, vars },
             ann,
             ..
         } => {

@@ -227,12 +227,12 @@ pub struct PrecedenceConflict<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AliasHeader<'a> {
+pub struct TypeHeader<'a> {
     pub name: Loc<&'a str>,
     pub vars: &'a [Loc<Pattern<'a>>],
 }
 
-impl<'a> AliasHeader<'a> {
+impl<'a> TypeHeader<'a> {
     pub fn region(&self) -> Region {
         Region::across_all(
             [self.name.region]
@@ -253,7 +253,7 @@ pub enum Def<'a> {
     ///
     /// Foo : Bar Baz
     Alias {
-        header: AliasHeader<'a>,
+        header: TypeHeader<'a>,
         ann: Loc<TypeAnnotation<'a>>,
     },
 
@@ -307,7 +307,7 @@ pub enum TypeAnnotation<'a> {
     As(
         &'a Loc<TypeAnnotation<'a>>,
         &'a [CommentOrNewline<'a>],
-        AliasHeader<'a>,
+        TypeHeader<'a>,
     ),
 
     Record {

@@ -329,7 +329,7 @@ pub fn to_type2<'a>(
     annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) -> Type2 {
-    use roc_parse::ast::AliasHeader;
+    use roc_parse::ast::TypeHeader;
     use roc_parse::ast::Pattern;
     use roc_parse::ast::TypeAnnotation::*;
 
@@ -455,7 +455,7 @@ pub fn to_type2<'a>(
         As(
             loc_inner,
             _spaces,
-            AliasHeader {
+            TypeHeader {
                 name,
                 vars: loc_vars,
             },

@@ -1,5 +1,5 @@
 use crate::ast::{
-    AliasHeader, AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Pattern,
+    TypeHeader, AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Pattern,
     Spaceable, TypeAnnotation,
 };
 use crate::blankspace::{space0_after_e, space0_around_ee, space0_before_e, space0_e};
@@ -746,7 +746,7 @@ fn append_alias_definition<'a>(
     loc_ann: Loc<TypeAnnotation<'a>>,
 ) {
     let def = Def::Alias {
-        header: AliasHeader {
+        header: TypeHeader {
             name,
             vars: pattern_arguments,
         },
@@ -1093,7 +1093,7 @@ fn parse_expr_operator<'a>(
                     let alias_region = Region::span_across(&expr.region, &ann_type.region);
 
                     let alias = Def::Alias {
-                        header: AliasHeader {
+                        header: TypeHeader {
                             name: Loc::at(expr.region, name),
                             vars: type_arguments.into_bump_slice(),
                         },

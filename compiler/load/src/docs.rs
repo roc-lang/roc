@@ -7,7 +7,7 @@ use roc_can::scope::Scope;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
 use roc_parse::ast::CommentOrNewline;
-use roc_parse::ast::{self, AliasHeader};
+use roc_parse::ast::{self, TypeHeader};
 use roc_parse::ast::{AssignedField, Def};
 use roc_region::all::Loc;
 
@@ -206,7 +206,7 @@ fn generate_entry_doc<'a>(
         },
 
         Def::Alias {
-            header: AliasHeader { name, vars },
+            header: TypeHeader { name, vars },
             ann,
         } => {
             let mut type_vars = Vec::new();
