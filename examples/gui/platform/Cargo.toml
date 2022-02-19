@@ -27,8 +27,8 @@ arrayvec = "0.7.2"
 page_size = "0.4.2"
 # when changing winit version, check if copypasta can be updated simultaneously so they use the same versions for their dependencies. This will save build time.
 winit = "0.26.1"
-wgpu = "0.12.0"
-wgpu_glyph = "0.16.0"
+wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "0545e36" }
+wgpu_glyph = { git = "https://github.com/Anton-4/wgpu_glyph", rev = "257d109" }
 glyph_brush = "0.7.2"
 log = "0.4.14"
 env_logger = "0.9.0"
