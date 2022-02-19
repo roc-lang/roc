@@ -326,7 +326,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                         tmp_stack_offset += 8;
                     }
                 }
-                Layout::Builtin(Builtin::Str) => {
+                Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
                     if general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
                         let (base_offset, _size) = storage_manager.stack_offset_and_size(sym);
                         debug_assert_eq!(base_offset % 8, 0);
@@ -669,7 +669,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         tmp_stack_offset += 8;
                     }
                 }
-                Layout::Builtin(Builtin::Str) => {
+                Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
                     // I think this just needs to be passed on the stack, so not a huge deal.
                     todo!("Passing str args with Windows fast call");
                 }
