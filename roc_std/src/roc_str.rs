@@ -20,7 +20,7 @@ impl RocStr {
             let bytes = self.length.to_ne_bytes();
             let last_byte = bytes[mem::size_of::<usize>() - 1];
 
-            (last_byte ^ 0b1000_0000) as usize
+            (last_byte ^ Self::MASK) as usize
         } else {
             self.length
         }
@@ -126,12 +126,12 @@ impl RocStr {
 
         array[..slice.len()].copy_from_slice(slice);
 
-        Self::from_slice_small_str_help(array)
+        Self::from_slice_small_str_help(array, slice.len())
     }
 
-    const fn from_slice_small_str_help(mut array: [u8; Self::SIZE]) -> Self {
-        let capacity = Self::SIZE - 1;
-        array[capacity] = capacity as u8 ^ 0b1000_0000;
+    const fn from_slice_small_str_help(mut array: [u8; Self::SIZE], length: usize) -> Self {
+        let highest_index = Self::SIZE - 1;
+        array[highest_index] = length as u8 | Self::MASK;
 
         unsafe { core::mem::transmute(array) }
     }
@@ -144,20 +144,7 @@ impl RocStr {
             capacity
         );
         if capacity < core::mem::size_of::<Self>() {
-            let mut rocstr = Self::empty();
-            let target_ptr = rocstr.get_small_str_ptr_mut();
-            let source_ptr = slice.as_ptr() as *const u8;
-            for index in 0..slice.len() {
-                unsafe {
-                    *target_ptr.add(index) = *source_ptr.add(index);
-                }
-            }
-            // Write length and small string bit to last byte of length.
-            let mut bytes = rocstr.length.to_ne_bytes();
-            bytes[mem::size_of::<usize>() - 1] = capacity as u8 ^ 0b1000_0000;
-            rocstr.length = usize::from_ne_bytes(bytes);
-
-            rocstr
+            Self::from_slice_small_str(slice)
         } else {
             let ptr = slice.as_ptr();
             let element_bytes = capacity;

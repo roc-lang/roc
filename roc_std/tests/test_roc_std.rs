@@ -52,7 +52,7 @@ mod test_roc_std {
 
         let mut expected = [0u8; RocStr::SIZE];
         expected[0] = b'a';
-        expected[RocStr::SIZE - 1] = RocStr::MASK + 1;
+        expected[RocStr::SIZE - 1] = RocStr::MASK | 1;
 
         assert_eq!(actual, expected);
     }
@@ -64,7 +64,7 @@ mod test_roc_std {
 
         let mut expected = [0u8; RocStr::SIZE];
         expected[..RocStr::SIZE - 1].copy_from_slice(&bytes);
-        expected[RocStr::SIZE - 1] = RocStr::MASK + bytes.len() as u8;
+        expected[RocStr::SIZE - 1] = RocStr::MASK | bytes.len() as u8;
 
         assert_eq!(actual, expected);
     }
