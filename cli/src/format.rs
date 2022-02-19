@@ -9,8 +9,8 @@ use roc_fmt::module::fmt_module;
 use roc_fmt::Buf;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::ast::{
-    TypeHeader, AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag,
-    TypeAnnotation, WhenBranch,
+    AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation,
+    TypeHeader, WhenBranch,
 };
 use roc_parse::header::{
     AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
@@ -410,6 +410,16 @@ impl<'a> RemoveSpaces<'a> for Def<'a> {
                     vars: vars.remove_spaces(arena),
                 },
                 ann: ann.remove_spaces(arena),
+            },
+            Def::Opaque {
+                header: TypeHeader { name, vars },
+                typ,
+            } => Def::Opaque {
+                header: TypeHeader {
+                    name: name.remove_spaces(arena),
+                    vars: vars.remove_spaces(arena),
+                },
+                typ: typ.remove_spaces(arena),
             },
             Def::Body(a, b) => Def::Body(
                 arena.alloc(a.remove_spaces(arena)),

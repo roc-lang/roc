@@ -4,6 +4,7 @@ use crate::docs::TypeAnnotation::{
 };
 use crate::file::LoadedModule;
 use roc_can::scope::Scope;
+use roc_error_macros::todo_opaques;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
 use roc_parse::ast::CommentOrNewline;
@@ -227,6 +228,8 @@ fn generate_entry_doc<'a>(
 
             (acc, None)
         }
+
+        Def::Opaque { .. } => todo_opaques!("figure out documentation for opaques"),
 
         Def::Body(_, _) => (acc, None),
 

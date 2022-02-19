@@ -1,6 +1,6 @@
 use crate::ast::{
-    TypeHeader, AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Pattern,
-    Spaceable, TypeAnnotation,
+    AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Pattern, Spaceable,
+    TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{space0_after_e, space0_around_ee, space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
@@ -422,7 +422,7 @@ impl<'a> ExprState<'a> {
         arena: &'a Bump,
         loc_op: Loc<BinOp>,
     ) -> Result<(Loc<Expr<'a>>, Vec<'a, &'a Loc<Expr<'a>>>), EExpr<'a>> {
-        debug_assert_eq!(loc_op.value, BinOp::HasType);
+        debug_assert_eq!(loc_op.value, BinOp::IsAliasType);
 
         if !self.operators.is_empty() {
             // this `:` likely occurred inline; treat it as an invalid operator
@@ -853,7 +853,7 @@ fn parse_defs_end<'a>(
 
                 parse_defs_end(options, column, def_state, arena, state)
             }
-            Ok((_, BinOp::HasType, state)) => {
+            Ok((_, BinOp::IsAliasType, state)) => {
                 let (_, ann_type, state) = specialize(
                     EExpr::Type,
                     space0_before_e(
@@ -917,6 +917,127 @@ fn parse_defs_expr<'a>(
             }
         }
     }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum TypeKind {
+    Alias,
+    Opaque,
+}
+
+fn finish_parsing_alias_or_opaque<'a>(
+    min_indent: u32,
+    options: ExprParseOptions,
+    start_column: u32,
+    expr_state: ExprState<'a>,
+    loc_op: Loc<BinOp>,
+    arena: &'a Bump,
+    state: State<'a>,
+    spaces_after_operator: &'a [CommentOrNewline<'a>],
+    kind: TypeKind,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let expr_region = expr_state.expr.region;
+    let indented_more = start_column + 1;
+
+    let (expr, arguments) = expr_state
+        .validate_has_type(arena, loc_op)
+        .map_err(|fail| (MadeProgress, fail, state.clone()))?;
+
+    let (loc_def, state) = match &expr.value {
+        Expr::GlobalTag(name) => {
+            let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
+
+            for argument in arguments {
+                match expr_to_pattern_help(arena, &argument.value) {
+                    Ok(good) => {
+                        type_arguments.push(Loc::at(argument.region, good));
+                    }
+                    Err(_) => panic!(),
+                }
+            }
+
+            let (_, ann_type, state) = specialize(
+                EExpr::Type,
+                space0_before_e(
+                    type_annotation::located_help(indented_more, true),
+                    min_indent,
+                    EType::TIndentStart,
+                ),
+            )
+            .parse(arena, state)?;
+
+            let def_region = Region::span_across(&expr.region, &ann_type.region);
+
+            let header = TypeHeader {
+                name: Loc::at(expr.region, name),
+                vars: type_arguments.into_bump_slice(),
+            };
+            let type_def = match kind {
+                TypeKind::Alias => Def::Alias {
+                    header,
+                    ann: ann_type,
+                },
+                TypeKind::Opaque => Def::Opaque {
+                    header,
+                    typ: ann_type,
+                },
+            };
+
+            (&*arena.alloc(Loc::at(def_region, type_def)), state)
+        }
+
+        _ => {
+            let call = to_call(arena, arguments, expr);
+
+            match expr_to_pattern_help(arena, &call.value) {
+                Ok(good) => {
+                    let parser = specialize(
+                        EExpr::Type,
+                        space0_before_e(
+                            type_annotation::located_help(indented_more, false),
+                            min_indent,
+                            EType::TIndentStart,
+                        ),
+                    );
+
+                    match parser.parse(arena, state) {
+                        Err((_, fail, state)) => return Err((MadeProgress, fail, state)),
+                        Ok((_, mut ann_type, state)) => {
+                            // put the spaces from after the operator in front of the call
+                            if !spaces_after_operator.is_empty() {
+                                ann_type = arena
+                                    .alloc(ann_type.value)
+                                    .with_spaces_before(spaces_after_operator, ann_type.region);
+                            }
+
+                            let def_region = Region::span_across(&call.region, &ann_type.region);
+
+                            let alias = Def::Annotation(Loc::at(expr_region, good), ann_type);
+
+                            (&*arena.alloc(Loc::at(def_region, alias)), state)
+                        }
+                    }
+                }
+                Err(_) => {
+                    // this `:`/`:=` likely occurred inline; treat it as an invalid operator
+                    let op = match kind {
+                        TypeKind::Alias => ":",
+                        TypeKind::Opaque => ":=",
+                    };
+                    let fail = EExpr::BadOperator(op, loc_op.region.start());
+
+                    return Err((MadeProgress, fail, state));
+                }
+            }
+        }
+    };
+
+    let def_state = DefState {
+        defs: bumpalo::vec![in arena; loc_def],
+        spaces_after: &[],
+    };
+
+    parse_defs_expr(options, start_column, def_state, arena, state)
 }
 
 fn parse_expr_operator<'a>(
@@ -1059,102 +1180,21 @@ fn parse_expr_operator<'a>(
 
             Ok((MadeProgress, ret, state))
         }
-        BinOp::HasType => {
-            let expr_region = expr_state.expr.region;
-            let indented_more = start_column + 1;
-
-            let (expr, arguments) = expr_state
-                .validate_has_type(arena, loc_op)
-                .map_err(|fail| (MadeProgress, fail, state.clone()))?;
-
-            let (loc_def, state) = match &expr.value {
-                Expr::GlobalTag(name) => {
-                    let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
-
-                    for argument in arguments {
-                        match expr_to_pattern_help(arena, &argument.value) {
-                            Ok(good) => {
-                                type_arguments.push(Loc::at(argument.region, good));
-                            }
-                            Err(_) => panic!(),
-                        }
-                    }
-
-                    let (_, ann_type, state) = specialize(
-                        EExpr::Type,
-                        space0_before_e(
-                            type_annotation::located_help(indented_more, true),
-                            min_indent,
-                            EType::TIndentStart,
-                        ),
-                    )
-                    .parse(arena, state)?;
-
-                    let alias_region = Region::span_across(&expr.region, &ann_type.region);
-
-                    let alias = Def::Alias {
-                        header: TypeHeader {
-                            name: Loc::at(expr.region, name),
-                            vars: type_arguments.into_bump_slice(),
-                        },
-                        ann: ann_type,
-                    };
-
-                    (&*arena.alloc(Loc::at(alias_region, alias)), state)
-                }
-
-                _ => {
-                    let call = to_call(arena, arguments, expr);
-
-                    match expr_to_pattern_help(arena, &call.value) {
-                        Ok(good) => {
-                            let parser = specialize(
-                                EExpr::Type,
-                                space0_before_e(
-                                    type_annotation::located_help(indented_more, false),
-                                    min_indent,
-                                    EType::TIndentStart,
-                                ),
-                            );
-
-                            match parser.parse(arena, state) {
-                                Err((_, fail, state)) => return Err((MadeProgress, fail, state)),
-                                Ok((_, mut ann_type, state)) => {
-                                    // put the spaces from after the operator in front of the call
-                                    if !spaces_after_operator.is_empty() {
-                                        ann_type = arena.alloc(ann_type.value).with_spaces_before(
-                                            spaces_after_operator,
-                                            ann_type.region,
-                                        );
-                                    }
-
-                                    let alias_region =
-                                        Region::span_across(&call.region, &ann_type.region);
-
-                                    let alias =
-                                        Def::Annotation(Loc::at(expr_region, good), ann_type);
-
-                                    (&*arena.alloc(Loc::at(alias_region, alias)), state)
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            // this `:` likely occurred inline; treat it as an invalid operator
-                            let fail = EExpr::BadOperator(":", loc_op.region.start());
-
-                            return Err((MadeProgress, fail, state));
-                        }
-                    }
-                }
-            };
-
-            let def_state = DefState {
-                defs: bumpalo::vec![in arena; loc_def],
-                spaces_after: &[],
-            };
-
-            parse_defs_expr(options, start_column, def_state, arena, state)
-        }
+        BinOp::IsAliasType | BinOp::IsOpaqueType => finish_parsing_alias_or_opaque(
+            min_indent,
+            options,
+            start_column,
+            expr_state,
+            loc_op,
+            arena,
+            state,
+            spaces_after_operator,
+            match op {
+                BinOp::IsAliasType => TypeKind::Alias,
+                BinOp::IsOpaqueType => TypeKind::Opaque,
+                _ => unreachable!(),
+            },
+        ),
         _ => match loc_possibly_negative_or_negated_term(min_indent, options).parse(arena, state) {
             Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
             Ok((_, mut new_expr, state)) => {
@@ -2372,7 +2412,8 @@ where
             Err((NoProgress, to_error(".", state.pos()), state))
         }
         "=" => good!(BinOp::Assignment, 1),
-        ":" => good!(BinOp::HasType, 1),
+        ":=" => good!(BinOp::IsOpaqueType, 2),
+        ":" => good!(BinOp::IsAliasType, 1),
         "|>" => good!(BinOp::Pizza, 2),
         "==" => good!(BinOp::Equals, 2),
         "!=" => good!(BinOp::NotEquals, 2),

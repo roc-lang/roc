@@ -12,6 +12,7 @@ use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::Scope;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_error_macros::todo_opaques;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -1503,6 +1504,8 @@ fn to_pending_def<'a>(
                 }
             }
         }
+
+        Opaque { .. } => todo_opaques!(),
 
         Expect(_condition) => todo!(),
 

@@ -257,6 +257,12 @@ pub enum Def<'a> {
         ann: Loc<TypeAnnotation<'a>>,
     },
 
+    /// An opaque type, wrapping its inner type. E.g. Age := U64.
+    Opaque {
+        header: TypeHeader<'a>,
+        typ: Loc<TypeAnnotation<'a>>,
+    },
+
     // TODO in canonicalization, check to see if there are any newlines after the
     // annotation; if not, and if it's followed by a Body, then the annotation
     // applies to that expr! (TODO: verify that the pattern for both annotation and body match.)
