@@ -635,6 +635,25 @@ impl<
         }
     }
 
+    /// Copies a complex symbol ot the stack to the arg pointer.
+    pub fn copy_symbol_to_arg_pionter(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        sym: &Symbol,
+        _layout: &Layout<'a>,
+    ) {
+        let ret_reg = self.load_to_general_reg(buf, &Symbol::RET_POINTER);
+        let (base_offset, size) = self.stack_offset_and_size(sym);
+        debug_assert!(base_offset % 8 == 0);
+        debug_assert!(size % 8 == 0);
+        self.with_tmp_general_reg(buf, |_storage_manager, buf, tmp_reg| {
+            for i in (0..size as i32).step_by(8) {
+                ASM::mov_reg64_base32(buf, tmp_reg, base_offset + i);
+                ASM::mov_mem64_offset32_reg64(buf, ret_reg, i, tmp_reg);
+            }
+        });
+    }
+
     /// Copies a symbol to the specified stack offset. This is used for things like filling structs.
     /// The offset is not guarenteed to be perfectly aligned, it follows Roc's alignment plan.
     /// This means that, for example 2 I32s might be back to back on the stack.

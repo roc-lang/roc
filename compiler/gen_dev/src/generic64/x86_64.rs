@@ -408,7 +408,10 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                     );
                 }
             }
-            x => todo!("returning complex type, {:?}", x),
+            _ => {
+                // This is a large type returned via the arg pointer.
+                storage_manager.copy_symbol_to_arg_pionter(buf, sym, layout);
+            }
         }
     }
 
@@ -1031,6 +1034,25 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
         mov_base64_offset32_reg64(buf, X86_64GeneralReg::RBP, offset, src)
+    }
+
+    #[inline(always)]
+    fn mov_reg64_mem64_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        mov_reg64_base64_offset32(buf, dst, src, offset)
+    }
+    #[inline(always)]
+    fn mov_mem64_offset32_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        offset: i32,
+        src: X86_64GeneralReg,
+    ) {
+        mov_base64_offset32_reg64(buf, dst, offset, src)
     }
 
     #[inline(always)]
