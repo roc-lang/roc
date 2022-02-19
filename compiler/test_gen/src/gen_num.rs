@@ -2101,19 +2101,19 @@ to_int_tests! {
         to_u16_same_width, "15i16", 15
         to_u16_extend, "15i8", 15
         to_u16_truncate, "115i32", 115
-        to_u16_truncate_wraps, "60000i32", 10
+        to_u16_truncate_wraps, "600000000i32", 17920
     )
     "Num.toU32", u32, (
         to_u32_same_width, "15i32", 15
         to_u32_extend, "15i8", 15
         to_u32_truncate, "115i64", 115
-        to_u32_truncate_wraps, "5000000000i64", 10
+        to_u32_truncate_wraps, "5000000000000000000i64", 1156841472
     )
     "Num.toU64", u64, (
         to_u64_same_width, "15i64", 15
         to_u64_extend, "15i8", 15
         to_u64_truncate, "115i128", 115
-        to_u64_truncate_wraps, "10_000_000_000_000_000_000i128", 10
+        to_u64_truncate_wraps, "10_000_000_000_000_000_000_000i128", 1864712049423024128
     )
     "Num.toU128", u128, (
         to_u128_same_width, "15i128", 15
