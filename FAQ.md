@@ -272,6 +272,6 @@ Not currently. Although they will presumably exist someday, while Roc is in the 
 effort to focus on the Roc Editor *instead of* adding Roc support to other editors - specifically in order to give the Roc
 Editor the best possible chance at kickstarting a virtuous cycle of plugin authorship.
 
-This is an unusual approach, but there are more details in [this 2021 interview](https://youtu.be/ITrDd6-PbvY?t=212).
+This is an unusual approach, but there are more details in [this 2022 interview](https://youtu.be/ITrDd6-PbvY?t=212).
 
 In the meantime, using CoffeeScript syntax highlighting for .roc files turns out to work surprisingly well!
