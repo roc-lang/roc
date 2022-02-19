@@ -277,13 +277,7 @@ trait Backend<'a> {
                             self.load_literal_symbols(arguments);
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                         } else {
-                            self.build_inline_builtin(
-                                sym,
-                                *func_sym,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            )
+                            self.build_builtin(sym, *func_sym, arguments, arg_layouts, ret_layout)
                         }
                     }
 
@@ -558,8 +552,9 @@ trait Backend<'a> {
         }
     }
 
-    // inlines simple builtin functions that do not map directly to a low level
-    fn build_inline_builtin(
+    /// Builds a builtin functions that do not map directly to a low level
+    /// If the builtin is simple enough, it will be inlined.
+    fn build_builtin(
         &mut self,
         sym: &Symbol,
         func_sym: Symbol,
@@ -584,6 +579,14 @@ trait Backend<'a> {
                 self.load_literal(&Symbol::DEV_TMP, &arg_layouts[0], &Literal::Int(0));
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
+            }
+            Symbol::LIST_GET => {
+                // TODO: This is probably simple enough to be worth inlining.
+                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
+                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                // Now that the arguments are needed, load them if they are literals.
+                self.load_literal_symbols(args);
+                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
             _ => todo!("the function, {:?}", func_sym),
         }
