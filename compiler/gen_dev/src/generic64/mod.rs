@@ -1,4 +1,7 @@
-use crate::{single_register_floats, single_register_integers, Backend, Env, Relocation};
+use crate::{
+    single_register_floats, single_register_int_builtins, single_register_integers, Backend, Env,
+    Relocation,
+};
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
@@ -15,6 +18,8 @@ pub(crate) mod storage;
 pub(crate) mod x86_64;
 
 use storage::StorageManager;
+
+// TODO: on all number functions double check and deal with over/underflow.
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<GeneralReg, FloatReg>>:
     Sized
@@ -716,7 +721,7 @@ impl<
 
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>) {
         match arg_layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            Layout::Builtin(single_register_int_builtins!()) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -999,21 +1004,25 @@ impl<
 }
 
 #[macro_export]
+macro_rules! single_register_int_builtins {
+    () => {
+        Builtin::Int(
+            IntWidth::I8
+                | IntWidth::I16
+                | IntWidth::I32
+                | IntWidth::I64
+                | IntWidth::U8
+                | IntWidth::U16
+                | IntWidth::U32
+                | IntWidth::U64,
+        )
+    };
+}
+
+#[macro_export]
 macro_rules! single_register_integers {
     () => {
-        Layout::Builtin(
-            Builtin::Bool
-                | Builtin::Int(
-                    IntWidth::I8
-                        | IntWidth::I16
-                        | IntWidth::I32
-                        | IntWidth::I64
-                        | IntWidth::U8
-                        | IntWidth::U16
-                        | IntWidth::U32
-                        | IntWidth::U64,
-                ),
-        ) | Layout::RecursivePointer
+        Layout::Builtin(Builtin::Bool | single_register_int_builtins!()) | Layout::RecursivePointer
     };
 }
 

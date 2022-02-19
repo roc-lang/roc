@@ -1,6 +1,7 @@
 use crate::{
     generic64::{Assembler, CallConv, RegTrait},
-    single_register_floats, single_register_integers, single_register_layouts, Env,
+    single_register_floats, single_register_int_builtins, single_register_integers,
+    single_register_layouts, Env,
 };
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
