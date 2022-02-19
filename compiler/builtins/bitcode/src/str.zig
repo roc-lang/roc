@@ -15,9 +15,13 @@ const InPlace = enum(u8) {
     Clone,
 };
 
+const MASK_ISIZE: isize = std.math.minInt(isize);
+const MASK: usize = @bitCast(usize, MASK_ISIZE);
+
 const SMALL_STR_MAX_LENGTH = small_string_size - 1;
 const small_string_size = @sizeOf(RocStr);
-const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);
+const SMALL_STRING_SIZE = small_string_size;
+// const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);
 
 fn init_blank_small_string(comptime n: usize) [n]u8 {
     var prime_list: [n]u8 = undefined;
@@ -38,12 +42,10 @@ pub const RocStr = extern struct {
     pub const alignment = @alignOf(usize);
 
     pub inline fn empty() RocStr {
-        const small_str_flag: isize = std.math.minInt(isize);
-        const length = @bitCast(usize, small_str_flag);
         return RocStr{
-            .str_len = length,
+            .str_len = 0,
             .str_bytes = null,
-            .str_capacity = 0,
+            .str_capacity = 0 | MASK,
         };
     }
 
@@ -73,14 +75,11 @@ pub const RocStr = extern struct {
         if (result_is_big) {
             return RocStr.initBig(result_in_place, number_of_chars);
         } else {
-            var t = blank_small_string;
+            var string = RocStr.empty();
 
-            const mask: u8 = 0b1000_0000;
-            const final_byte = @truncate(u8, number_of_chars) | mask;
+            string.str_capacity = SMALL_STR_MAX_LENGTH | MASK;
 
-            t[small_string_size - 1] = final_byte;
-
-            return @bitCast(RocStr, t);
+            return string;
         }
     }
 
@@ -207,18 +206,27 @@ pub const RocStr = extern struct {
 
     // NOTE: returns false for empty string!
     pub fn isSmallStr(self: RocStr) bool {
-        return @bitCast(isize, self.str_len) < 0;
+        return @bitCast(isize, self.str_capacity) < 0;
+    }
+
+    fn asArray(self: RocStr) [@sizeOf(RocStr)]u8 {
+        const as_int = @ptrToInt(&self);
+        const as_ptr = @intToPtr([*]u8, as_int);
+        const slice = as_ptr[0..@sizeOf(RocStr)];
+
+        return slice.*;
     }
 
     pub fn len(self: RocStr) usize {
-        const bytes: [*]const u8 = @ptrCast([*]const u8, &self);
-        const last_byte = bytes[@sizeOf(RocStr) - 1];
-        const small_len = @as(usize, last_byte ^ 0b1000_0000);
-        const big_len = self.str_len;
+        if (self.isSmallStr()) {
+            return self.asArray()[@sizeOf(RocStr) - 1] ^ 0b1000_0000;
+        } else {
+            return self.str_len;
+        }
+    }
 
-        // Since this conditional would be prone to branch misprediction,
-        // make sure it will compile to a cmov.
-        return if (self.isSmallStr()) small_len else big_len;
+    pub fn capacity(self: RocStr) usize {
+        return self.str_capacity ^ MASK;
     }
 
     pub fn isEmpty(self: RocStr) bool {

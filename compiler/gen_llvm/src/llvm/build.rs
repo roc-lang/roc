@@ -23,7 +23,7 @@ use crate::llvm::build_str::{
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, basic_type_from_builtin, basic_type_from_layout, basic_type_from_layout_1,
-    block_of_memory_slices,
+    block_of_memory_slices, zig_str_type,
 };
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -211,7 +211,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 
     pub fn small_str_bytes(&self) -> u32 {
-        self.target_info.ptr_width() as u32 * 2
+        self.target_info.ptr_width() as u32 * 3
     }
 
     pub fn build_intrinsic_call(
@@ -793,79 +793,41 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
-            let ctx = env.context;
             let builder = env.builder;
             let number_of_chars = str_literal.len() as u64;
 
             let str_type = super::convert::zig_str_type(env);
 
             if str_literal.len() < env.small_str_bytes() as usize {
-                // TODO support big endian systems
-
-                let array_alloca = builder.build_array_alloca(
-                    ctx.i8_type(),
-                    ctx.i8_type().const_int(env.small_str_bytes() as u64, false),
-                    "alloca_small_str",
+                let mut array = Vec::from_iter_in(
+                    std::iter::repeat(0u8).take(env.small_str_bytes() as usize),
+                    env.arena,
                 );
 
-                // Zero out all the bytes. If we don't do this, then
-                // small strings would have uninitialized bytes, which could
-                // cause string equality checks to fail randomly.
-                //
-                // We're running memset over *all* the bytes, even though
-                // the final one is about to be manually overridden, on
-                // the theory that LLVM will optimize the memset call
-                // into two instructions to move appropriately-sized
-                // zero integers into the appropriate locations instead
-                // of doing any iteration.
-                //
-                // TODO: look at the compiled output to verify this theory!
-                env.call_memset(
-                    array_alloca,
-                    ctx.i8_type().const_zero(),
-                    env.ptr_int().const_int(env.small_str_bytes() as u64, false),
-                );
-
-                let final_byte = (str_literal.len() as u8) | 0b1000_0000;
-
-                let final_byte_ptr = unsafe {
-                    builder.build_in_bounds_gep(
-                        array_alloca,
-                        &[ctx
-                            .i8_type()
-                            .const_int(env.small_str_bytes() as u64 - 1, false)],
-                        "str_literal_final_byte",
-                    )
-                };
-
-                builder.build_store(
-                    final_byte_ptr,
-                    ctx.i8_type().const_int(final_byte as u64, false),
-                );
-
-                // Copy the elements from the list literal into the array
-                for (index, character) in str_literal.as_bytes().iter().enumerate() {
-                    let val = env
-                        .context
-                        .i8_type()
-                        .const_int(*character as u64, false)
-                        .as_basic_value_enum();
-                    let index_val = ctx.i64_type().const_int(index as u64, false);
-                    let elem_ptr =
-                        unsafe { builder.build_in_bounds_gep(array_alloca, &[index_val], "index") };
-
-                    builder.build_store(elem_ptr, val);
+                // while loop because for uses Iterator and is not available in const contexts
+                let mut i = 0;
+                while i < str_literal.len() {
+                    array[i] = str_literal.as_bytes()[i];
+                    i += 1;
                 }
 
-                builder.build_load(
-                    builder
-                        .build_bitcast(
-                            array_alloca,
-                            str_type.ptr_type(AddressSpace::Generic),
-                            "cast_collection",
-                        )
-                        .into_pointer_value(),
-                    "small_str_array",
+                array[env.small_str_bytes() as usize - 1] =
+                    str_literal.len() as u8 | roc_std::RocStr::MASK;
+
+                let byte_int_values = Vec::from_iter_in(
+                    array
+                        .iter()
+                        .map(|x| env.context.i8_type().const_int(*x as _, false)),
+                    env.arena,
+                );
+
+                let llvm_array = env.context.i8_type().const_array(&byte_int_values);
+
+                complex_bitcast(
+                    env.builder,
+                    llvm_array.into(),
+                    zig_str_type(env).into(),
+                    "transmute_to_roc_str",
                 )
             } else {
                 let ptr = define_global_str_literal_ptr(env, *str_literal);

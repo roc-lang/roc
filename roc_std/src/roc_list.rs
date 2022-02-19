@@ -9,6 +9,7 @@ use crate::{roc_alloc, roc_dealloc, roc_realloc, Storage, REFCOUNT_1};
 pub struct RocList<T> {
     elements: *mut T,
     length: usize,
+    capacity: usize,
 }
 
 impl<T: Clone> Clone for RocList<T> {
@@ -135,6 +136,7 @@ impl<T> RocList<T> {
 
         Self {
             length: slice.len(),
+            capacity: slice.len(),
             elements,
         }
     }
@@ -360,6 +362,7 @@ impl<T> Default for RocList<T> {
     fn default() -> Self {
         Self {
             length: 0,
+            capacity: 0,
             elements: core::ptr::null_mut(),
         }
     }

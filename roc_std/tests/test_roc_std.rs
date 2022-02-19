@@ -70,6 +70,28 @@ mod test_roc_std {
     }
 
     #[test]
+    fn empty_string_from_str() {
+        let a = RocStr::from("");
+        let b = RocStr::empty();
+
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn empty_string_length() {
+        let string = RocStr::from("");
+
+        assert_eq!(string.len(), 0);
+    }
+
+    #[test]
+    fn empty_string_capacity() {
+        let string = RocStr::from("");
+
+        assert_eq!(string.capacity(), 0);
+    }
+
+    #[test]
     fn roc_result_to_rust_result() {
         let greeting = "Hello, World!";
         let roc_result: RocResult<String, ()> = RocResult::ok(greeting.into());

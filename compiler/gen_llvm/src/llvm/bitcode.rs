@@ -65,8 +65,8 @@ pub fn call_str_bitcode_fn<'a, 'ctx, 'env>(
     let result = create_entry_block_alloca(env, parent, str_type.into(), "str_alloca");
     let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len() + 1, env.arena);
 
-    arguments.extend(args);
     arguments.push(result.into());
+    arguments.extend(args);
 
     call_void_bitcode_fn(env, &arguments, fn_name);
 

@@ -17,7 +17,11 @@ impl RocStr {
     pub const MASK: u8 = 0b1000_0000;
 
     pub const fn len(&self) -> usize {
-        self.length
+        if self.is_small_str() {
+            (self.as_array()[Self::SIZE - 1] ^ Self::MASK) as usize
+        } else {
+            self.length
+        }
     }
 
     pub const fn capacity(&self) -> usize {
@@ -186,6 +190,15 @@ impl RocStr {
 
     pub fn from_slice(slice: &[u8]) -> Self {
         Self::from_slice_with_capacity_str(slice, slice.len())
+    }
+
+    const fn as_array(&self) -> [u8; Self::SIZE] {
+        let this = RocStr {
+            elements: self.elements,
+            length: self.length,
+            capacity: self.capacity,
+        };
+        unsafe { core::mem::transmute(this) }
     }
 
     pub fn as_slice(&self) -> &[u8] {

@@ -283,26 +283,34 @@ fn str_concat_big_to_big() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_literal() {
     assert_llvm_evals_to!(
-        "\"JJJJJJJJJJJJJJJ\"",
+        "\"JJJJJJJJJJJJJJJJJJJJJJJ\"",
         [
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0b1000_1111
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            0b1000_0000 | 23
         ],
-        [u8; 16]
+        [u8; 24]
     );
 }
 
@@ -330,9 +338,17 @@ fn small_str_zeroed_literal() {
             0x00,
             0x00,
             0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
             0b1000_0001
         ],
-        [u8; 16]
+        [u8; 24]
     );
 }
 
@@ -342,24 +358,32 @@ fn small_str_concat_empty_first_arg() {
     assert_llvm_evals_to!(
         r#"Str.concat "" "JJJJJJJJJJJJJJJ""#,
         [
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0b1000_1111
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            0b1000_0000 | 23
         ],
-        [u8; 16]
+        [u8; 24]
     );
 }
 
@@ -369,24 +393,32 @@ fn small_str_concat_empty_second_arg() {
     assert_llvm_evals_to!(
         r#"Str.concat "JJJJJJJJJJJJJJJ" """#,
         [
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0b1000_1111
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            0b1000_0000 | 23
         ],
-        [u8; 16]
+        [u8; 24]
     );
 }
 
@@ -406,24 +438,32 @@ fn small_str_concat_small_to_small_staying_small() {
     assert_llvm_evals_to!(
         r#"Str.concat "J" "JJJJJJJJJJJJJJ""#,
         [
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0b1000_1111
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            0b1000_0000 | 23
         ],
-        [u8; 16]
+        [u8; 24]
     );
 }
 
