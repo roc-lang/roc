@@ -31,6 +31,13 @@ impl RocStr {
         (self.length as isize) < 0
     }
 
+    pub const fn empty() -> Self {
+        Self {
+            length: isize::MIN as usize,
+            elements: core::ptr::null_mut(),
+        }
+    }
+
     pub fn get(&self, index: usize) -> Option<&u8> {
         if index < self.len() {
             Some(unsafe {
@@ -240,10 +247,7 @@ impl DerefMut for RocStr {
 
 impl Default for RocStr {
     fn default() -> Self {
-        Self {
-            length: isize::MIN as usize,
-            elements: core::ptr::null_mut(),
-        }
+        Self::empty()
     }
 }
 
