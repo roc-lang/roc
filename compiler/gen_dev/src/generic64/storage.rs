@@ -658,8 +658,9 @@ impl<
                     .position(|(used_reg, _sym)| reg == *used_reg)
                 {
                     Some(position) => {
-                        let (_, sym) = self.general_used_regs.remove(position);
+                        let (used_reg, sym) = self.general_used_regs.remove(position);
                         self.free_to_stack(buf, &sym, wanted_reg);
+                        self.general_free_regs.push(used_reg);
                     }
                     None => {
                         internal_error!("wanted register ({:?}) is not used or free", wanted_reg);
@@ -676,8 +677,9 @@ impl<
                     .position(|(used_reg, _sym)| reg == *used_reg)
                 {
                     Some(position) => {
-                        let (_, sym) = self.float_used_regs.remove(position);
+                        let (used_reg, sym) = self.float_used_regs.remove(position);
                         self.free_to_stack(buf, &sym, wanted_reg);
+                        self.float_free_regs.push(used_reg);
                     }
                     None => {
                         internal_error!("wanted register ({:?}) is not used or free", wanted_reg);
@@ -845,7 +847,6 @@ impl<
             Some(storages) => storages,
             None => internal_error!("Jump: unknown point specified to jump to: {:?}", id),
         };
-        println!("Param storage: {:?}", param_storage);
         for ((sym, layout), wanted_storage) in
             args.iter().zip(arg_layouts).zip(param_storage.iter())
         {
@@ -858,7 +859,6 @@ impl<
                     // Ensure the reg is free, if not free it.
                     self.ensure_reg_free(buf, General(*reg));
                     // Copy the value over to the reg.
-                    println!("Loading {:?} to {:?}", sym, reg);
                     self.load_to_specified_general_reg(buf, sym, *reg)
                 }
                 Reg(Float(reg)) => {
