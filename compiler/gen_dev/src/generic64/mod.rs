@@ -14,14 +14,6 @@ pub(crate) mod aarch64;
 pub(crate) mod storage;
 pub(crate) mod x86_64;
 
-// TODO: StorageManager is still not fully integrated.
-// General pieces needed:
-// - function call stack fully moved to storage manager
-// - remove data that is duplicated here and in storage manager
-// To make joinpoints better:
-// - consider their parameters to be alive until the last jump to them
-// - save the location of the parameters at the start of the joinpoint in a special location.
-// - When jumping to them, move the args to the location of the parameters (pushing to stack if necessary)
 use storage::StorageManager;
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<GeneralReg, FloatReg>>:
@@ -66,8 +58,8 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         fn_call_stack_size: i32,
     );
 
-    // load_args updates the symbol map to know where every arg is stored.
-    // It returns the total stack space after loading the args.
+    /// load_args updates the symbol map to know where every arg is stored.
+    /// It returns the total stack space after loading the args.
     fn load_args<'a>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
@@ -76,8 +68,8 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         ret_layout: &Layout<'a>,
     );
 
-    // store_args stores the args in registers and on the stack for function calling.
-    // It returns the amount of stack space needed to temporarily store the args.
+    /// store_args stores the args in registers and on the stack for function calling.
+    /// It returns the amount of stack space needed to temporarily store the args.
     fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
@@ -137,16 +129,16 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized {
 
     fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String);
 
-    // Jumps by an offset of offset bytes unconditionally.
-    // It should always generate the same number of bytes to enable replacement if offset changes.
-    // It returns the base offset to calculate the jump from (generally the instruction after the jump).
+    /// Jumps by an offset of offset bytes unconditionally.
+    /// It should always generate the same number of bytes to enable replacement if offset changes.
+    /// It returns the base offset to calculate the jump from (generally the instruction after the jump).
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize;
 
     fn tail_call(buf: &mut Vec<'_, u8>) -> u64;
 
-    // Jumps by an offset of offset bytes if reg is not equal to imm.
-    // It should always generate the same number of bytes to enable replacement if offset changes.
-    // It returns the base offset to calculate the jump from (generally the instruction after the jump).
+    /// Jumps by an offset of offset bytes if reg is not equal to imm.
+    /// It should always generate the same number of bytes to enable replacement if offset changes.
+    /// It returns the base offset to calculate the jump from (generally the instruction after the jump).
     fn jne_reg64_imm64_imm32(
         buf: &mut Vec<'_, u8>,
         reg: GeneralReg,
@@ -985,7 +977,7 @@ impl<
         CC: CallConv<GeneralReg, FloatReg, ASM>,
     > Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
 {
-    // Updates a jump instruction to a new offset and returns the number of bytes written.
+    /// Updates a jump instruction to a new offset and returns the number of bytes written.
     fn update_jmp_imm32_offset(
         &mut self,
         tmp: &mut Vec<'a, u8>,

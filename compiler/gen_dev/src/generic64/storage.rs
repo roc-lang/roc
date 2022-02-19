@@ -28,31 +28,31 @@ enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum StackStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
-    // Primitives are 8 bytes or less. That generally live in registers but can move stored on the stack.
-    // Their data must always be 8 byte aligned and will be moved as a block.
-    // They are never part of a struct, union, or more complex value.
-    // The rest of the bytes should be zero due to how these are loaded.
+    /// Primitives are 8 bytes or less. That generally live in registers but can move stored on the stack.
+    /// Their data must always be 8 byte aligned and will be moved as a block.
+    /// They are never part of a struct, union, or more complex value.
+    /// The rest of the bytes should be zero due to how these are loaded.
     Primitive {
         // Offset from the base pointer in bytes.
         base_offset: i32,
         // Optional register also holding the value.
         reg: Option<RegStorage<GeneralReg, FloatReg>>,
     },
-    // Referenced Primitives are primitives within a complex structure.
-    // They have no guarentees about alignment or zeroed bits.
-    // When they are loaded, they should be aligned and zeroed.
-    // After loading, they should just be stored in a register.
+    /// Referenced Primitives are primitives within a complex structure.
+    /// They have no guarentees about alignment or zeroed bits.
+    /// When they are loaded, they should be aligned and zeroed.
+    /// After loading, they should just be stored in a register.
     ReferencedPrimitive {
         // Offset from the base pointer in bytes.
         base_offset: i32,
         // Size on the stack in bytes.
         size: u32,
     },
-    // Complex data (lists, unions, structs, str) stored on the stack.
-    // Note, this is also used for referencing a value within a struct/union.
-    // It has no alignment guarantees.
-    // When a primitive value is being loaded from this, it should be moved into a register.
-    // To start, the primitive can just be loaded as a ReferencePrimitive.
+    /// Complex data (lists, unions, structs, str) stored on the stack.
+    /// Note, this is also used for referencing a value within a struct/union.
+    /// It has no alignment guarantees.
+    /// When a primitive value is being loaded from this, it should be moved into a register.
+    /// To start, the primitive can just be loaded as a ReferencePrimitive.
     Complex {
         // Offset from the base pointer in bytes.
         base_offset: i32,
@@ -196,7 +196,7 @@ impl<
         used_regs
     }
 
-    // Returns true if the symbol is storing a primitive value.
+    /// Returns true if the symbol is storing a primitive value.
     pub fn is_stored_primitive(&self, sym: &Symbol) -> bool {
         matches!(
             self.get_storage_for_sym(sym),
@@ -204,8 +204,8 @@ impl<
         )
     }
 
-    // Get a general register from the free list.
-    // Will free data to the stack if necessary to get the register.
+    /// Get a general register from the free list.
+    /// Will free data to the stack if necessary to get the register.
     fn get_general_reg(&mut self, buf: &mut Vec<'a, u8>) -> GeneralReg {
         if let Some(reg) = self.general_free_regs.pop() {
             if CC::general_callee_saved(&reg) {
@@ -221,8 +221,8 @@ impl<
         }
     }
 
-    // Get a float register from the free list.
-    // Will free data to the stack if necessary to get the register.
+    /// Get a float register from the free list.
+    /// Will free data to the stack if necessary to get the register.
     fn get_float_reg(&mut self, buf: &mut Vec<'a, u8>) -> FloatReg {
         if let Some(reg) = self.float_free_regs.pop() {
             if CC::float_callee_saved(&reg) {
@@ -238,8 +238,8 @@ impl<
         }
     }
 
-    // Claims a general reg for a specific symbol.
-    // They symbol should not already have storage.
+    /// Claims a general reg for a specific symbol.
+    /// They symbol should not already have storage.
     pub fn claim_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
         debug_assert_eq!(self.symbol_storage_map.get(sym), None);
         let reg = self.get_general_reg(buf);
@@ -248,8 +248,8 @@ impl<
         reg
     }
 
-    // Claims a float reg for a specific symbol.
-    // They symbol should not already have storage.
+    /// Claims a float reg for a specific symbol.
+    /// They symbol should not already have storage.
     pub fn claim_float_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> FloatReg {
         debug_assert_eq!(self.symbol_storage_map.get(sym), None);
         let reg = self.get_float_reg(buf);
@@ -258,8 +258,8 @@ impl<
         reg
     }
 
-    // This claims a temporary general register and enables is used in the passed in function.
-    // Temporary registers are not safe across call instructions.
+    /// This claims a temporary general register and enables is used in the passed in function.
+    /// Temporary registers are not safe across call instructions.
     pub fn with_tmp_general_reg<F: FnOnce(&mut Self, &mut Vec<'a, u8>, GeneralReg)>(
         &mut self,
         buf: &mut Vec<'a, u8>,
@@ -271,8 +271,8 @@ impl<
     }
 
     #[allow(dead_code)]
-    // This claims a temporary float register and enables is used in the passed in function.
-    // Temporary registers are not safe across call instructions.
+    /// This claims a temporary float register and enables is used in the passed in function.
+    /// Temporary registers are not safe across call instructions.
     pub fn with_tmp_float_reg<F: FnOnce(&mut Self, &mut Vec<'a, u8>, FloatReg)>(
         &mut self,
         buf: &mut Vec<'a, u8>,
@@ -283,10 +283,10 @@ impl<
         self.float_free_regs.push(reg);
     }
 
-    // Loads a symbol into a general reg and returns that register.
-    // The symbol must already be stored somewhere.
-    // Will fail on values stored in float regs.
-    // Will fail for values that don't fit in a single register.
+    /// Loads a symbol into a general reg and returns that register.
+    /// The symbol must already be stored somewhere.
+    /// Will fail on values stored in float regs.
+    /// Will fail for values that don't fit in a single register.
     pub fn load_to_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
         let storage = self.remove_storage_for_sym(sym);
         match storage {
@@ -345,10 +345,10 @@ impl<
         }
     }
 
-    // Loads a symbol into a float reg and returns that register.
-    // The symbol must already be stored somewhere.
-    // Will fail on values stored in general regs.
-    // Will fail for values that don't fit in a single register.
+    /// Loads a symbol into a float reg and returns that register.
+    /// The symbol must already be stored somewhere.
+    /// Will fail on values stored in general regs.
+    /// Will fail for values that don't fit in a single register.
     pub fn load_to_float_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> FloatReg {
         let storage = self.remove_storage_for_sym(sym);
         match storage {
@@ -407,11 +407,11 @@ impl<
         }
     }
 
-    // Loads the symbol to the specified register.
-    // It will fail if the symbol is stored in a float register.
-    // This is only made to be used in special cases where exact regs are needed (function args and returns).
-    // It will not try to free the register first.
-    // This will not track the symbol change (it makes no assumptions about the new reg).
+    /// Loads the symbol to the specified register.
+    /// It will fail if the symbol is stored in a float register.
+    /// This is only made to be used in special cases where exact regs are needed (function args and returns).
+    /// It will not try to free the register first.
+    /// This will not track the symbol change (it makes no assumptions about the new reg).
     pub fn load_to_specified_general_reg(
         &self,
         buf: &mut Vec<'a, u8>,
@@ -461,11 +461,11 @@ impl<
         }
     }
 
-    // Loads the symbol to the specified register.
-    // It will fail if the symbol is stored in a general register.
-    // This is only made to be used in special cases where exact regs are needed (function args and returns).
-    // It will not try to free the register first.
-    // This will not track the symbol change (it makes no assumptions about the new reg).
+    /// Loads the symbol to the specified register.
+    /// It will fail if the symbol is stored in a general register.
+    /// This is only made to be used in special cases where exact regs are needed (function args and returns).
+    /// It will not try to free the register first.
+    /// This will not track the symbol change (it makes no assumptions about the new reg).
     pub fn load_to_specified_float_reg(&self, buf: &mut Vec<'a, u8>, sym: &Symbol, reg: FloatReg) {
         match self.get_storage_for_sym(sym) {
             Reg(Float(old_reg))
@@ -510,8 +510,8 @@ impl<
         }
     }
 
-    // Loads a field from a struct or tag union.
-    // This is lazy by default. It will not copy anything around.
+    /// Loads a field from a struct or tag union.
+    /// This is lazy by default. It will not copy anything around.
     pub fn load_field_at_index(
         &mut self,
         sym: &Symbol,
@@ -564,7 +564,7 @@ impl<
         }
     }
 
-    // Creates a struct on the stack, moving the data in fields into the struct.
+    /// Creates a struct on the stack, moving the data in fields into the struct.
     pub fn create_struct(
         &mut self,
         buf: &mut Vec<'a, u8>,
@@ -593,10 +593,10 @@ impl<
         }
     }
 
-    // Copies a symbol to the specified stack offset. This is used for things like filling structs.
-    // The offset is not guarenteed to be perfectly aligned, it follows Roc's alignment plan.
-    // This means that, for example 2 I32s might be back to back on the stack.
-    // Always interact with the stack using aligned 64bit movement.
+    /// Copies a symbol to the specified stack offset. This is used for things like filling structs.
+    /// The offset is not guarenteed to be perfectly aligned, it follows Roc's alignment plan.
+    /// This means that, for example 2 I32s might be back to back on the stack.
+    /// Always interact with the stack using aligned 64bit movement.
     fn copy_symbol_to_stack_offset(
         &mut self,
         buf: &mut Vec<'a, u8>,
@@ -687,8 +687,8 @@ impl<
         }
     }
 
-    // Frees `wanted_reg` which is currently owned by `sym` by making sure the value is loaded on the stack.
-    // Note, used and free regs are expected to be updated outside of this function.
+    /// Frees `wanted_reg` which is currently owned by `sym` by making sure the value is loaded on the stack.
+    /// Note, used and free regs are expected to be updated outside of this function.
     fn free_to_stack(
         &mut self,
         buf: &mut Vec<'a, u8>,
@@ -731,8 +731,8 @@ impl<
         }
     }
 
-    // gets the stack offset and size of the specified symbol.
-    // the symbol must already be stored on the stack.
+    /// gets the stack offset and size of the specified symbol.
+    /// the symbol must already be stored on the stack.
     pub fn stack_offset_and_size(&self, sym: &Symbol) -> (i32, u32) {
         match self.get_storage_for_sym(sym) {
             Stack(Primitive { base_offset, .. }) => (*base_offset, 8),
@@ -749,21 +749,21 @@ impl<
         }
     }
 
-    // Specifies a symbol is loaded at the specified general register.
+    /// Specifies a symbol is loaded at the specified general register.
     pub fn general_reg_arg(&mut self, sym: &Symbol, reg: GeneralReg) {
         self.symbol_storage_map.insert(*sym, Reg(General(reg)));
         self.general_free_regs.retain(|r| *r != reg);
         self.general_used_regs.push((reg, *sym));
     }
 
-    // Specifies a symbol is loaded at the specified float register.
+    /// Specifies a symbol is loaded at the specified float register.
     pub fn float_reg_arg(&mut self, sym: &Symbol, reg: FloatReg) {
         self.symbol_storage_map.insert(*sym, Reg(Float(reg)));
         self.float_free_regs.retain(|r| *r != reg);
         self.float_used_regs.push((reg, *sym));
     }
 
-    // Specifies a primitive is loaded at the specific base offset.
+    /// Specifies a primitive is loaded at the specific base offset.
     pub fn primitive_stack_arg(&mut self, sym: &Symbol, base_offset: i32) {
         self.symbol_storage_map.insert(
             *sym,
@@ -774,13 +774,13 @@ impl<
         );
     }
 
-    // Loads the arg pointer symbol to the specified general reg.
+    /// Loads the arg pointer symbol to the specified general reg.
     pub fn ret_pionter_arg(&mut self, reg: GeneralReg) {
         self.symbol_storage_map
             .insert(Symbol::RET_POINTER, Reg(General(reg)));
     }
 
-    // updates the function call stack size to the max of its current value and the size need for this call.
+    /// updates the function call stack size to the max of its current value and the size need for this call.
     pub fn update_fn_call_stack_size(&mut self, tmp_size: u32) {
         self.fn_call_stack_size = max(self.fn_call_stack_size, tmp_size);
     }
@@ -830,8 +830,8 @@ impl<
         self.join_param_map.insert(*id, param_storage);
     }
 
-    // Setup jump loads the parameters for the joinpoint.
-    // This enables the jump to correctly passe arguments to the joinpoint.
+    /// Setup jump loads the parameters for the joinpoint.
+    /// This enables the jump to correctly passe arguments to the joinpoint.
     pub fn setup_jump(
         &mut self,
         buf: &mut Vec<'a, u8>,
@@ -882,6 +882,7 @@ impl<
         }
         self.join_param_map.insert(*id, param_storage);
     }
+
     /// claim_stack_area is the public wrapper around claim_stack_size.
     /// It also deals with updating symbol storage.
     /// It returns the base offset of the stack area.
@@ -969,7 +970,7 @@ impl<
         }
     }
 
-    // Frees an reference and release an allocation if it is no longer used.
+    /// Frees an reference and release an allocation if it is no longer used.
     fn free_reference(&mut self, sym: &Symbol) {
         let owned_data = if let Some(owned_data) = self.allocation_map.remove(sym) {
             owned_data
