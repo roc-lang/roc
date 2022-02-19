@@ -381,6 +381,32 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                 );
             }
             x if x.stack_size(TARGET_INFO) == 0 => {}
+            x if !Self::returns_via_arg_pointer(x) => {
+                let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
+                debug_assert_eq!(base_offset % 8, 0);
+                if size <= 8 {
+                    X86_64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[0],
+                        base_offset,
+                    );
+                } else if size <= 16 {
+                    X86_64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[0],
+                        base_offset,
+                    );
+                    X86_64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[1],
+                        base_offset + 8,
+                    );
+                } else {
+                    internal_error!(
+                        "types that don't return via arg pointer must be less than 16 bytes"
+                    );
+                }
+            }
             x => todo!("returning complex type, {:?}", x),
         }
     }
@@ -405,6 +431,24 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                 let offset = storage_manager.claim_stack_area(sym, 16);
                 X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
                 X86_64Assembler::mov_base32_reg64(buf, offset + 8, Self::GENERAL_RETURN_REGS[1]);
+            }
+            x if !Self::returns_via_arg_pointer(x) => {
+                let size = layout.stack_size(TARGET_INFO);
+                let offset = storage_manager.claim_stack_area(sym, size);
+                if size <= 8 {
+                    X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+                } else if size <= 16 {
+                    X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+                    X86_64Assembler::mov_base32_reg64(
+                        buf,
+                        offset + 8,
+                        Self::GENERAL_RETURN_REGS[1],
+                    );
+                } else {
+                    internal_error!(
+                        "types that don't return via arg pointer must be less than 16 bytes"
+                    );
+                }
             }
             x if x.stack_size(TARGET_INFO) == 0 => {}
             x => todo!("receiving complex return type, {:?}", x),
