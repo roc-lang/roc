@@ -39,7 +39,7 @@ enum StackStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
         reg: Option<RegStorage<GeneralReg, FloatReg>>,
     },
     /// Referenced Primitives are primitives within a complex structure.
-    /// They have no guarentees about alignment or zeroed bits.
+    /// They have no guarantees about alignment or zeroed bits.
     /// When they are loaded, they should be aligned and zeroed.
     /// After loading, they should just be stored in a register.
     ReferencedPrimitive {

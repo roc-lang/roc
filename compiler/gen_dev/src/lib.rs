@@ -741,7 +741,7 @@ trait Backend<'a> {
     /// scan_ast runs through the ast and fill the last seen map.
     /// This must iterate through the ast in the same way that build_stmt does. i.e. then before else.
     fn scan_ast(&mut self, stmt: &Stmt<'a>) {
-        // Join map keeps track of join point paramaters so that we can keep them around while they still might be jumped to.
+        // Join map keeps track of join point parameters so that we can keep them around while they still might be jumped to.
         let mut join_map: MutMap<JoinPointId, &'a [Param<'a>]> = MutMap::default();
         match stmt {
             Stmt::Let(sym, expr, _, following) => {
