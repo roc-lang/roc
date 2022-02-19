@@ -2054,9 +2054,9 @@ fn max_u8() {
 }
 
 macro_rules! to_int_tests {
-    ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr)*))*) => {$($(
+    ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr $(, [ $($support_gen:literal),* ])? )*))*) => {$($(
         #[test]
-        #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+        #[cfg(any(feature = "gen-llvm", $($(feature = $support_gen)*)?))]
         fn $test_name() {
             let input = format!("{} {}", $fn, $input);
             assert_evals_to!(&input, $output, $typ)
@@ -2066,25 +2066,25 @@ macro_rules! to_int_tests {
 
 to_int_tests! {
     "Num.toI8", i8, (
-        to_i8_same_width, "15u8", 15
-        to_i8_truncate, "115i32", 115
-        to_i8_truncate_wraps, "500i32", -12
+        to_i8_same_width, "15u8", 15, ["gen-wasm"]
+        to_i8_truncate, "115i32", 115, ["gen-wasm"]
+        to_i8_truncate_wraps, "500i32", -12, ["gen-wasm"]
     )
     "Num.toI16", i16, (
-        to_i16_same_width, "15u16", 15
-        to_i16_extend, "15i8", 15
-        to_i16_truncate, "115i32", 115
-        to_i16_truncate_wraps, "60000i32", -5536
+        to_i16_same_width, "15u16", 15, ["gen-wasm"]
+        to_i16_extend, "15i8", 15, ["gen-wasm"]
+        to_i16_truncate, "115i32", 115, ["gen-wasm"]
+        to_i16_truncate_wraps, "60000i32", -5536, ["gen-wasm"]
     )
     "Num.toI32", i32, (
-        to_i32_same_width, "15u32", 15
-        to_i32_extend, "15i8", 15
-        to_i32_truncate, "115i64", 115
-        to_i32_truncate_wraps, "5000000000i64", 705032704
+        to_i32_same_width, "15u32", 15, ["gen-wasm"]
+        to_i32_extend, "15i8", 15, ["gen-wasm"]
+        to_i32_truncate, "115i64", 115, ["gen-wasm"]
+        to_i32_truncate_wraps, "5000000000i64", 705032704, ["gen-wasm"]
     )
     "Num.toI64", i64, (
-        to_i64_same_width, "15u64", 15
-        to_i64_extend, "15i8", 15
+        to_i64_same_width, "15u64", 15, ["gen-wasm"]
+        to_i64_extend, "15i8", 15, ["gen-wasm"]
         to_i64_truncate, "115i128", 115
         to_i64_truncate_wraps, "10_000_000_000_000_000_000i128", -8446744073709551616
     )
@@ -2093,25 +2093,25 @@ to_int_tests! {
         to_i128_extend, "15i8", 15
     )
     "Num.toU8", u8, (
-        to_u8_same_width, "15i8", 15
-        to_u8_truncate, "115i32", 115
-        to_u8_truncate_wraps, "500i32", 244
+        to_u8_same_width, "15i8", 15, ["gen-wasm"]
+        to_u8_truncate, "115i32", 115, ["gen-wasm"]
+        to_u8_truncate_wraps, "500i32", 244, ["gen-wasm"]
     )
     "Num.toU16", u16, (
-        to_u16_same_width, "15i16", 15
-        to_u16_extend, "15i8", 15
-        to_u16_truncate, "115i32", 115
-        to_u16_truncate_wraps, "600000000i32", 17920
+        to_u16_same_width, "15i16", 15, ["gen-wasm"]
+        to_u16_extend, "15i8", 15, ["gen-wasm"]
+        to_u16_truncate, "115i32", 115, ["gen-wasm"]
+        to_u16_truncate_wraps, "600000000i32", 17920, ["gen-wasm"]
     )
     "Num.toU32", u32, (
-        to_u32_same_width, "15i32", 15
-        to_u32_extend, "15i8", 15
-        to_u32_truncate, "115i64", 115
-        to_u32_truncate_wraps, "5000000000000000000i64", 1156841472
+        to_u32_same_width, "15i32", 15, ["gen-wasm"]
+        to_u32_extend, "15i8", 15, ["gen-wasm"]
+        to_u32_truncate, "115i64", 115, ["gen-wasm"]
+        to_u32_truncate_wraps, "5000000000000000000i64", 1156841472, ["gen-wasm"]
     )
     "Num.toU64", u64, (
-        to_u64_same_width, "15i64", 15
-        to_u64_extend, "15i8", 15
+        to_u64_same_width, "15i64", 15, ["gen-wasm"]
+        to_u64_extend, "15i8", 15, ["gen-wasm"]
         to_u64_truncate, "115i128", 115
         to_u64_truncate_wraps, "10_000_000_000_000_000_000_000i128", 1864712049423024128
     )
