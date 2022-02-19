@@ -12,7 +12,8 @@ pub struct RocStr {
 }
 
 impl RocStr {
-    const SIZE: usize = core::mem::size_of::<Self>();
+    pub const SIZE: usize = core::mem::size_of::<Self>();
+    pub const MASK: u8 = 0b1000_0000;
 
     pub fn len(&self) -> usize {
         if self.is_small_str() {
