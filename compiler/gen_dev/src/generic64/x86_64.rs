@@ -2088,10 +2088,7 @@ mod tests {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for ((dst, src), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x0F, 0x10, 0xC0],
-            ),
+            ((X86_64FloatReg::XMM0, X86_64FloatReg::XMM0), vec![]),
             (
                 (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
                 vec![0xF2, 0x41, 0x0F, 0x10, 0xC7],
@@ -2100,10 +2097,7 @@ mod tests {
                 (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
                 vec![0xF2, 0x44, 0x0F, 0x10, 0xF8],
             ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x45, 0x0F, 0x10, 0xFF],
-            ),
+            ((X86_64FloatReg::XMM15, X86_64FloatReg::XMM15), vec![]),
         ] {
             buf.clear();
             movsd_freg64_freg64(&mut buf, *dst, *src);
