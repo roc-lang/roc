@@ -537,32 +537,29 @@ impl<
 
         let mut ret_jumps = bumpalo::vec![in self.env.arena];
         let mut tmp = bumpalo::vec![in self.env.arena];
-        for (val, branch_info, stmt) in branches.iter() {
+        for (val, _branch_info, stmt) in branches.iter() {
+            // TODO: look inot branch info and if it matters here.
             tmp.clear();
-            if let BranchInfo::None = branch_info {
-                // Create jump to next branch if not cond_sym not equal to value.
-                // Since we don't know the offset yet, set it to 0 and overwrite later.
-                let jne_location = self.buf.len();
-                let start_offset = ASM::jne_reg64_imm64_imm32(&mut self.buf, cond_reg, *val, 0);
+            // Create jump to next branch if not cond_sym not equal to value.
+            // Since we don't know the offset yet, set it to 0 and overwrite later.
+            let jne_location = self.buf.len();
+            let start_offset = ASM::jne_reg64_imm64_imm32(&mut self.buf, cond_reg, *val, 0);
 
-                // Build all statements in this branch.
-                self.build_stmt(stmt, ret_layout);
+            // Build all statements in this branch.
+            self.build_stmt(stmt, ret_layout);
 
-                // Build unconditional jump to the end of this switch.
-                // Since we don't know the offset yet, set it to 0 and overwrite later.
-                let jmp_location = self.buf.len();
-                let jmp_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
-                ret_jumps.push((jmp_location, jmp_offset));
+            // Build unconditional jump to the end of this switch.
+            // Since we don't know the offset yet, set it to 0 and overwrite later.
+            let jmp_location = self.buf.len();
+            let jmp_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
+            ret_jumps.push((jmp_location, jmp_offset));
 
-                // Overwrite the original jne with the correct offset.
-                let end_offset = self.buf.len();
-                let jne_offset = end_offset - start_offset;
-                ASM::jne_reg64_imm64_imm32(&mut tmp, cond_reg, *val, jne_offset as i32);
-                for (i, byte) in tmp.iter().enumerate() {
-                    self.buf[jne_location + i] = *byte;
-                }
-            } else {
-                todo!("Switch: branch info, {:?}", branch_info);
+            // Overwrite the original jne with the correct offset.
+            let end_offset = self.buf.len();
+            let jne_offset = end_offset - start_offset;
+            ASM::jne_reg64_imm64_imm32(&mut tmp, cond_reg, *val, jne_offset as i32);
+            for (i, byte) in tmp.iter().enumerate() {
+                self.buf[jne_location + i] = *byte;
             }
         }
         let (branch_info, stmt) = default_branch;
