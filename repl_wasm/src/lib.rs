@@ -29,15 +29,6 @@ extern "C" {
     fn js_run_app() -> usize;
 
     fn js_get_result_and_memory(buffer_alloc_addr: *mut u8) -> usize;
-
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
-
-// In-browser debugging
-#[allow(unused_macros)]
-macro_rules! console_log {
-    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
 }
 
 pub struct WasmReplApp<'a> {
