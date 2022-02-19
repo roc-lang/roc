@@ -2095,7 +2095,7 @@ to_int_tests! {
     "Num.toU8", u8, (
         to_u8_same_width, "15i8", 15
         to_u8_truncate, "115i32", 115
-        to_u8_truncate_wraps, "500i32", 20
+        to_u8_truncate_wraps, "500i32", 244
     )
     "Num.toU16", u16, (
         to_u16_same_width, "15i16", 15
@@ -2121,154 +2121,137 @@ to_int_tests! {
     )
 }
 
-#[test]
-#[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_i8_checked() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toI8Checked TODO
-                "#
-        ),
-        i8::MAX, // TODO
-        i8
-    );
+macro_rules! to_int_checked_tests {
+    ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr)*))*) => {$($(
+        #[test]
+        #[cfg(any(feature = "gen-llvm"))]
+        fn $test_name() {
+            let sentinel = 23;
+            // Some n = Ok n, None = OutOfBounds
+            let expected = match $output.into() {
+                None => sentinel,
+                Some(n) => {
+                    assert_ne!(n, sentinel);
+                    n
+                }
+            };
+            let input = format!("Result.withDefault ({} {}) {}", $fn, $input, sentinel);
+            assert_evals_to!(&input, expected, $typ)
+        }
+    )*)*}
 }
 
-#[test]
-#[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_i16_checked() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toI16Checked TODO
-                "#
-        ),
-        i16::MAX, // TODO
-        i16
-    );
-}
-
-#[test]
-#[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_i32_checked() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toI32Checked TODO
-                "#
-        ),
-        i32::MAX, // TODO
-        i32
-    );
-}
-
-#[test]
-#[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_i64_checked() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toI64Checked TODO
-                "#
-        ),
-        i64::MAX, // TODO
-        i64
-    );
-}
-
-#[test]
-#[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_i128_checked() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toI128Checked TODO
-                "#
-        ),
-        i128::MAX, // TODO
-        i128
-    );
-}
-
-#[test]
-#[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_u8_checked() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toU8Checked TODO
-                "#
-        ),
-        u8::MAX, // TODO
-        u8
-    );
-}
-
-#[test]
-#[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_u16_checked() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toU16Checked TODO
-                "#
-        ),
-        u16::MAX, // TODO
-        u16
-    );
-}
-
-#[test]
-#[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_u32_checked() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toU32Checked TODO
-                "#
-        ),
-        u32::MAX, // TODO
-        u32
-    );
-}
-
-#[test]
-#[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_u64_checked() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toU64Checked TODO
-                "#
-        ),
-        u64::MAX, // TODO
-        u64
-    );
-}
-
-#[test]
-#[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn to_u128_checked() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.toU128Checked TODO
-                "#
-        ),
-        u128::MAX, // TODO
-        u128
-    );
+to_int_checked_tests! {
+    "Num.toI8Checked", i8, (
+        to_i8_checked_same,                             "15i8",    15
+        to_i8_checked_same_width_unsigned_fits,         "15u8",    15
+        to_i8_checked_same_width_unsigned_oob,          "128u8",   None
+        to_i8_checked_larger_width_signed_fits_pos,     "15i16",   15
+        to_i8_checked_larger_width_signed_oob_pos,      "128i16",  None
+        to_i8_checked_larger_width_signed_fits_neg,     "-15i16",  -15
+        to_i8_checked_larger_width_signed_oob_neg,      "-129i16", None
+        to_i8_checked_larger_width_unsigned_fits_pos,   "15u16",   15
+        to_i8_checked_larger_width_unsigned_oob_pos,    "128u16",  None
+    )
+    "Num.toI16Checked", i16, (
+        to_i16_checked_smaller_width_pos,                "15i8",      15
+        to_i16_checked_smaller_width_neg,                "-15i8",     -15
+        to_i16_checked_same,                             "15i16",     15
+        to_i16_checked_same_width_unsigned_fits,         "15u16",     15
+        to_i16_checked_same_width_unsigned_oob,          "32768u16",  None
+        to_i16_checked_larger_width_signed_fits_pos,     "15i32",     15
+        to_i16_checked_larger_width_signed_oob_pos,      "32768i32",  None
+        to_i16_checked_larger_width_signed_fits_neg,     "-15i32",    -15
+        to_i16_checked_larger_width_signed_oob_neg,      "-32769i32", None
+        to_i16_checked_larger_width_unsigned_fits_pos,   "15u32",     15
+        to_i16_checked_larger_width_unsigned_oob_pos,    "32768u32",  None
+    )
+    "Num.toI32Checked", i32, (
+        to_i32_checked_smaller_width_pos,                "15i8",      15
+        to_i32_checked_smaller_width_neg,                "-15i8",     -15
+        to_i32_checked_same,                             "15i32",     15
+        to_i32_checked_same_width_unsigned_fits,         "15u32",     15
+        to_i32_checked_same_width_unsigned_oob,          "2147483648u32",  None
+        to_i32_checked_larger_width_signed_fits_pos,     "15i64",     15
+        to_i32_checked_larger_width_signed_oob_pos,      "2147483648i64",  None
+        to_i32_checked_larger_width_signed_fits_neg,     "-15i64",    -15
+        to_i32_checked_larger_width_signed_oob_neg,      "-2147483649i64", None
+        to_i32_checked_larger_width_unsigned_fits_pos,   "15u64",     15
+        to_i32_checked_larger_width_unsigned_oob_pos,    "2147483648u64",  None
+    )
+    "Num.toI64Checked", i64, (
+        to_i64_checked_smaller_width_pos,                "15i8",      15
+        to_i64_checked_smaller_width_neg,                "-15i8",     -15
+        to_i64_checked_same,                             "15i64",     15
+        to_i64_checked_same_width_unsigned_fits,         "15u64",     15
+        to_i64_checked_same_width_unsigned_oob,          "9223372036854775808u64",  None
+        to_i64_checked_larger_width_signed_fits_pos,     "15i128",     15
+        to_i64_checked_larger_width_signed_oob_pos,      "9223372036854775808i128",  None
+        to_i64_checked_larger_width_signed_fits_neg,     "-15i128",    -15
+        to_i64_checked_larger_width_signed_oob_neg,      "-9223372036854775809i128", None
+        to_i64_checked_larger_width_unsigned_fits_pos,   "15u128",     15
+        to_i64_checked_larger_width_unsigned_oob_pos,    "9223372036854775808u128",  None
+    )
+    "Num.toI128Checked", i128, (
+        to_i128_checked_smaller_width_pos,                "15i8",      15
+        to_i128_checked_smaller_width_neg,                "-15i8",     -15
+        to_i128_checked_same,                             "15i128",     15
+        to_i128_checked_same_width_unsigned_fits,         "15u128",     15
+        to_i128_checked_same_width_unsigned_oob,          "170141183460469231731687303715884105728u128",  None
+    )
+    "Num.toU8Checked", u8, (
+        to_u8_checked_same,                           "15u8",   15
+        to_u8_checked_same_width_signed_fits,         "15i8",   15
+        to_u8_checked_same_width_signed_oob,          "-1i8",   None
+        to_u8_checked_larger_width_signed_fits_pos,   "15i16",  15
+        to_u8_checked_larger_width_signed_oob_pos,    "256i16", None
+        to_u8_checked_larger_width_signed_oob_neg,    "-1i16",  None
+        to_u8_checked_larger_width_unsigned_fits_pos, "15u16",  15
+        to_u8_checked_larger_width_unsigned_oob_pos,  "256u16", None
+    )
+    "Num.toU16Checked", u16, (
+        to_u16_checked_smaller_width_pos,              "15i8",     15
+        to_u16_checked_smaller_width_neg_oob,          "-15i8",    None
+        to_u16_checked_same,                           "15u16",    15
+        to_u16_checked_same_width_signed_fits,         "15i16",    15
+        to_u16_checked_same_width_signed_oob,          "-1i16",    None
+        to_u16_checked_larger_width_signed_fits_pos,   "15i32",    15
+        to_u16_checked_larger_width_signed_oob_pos,    "65536i32", None
+        to_u16_checked_larger_width_signed_oob_neg,    "-1i32",    None
+        to_u16_checked_larger_width_unsigned_fits_pos, "15u32",    15
+        to_u16_checked_larger_width_unsigned_oob_pos,  "65536u32", None
+    )
+    "Num.toU32Checked", u32, (
+        to_u32_checked_smaller_width_pos,              "15i8",     15
+        to_u32_checked_smaller_width_neg_oob,          "-15i8",    None
+        to_u32_checked_same,                           "15u32",    15
+        to_u32_checked_same_width_signed_fits,         "15i32",    15
+        to_u32_checked_same_width_signed_oob,          "-1i32",    None
+        to_u32_checked_larger_width_signed_fits_pos,   "15i64",    15
+        to_u32_checked_larger_width_signed_oob_pos,    "4294967296i64", None
+        to_u32_checked_larger_width_signed_oob_neg,    "-1i64",    None
+        to_u32_checked_larger_width_unsigned_fits_pos, "15u64",    15
+        to_u32_checked_larger_width_unsigned_oob_pos,  "4294967296u64", None
+    )
+    "Num.toU64Checked", u64, (
+        to_u64_checked_smaller_width_pos,              "15i8",     15
+        to_u64_checked_smaller_width_neg_oob,          "-15i8",    None
+        to_u64_checked_same,                           "15u64",    15
+        to_u64_checked_same_width_signed_fits,         "15i64",    15
+        to_u64_checked_same_width_signed_oob,          "-1i64",    None
+        to_u64_checked_larger_width_signed_fits_pos,   "15i128",   15
+        to_u64_checked_larger_width_signed_oob_pos,    "18446744073709551616i128", None
+        to_u64_checked_larger_width_signed_oob_neg,    "-1i128",   None
+        to_u64_checked_larger_width_unsigned_fits_pos, "15u128",   15
+        to_u64_checked_larger_width_unsigned_oob_pos,  "18446744073709551616u128", None
+    )
+    "Num.toU128Checked", u128, (
+        to_u128_checked_smaller_width_pos,             "15i8",     15
+        to_u128_checked_smaller_width_neg_oob,         "-15i8",    None
+        to_u128_checked_same,                          "15u128",   15
+        to_u128_checked_same_width_signed_fits,        "15i128",   15
+        to_u128_checked_same_width_signed_oob,         "-1i128",   None
+    )
 }
 
 #[test]

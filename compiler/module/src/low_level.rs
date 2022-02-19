@@ -111,6 +111,7 @@ pub enum LowLevel {
     NumShiftRightBy,
     NumShiftRightZfBy,
     NumIntCast,
+    NumToIntChecked,
     NumToStr,
     Eq,
     NotEq,

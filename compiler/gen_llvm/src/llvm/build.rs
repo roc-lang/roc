@@ -1,7 +1,9 @@
 use std::convert::TryFrom;
 use std::path::Path;
 
-use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
+use crate::llvm::bitcode::{
+    call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_void_bitcode_fn,
+};
 use crate::llvm::build_dict::{
     self, dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
     dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk, set_from_list,
@@ -53,7 +55,7 @@ use morphic_lib::{
     CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
 };
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth, IntrinsicName};
-use roc_builtins::{float_intrinsic, int_intrinsic};
+use roc_builtins::{float_intrinsic, llvm_int_intrinsic};
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
@@ -609,14 +611,14 @@ static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";
 pub static LLVM_LONGJMP: &str = "llvm.eh.sjlj.longjmp";
 
 const LLVM_ADD_WITH_OVERFLOW: IntrinsicName =
-    int_intrinsic!("llvm.sadd.with.overflow", "llvm.uadd.with.overflow");
+    llvm_int_intrinsic!("llvm.sadd.with.overflow", "llvm.uadd.with.overflow");
 const LLVM_SUB_WITH_OVERFLOW: IntrinsicName =
-    int_intrinsic!("llvm.ssub.with.overflow", "llvm.usub.with.overflow");
+    llvm_int_intrinsic!("llvm.ssub.with.overflow", "llvm.usub.with.overflow");
 const LLVM_MUL_WITH_OVERFLOW: IntrinsicName =
-    int_intrinsic!("llvm.smul.with.overflow", "llvm.umul.with.overflow");
+    llvm_int_intrinsic!("llvm.smul.with.overflow", "llvm.umul.with.overflow");
 
-const LLVM_ADD_SATURATED: IntrinsicName = int_intrinsic!("llvm.sadd.sat", "llvm.uadd.sat");
-const LLVM_SUB_SATURATED: IntrinsicName = int_intrinsic!("llvm.ssub.sat", "llvm.usub.sat");
+const LLVM_ADD_SATURATED: IntrinsicName = llvm_int_intrinsic!("llvm.sadd.sat", "llvm.uadd.sat");
+const LLVM_SUB_SATURATED: IntrinsicName = llvm_int_intrinsic!("llvm.ssub.sat", "llvm.usub.sat");
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -2921,7 +2923,7 @@ pub fn complex_bitcast<'ctx>(
 
 /// Check the size of the input and output types. Pretending we have more bytes at a pointer than
 /// we actually do can lead to faulty optimizations and weird segfaults/crashes
-fn complex_bitcast_check_size<'a, 'ctx, 'env>(
+pub fn complex_bitcast_check_size<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: BasicValueEnum<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
@@ -4073,7 +4075,13 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
-    let mod_solutions = build_procedures_help(env, opt_level, procedures, entry_point, None);
+    let mod_solutions = build_procedures_help(
+        env,
+        opt_level,
+        procedures,
+        entry_point,
+        Some(Path::new("/tmp/test.ll")),
+    );
 
     promote_to_main_function(env, mod_solutions, entry_point.symbol, entry_point.layout)
 }
@@ -5680,7 +5688,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
-        | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
+        | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin
+        | NumToIntChecked => {
             debug_assert_eq!(args.len(), 1);
 
             let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -5692,7 +5701,14 @@ fn run_low_level<'a, 'ctx, 'env>(
                     match arg_builtin {
                         Int(int_width) => {
                             let int_type = convert::int_type_from_int_width(env, *int_width);
-                            build_int_unary_op(env, arg.into_int_value(), int_type, op, layout)
+                            build_int_unary_op(
+                                env,
+                                arg.into_int_value(),
+                                *int_width,
+                                int_type,
+                                op,
+                                layout,
+                            )
                         }
                         Float(float_width) => build_float_unary_op(
                             env,
@@ -6186,7 +6202,7 @@ impl RocReturn {
 }
 
 #[derive(Debug)]
-enum CCReturn {
+pub enum CCReturn {
     /// Return as normal
     Return,
     /// require an extra argument, a pointer
@@ -6228,7 +6244,7 @@ impl CCReturn {
 }
 
 /// According to the C ABI, how should we return a value with the given layout?
-fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> CCReturn {
+pub fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> CCReturn {
     let return_size = layout.stack_size(env.target_info);
     let pass_result_by_pointer = return_size > 2 * env.target_info.ptr_width() as u32;
 
@@ -6922,6 +6938,7 @@ fn int_type_signed_min(int_type: IntType) -> IntValue {
 fn build_int_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: IntValue<'ctx>,
+    arg_width: IntWidth,
     arg_int_type: IntType<'ctx>,
     op: LowLevel,
     return_layout: &Layout<'a>,
@@ -6955,6 +6972,75 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 target_float_type,
                 "i64_to_f64",
             )
+        }
+        NumToIntChecked => {
+            // return_layout : Result N [ OutOfBounds ]* ~ { result: N, out_of_bounds: bool }
+
+            let target_int_width = match return_layout {
+                Layout::Struct(layouts) if layouts.len() == 2 => {
+                    debug_assert!(matches!(layouts[1], Layout::Builtin(Builtin::Bool)));
+                    match layouts[0] {
+                        Layout::Builtin(Builtin::Int(iw)) => iw,
+                        layout => internal_error!(
+                            "There can only be an int layout here, found {:?}!",
+                            layout
+                        ),
+                    }
+                }
+                layout => internal_error!(
+                    "There can only be a result layout here, found {:?}!",
+                    layout
+                ),
+            };
+
+            let arg_always_fits_in_target = (arg_width.stack_size() < target_int_width.stack_size()
+                && (
+                    // If the arg is unsigned, it will always fit in either a signed or unsigned
+                    // int of a larger width.
+                    !arg_width.is_signed()
+                    ||
+                    // Otherwise if the arg is signed, it will always fit in a signed int of a
+                    // larger width.
+                    (target_int_width.is_signed() )
+                )                )
+                || // Or if the two types are the same, they trivially fit.
+                arg_width == target_int_width;
+
+            if arg_always_fits_in_target {
+                // This is guaranteed to succeed so we can just make it an int cast and let LLVM
+                // optimize it away.
+                let target_int_type = convert::int_type_from_int_width(env, target_int_width);
+                let target_int_val: BasicValueEnum<'ctx> = env
+                    .builder
+                    .build_int_cast(arg, target_int_type, "int_cast")
+                    .into();
+
+                let return_type =
+                    convert::basic_type_from_layout(env, return_layout).into_struct_type();
+                let r = return_type.const_zero();
+                let r = bd
+                    .build_insert_value(r, target_int_val, 0, "converted_int")
+                    .unwrap();
+                let r = bd
+                    .build_insert_value(r, env.context.bool_type().const_zero(), 1, "out_of_bounds")
+                    .unwrap();
+
+                r.into_struct_value().into()
+            } else {
+                let bitcode_fn = if !arg_width.is_signed() {
+                    // We are trying to convert from unsigned to signed/unsigned of same or lesser width, e.g.
+                    // u16 -> i16, u16 -> i8, or u16 -> u8. We only need to check that the argument
+                    // value fits in the MAX target type value.
+                    &bitcode::NUM_INT_TO_INT_CHECKING_MAX[target_int_width][arg_width]
+                } else {
+                    // We are trying to convert from signed to signed/unsigned of same or lesser width, e.g.
+                    // i16 -> u16, i16 -> i8, or i16 -> u8. We need to check that the argument value fits in
+                    // the MAX and MIN target type.
+                    &bitcode::NUM_INT_TO_INT_CHECKING_MAX_AND_MIN[target_int_width][arg_width]
+                };
+
+                call_bitcode_fn_fixing_for_convention(env, &[arg.into()], return_layout, bitcode_fn)
+            }
         }
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
