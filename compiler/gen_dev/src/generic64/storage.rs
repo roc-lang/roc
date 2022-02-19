@@ -657,6 +657,15 @@ impl<
                 let reg = self.load_to_float_reg(buf, sym);
                 ASM::mov_base32_freg64(buf, to_offset, reg);
             }
+            Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
+                let (from_offset, _) = self.stack_offset_and_size(sym);
+                self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
+                    ASM::mov_reg64_base32(buf, reg, from_offset);
+                    ASM::mov_base32_reg64(buf, to_offset, reg);
+                    ASM::mov_reg64_base32(buf, reg, from_offset + 8);
+                    ASM::mov_base32_reg64(buf, to_offset + 8, reg);
+                });
+            }
             // Layout::Struct(_) if layout.safe_to_memcpy() => {
             //     // self.storage_manager.with_tmp_float_reg(&mut self.buf, |buf, storage, )
             //     // if let Some(SymbolStorage::Base {
