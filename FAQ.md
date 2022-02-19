@@ -203,7 +203,7 @@ without concern.
 Prior to designing Roc, I taught a lot of beginner [Elm](https://elm-lang.org/) workshops. Sometimes at
 conferences, sometimes for [Frontend Masters](https://frontendmasters.com/courses/intro-elm/),
 sometimes for free at local coding bootcamps or meetup groups.
-In total I've spent well over 100 hours standing in front of a class, introdcuing the students to their
+In total I've spent well over 100 hours standing in front of a class, introducing the students to their
 first pure functional programming language.
 
 Here was my experience teaching currying:
