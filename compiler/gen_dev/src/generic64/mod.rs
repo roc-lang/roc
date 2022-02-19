@@ -229,6 +229,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized {
 
     fn to_float_freg64_freg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
 
+    fn lte_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
     fn gte_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
@@ -832,6 +839,28 @@ impl<
         }
     }
 
+    fn build_num_lte(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    ) {
+        match arg_layout {
+            Layout::Builtin(single_register_int_builtins!()) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+                ASM::lte_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            x => todo!("NumLte: layout, {:?}", x),
+        }
+    }
+
     fn build_num_gte(
         &mut self,
         dst: &Symbol,
@@ -840,7 +869,7 @@ impl<
         arg_layout: &Layout<'a>,
     ) {
         match arg_layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            Layout::Builtin(single_register_int_builtins!()) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager

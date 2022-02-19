@@ -509,6 +509,23 @@ trait Backend<'a> {
                 );
                 self.build_num_to_float(sym, &args[0], &arg_layouts[0], ret_layout)
             }
+            LowLevel::NumLte => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumLte: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumLte: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::Builtin(Builtin::Bool),
+                    *ret_layout,
+                    "NumLte: expected to have return layout of type Bool"
+                );
+                self.build_num_lte(sym, &args[0], &args[1], &arg_layouts[0])
+            }
             LowLevel::NumGte => {
                 debug_assert_eq!(
                     2,
@@ -648,6 +665,15 @@ trait Backend<'a> {
         src: &Symbol,
         arg_layout: &Layout<'a>,
         ret_layout: &Layout<'a>,
+    );
+
+    /// build_num_lte stores the result of `src1 <= src2` into dst.
+    fn build_num_lte(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &Layout<'a>,
     );
 
     /// build_num_gte stores the result of `src1 >= src2` into dst.

@@ -638,6 +638,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn lte_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers less than or equal for AArch64");
+    }
+
+    #[inline(always)]
     fn gte_reg64_reg64_reg64(
         _buf: &mut Vec<'_, u8>,
         _dst: AArch64GeneralReg,
