@@ -1353,6 +1353,9 @@ fn mov_reg64_base64_offset32(
 /// `MOVSD xmm1,xmm2` -> Move scalar double-precision floating-point value from xmm2 to xmm1 register.
 #[inline(always)]
 fn movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    if dst == src {
+        return;
+    }
     let dst_high = dst as u8 > 7;
     let dst_mod = dst as u8 % 8;
     let src_high = src as u8 > 7;
@@ -2085,10 +2088,7 @@ mod tests {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for ((dst, src), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x0F, 0x10, 0xC0],
-            ),
+            ((X86_64FloatReg::XMM0, X86_64FloatReg::XMM0), vec![]),
             (
                 (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
                 vec![0xF2, 0x41, 0x0F, 0x10, 0xC7],
@@ -2097,10 +2097,7 @@ mod tests {
                 (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
                 vec![0xF2, 0x44, 0x0F, 0x10, 0xF8],
             ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x45, 0x0F, 0x10, 0xFF],
-            ),
+            ((X86_64FloatReg::XMM15, X86_64FloatReg::XMM15), vec![]),
         ] {
             buf.clear();
             movsd_freg64_freg64(&mut buf, *dst, *src);
