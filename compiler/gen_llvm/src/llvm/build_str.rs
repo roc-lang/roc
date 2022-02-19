@@ -1,8 +1,8 @@
-use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
-use crate::llvm::build::{complex_bitcast, Env, Scope};
-use crate::llvm::build_list::{
-    allocate_list, call_bitcode_fn_returns_list, pass_update_mode, store_list,
+use crate::llvm::bitcode::{
+    call_bitcode_fn, call_list_bitcode_fn, call_str_bitcode_fn, call_void_bitcode_fn,
 };
+use crate::llvm::build::{complex_bitcast, Env, Scope};
+use crate::llvm::build_list::{allocate_list, pass_update_mode, store_list};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
@@ -25,7 +25,7 @@ pub fn str_repeat<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let str_c_abi = str_symbol_to_c_abi(env, scope, str_symbol);
     let count = load_symbol(scope, &count_symbol);
-    call_bitcode_fn(env, &[str_c_abi.into(), count], bitcode::STR_REPEAT)
+    call_str_bitcode_fn(env, &[str_c_abi.into(), count], bitcode::STR_REPEAT)
 }
 
 /// Str.split : Str, Str -> List Str
@@ -40,7 +40,7 @@ pub fn str_split<'a, 'ctx, 'env>(
     let str_c_abi = str_symbol_to_c_abi(env, scope, str_symbol);
     let delim_c_abi = str_symbol_to_c_abi(env, scope, delimiter_symbol);
 
-    let segment_count = call_bitcode_fn(
+    let segment_count = call_list_bitcode_fn(
         env,
         &[str_c_abi.into(), delim_c_abi.into()],
         bitcode::STR_COUNT_SEGMENTS,
@@ -140,7 +140,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
     let str1_c_abi = str_symbol_to_c_abi(env, scope, str1_symbol);
     let str2_c_abi = str_symbol_to_c_abi(env, scope, str2_symbol);
 
-    call_bitcode_fn(
+    call_str_bitcode_fn(
         env,
         &[str1_c_abi.into(), str2_c_abi.into()],
         bitcode::STR_CONCAT,
@@ -159,7 +159,7 @@ pub fn str_join_with<'a, 'ctx, 'env>(
     let list_i128 = str_symbol_to_c_abi(env, scope, list_symbol);
     let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
 
-    call_bitcode_fn(
+    call_str_bitcode_fn(
         env,
         &[list_i128.into(), str_i128.into()],
         bitcode::STR_JOIN_WITH,
@@ -255,7 +255,7 @@ pub fn str_trim<'a, 'ctx, 'env>(
     str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM)
+    call_str_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM)
 }
 
 /// Str.trimLeft : Str -> Str
@@ -265,7 +265,7 @@ pub fn str_trim_left<'a, 'ctx, 'env>(
     str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_LEFT)
+    call_str_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_LEFT)
 }
 
 /// Str.trimRight : Str -> Str
@@ -275,7 +275,7 @@ pub fn str_trim_right<'a, 'ctx, 'env>(
     str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_RIGHT)
+    call_str_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_RIGHT)
 }
 
 /// Str.fromInt : Int -> Str
@@ -284,7 +284,7 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     value: IntValue<'ctx>,
     int_width: IntWidth,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn(env, &[value.into()], &bitcode::STR_FROM_INT[int_width])
+    call_str_bitcode_fn(env, &[value.into()], &bitcode::STR_FROM_INT[int_width])
 }
 
 /// Str.toUtf8 : Str -> List U8
@@ -299,7 +299,7 @@ pub fn str_to_utf8<'a, 'ctx, 'env>(
         "to_utf8",
     );
 
-    call_bitcode_fn_returns_list(env, &[string], bitcode::STR_TO_UTF8)
+    call_list_bitcode_fn(env, &[string], bitcode::STR_TO_UTF8)
 }
 
 fn decode_from_utf8_result<'a, 'ctx, 'env>(
@@ -411,7 +411,7 @@ pub fn str_from_float<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let float = load_symbol(scope, &int_symbol);
 
-    call_bitcode_fn(env, &[float], bitcode::STR_FROM_FLOAT)
+    call_str_bitcode_fn(env, &[float], bitcode::STR_FROM_FLOAT)
 }
 
 /// Str.equal : Str, Str -> Bool
