@@ -285,7 +285,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                         storage_manager.load_to_specified_general_reg(
                             buf,
                             sym,
-                            Self::GENERAL_PARAM_REGS[i],
+                            Self::GENERAL_PARAM_REGS[general_i],
                         );
                         general_i += 1;
                     } else {
@@ -308,7 +308,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                         storage_manager.load_to_specified_float_reg(
                             buf,
                             sym,
-                            Self::FLOAT_PARAM_REGS[i],
+                            Self::FLOAT_PARAM_REGS[float_i],
                         );
                         float_i += 1;
                     } else {
