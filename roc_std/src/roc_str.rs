@@ -119,19 +119,20 @@ impl RocStr {
         (self as *mut Self).cast()
     }
 
-    fn from_slice_small_str(slice: &[u8]) -> Self {
+    const fn from_slice_small_str(slice: &[u8]) -> Self {
         assert!(slice.len() < Self::SIZE);
 
         let mut array = [0u8; Self::SIZE];
 
-        array[..slice.len()].copy_from_slice(slice);
+        // while loop because for uses Iterator and is not available in const contexts
+        let mut i = 0;
+        while i < slice.len() {
+            array[i] = slice[i];
+            i += 1;
+        }
 
-        Self::from_slice_small_str_help(array, slice.len())
-    }
-
-    const fn from_slice_small_str_help(mut array: [u8; Self::SIZE], length: usize) -> Self {
         let highest_index = Self::SIZE - 1;
-        array[highest_index] = length as u8 | Self::MASK;
+        array[highest_index] = slice.len() as u8 | Self::MASK;
 
         unsafe { core::mem::transmute(array) }
     }
