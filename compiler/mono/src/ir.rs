@@ -3430,6 +3430,7 @@ pub fn with_hole<'a>(
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
 
+            #[allow(clippy::enum_variant_names)]
             enum Field {
                 // TODO: rename this since it can handle unspecialized expressions now too
                 Function(Symbol, Variable),
