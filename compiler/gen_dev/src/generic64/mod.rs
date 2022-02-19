@@ -1004,6 +1004,7 @@ impl<
     }
 
     fn free_symbol(&mut self, sym: &Symbol) {
+        self.join_map.remove(&JoinPointId(*sym));
         self.storage_manager.free_symbol(sym);
     }
 
@@ -1029,9 +1030,16 @@ impl<
                     internal_error!("All primitive valuse should fit in a single register");
                 }
             }
-            return;
+        } else {
+            CC::return_complex_symbol(&mut self.buf, &mut self.storage_manager, sym, layout)
         }
-        CC::return_complex_symbol(&mut self.buf, &mut self.storage_manager, sym, layout)
+        let inst_loc = self.buf.len() as u64;
+        let offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678) as u64;
+        self.relocs.push(Relocation::JmpToReturn {
+            inst_loc,
+            inst_size: self.buf.len() as u64 - inst_loc,
+            offset,
+        });
     }
 }
 

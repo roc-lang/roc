@@ -790,7 +790,7 @@ impl<
             // Claim a location for every join point parameter to be loaded at.
             match layout {
                 single_register_integers!() => {
-                    self.claim_general_reg(buf, symbol);
+                    let reg = self.claim_general_reg(buf, symbol);
                 }
                 single_register_floats!() => {
                     self.claim_float_reg(buf, symbol);
@@ -804,6 +804,7 @@ impl<
                     }
                 }
             }
+            param_storage.push(*self.get_storage_for_sym(symbol));
         }
         self.join_param_map.insert(*id, param_storage);
     }
@@ -823,12 +824,12 @@ impl<
             Some(storages) => storages,
             None => internal_error!("Jump: unknown point specified to jump to: {:?}", id),
         };
+        println!("Param storage: {:?}", param_storage);
         for ((sym, layout), wanted_storage) in
             args.iter().zip(arg_layouts).zip(param_storage.iter())
         {
             // Note: it is possible that the storage we want to move to is in use by one of the args we want to pass.
-            let current_storage = self.remove_storage_for_sym(sym);
-            if &current_storage == wanted_storage {
+            if self.get_storage_for_sym(sym) == wanted_storage {
                 continue;
             }
             match wanted_storage {
@@ -836,6 +837,7 @@ impl<
                     // Ensure the reg is free, if not free it.
                     self.ensure_reg_free(buf, General(*reg));
                     // Copy the value over to the reg.
+                    println!("Loading {:?} to {:?}", sym, reg);
                     self.load_to_specified_general_reg(buf, sym, *reg)
                 }
                 Reg(Float(reg)) => {
@@ -856,7 +858,6 @@ impl<
                     internal_error!("Primitive stack storage is not allowed for jumping")
                 }
             }
-            self.symbol_storage_map.insert(*sym, current_storage);
         }
         self.join_param_map.insert(*id, param_storage);
     }
@@ -915,6 +916,10 @@ impl<
     }
 
     pub fn free_symbol(&mut self, sym: &Symbol) {
+        if let Some(_) = self.join_param_map.remove(&JoinPointId(*sym)) {
+            // This is a join point and will not be in the storage map.
+            return;
+        }
         match self.remove_storage_for_sym(sym) {
             // Free stack chunck if this is the last reference to the chunk.
             Stack(Primitive { base_offset, .. }) => {
@@ -948,7 +953,7 @@ impl<
         let owned_data = if let Some(owned_data) = self.allocation_map.remove(sym) {
             owned_data
         } else {
-            internal_error!("Unknown symbol: {}", sym);
+            internal_error!("Unknown symbol: {:?}", sym);
         };
         if Rc::strong_count(&owned_data) == 1 {
             self.free_stack_chunk(owned_data.0, owned_data.1);
@@ -1037,7 +1042,7 @@ impl<
         if let Some(storage) = self.symbol_storage_map.get(sym) {
             storage
         } else {
-            internal_error!("Unknown symbol: {}", sym);
+            internal_error!("Unknown symbol: {:?}", sym);
         }
     }
 
@@ -1046,7 +1051,7 @@ impl<
         if let Some(storage) = self.symbol_storage_map.remove(sym) {
             storage
         } else {
-            internal_error!("Unknown symbol: {}", sym);
+            internal_error!("Unknown symbol: {:?}", sym);
         }
     }
 }
