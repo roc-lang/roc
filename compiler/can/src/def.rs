@@ -423,7 +423,7 @@ pub fn sort_can_defs(
     let mut defined_symbols: Vec<Symbol> = Vec::new();
     let mut defined_symbols_set: ImSet<Symbol> = ImSet::default();
 
-    for symbol in can_defs_by_symbol.keys().into_iter() {
+    for symbol in can_defs_by_symbol.keys() {
         defined_symbols.push(*symbol);
         defined_symbols_set.insert(*symbol);
     }

@@ -254,7 +254,7 @@ pub fn canonicalize_pattern<'a>(
                 }
                 Ok((int, bound)) => {
                     let sign_str = if is_negative { "-" } else { "" };
-                    let int_str = format!("{}{}", sign_str, int.to_string()).into_boxed_str();
+                    let int_str = format!("{}{}", sign_str, int).into_boxed_str();
                     let i = match int {
                         // Safety: this is fine because I128::MAX = |I128::MIN| - 1
                         IntValue::I128(n) if is_negative => IntValue::I128(-n),
