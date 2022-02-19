@@ -12,6 +12,8 @@ pub struct RocStr {
 }
 
 impl RocStr {
+    const SIZE: usize = core::mem::size_of::<Self>();
+
     pub fn len(&self) -> usize {
         if self.is_small_str() {
             let bytes = self.length.to_ne_bytes();
@@ -116,6 +118,23 @@ impl RocStr {
         (self as *mut Self).cast()
     }
 
+    fn from_slice_small_str(slice: &[u8]) -> Self {
+        assert!(slice.len() < Self::SIZE);
+
+        let mut array = [0u8; Self::SIZE];
+
+        array[..slice.len()].copy_from_slice(slice);
+
+        Self::from_slice_small_str_help(array)
+    }
+
+    const fn from_slice_small_str_help(mut array: [u8; Self::SIZE]) -> Self {
+        let capacity = Self::SIZE - 1;
+        array[capacity] = capacity as u8 ^ 0b1000_0000;
+
+        unsafe { core::mem::transmute(array) }
+    }
+
     fn from_slice_with_capacity_str(slice: &[u8], capacity: usize) -> Self {
         assert!(
             slice.len() <= capacity,
@@ -124,7 +143,7 @@ impl RocStr {
             capacity
         );
         if capacity < core::mem::size_of::<Self>() {
-            let mut rocstr = Self::default();
+            let mut rocstr = Self::empty();
             let target_ptr = rocstr.get_small_str_ptr_mut();
             let source_ptr = slice.as_ptr() as *const u8;
             for index in 0..slice.len() {
