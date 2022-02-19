@@ -9,7 +9,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
-use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_mono::layout::{Builtin, Layout, TagIdIntType, UnionLayout};
 use roc_target::TargetInfo;
 use std::marker::PhantomData;
 
@@ -877,6 +877,27 @@ impl<
     ) {
         self.storage_manager
             .load_field_at_index(sym, structure, index, field_layouts);
+    }
+
+    fn load_union_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        tag_id: TagIdIntType,
+        index: u64,
+        union_layout: &UnionLayout<'a>,
+    ) {
+        match union_layout {
+            UnionLayout::NonRecursive(tag_layouts) | UnionLayout::Recursive(tag_layouts) => {
+                self.storage_manager.load_field_at_index(
+                    sym,
+                    structure,
+                    index,
+                    tag_layouts[tag_id as usize],
+                );
+            }
+            x => todo!("loading from union type: {:?}", x),
+        }
     }
 
     fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>) {

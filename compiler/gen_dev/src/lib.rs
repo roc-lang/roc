@@ -14,7 +14,7 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds, UnionLayout};
+use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, UnionLayout};
 
 mod generic64;
 mod object_builder;
@@ -314,6 +314,14 @@ trait Backend<'a> {
                 structure,
             } => {
                 self.load_struct_at_index(sym, structure, *index, field_layouts);
+            }
+            Expr::UnionAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => {
+                self.load_union_at_index(sym, structure, *tag_id, *index, union_layout);
             }
             Expr::GetTagId {
                 structure,
@@ -684,6 +692,16 @@ trait Backend<'a> {
         structure: &Symbol,
         index: u64,
         field_layouts: &'a [Layout<'a>],
+    );
+
+    /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
+    fn load_union_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        tag_id: TagIdIntType,
+        index: u64,
+        union_layout: &UnionLayout<'a>,
     );
 
     /// get_tag_id loads the tag id from a the union.
