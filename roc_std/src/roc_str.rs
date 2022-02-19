@@ -9,34 +9,33 @@ use crate::{roc_alloc, roc_dealloc, Storage, REFCOUNT_1};
 pub struct RocStr {
     elements: *mut u8,
     length: usize,
+    capacity: usize,
 }
 
 impl RocStr {
     pub const SIZE: usize = core::mem::size_of::<Self>();
     pub const MASK: u8 = 0b1000_0000;
 
-    pub fn len(&self) -> usize {
-        if self.is_small_str() {
-            let bytes = self.length.to_ne_bytes();
-            let last_byte = bytes[mem::size_of::<usize>() - 1];
-
-            (last_byte ^ Self::MASK) as usize
-        } else {
-            self.length
-        }
+    pub const fn len(&self) -> usize {
+        self.length
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub const fn capacity(&self) -> usize {
+        self.capacity ^ isize::MIN as usize
+    }
+
+    pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub fn is_small_str(&self) -> bool {
-        (self.length as isize) < 0
+    pub const fn is_small_str(&self) -> bool {
+        (self.capacity as isize) < 0
     }
 
     pub const fn empty() -> Self {
         Self {
-            length: isize::MIN as usize,
+            length: 0,
+            capacity: isize::MIN as usize,
             elements: core::ptr::null_mut(),
         }
     }
@@ -131,8 +130,7 @@ impl RocStr {
             i += 1;
         }
 
-        let highest_index = Self::SIZE - 1;
-        array[highest_index] = slice.len() as u8 | Self::MASK;
+        array[Self::SIZE - 1] = slice.len() as u8 | Self::MASK;
 
         unsafe { core::mem::transmute(array) }
     }
@@ -180,6 +178,7 @@ impl RocStr {
 
             Self {
                 length: slice.len(),
+                capacity: slice.len(),
                 elements,
             }
         }
@@ -306,6 +305,7 @@ impl Clone for RocStr {
             Self {
                 elements: self.elements,
                 length: self.length,
+                capacity: self.capacity,
             }
         } else {
             let capacity_size = core::mem::size_of::<usize>();
@@ -332,6 +332,7 @@ impl Clone for RocStr {
             Self {
                 elements,
                 length: self.length,
+                capacity: self.capacity,
             }
         }
     }
