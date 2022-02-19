@@ -29,19 +29,20 @@ enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum StackStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     /// Primitives are 8 bytes or less. That generally live in registers but can move stored on the stack.
-    /// Their data must always be 8 byte aligned and will be moved as a block.
+    /// Their data, when on the stack, must always be 8 byte aligned and will be moved as a block.
     /// They are never part of a struct, union, or more complex value.
-    /// The rest of the bytes should be zero due to how these are loaded.
+    /// The rest of the bytes should be the sign extension due to how these are loaded.
     Primitive {
         // Offset from the base pointer in bytes.
         base_offset: i32,
         // Optional register also holding the value.
         reg: Option<RegStorage<GeneralReg, FloatReg>>,
     },
-    /// Referenced Primitives are primitives within a complex structure.
-    /// They have no guarantees about alignment or zeroed bits.
-    /// When they are loaded, they should be aligned and zeroed.
-    /// After loading, they should just be stored in a register.
+    /// Referenced Primitives are primitives within a complex structures.
+    /// They have no guarantees about the bits around them and cannot simply be loaded as an 8 byte value.
+    /// For example, a U8 in a struct must be loaded as a single byte and sign extended.
+    /// If it was loaded as an 8 byte value, a bunch of garbage data would be loaded with the U8.
+    /// After loading, they should just be stored in a register, removing the reference.
     ReferencedPrimitive {
         // Offset from the base pointer in bytes.
         base_offset: i32,

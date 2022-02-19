@@ -58,8 +58,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         fn_call_stack_size: i32,
     );
 
-    /// load_args updates the symbol map to know where every arg is stored.
-    /// It returns the total stack space after loading the args.
+    /// load_args updates the storage manager to know where every arg is stored.
     fn load_args<'a>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
@@ -69,7 +68,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
     );
 
     /// store_args stores the args in registers and on the stack for function calling.
-    /// It returns the amount of stack space needed to temporarily store the args.
+    /// It also updates the amount of temporary stack space needed in the storage manager.
     fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
