@@ -920,12 +920,12 @@ impl<
             // This is a join point and will not be in the storage map.
             return;
         }
-        match self.remove_storage_for_sym(sym) {
+        match self.symbol_storage_map.remove(sym) {
             // Free stack chunck if this is the last reference to the chunk.
-            Stack(Primitive { base_offset, .. }) => {
+            Some(Stack(Primitive { base_offset, .. })) => {
                 self.free_stack_chunk(base_offset, 8);
             }
-            Stack(Complex { .. } | ReferencedPrimitive { .. }) => {
+            Some(Stack(Complex { .. } | ReferencedPrimitive { .. })) => {
                 self.free_reference(sym);
             }
             _ => {}
