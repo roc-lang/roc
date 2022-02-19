@@ -517,7 +517,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::NUM_TO_I128_CHECKED,
         vec![int_type(flex(TVAR1))],
-        Box::new(result_type(i128_type(), out_of_bounds.clone())),
+        Box::new(result_type(i128_type(), out_of_bounds)),
     );
 
     // toU8 : Int * -> U8
@@ -592,7 +592,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::NUM_TO_U128_CHECKED,
         vec![int_type(flex(TVAR1))],
-        Box::new(result_type(u128_type(), out_of_bounds.clone())),
+        Box::new(result_type(u128_type(), out_of_bounds)),
     );
 
     // toStr : Num a -> Str
