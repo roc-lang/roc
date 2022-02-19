@@ -569,22 +569,18 @@ impl<
                 self.buf[jne_location + i] = *byte;
             }
         }
-        let (branch_info, stmt) = default_branch;
-        if let BranchInfo::None = branch_info {
-            self.build_stmt(stmt, ret_layout);
+        let (_branch_info, stmt) = default_branch;
+        self.build_stmt(stmt, ret_layout);
 
-            // Update all return jumps to jump past the default case.
-            let ret_offset = self.buf.len();
-            for (jmp_location, start_offset) in ret_jumps.into_iter() {
-                self.update_jmp_imm32_offset(
-                    &mut tmp,
-                    jmp_location as u64,
-                    start_offset as u64,
-                    ret_offset as u64,
-                );
-            }
-        } else {
-            todo!("Switch: branch info, {:?}", branch_info);
+        // Update all return jumps to jump past the default case.
+        let ret_offset = self.buf.len();
+        for (jmp_location, start_offset) in ret_jumps.into_iter() {
+            self.update_jmp_imm32_offset(
+                &mut tmp,
+                jmp_location as u64,
+                start_offset as u64,
+                ret_offset as u64,
+            );
         }
     }
 
