@@ -211,7 +211,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         let mut general_i = 0;
         let mut float_i = 0;
         if X86_64SystemV::returns_via_arg_pointer(ret_layout) {
-            storage_manager.ret_pionter_arg(Self::GENERAL_PARAM_REGS[0]);
+            storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[0]);
             general_i += 1;
         }
         for (layout, sym) in args.iter() {
@@ -565,7 +565,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
         let mut i = 0;
         if X86_64WindowsFastcall::returns_via_arg_pointer(ret_layout) {
-            storage_manager.ret_pionter_arg(Self::GENERAL_PARAM_REGS[i]);
+            storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[i]);
             i += 1;
         }
         for (layout, sym) in args.iter() {

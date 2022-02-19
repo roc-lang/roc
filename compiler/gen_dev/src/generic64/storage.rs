@@ -775,7 +775,7 @@ impl<
     }
 
     /// Loads the arg pointer symbol to the specified general reg.
-    pub fn ret_pionter_arg(&mut self, reg: GeneralReg) {
+    pub fn ret_pointer_arg(&mut self, reg: GeneralReg) {
         self.symbol_storage_map
             .insert(Symbol::RET_POINTER, Reg(General(reg)));
     }
