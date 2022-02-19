@@ -1,7 +1,7 @@
 use crate::{
     generic64::{Assembler, CallConv, RegTrait},
-    single_register_floats, single_register_int_builtins, single_register_integers,
-    single_register_layouts, Env,
+    sign_extended_builtins, single_register_floats, single_register_int_builtins,
+    single_register_integers, single_register_layouts, Env,
 };
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -49,6 +49,9 @@ enum StackStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
         base_offset: i32,
         // Size on the stack in bytes.
         size: u32,
+        // Whether or not the data is need to be sign extended on load.
+        // If not, it must be zero extended.
+        sign_extend: bool,
     },
     /// Complex data (lists, unions, structs, str) stored on the stack.
     /// Note, this is also used for referencing a value within a struct/union.
@@ -324,19 +327,21 @@ impl<
                 );
                 reg
             }
-            Stack(ReferencedPrimitive { base_offset, size })
-                if base_offset % 8 == 0 && size == 8 =>
-            {
-                // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
+            Stack(ReferencedPrimitive {
+                base_offset,
+                size,
+                sign_extend,
+            }) => {
                 let reg = self.get_general_reg(buf);
-                ASM::mov_reg64_base32(buf, reg, base_offset);
+                if sign_extend {
+                    ASM::movsx_reg64_base32(buf, reg, base_offset, size as u8);
+                } else {
+                    ASM::movzx_reg64_base32(buf, reg, base_offset, size as u8);
+                }
                 self.general_used_regs.push((reg, *sym));
                 self.symbol_storage_map.insert(*sym, Reg(General(reg)));
                 self.free_reference(sym);
                 reg
-            }
-            Stack(ReferencedPrimitive { .. }) => {
-                todo!("loading referenced primitives")
             }
             Stack(Complex { .. }) => {
                 internal_error!("Cannot load large values into general registers: {}", sym)
@@ -386,9 +391,9 @@ impl<
                 );
                 reg
             }
-            Stack(ReferencedPrimitive { base_offset, size })
-                if base_offset % 8 == 0 && size == 8 =>
-            {
+            Stack(ReferencedPrimitive {
+                base_offset, size, ..
+            }) if base_offset % 8 == 0 && size == 8 => {
                 // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
                 let reg = self.get_float_reg(buf);
                 ASM::mov_freg64_base32(buf, reg, base_offset);
@@ -445,9 +450,9 @@ impl<
                 debug_assert_eq!(base_offset % 8, 0);
                 ASM::mov_reg64_base32(buf, reg, *base_offset);
             }
-            Stack(ReferencedPrimitive { base_offset, size })
-                if base_offset % 8 == 0 && *size == 8 =>
-            {
+            Stack(ReferencedPrimitive {
+                base_offset, size, ..
+            }) if base_offset % 8 == 0 && *size == 8 => {
                 // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
                 ASM::mov_reg64_base32(buf, reg, *base_offset);
             }
@@ -494,9 +499,9 @@ impl<
                 debug_assert_eq!(base_offset % 8, 0);
                 ASM::mov_freg64_base32(buf, reg, *base_offset);
             }
-            Stack(ReferencedPrimitive { base_offset, size })
-                if base_offset % 8 == 0 && *size == 8 =>
-            {
+            Stack(ReferencedPrimitive {
+                base_offset, size, ..
+            }) if base_offset % 8 == 0 && *size == 8 => {
                 // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
                 ASM::mov_freg64_base32(buf, reg, *base_offset);
             }
@@ -544,6 +549,10 @@ impl<
                         ReferencedPrimitive {
                             base_offset: data_offset,
                             size,
+                            sign_extend: matches!(
+                                layout,
+                                Layout::Builtin(sign_extended_builtins!())
+                            ),
                         }
                     } else {
                         Complex {
@@ -589,6 +598,7 @@ impl<
                     Stack(ReferencedPrimitive {
                         base_offset: union_offset + id_offset as i32,
                         size,
+                        sign_extend: matches!(id_builtin, sign_extended_builtins!()),
                     }),
                 );
             }
@@ -770,9 +780,12 @@ impl<
     pub fn stack_offset_and_size(&self, sym: &Symbol) -> (i32, u32) {
         match self.get_storage_for_sym(sym) {
             Stack(Primitive { base_offset, .. }) => (*base_offset, 8),
-            Stack(ReferencedPrimitive { base_offset, size } | Complex { base_offset, size }) => {
-                (*base_offset, *size)
-            }
+            Stack(
+                ReferencedPrimitive {
+                    base_offset, size, ..
+                }
+                | Complex { base_offset, size },
+            ) => (*base_offset, *size),
             storage => {
                 internal_error!(
                     "Data not on the stack for sym ({}) with storage ({:?})",

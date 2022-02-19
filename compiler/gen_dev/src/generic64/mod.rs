@@ -172,6 +172,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized {
     fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
 
+    /// Sign extends the data at `offset` with `size` as it copies it to `dst`
+    /// size must be less than or equal to 8.
+    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, size: u8);
+    /// Zero extends the data at `offset` with `size` as it copies it to `dst`
+    /// size must be less than or equal to 8.
+    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, size: u8);
+
     fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
@@ -1001,6 +1008,13 @@ impl<
             self.buf[jmp_location as usize + i] = *byte;
         }
     }
+}
+
+#[macro_export]
+macro_rules! sign_extended_builtins {
+    () => {
+        Builtin::Int(IntWidth::I8 | IntWidth::I16 | IntWidth::I32 | IntWidth::I64 | IntWidth::I128)
+    };
 }
 
 #[macro_export]

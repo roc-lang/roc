@@ -433,6 +433,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                 X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
                 X86_64Assembler::mov_base32_reg64(buf, offset + 8, Self::GENERAL_RETURN_REGS[1]);
             }
+            x if x.stack_size(TARGET_INFO) == 0 => {}
             x if !Self::returns_via_arg_pointer(x) => {
                 let size = layout.stack_size(TARGET_INFO);
                 let offset = storage_manager.claim_stack_area(sym, size);
@@ -451,7 +452,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                     );
                 }
             }
-            x if x.stack_size(TARGET_INFO) == 0 => {}
             x => todo!("receiving complex return type, {:?}", x),
         }
     }
@@ -1034,6 +1034,37 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
+        debug_assert!(size <= 8);
+        if size == 8 {
+            Self::mov_reg64_base32(buf, dst, offset);
+        } else if size == 4 {
+            todo!("sign extending 4 byte values");
+        } else if size == 2 {
+            todo!("sign extending 2 byte values");
+        } else if size == 1 {
+            todo!("sign extending 1 byte values");
+        } else {
+            internal_error!("Invalid size for sign extension: {}", size);
+        }
+    }
+    #[inline(always)]
+    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
+        debug_assert!(size <= 8);
+        if size == 8 {
+            Self::mov_reg64_base32(buf, dst, offset);
+        } else if size == 4 {
+            todo!("zero extending 4 byte values");
+        } else if size == 2 {
+            todo!("zero extending 2 byte values");
+        } else if size == 1 {
+            movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset);
+        } else {
+            internal_error!("Invalid size for zero extension: {}", size);
+        }
+    }
+
+    #[inline(always)]
     fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: i32) {
         movsd_freg64_base64_offset32(buf, dst, X86_64GeneralReg::RSP, offset)
     }
@@ -1416,6 +1447,27 @@ fn mov_reg64_base64_offset32(
     let base_mod = base as u8 % 8;
     buf.reserve(8);
     buf.extend(&[rex, 0x8B, 0x80 + dst_mod + base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(&offset.to_le_bytes());
+}
+
+/// `MOVZX r64,r/m8` -> Move r/m8 with zero extention to r64, where m8 references a base + offset.
+#[inline(always)]
+fn movzx_reg64_base8_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(9);
+    buf.extend(&[rex, 0x0F, 0xB6, 0x80 + dst_mod + base_mod]);
     // Using RSP or R12 requires a secondary index byte.
     if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
         buf.push(0x24);
@@ -2123,6 +2175,35 @@ mod tests {
             mov_base64_offset32_reg64(&mut buf, X86_64GeneralReg::RBP, *offset, *src);
             assert_eq!(expected, &buf[..3]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
+        }
+    }
+
+    #[test]
+    fn test_movzx_reg64_base8_offset32() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, src, offset), expected) in &[
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::RBP, TEST_I32),
+                vec![0x48, 0x0F, 0xB6, 0x85],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::RBP, TEST_I32),
+                vec![0x4C, 0x0F, 0xB6, 0xBD],
+            ),
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::RSP, TEST_I32),
+                vec![0x48, 0x0F, 0xB6, 0x84, 0x24],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::RSP, TEST_I32),
+                vec![0x4C, 0x0F, 0xB6, 0xBC, 0x24],
+            ),
+        ] {
+            buf.clear();
+            movzx_reg64_base8_offset32(&mut buf, *dst, *src, *offset);
+            assert_eq!(expected, &buf[..expected.len()]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[expected.len()..]);
         }
     }
 
