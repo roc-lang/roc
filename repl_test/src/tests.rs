@@ -975,4 +975,3 @@ fn issue_2343_complete_mono_with_shadowed_vars() {
         ),
     );
 }
-
