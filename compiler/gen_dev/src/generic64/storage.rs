@@ -606,6 +606,22 @@ impl<
         }
     }
 
+    // Loads the dst to be the later 64 bits of a list (its length).
+    pub fn list_len(&mut self, _buf: &mut Vec<'a, u8>, dst: &Symbol, list: &Symbol) {
+        let owned_data = self.remove_allocation_for_sym(list);
+        self.allocation_map.insert(*list, Rc::clone(&owned_data));
+        self.allocation_map.insert(*dst, owned_data);
+        let (list_offset, _) = self.stack_offset_and_size(list);
+        self.symbol_storage_map.insert(
+            *dst,
+            Stack(ReferencedPrimitive {
+                base_offset: list_offset + 8,
+                size: 8,
+                sign_extend: false,
+            }),
+        );
+    }
+
     /// Creates a struct on the stack, moving the data in fields into the struct.
     pub fn create_struct(
         &mut self,

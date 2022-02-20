@@ -892,6 +892,10 @@ impl<
         }
     }
 
+    fn build_list_len(&mut self, dst: &Symbol, list: &Symbol) {
+        self.storage_manager.list_len(&mut self.buf, dst, list);
+    }
+
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
         // We may not strictly need an instruction here.
         // What's important is to load the value, and for src and dest to have different Layouts.

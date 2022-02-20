@@ -550,6 +550,14 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::ListLen => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "ListLen: expected to have exactly one argument"
+                );
+                self.build_list_len(sym, &args[0])
+            }
             LowLevel::StrConcat => self.build_fn_call(
                 sym,
                 bitcode::STR_CONCAT.to_string(),
@@ -684,6 +692,9 @@ trait Backend<'a> {
         src2: &Symbol,
         arg_layout: &Layout<'a>,
     );
+
+    /// build_list_len returns the length of a list.
+    fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);
 
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
