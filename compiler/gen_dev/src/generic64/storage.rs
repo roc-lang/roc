@@ -1,6 +1,6 @@
 use crate::{
     generic64::{Assembler, CallConv, RegTrait},
-    sign_extended_builtins, single_register_floats, single_register_int_builtins,
+    sign_extended_int_builtins, single_register_floats, single_register_int_builtins,
     single_register_integers, single_register_layouts, Env,
 };
 use bumpalo::collections::Vec;
@@ -179,6 +179,10 @@ impl<
         self.free_stack_chunks.clear();
         self.stack_size = 0;
         self.fn_call_stack_size = 0;
+    }
+
+    pub fn target_info(&self) -> TargetInfo {
+        self.target_info
     }
 
     pub fn stack_size(&self) -> u32 {
@@ -551,7 +555,7 @@ impl<
                             size,
                             sign_extend: matches!(
                                 layout,
-                                Layout::Builtin(sign_extended_builtins!())
+                                Layout::Builtin(sign_extended_int_builtins!())
                             ),
                         }
                     } else {
@@ -598,7 +602,7 @@ impl<
                     Stack(ReferencedPrimitive {
                         base_offset: union_offset + id_offset as i32,
                         size,
-                        sign_extend: matches!(id_builtin, sign_extended_builtins!()),
+                        sign_extend: matches!(id_builtin, sign_extended_int_builtins!()),
                     }),
                 );
             }

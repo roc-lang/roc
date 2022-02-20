@@ -897,6 +897,39 @@ impl<
     fn build_list_len(&mut self, dst: &Symbol, list: &Symbol) {
         self.storage_manager.list_len(&mut self.buf, dst, list);
     }
+    fn build_list_get_unsafe(
+        &mut self,
+        dst: &Symbol,
+        list: &Symbol,
+        index: &Symbol,
+        ret_layout: &Layout<'a>,
+    ) {
+        let (base_offset, _) = self.storage_manager.stack_offset_and_size(list);
+        let index_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, index);
+        let ret_stack_size = ret_layout.stack_size(self.storage_manager.target_info());
+        // TODO: This can be optimized with smarter instructions.
+        // Also can probably be moved into storage manager at least partly.
+        self.storage_manager.with_tmp_general_reg(
+            &mut self.buf,
+            |storage_manager, buf, list_ptr| {
+                ASM::mov_reg64_base32(buf, list_ptr, base_offset as i32);
+                storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp| {
+                    ASM::mov_reg64_imm64(buf, tmp, ret_stack_size as i64);
+                    ASM::imul_reg64_reg64_reg64(buf, tmp, tmp, index_reg);
+                    ASM::add_reg64_reg64_reg64(buf, tmp, tmp, list_ptr);
+                    match ret_layout {
+                        single_register_integers!() if ret_stack_size == 8 => {
+                            let dst_reg = storage_manager.claim_general_reg(buf, dst);
+                            ASM::mov_reg64_mem64_offset32(buf, dst_reg, list_ptr, 0);
+                        }
+                        x => internal_error!("Loading list element with layout: {:?}", x),
+                    }
+                });
+            },
+        );
+    }
 
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
         // We may not strictly need an instruction here.
@@ -1073,9 +1106,16 @@ impl<
 }
 
 #[macro_export]
-macro_rules! sign_extended_builtins {
+macro_rules! sign_extended_int_builtins {
     () => {
         Builtin::Int(IntWidth::I8 | IntWidth::I16 | IntWidth::I32 | IntWidth::I64 | IntWidth::I128)
+    };
+}
+
+#[macro_export]
+macro_rules! zero_extended_int_builtins {
+    () => {
+        Builtin::Int(IntWidth::U8 | IntWidth::U16 | IntWidth::U32 | IntWidth::U64 | IntWidth::U128)
     };
 }
 

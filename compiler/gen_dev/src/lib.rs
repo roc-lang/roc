@@ -558,6 +558,14 @@ trait Backend<'a> {
                 );
                 self.build_list_len(sym, &args[0])
             }
+            LowLevel::ListGetUnsafe => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "ListLen: expected to have exactly two arguments"
+                );
+                self.build_list_get_unsafe(sym, &args[0], &args[1], ret_layout)
+            }
             LowLevel::ListSet => self.build_fn_call(
                 sym,
                 bitcode::LIST_SET.to_string(),
@@ -703,6 +711,14 @@ trait Backend<'a> {
     /// build_list_len returns the length of a list.
     fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);
 
+    /// build_list_get_unsafe loads the element from the list at the index.
+    fn build_list_get_unsafe(
+        &mut self,
+        dst: &Symbol,
+        list: &Symbol,
+        index: &Symbol,
+        ret_layout: &Layout<'a>,
+    );
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
 
