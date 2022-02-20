@@ -43,15 +43,15 @@ performance-boosting advice not to use it.
 
 _Since this is a FAQ answer, I'm going to assume familiarity with higher-kinded types and higher-rank types instead of including a primer on them._
 
-A valuable aspect of Roc's type system is that it has [principal](https://en.wikipedia.org/wiki/Principal_type)
+A valuable aspect of Roc's type system is that it has decidable [principal](https://en.wikipedia.org/wiki/Principal_type)
 type inference. This means that:
 
 * At compile time, Roc can correctly infer the types for every expression in a program, even if you don't annotate any of the types.
 * This inference always infers the most general type possible; you couldn't possibly add a valid type annotation that would make the type more flexible than the one that Roc would infer if you deleted the annotation.
 
-It's been proven that any type system which supports either [higher-kinded polymorphism](https://www.cl.cam.ac.uk/~jdy22/papers/lightweight-higher-kinded-polymorphism.pdf) or [arbitrary-rank types](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/putting.pdf) cannot have
+It's been proven that any type system which supports either [higher-kinded polymorphism](https://www.cl.cam.ac.uk/~jdy22/papers/lightweight-higher-kinded-polymorphism.pdf) or [arbitrary-rank types](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/putting.pdf) cannot have decidable
 principal type inference. With either of those features in the language, there will be situations where the compiler
-reports an error that can only be fixed by the programmer adding a type annotation. This also means there would be
+would be unable to infer a type—and you'd have to write a type annotation. This also means there would be
 situations where the editor would not be able to reliably tell you the type of part of your program, unlike today
 where it can accurately tell you the type of anything, even if you have no type annotations in your entire code base.
 
@@ -137,12 +137,13 @@ So why does Roc have the specific syntax changes it does? Here are some brief ex
 
 * `#` instead of `--` for comments - this allows [hashbang](https://senthilnayagan.medium.com/shebang-hashbang-10966b8f28a8)s to work without needing special syntax. That isn't a use case Elm supports, but it is one Roc is designed to support.
 * `{}` instead of `()` for the unit type - Elm has both, and they can both be used as a unit type. Since `{}` has other uses in the type system, but `()` doesn't, I consider it redundant and took it out.
-* No tuples - I wanted to try simplifying the language and seeing how much we'd miss them. Anything that could be represented as a tuple can be represented with either a record or a single-tag union instead (e.g. `Pair x y = ...`), so is it really necessary to have a third syntax for representing a [product type](https://en.wikipedia.org/wiki/Product_type)?
+* No tuples - I wanted to try simplifying the language and seeing how much we'd miss them. Anything that could be represented as a tuple can be represented with either a record or a single-tag union instead (e.g. `Pair x y = ...`), so is it really necessary to have a third syntax for representing a group of fields with potentially different types?
 * `when`...`is` instead of `case`...`of` - I predict it will be easier for beginners to pick up, because usually the way I explain `case`...`of` to beginners is by saying the words "when" and "is" out loud - e.g. "when `color` is `Red`, it runs this first branch; when `color` is `Blue`, it runs this other branch..."
-* `:` instead of `=` for record field names: I like `=` being reserved for definitions, and `:` is the most popular alternative.
+* `:` instead of `=` for record field definitions (e.g. `{ foo: bar }` where Elm syntax would be `{ foo = bar }`): I like `=` being reserved for definitions, and `:` is the most popular alternative.
 * Backpassing syntax - since Roc is designed to be used for use cases like command-line apps, shell scripts, and servers, I expect chained effects to come up a lot more often than they do in Elm. I think backpassing is nice for those use cases, similarly to how `do` notation is nice for them in Haskell.
 * Tag unions instead of Elm's custom types (aka algebraic data types). This isn't just a syntactic change; tag unions are mainly in Roc because they can facilitate errors being accumulated across chained effects, which (as noted a moment ago) I expect to be a lot more common in Roc than in Elm. If you have tag unions, you don't really need a separate language feature for algebraic data types, since closed tag unions essentially work the same way - aside from not giving you a way to selectively expose variants or define phantom types. Roc's opaque types language feature covers those use cases instead.
 * No `<|` operator. In Elm, I almost exclusively found myself wanting to use this in conjunction with anonymous functions (e.g. `foo <| \bar -> ...`) or conditionals (e.g. `foo <| if bar then ...`). In Roc you can do both of these without the `<|`. That means the main remaining use for `<|` is to reduce parentheses, but I tend to think `|>` is better at that (or else the parens are fine), so after the other syntactic changes, I considered `<|` an unnecessary stylistic alternative to `|>` or parens.
+* The `|>` operator passes the expression before the `|>` as the *first* argument to the function after the `|>` instead of as the last argument. See the section on currying for details on why this works this way.
 * `:` instead of `type alias` - I like to avoid reserved keywords for terms that are desirable in userspace, so that people don't have to name things `typ` because `type` is a reserved keyword, or `clazz` because `class` is reserved. (I couldn't think of satisfactory alternatives for `as`, `when`, `is`, or `if` other than different reserved keywords. I could see an argument for `then`—and maybe even `is`—being replaced with a `->` or `=>` or something, but I don't anticipate missing either of those words much in userspace. `then` is used in JavaScript promises, but I think there are several better names for that function.)
 * No underscores in variable names - I've seen Elm beginners reflexively use `snake_case` over `camelCase` and then need to un-learn the habit after the compiler accepted it. I'd rather have the compiler give feedback that this isn't the way to do it in Roc, and suggest a camelCase alternative. I've also seen underscores used for lazy naming, e.g. `foo` and then `foo_`. If lazy naming is the goal, `foo2` is just as concise as `foo_`, but `foo3` is more concise than `foo__`. So in a way, removing `_` is a forcing function for improved laziness. (Of course, more descriptive naming would be even better.)
 * Trailing commas - I've seen people walk away (in some cases physically!) from Elm as soon as they saw the leading commas in collection literals. While I think they've made a mistake by not pushing past this aesthetic preference to give the language a chance, I also would prefer not put them in a position to make such a mistake in the first place. Secondarily, while I'm personally fine with either style, between the two I prefer the look of trailing commas.
@@ -154,10 +155,15 @@ Roc also has a different standard library from Elm. Some of the differences come
 * No `Basics` module. I wanted to have a simple rule of "all modules in the standard library are imported by default, and so are their exposed types," and that's it. Given that I wanted the comparison operators (e.g. `<`) to work only on numbers, it ended up that having `Num` and `Bool` modules meant that almost nothing would be left for a `Basics` equivalent in Roc except `identity` and `Never`. The Roc type `[]` (empty tag union) is equivalent to `Never`, so that wasn't necessary, and I generally think that `identity` is a good concept but a sign of an incomplete API whenever its use comes up in practice. For example, instead of calling `|> List.filterMap identity` I'd rather have access to a more self-descriptive function like `|> List.dropNothings`. With `Num` and `Bool`, and without `identity` and `Never`, there was nothing left in `Basics`.
 * `Str` instead of `String` - after using the `str` type in Rust, I realized I had no issue whatsoever with the more concise name, especially since it was used in so many places (similar to `Msg` and `Cmd` in Elm) - so I decided to save a couple of letters.
 * No function composition operators - I stopped using these in Elm so long ago, at one point I forgot they were in the language! See the FAQ entry on currying for details about why.
-* No `Maybe`. If a function returns a potential error, I prefer `Result` with an error type that uses a no-payload tag to describe what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*` instead of `List.first : List a -> Maybe a`.) This is not only more self-descriptive, it also composes better with operations that have multiple ways to fail. Optional record fields can be handled using the explicit Optional Record Field language feature. To describe something that's neither an operation that can fail nor an optional field, I prefer using a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, making a self-documenting API like `nullable : Decoder a -> Decoder [ Null, NonNull a ]`. Joël's legendary [talk about Maybe](https://youtu.be/43eM4kNbb6c) is great, but the fact that a whole talk about such a simple type can be so useful speaks to how easy the type is to misuse. Imagine a 20-minute talk about `Result` - could it be anywhere near as hepful? On a historical note, it's conceivable that the creation of `Maybe` predated `Result`, and `Maybe` might have been thought of as a substitute for null pointers—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed.
 * No `Char`. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).
 * No `Debug.log` - the editor can do a better job at this, or you can write `expect x != x` to see what `x` is when the expectation fails. Using the editor means your code doesn't change, and using `expect` gives a natural reminder to remove the debugging code before shipping: the build will fail.
 * No `Debug.todo` - instead you can write a type annotation with no implementation below it; the type checker will treat it normally, but attempting to use the value will cause a runtime exception. This is a feature I've often wanted in Elm, because I like prototyping APIs by writing out the types only, but then when I want the compiler to type-check them for me, I end up having to add `Debug.todo` in various places.
+* No `Maybe`. There are several reasons for this:
+    * If a function returns a potential error, I prefer `Result` with an error type that uses a no-payload tag to describe what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*` instead of `List.first : List a -> Maybe a`.) This is not only more self-descriptive, it also composes better with operations that have multiple ways to fail.
+    * Optional record fields can be handled using the explicit Optional Record Field language feature.
+    * To describe something that's neither an operation that can fail nor an optional field, I prefer using a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, making a self-documenting API like `nullable : Decoder a -> Decoder [ Null, NonNull a ]`.
+    * It's surprisingly easy to misuse - especially by overusing it when a different language feature (especially a custom tag union) would lead to nicer code. Joël's legendary [talk about Maybe](https://youtu.be/43eM4kNbb6c) is great, but the fact that a whole talk about such a simple type can be so useful speaks to how easy the type is to misuse. Imagine a 20-minute talk about `Result` - could it be anywhere near as hepful?
+    * On a historical note, it's conceivable that the creation of `Maybe` predated `Result`, and `Maybe` might have been thought of as a substitute for null pointers—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed.
 
 ## Why aren't Roc functions curried by default?
 
@@ -167,18 +173,19 @@ typically what people mean when they say Roc isn't a curried language is that Ro
 by default. For the rest of this section, I'll use "currying" as a shorthand for "functions that are curried
 by default" for the sake of brevity.
 
-As I see it, currying has one major upside and three major downsides. The upside:
+As I see it, currying has one major upside and several major downsides. The upside:
 
 * It makes function calls more concise in some cases.
 
 The downsides:
 
+* It lowers error message quality, because there can no longer be an error for "function called with too few arguments." (Calling a function with fewer arguments is always valid in curried functions; the error you get instead will unavoidably be some other sort of type mismatch, and it will be up to you to figure out that the real problem was that you forgot an argument.)
 * It makes the `|>` operator more error-prone in some cases.
 * It makes higher-order function calls need more parentheses in some cases.
-* It significantly increases the language's learning curve.
+* It significantly increases the language's learning curve. (More on this later.)
 * It facilitates pointfree function composition. (More on why this is listed as a downside later.)
 
-There's also a downside that it would make runtime performance of compiled progarms worse by default,
+There's also a downside that it would make runtime performance of compiled programs worse by default,
 but I assume it would be possible to optimize that away at the cost of slightly longer compile times.
 
 I consider the one upside (conciseness in some places) extremely minor, and have almost never missed it in Roc.
