@@ -626,7 +626,7 @@ trait Backend<'a> {
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
-            Symbol::LIST_GET => {
+            Symbol::LIST_GET | Symbol::LIST_SET => {
                 // TODO: This is probably simple enough to be worth inlining.
                 let layout_id = LayoutIds::default().get(func_sym, ret_layout);
                 let fn_name = self.symbol_to_string(func_sym, layout_id);

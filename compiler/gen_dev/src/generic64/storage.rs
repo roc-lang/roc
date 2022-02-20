@@ -701,28 +701,18 @@ impl<
                     ASM::mov_base32_reg64(buf, to_offset + 8, reg);
                 });
             }
-            // Layout::Struct(_) if layout.safe_to_memcpy() => {
-            //     // self.storage_manager.with_tmp_float_reg(&mut self.buf, |buf, storage, )
-            //     // if let Some(SymbolStorage::Base {
-            //     //     offset: from_offset,
-            //     //     size,
-            //     //     ..
-            //     // }) = self.symbol_storage_map.get(sym)
-            //     // {
-            //     //     debug_assert_eq!(
-            //     //         *size,
-            //     //         layout.stack_size(self.target_info),
-            //     //         "expected struct to have same size as data being stored in it"
-            //     //     );
-            //     //     for i in 0..layout.stack_size(self.target_info) as i32 {
-            //     //         ASM::mov_reg64_base32(&mut self.buf, tmp_reg, from_offset + i);
-            //     //         ASM::mov_base32_reg64(&mut self.buf, to_offset + i, tmp_reg);
-            //     //     }
-            //     todo!()
-            //     } else {
-            //         internal_error!("unknown struct: {:?}", sym);
-            //     }
-            // }
+            _ if layout.safe_to_memcpy() => {
+                let (from_offset, size) = self.stack_offset_and_size(sym);
+                debug_assert!(from_offset % 8 == 0);
+                debug_assert!(size % 8 == 0);
+                debug_assert_eq!(size, layout.stack_size(self.target_info));
+                self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
+                    for i in (0..size as i32).step_by(8) {
+                        ASM::mov_reg64_base32(buf, reg, from_offset + i);
+                        ASM::mov_base32_reg64(buf, to_offset + i, reg);
+                    }
+                });
+            }
             x => todo!("copying data to the stack with layout, {:?}", x),
         }
     }
