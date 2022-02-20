@@ -197,31 +197,35 @@ fn loc_ident_pattern_help<'a>(
                     Ok((MadeProgress, loc_tag, state))
                 }
             }
-            Ident::PrivateTag(tag) => {
-                let loc_tag = Loc {
+            Ident::PrivateTag(name) | Ident::OpaqueRef(name) => {
+                let loc_pat = Loc {
                     region: loc_ident.region,
-                    value: Pattern::PrivateTag(tag),
+                    value: if matches!(loc_ident.value, Ident::PrivateTag(..)) {
+                        Pattern::PrivateTag(name)
+                    } else {
+                        Pattern::OpaqueRef(name)
+                    },
                 };
 
-                // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
+                // Make sure `@Foo Bar 1` is parsed as `@Foo (Bar) 1`, and not `@Foo (Bar 1)`
                 if can_have_arguments {
                     let (_, loc_args, state) =
                         loc_tag_pattern_args_help(min_indent).parse(arena, state)?;
 
                     if loc_args.is_empty() {
-                        Ok((MadeProgress, loc_tag, state))
+                        Ok((MadeProgress, loc_pat, state))
                     } else {
                         let region = Region::across_all(
                             std::iter::once(&loc_ident.region)
                                 .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
                         );
                         let value =
-                            Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
+                            Pattern::Apply(&*arena.alloc(loc_pat), loc_args.into_bump_slice());
 
                         Ok((MadeProgress, Loc { region, value }, state))
                     }
                 } else {
-                    Ok((MadeProgress, loc_tag, state))
+                    Ok((MadeProgress, loc_pat, state))
                 }
             }
             Ident::Access { module_name, parts } => {

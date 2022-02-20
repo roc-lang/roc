@@ -5,6 +5,7 @@ use crate::num::{
     NumericBound, ParsedNumResult,
 };
 use crate::scope::Scope;
+use roc_error_macros::todo_opaques;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
@@ -153,6 +154,7 @@ pub fn canonicalize_pattern<'a>(
                 arguments: vec![],
             }
         }
+        OpaqueRef(..) => todo_opaques!(),
         Apply(tag, patterns) => {
             let tag_name = match tag.value {
                 GlobalTag(name) => TagName::Global(name.into()),

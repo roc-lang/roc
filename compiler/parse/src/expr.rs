@@ -1454,6 +1454,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         Expr::Underscore(opt_name) => Ok(Pattern::Underscore(opt_name)),
         Expr::GlobalTag(value) => Ok(Pattern::GlobalTag(value)),
         Expr::PrivateTag(value) => Ok(Pattern::PrivateTag(value)),
+        Expr::OpaqueRef(value) => Ok(Pattern::OpaqueRef(value)),
         Expr::Apply(loc_val, loc_args, _) => {
             let region = loc_val.region;
             let value = expr_to_pattern_help(arena, &loc_val.value)?;
@@ -2125,6 +2126,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
         Ident::GlobalTag(string) => Expr::GlobalTag(string),
         Ident::PrivateTag(string) => Expr::PrivateTag(string),
+        Ident::OpaqueRef(string) => Expr::OpaqueRef(string),
         Ident::Access { module_name, parts } => {
             let mut iter = parts.iter();
 

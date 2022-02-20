@@ -37,7 +37,8 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedIdent(_, _)
             | MalformedClosure
             | GlobalTag(_)
-            | PrivateTag(_) => false,
+            | PrivateTag(_)
+            | OpaqueRef(_) => false,
 
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
@@ -204,7 +205,7 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 buf.push_str(string);
             }
-            GlobalTag(string) | PrivateTag(string) => {
+            GlobalTag(string) | PrivateTag(string) | OpaqueRef(string) => {
                 buf.indent(indent);
                 buf.push_str(string)
             }

@@ -5821,6 +5821,29 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
+    fn opaque_ref_field_access() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $UUID.bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am very confused by this field access:
+
+                1│  $UUID.bar
+                         ^^^^
+
+                It looks like a record field access on an opaque reference.
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn weird_accessor() {
         report_problem_as(
             indoc!(

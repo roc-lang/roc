@@ -10,6 +10,7 @@ use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
+use roc_error_macros::todo_opaques;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -696,6 +697,7 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
+        ast::Expr::OpaqueRef(..) => todo_opaques!(),
         ast::Expr::Expect(condition, continuation) => {
             let mut output = Output::default();
 

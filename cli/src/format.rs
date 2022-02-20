@@ -524,6 +524,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::GlobalTag(a) => Expr::GlobalTag(a),
             Expr::PrivateTag(a) => Expr::PrivateTag(a),
+            Expr::OpaqueRef(a) => Expr::OpaqueRef(a),
             Expr::Closure(a, b) => Expr::Closure(
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),
@@ -574,6 +575,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::Identifier(a) => Pattern::Identifier(a),
             Pattern::GlobalTag(a) => Pattern::GlobalTag(a),
             Pattern::PrivateTag(a) => Pattern::PrivateTag(a),
+            Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
             Pattern::Apply(a, b) => Pattern::Apply(
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),

@@ -175,6 +175,9 @@ pub enum Expr<'a> {
     GlobalTag(&'a str),
     PrivateTag(&'a str),
 
+    // Reference to an opaque type, e.g. $Opaq
+    OpaqueRef(&'a str),
+
     // Pattern Matching
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
@@ -430,6 +433,9 @@ pub enum Pattern<'a> {
 
     GlobalTag(&'a str),
     PrivateTag(&'a str),
+
+    OpaqueRef(&'a str),
+
     Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
 
     /// This is Located<Pattern> rather than Located<str> so we can record comments
@@ -482,6 +488,7 @@ impl<'a> Pattern<'a> {
         match ident {
             Ident::GlobalTag(string) => Pattern::GlobalTag(string),
             Ident::PrivateTag(string) => Pattern::PrivateTag(string),
+            Ident::OpaqueRef(string) => Pattern::OpaqueRef(string),
             Ident::Access { module_name, parts } => {
                 if parts.len() == 1 {
                     // This is valid iff there is no module.

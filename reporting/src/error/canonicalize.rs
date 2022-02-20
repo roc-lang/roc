@@ -631,8 +631,13 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
 
-        BadPrivateTag(pos) => {
+        BadPrivateTag(pos) | BadOpaqueRef(pos) => {
             use BadIdentNext::*;
+            let kind = if matches!(bad_ident, BadPrivateTag(..)) {
+                "a private tag"
+            } else {
+                "an opaque reference"
+            };
             match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
                 LowercaseAccess(width) => {
                     let region = Region::new(pos, pos.bump_column(width));
@@ -643,7 +648,9 @@ fn to_bad_ident_expr_report<'b>(
                             lines.convert_region(region),
                         ),
                         alloc.concat(vec![
-                            alloc.reflow(r"It looks like a record field access on a private tag.")
+                            alloc.reflow(r"It looks like a record field access on "),
+                            alloc.reflow(kind),
+                            alloc.text("."),
                         ]),
                     ])
                 }
@@ -656,9 +663,9 @@ fn to_bad_ident_expr_report<'b>(
                             lines.convert_region(region),
                         ),
                         alloc.concat(vec![
-                            alloc.reflow(
-                                r"Looks like a private tag is treated like a module name. ",
-                            ),
+                            alloc.reflow(r"Looks like "),
+                            alloc.reflow(kind),
+                            alloc.reflow(" is treated like a module name. "),
                             alloc.reflow(r"Maybe you wanted a qualified name, like "),
                             alloc.parser_suggestion("Json.Decode.string"),
                             alloc.text("?"),
@@ -669,7 +676,11 @@ fn to_bad_ident_expr_report<'b>(
                     let region =
                         Region::new(surroundings.start().bump_column(1), pos.bump_column(1));
                     alloc.stack(vec![
-                        alloc.reflow("I am trying to parse a private tag here:"),
+                        alloc.concat(vec![
+                            alloc.reflow("I am trying to parse "),
+                            alloc.reflow(kind),
+                            alloc.reflow(" here:"),
+                        ]),
                         alloc.region_with_subregion(
                             lines.convert_region(surroundings),
                             lines.convert_region(region),
