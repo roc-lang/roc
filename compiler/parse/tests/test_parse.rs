@@ -191,6 +191,8 @@ mod test_parse {
         pass/one_minus_two.expr,
         pass/one_plus_two.expr,
         pass/one_spaced_def.expr,
+        pass/opaque_simple.module,
+        pass/opaque_with_type_arguments.module,
         pass/ops_with_newlines.expr,
         pass/packed_singleton_list.expr,
         pass/parenthetical_apply.expr,

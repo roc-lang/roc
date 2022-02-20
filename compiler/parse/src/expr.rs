@@ -671,6 +671,7 @@ fn append_annotation_definition<'a>(
     spaces: &'a [CommentOrNewline<'a>],
     loc_pattern: Loc<Pattern<'a>>,
     loc_ann: Loc<TypeAnnotation<'a>>,
+    kind: TypeKind,
 ) {
     let region = Region::span_across(&loc_pattern.region, &loc_ann.region);
 
@@ -682,7 +683,7 @@ fn append_annotation_definition<'a>(
                 ..
             },
             alias_arguments,
-        ) => append_alias_definition(
+        ) => append_type_definition(
             arena,
             defs,
             region,
@@ -690,8 +691,9 @@ fn append_annotation_definition<'a>(
             Loc::at(loc_pattern.region, name),
             alias_arguments,
             loc_ann,
+            kind,
         ),
-        Pattern::GlobalTag(name) => append_alias_definition(
+        Pattern::GlobalTag(name) => append_type_definition(
             arena,
             defs,
             region,
@@ -699,6 +701,7 @@ fn append_annotation_definition<'a>(
             Loc::at(loc_pattern.region, name),
             &[],
             loc_ann,
+            kind,
         ),
         _ => {
             let mut loc_def = Loc::at(region, Def::Annotation(loc_pattern, loc_ann));
@@ -736,7 +739,7 @@ fn append_expect_definition<'a>(
     defs.push(arena.alloc(loc_def));
 }
 
-fn append_alias_definition<'a>(
+fn append_type_definition<'a>(
     arena: &'a Bump,
     defs: &mut Vec<'a, &'a Loc<Def<'a>>>,
     region: Region,
@@ -744,13 +747,21 @@ fn append_alias_definition<'a>(
     name: Loc<&'a str>,
     pattern_arguments: &'a [Loc<Pattern<'a>>],
     loc_ann: Loc<TypeAnnotation<'a>>,
+    kind: TypeKind,
 ) {
-    let def = Def::Alias {
-        header: TypeHeader {
-            name,
-            vars: pattern_arguments,
+    let header = TypeHeader {
+        name,
+        vars: pattern_arguments,
+    };
+    let def = match kind {
+        TypeKind::Alias => Def::Alias {
+            header,
+            ann: loc_ann,
         },
-        ann: loc_ann,
+        TypeKind::Opaque => Def::Opaque {
+            header,
+            typ: loc_ann,
+        },
     };
     let mut loc_def = Loc::at(region, def);
 
@@ -853,7 +864,7 @@ fn parse_defs_end<'a>(
 
                 parse_defs_end(options, column, def_state, arena, state)
             }
-            Ok((_, BinOp::IsAliasType, state)) => {
+            Ok((_, op @ (BinOp::IsAliasType | BinOp::IsOpaqueType), state)) => {
                 let (_, ann_type, state) = specialize(
                     EExpr::Type,
                     space0_before_e(
@@ -870,6 +881,11 @@ fn parse_defs_end<'a>(
                     def_state.spaces_after,
                     loc_pattern,
                     ann_type,
+                    match op {
+                        BinOp::IsAliasType => TypeKind::Alias,
+                        BinOp::IsOpaqueType => TypeKind::Opaque,
+                        _ => unreachable!(),
+                    },
                 );
 
                 parse_defs_end(options, column, def_state, arena, state)
