@@ -1,5 +1,15 @@
 # Frequently Asked Questions
 
+## Is there syntax highlighting for Vim/Emacs/VS Code or a LSP?
+
+Not currently. Although they will presumably exist someday, while Roc is in the early days there's actually a conscious
+effort to focus on the Roc Editor *instead of* adding Roc support to other editors - specifically in order to give the Roc
+Editor the best possible chance at kickstarting a virtuous cycle of plugin authorship.
+
+This is an unusual approach, but there are more details in [this 2021 interview](https://youtu.be/ITrDd6-PbvY?t=212).
+
+In the meantime, using CoffeeScript syntax highlighting for .roc files turns out to work surprisingly well!
+
 ## Why doesn't Roc have higher-kinded polymorphism or arbitrary-rank types?
 
 _Since this is a FAQ answer, I'm going to assume familiarity with higher-kinded types and higher-rank types instead of including a primer on them._
@@ -265,13 +275,3 @@ Currying facilitates the antipattern of pointfree function composition, which I 
 
 Stacking up all these downsides of currying against the one upside of making certain function calls more concise,
 I concluded that it would be a mistake to have it in Roc.
-
-## Is there syntax highlighting for Vim/Emacs/VS Code or a LSP?
-
-Not currently. Although they will presumably exist someday, while Roc is in the early days there's actually a conscious
-effort to focus on the Roc Editor *instead of* adding Roc support to other editors - specifically in order to give the Roc
-Editor the best possible chance at kickstarting a virtuous cycle of plugin authorship.
-
-This is an unusual approach, but there are more details in [this 2021 interview](https://youtu.be/ITrDd6-PbvY?t=212).
-
-In the meantime, using CoffeeScript syntax highlighting for .roc files turns out to work surprisingly well!
