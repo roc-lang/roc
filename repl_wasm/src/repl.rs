@@ -237,7 +237,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     // Transform the Expr to a string
     // `Result::Err` becomes a JS exception that will be caught and displayed
     match format_answer(arena, res_answer, expr_type_str) {
-        ReplOutput::NoProblems { expr, expr_type } => Ok(format!("\n{}: {}", expr, expr_type)),
+        ReplOutput::NoProblems { expr, expr_type } => Ok(format!("{} : {}", expr, expr_type)),
         ReplOutput::Problems(lines) => Err(format!("\n{}\n", lines.join("\n\n"))),
     }
 }

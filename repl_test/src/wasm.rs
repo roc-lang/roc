@@ -11,27 +11,30 @@ use wasmer_wasi::WasiState;
 const WASM_REPL_COMPILER_PATH: &str = "../target/wasm32-unknown-unknown/release/roc_repl_wasm.wasm";
 
 thread_local! {
+    static COMPILER: RefCell<Option<Instance>> = RefCell::new(None)
+}
+
+thread_local! {
     static REPL_STATE: RefCell<Option<ReplState>> = RefCell::new(None)
 }
 
 struct ReplState {
     src: &'static str,
-    compiler: Instance,
     app: Option<Instance>,
     result_addr: Option<u32>,
     output: Option<String>,
 }
 
 fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) {
-    REPL_STATE.with(|f| {
-        if let Some(state) = f.borrow_mut().deref_mut() {
-            let compiler_memory = state.compiler.exports.get_memory("memory").unwrap();
-            let compiler_memory_bytes: &mut [u8] = unsafe { compiler_memory.data_unchecked_mut() };
+    let app = COMPILER.with(|f| {
+        if let Some(compiler) = f.borrow().deref() {
+            let memory = compiler.exports.get_memory("memory").unwrap();
+            let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
 
             // Find the slice of bytes for the compiled Roc app
             let ptr = app_bytes_ptr as usize;
             let len = app_bytes_len as usize;
-            let app_module_bytes: &[u8] = &compiler_memory_bytes[ptr..][..len];
+            let app_module_bytes: &[u8] = &memory_bytes[ptr..][..len];
 
             // Parse the bytes into a Wasmer module
             let store = Store::default();
@@ -43,13 +46,20 @@ fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) {
                 .import_object(&wasmer_module)
                 .unwrap_or_else(|_| imports!());
 
-            // Create an executable instance (give it a stack & heap, etc. For ELF, this would be the OS's job.)
-            let instance = Instance::new(&wasmer_module, &import_object).unwrap();
-            state.app = Some(instance)
+            // Create an executable instance. (Give it a stack & heap, etc. If this was ELF, it would be the OS's job.)
+            Instance::new(&wasmer_module, &import_object).unwrap()
         } else {
-            panic!("REPL state not found")
+            unreachable!()
         }
-    })
+    });
+
+    REPL_STATE.with(|f| {
+        if let Some(state) = f.borrow_mut().deref_mut() {
+            state.app = Some(app)
+        } else {
+            unreachable!()
+        }
+    });
 }
 
 fn wasmer_run_app() -> u32 {
@@ -67,10 +77,10 @@ fn wasmer_run_app() -> u32 {
                 let memory = app.exports.get_memory("memory").unwrap();
                 memory.size().bytes().0 as u32
             } else {
-                panic!("App not found")
+                unreachable!()
             }
         } else {
-            panic!("REPL state not found")
+            unreachable!()
         }
     })
 }
@@ -80,17 +90,23 @@ fn wasmer_get_result_and_memory(buffer_alloc_addr: u32) -> u32 {
         if let Some(state) = f.borrow().deref() {
             if let Some(app) = &state.app {
                 let app_memory = app.exports.get_memory("memory").unwrap();
-                let compiler_memory = state.compiler.exports.get_memory("memory").unwrap();
                 let result_addr = state.result_addr.unwrap();
-
-                let compiler_memory_bytes: &mut [u8] =
-                    unsafe { compiler_memory.data_unchecked_mut() };
 
                 let app_memory_bytes: &[u8] = unsafe { app_memory.data_unchecked() };
 
                 let buf_addr = buffer_alloc_addr as usize;
                 let len = app_memory_bytes.len();
-                compiler_memory_bytes[buf_addr..][..len].copy_from_slice(app_memory_bytes);
+
+                COMPILER.with(|f| {
+                    if let Some(compiler) = f.borrow().deref() {
+                        let memory = compiler.exports.get_memory("memory").unwrap();
+                        let compiler_memory_bytes: &mut [u8] =
+                            unsafe { memory.data_unchecked_mut() };
+                        compiler_memory_bytes[buf_addr..][..len].copy_from_slice(app_memory_bytes);
+                    } else {
+                        unreachable!()
+                    }
+                });
 
                 result_addr
             } else {
@@ -103,33 +119,49 @@ fn wasmer_get_result_and_memory(buffer_alloc_addr: u32) -> u32 {
 }
 
 fn wasmer_copy_input_string(src_buffer_addr: u32) {
-    REPL_STATE.with(|f| {
-        if let Some(state) = f.borrow().deref() {
-            let compiler_memory = state.compiler.exports.get_memory("memory").unwrap();
-            let compiler_memory_bytes: &mut [u8] = unsafe { compiler_memory.data_unchecked_mut() };
+    let src = REPL_STATE.with(|rs| {
+        if let Some(state) = rs.borrow_mut().deref_mut() {
+            std::mem::take(&mut state.src)
+        } else {
+            unreachable!()
+        }
+    });
+
+    COMPILER.with(|c| {
+        if let Some(compiler) = c.borrow().deref() {
+            let memory = compiler.exports.get_memory("memory").unwrap();
+            let memory_bytes: &mut [u8] = unsafe { memory.data_unchecked_mut() };
 
             let buf_addr = src_buffer_addr as usize;
-            let len = state.src.len();
-            compiler_memory_bytes[buf_addr..][..len].copy_from_slice(state.src.as_bytes());
+            let len = src.len();
+            memory_bytes[buf_addr..][..len].copy_from_slice(src.as_bytes());
+        } else {
+            unreachable!()
         }
     })
 }
 
 fn wasmer_copy_output_string(output_ptr: u32, output_len: u32) {
-    REPL_STATE.with(|f| {
-        if let Some(state) = f.borrow_mut().deref_mut() {
-            let compiler_memory = state.compiler.exports.get_memory("memory").unwrap();
-            let compiler_memory_bytes: &mut [u8] = unsafe { compiler_memory.data_unchecked_mut() };
+    let output: String = COMPILER.with(|c| {
+        if let Some(compiler) = c.borrow().deref() {
+            let memory = compiler.exports.get_memory("memory").unwrap();
+            let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
 
-            // Find the slice of bytes for the compiled Roc app
+            // Find the slice of bytes for the output string
             let ptr = output_ptr as usize;
             let len = output_len as usize;
-            let output_bytes: &[u8] = &compiler_memory_bytes[ptr..][..len];
+            let output_bytes: &[u8] = &memory_bytes[ptr..][..len];
 
             // Copy it out of the Wasm module
             let copied_bytes = output_bytes.to_vec();
-            let output = unsafe { String::from_utf8_unchecked(copied_bytes) };
+            unsafe { String::from_utf8_unchecked(copied_bytes) }
+        } else {
+            unreachable!()
+        }
+    });
 
+    REPL_STATE.with(|f| {
+        if let Some(state) = f.borrow_mut().deref_mut() {
             state.output = Some(output)
         }
     })
@@ -160,39 +192,36 @@ fn init_compiler() -> Instance {
 }
 
 fn run(src: &'static str) -> (bool, String) {
-    REPL_STATE.with(|f| {
-        let compiler = init_compiler();
-
-        let new_state = ReplState {
+    REPL_STATE.with(|rs| {
+        *rs.borrow_mut().deref_mut() = Some(ReplState {
             src,
-            compiler,
             app: None,
             result_addr: None,
             output: None,
-        };
+        });
+    });
 
-        {
-            *f.borrow_mut().deref_mut() = Some(new_state);
-        }
+    let ok = COMPILER.with(|c| {
+        *c.borrow_mut().deref_mut() = Some(init_compiler());
 
-        if let Some(state) = f.borrow().deref() {
-            let entrypoint = state
-                .compiler
+        if let Some(compiler) = c.borrow().deref() {
+            let entrypoint = compiler
                 .exports
                 .get_function("entrypoint_from_test")
                 .unwrap();
 
             let src_len = Value::I32(src.len() as i32);
             let wasm_ok: i32 = entrypoint.call(&[src_len]).unwrap().deref()[0].unwrap_i32();
-            let ok = wasm_ok != 0;
-
-            let final_state = f.take().unwrap();
-
-            (ok, final_state.output.unwrap())
+            wasm_ok != 0
         } else {
-            panic!()
+            unreachable!()
         }
-    })
+    });
+
+    let final_state: ReplState = REPL_STATE.with(|rs| rs.take()).unwrap();
+    let output: String = final_state.output.unwrap();
+
+    (ok, output)
 }
 
 fn format_compiler_load_error(e: std::io::Error) -> String {
