@@ -558,6 +558,13 @@ trait Backend<'a> {
                 );
                 self.build_list_len(sym, &args[0])
             }
+            LowLevel::ListSet => self.build_fn_call(
+                sym,
+                bitcode::LIST_SET.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::StrConcat => self.build_fn_call(
                 sym,
                 bitcode::STR_CONCAT.to_string(),
