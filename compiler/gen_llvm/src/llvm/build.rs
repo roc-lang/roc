@@ -5670,8 +5670,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let result_layout = list_element_layout!(list_layout);
 
             let element_layout = match result_layout {
-                Layout::Union(UnionLayout::NonRecursive([[elem], _])) => elem,
-                _ => unreachable!(),
+                Layout::Union(UnionLayout::NonRecursive([[elem], [_err]])) => elem,
+                Layout::Builtin(Builtin::Bool) => &Layout::UNIT,
+                layout => {
+                    println!("WTF even is this layout?");
+                    println!("{:?}", layout);
+                    unreachable!()
+                },
             };
 
             list_oks(env, list, result_layout, element_layout)
