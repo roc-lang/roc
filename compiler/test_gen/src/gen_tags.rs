@@ -1,8 +1,8 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to;
+#[cfg(feature = "gen-dev")]
+use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
@@ -29,7 +29,7 @@ fn width_and_alignment_u8_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_nothing_ir() {
     assert_evals_to!(
         indoc!(
@@ -49,7 +49,7 @@ fn applied_tag_nothing_ir() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_nothing() {
     assert_evals_to!(
         indoc!(
@@ -69,7 +69,7 @@ fn applied_tag_nothing() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_just() {
     assert_evals_to!(
         indoc!(
@@ -88,7 +88,7 @@ fn applied_tag_just() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_just_ir() {
     assert_evals_to!(
         indoc!(
