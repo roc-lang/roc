@@ -53,10 +53,7 @@ fn wasmer_run_app() -> u32 {
 
                 let result_addr: i32 = match wrapper.call(&[]) {
                     Err(e) => panic!("{:?}", e),
-                    Ok(result) => match result[0] {
-                        wasmer::Value::I32(a) => a,
-                        _ => panic!("Expected an i32 address, got {:?}", result),
-                    },
+                    Ok(result) => result[0].unwrap_i32(),
                 };
                 state.result_addr = Some(result_addr as u32);
 

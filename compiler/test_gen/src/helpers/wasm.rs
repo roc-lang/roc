@@ -194,10 +194,7 @@ where
     match test_wrapper.call(&[]) {
         Err(e) => Err(format!("{:?}", e)),
         Ok(result) => {
-            let address = match result[0] {
-                wasmer::Value::I32(a) => a,
-                _ => panic!(),
-            };
+            let address = result[0].unwrap_i32();
 
             if false {
                 println!("test_wrapper returned 0x{:x}", address);
@@ -239,10 +236,7 @@ where
     let init_result = init_refcount_test.call(&[wasmer::Value::I32(expected_len)]);
     let refcount_vector_addr = match init_result {
         Err(e) => return Err(format!("{:?}", e)),
-        Ok(result) => match result[0] {
-            wasmer::Value::I32(a) => a,
-            _ => panic!(),
-        },
+        Ok(result) => result[0].unwrap_i32(),
     };
 
     // Run the test

@@ -492,10 +492,7 @@ where
     match test_wrapper.call(&[]) {
         Err(e) => Err(format!("call to `test_wrapper`: {:?}", e)),
         Ok(result) => {
-            let address = match result[0] {
-                wasmer::Value::I32(a) => a,
-                _ => panic!(),
-            };
+            let address = result[0].unwrap_i32();
 
             let output = <T as crate::helpers::llvm::FromWasmerMemory>::decode(
                 memory,
