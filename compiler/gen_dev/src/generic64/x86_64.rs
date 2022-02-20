@@ -356,6 +356,19 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                     }
                 }
                 x if x.stack_size(TARGET_INFO) == 0 => {}
+                x if x.stack_size(TARGET_INFO) > 16 => {
+                    // TODO: Double check this.
+                    // Just copy onto the stack.
+                    let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
+                    debug_assert_eq!(base_offset % 8, 0);
+                    storage_manager.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
+                        for i in (0..size as i32).step_by(8) {
+                            X86_64Assembler::mov_reg64_base32(buf, reg, base_offset + i);
+                            X86_64Assembler::mov_stack32_reg64(buf, tmp_stack_offset + i, reg);
+                        }
+                    });
+                    tmp_stack_offset += size as i32;
+                }
                 x => {
                     todo!("calling with arg type, {:?}", x);
                 }
