@@ -77,6 +77,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
     fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
+        dst: &Symbol,
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
@@ -511,6 +512,7 @@ impl<
         CC::store_args(
             &mut self.buf,
             &mut self.storage_manager,
+            dst,
             args,
             arg_layouts,
             ret_layout,

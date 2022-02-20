@@ -266,19 +266,28 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             X86_64Assembler,
             X86_64SystemV,
         >,
+        dst: &Symbol,
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     ) {
         let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
-        if Self::returns_via_arg_pointer(ret_layout) {
-            // Save space on the stack for the arg we will return.
-            storage_manager
-                .claim_stack_area(&Symbol::RET_POINTER, ret_layout.stack_size(TARGET_INFO));
-            todo!("claim first parama reg for the address");
-        }
         let mut general_i = 0;
         let mut float_i = 0;
+        if Self::returns_via_arg_pointer(ret_layout) {
+            // Save space on the stack for the result we will be return.
+            let base_offset =
+                storage_manager.claim_stack_area(dst, ret_layout.stack_size(TARGET_INFO));
+            // Set the first reg to the address base + offset.
+            let ret_reg = Self::GENERAL_PARAM_REGS[general_i];
+            general_i += 1;
+            X86_64Assembler::add_reg64_reg64_imm32(
+                buf,
+                ret_reg,
+                X86_64GeneralReg::RBP,
+                base_offset,
+            );
+        }
         for (sym, layout) in args.iter().zip(arg_layouts.iter()) {
             match layout {
                 single_register_integers!() => {
@@ -411,6 +420,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             _ => {
                 // This is a large type returned via the arg pointer.
                 storage_manager.copy_symbol_to_arg_pionter(buf, sym, layout);
+                // Also set the return reg to the arg pointer.
+                storage_manager.load_to_specified_general_reg(
+                    buf,
+                    &Symbol::RET_POINTER,
+                    Self::GENERAL_RETURN_REGS[0],
+                );
             }
         }
     }
@@ -455,7 +470,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                     );
                 }
             }
-            x => todo!("receiving complex return type, {:?}", x),
+            _ => {
+                // This should have been recieved via an arg pointer.
+                // That means the value is already loaded onto the stack area we allocated before the call.
+                // Nothing to do.
+            }
         }
     }
 }
@@ -660,6 +679,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
             X86_64Assembler,
             X86_64WindowsFastcall,
         >,
+        dst: &Symbol,
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
@@ -667,8 +687,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
         if Self::returns_via_arg_pointer(ret_layout) {
             // Save space on the stack for the arg we will return.
-            storage_manager
-                .claim_stack_area(&Symbol::RET_POINTER, ret_layout.stack_size(TARGET_INFO));
+            storage_manager.claim_stack_area(dst, ret_layout.stack_size(TARGET_INFO));
             todo!("claim first parama reg for the address");
         }
         for (i, (sym, layout)) in args.iter().zip(arg_layouts.iter()).enumerate() {

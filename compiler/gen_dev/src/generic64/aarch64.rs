@@ -281,6 +281,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             AArch64Assembler,
             AArch64Call,
         >,
+        _dst: &Symbol,
         _args: &'a [Symbol],
         _arg_layouts: &[Layout<'a>],
         _ret_layout: &Layout<'a>,
