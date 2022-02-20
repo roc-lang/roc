@@ -86,7 +86,7 @@ pub fn canonicalize_module_defs<'a>(
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
-        scope.add_alias(name, alias.region, alias.type_variables, alias.typ);
+        scope.add_alias(name, alias.region, alias.type_variables, alias.typ, false);
     }
 
     struct Hosted {
@@ -131,6 +131,7 @@ pub fn canonicalize_module_defs<'a>(
                 Region::zero(),
                 vec![Loc::at_zero(("a".into(), a_var))],
                 actual,
+                /* is_opaque */ false,
             );
         }
 
@@ -686,7 +687,7 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
 
-        Tag { arguments, .. } | ZeroArgumentTag { arguments, .. } => {
+        Tag { arguments, .. } | ZeroArgumentTag { arguments, .. } | OpaqueRef { arguments, .. } => {
             for (_, loc_arg) in arguments.iter_mut() {
                 fix_values_captured_in_closure_expr(&mut loc_arg.value, no_capture_symbols);
             }

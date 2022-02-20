@@ -50,6 +50,8 @@ impl Scope {
                 lambda_set_variables: Vec::new(),
                 recursion_variables: MutSet::default(),
                 type_variables: variables,
+                // TODO(opaques): replace when opaques are included in the stdlib
+                is_opaque: false,
             };
 
             aliases.insert(symbol, alias);
@@ -180,8 +182,9 @@ impl Scope {
         region: Region,
         vars: Vec<Loc<(Lowercase, Variable)>>,
         typ: Type,
+        is_opaque: bool,
     ) {
-        let alias = create_alias(name, region, vars, typ);
+        let alias = create_alias(name, region, vars, typ, is_opaque);
         self.aliases.insert(name, alias);
     }
 
@@ -195,6 +198,7 @@ pub fn create_alias(
     region: Region,
     vars: Vec<Loc<(Lowercase, Variable)>>,
     typ: Type,
+    is_opaque: bool,
 ) -> Alias {
     let roc_types::types::VariableDetail {
         type_variables,
@@ -230,5 +234,6 @@ pub fn create_alias(
         lambda_set_variables,
         recursion_variables,
         typ,
+        is_opaque,
     }
 }

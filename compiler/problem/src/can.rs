@@ -39,7 +39,7 @@ pub enum Problem {
     CyclicAlias(Symbol, Region, Vec<Symbol>),
     BadRecursion(Vec<CycleEntry>),
     PhantomTypeArgument {
-        alias: Symbol,
+        typ: Symbol,
         variable_region: Region,
         variable_name: Lowercase,
     },
@@ -74,6 +74,10 @@ pub enum Problem {
     },
     InvalidAliasRigid {
         alias_name: Symbol,
+        region: Region,
+    },
+    InvalidOpaqueRigid {
+        opaque_name: Symbol,
         region: Region,
     },
     InvalidInterpolation(Region),

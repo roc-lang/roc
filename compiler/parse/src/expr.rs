@@ -417,16 +417,27 @@ impl<'a> ExprState<'a> {
         }
     }
 
-    fn validate_has_type(
+    fn validate_is_type_def(
         mut self,
         arena: &'a Bump,
         loc_op: Loc<BinOp>,
+        kind: TypeKind,
     ) -> Result<(Loc<Expr<'a>>, Vec<'a, &'a Loc<Expr<'a>>>), EExpr<'a>> {
-        debug_assert_eq!(loc_op.value, BinOp::IsAliasType);
+        debug_assert_eq!(
+            loc_op.value,
+            match kind {
+                TypeKind::Alias => BinOp::IsAliasType,
+                TypeKind::Opaque => BinOp::IsOpaqueType,
+            }
+        );
 
         if !self.operators.is_empty() {
-            // this `:` likely occurred inline; treat it as an invalid operator
-            let fail = EExpr::BadOperator(":", loc_op.region.start());
+            // this `:`/`:=` likely occurred inline; treat it as an invalid operator
+            let op = match kind {
+                TypeKind::Alias => ":",
+                TypeKind::Opaque => ":=",
+            };
+            let fail = EExpr::BadOperator(op, loc_op.region.start());
 
             Err(fail)
         } else {
@@ -958,7 +969,7 @@ fn finish_parsing_alias_or_opaque<'a>(
     let indented_more = start_column + 1;
 
     let (expr, arguments) = expr_state
-        .validate_has_type(arena, loc_op)
+        .validate_is_type_def(arena, loc_op, kind)
         .map_err(|fail| (MadeProgress, fail, state.clone()))?;
 
     let (loc_def, state) = match &expr.value {

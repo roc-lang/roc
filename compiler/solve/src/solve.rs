@@ -914,6 +914,8 @@ fn type_to_variable<'a>(
             type_arguments,
             actual,
             lambda_set_variables,
+            // TODO(opaques): revisit opacity
+            is_opaque: _,
         } => {
             if let Some(reserved) = Variable::get_reserved(*symbol) {
                 if rank.is_none() {

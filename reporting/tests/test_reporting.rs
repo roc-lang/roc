@@ -3135,6 +3135,32 @@ mod test_reporting {
     }
 
     #[test]
+    fn invalid_opaque_rigid_var_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age 1 := I64
+
+                a : Age
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This pattern in the definition of `Age` is not what I expect:
+
+                1│  Age 1 := I64
+                        ^
+
+                Only type variables like `a` or `value` can occur in this position.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn invalid_num() {
         report_problem_as(
             indoc!(

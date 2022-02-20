@@ -162,6 +162,8 @@ fn builtin_alias(
         type_arguments,
         actual,
         lambda_set_variables: vec![],
+        // TODO(opaques): revisit later
+        is_opaque: false,
     }
 }
 

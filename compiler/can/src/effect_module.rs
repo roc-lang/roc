@@ -1140,6 +1140,7 @@ fn build_effect_loop(
                     closure_var,
                 ))],
                 actual: Box::new(actual),
+                is_opaque: false,
             }
         };
 
@@ -1579,6 +1580,7 @@ fn build_effect_alias(
         type_arguments: vec![(a_name.into(), Type::Variable(a_var))],
         lambda_set_variables: vec![roc_types::types::LambdaSet(Type::Variable(closure_var))],
         actual: Box::new(actual),
+        is_opaque: false,
     }
 }
 

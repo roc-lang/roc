@@ -559,6 +559,8 @@ pub fn to_type(
                 type_arguments: type_variables,
                 lambda_set_variables,
                 actual: Box::new(actual),
+                // TODO(opaques): revisit when opaques are in the solver
+                is_opaque: false,
             }
         }
         HostExposedAlias {

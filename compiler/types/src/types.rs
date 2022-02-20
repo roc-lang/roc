@@ -185,6 +185,7 @@ pub enum Type {
         type_arguments: Vec<(Lowercase, Type)>,
         lambda_set_variables: Vec<LambdaSet>,
         actual: Box<Type>,
+        is_opaque: bool,
     },
     HostExposedAlias {
         name: Symbol,
@@ -853,6 +854,7 @@ impl Type {
                         type_arguments: named_args,
                         lambda_set_variables,
                         actual: Box::new(actual),
+                        is_opaque: alias.is_opaque,
                     };
                 } else {
                     // one of the special-cased Apply types.
@@ -1337,6 +1339,8 @@ pub struct Alias {
     pub recursion_variables: MutSet<Variable>,
 
     pub typ: Type,
+
+    pub is_opaque: bool,
 }
 
 impl Alias {

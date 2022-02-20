@@ -221,7 +221,7 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
         Problem::PhantomTypeArgument {
-            alias,
+            typ: alias,
             variable_region,
             variable_name,
         } => {
@@ -386,11 +386,18 @@ pub fn can_problem<'b>(
             title = NAMING_PROBLEM.to_string();
             severity = Severity::RuntimeError;
         }
-        Problem::InvalidAliasRigid { alias_name, region } => {
+        Problem::InvalidAliasRigid {
+            alias_name: type_name,
+            region,
+        }
+        | Problem::InvalidOpaqueRigid {
+            opaque_name: type_name,
+            region,
+        } => {
             doc = alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.reflow("This pattern in the definition of "),
-                    alloc.symbol_unqualified(alias_name),
+                    alloc.symbol_unqualified(type_name),
                     alloc.reflow(" is not what I expect:"),
                 ]),
                 alloc.region(lines.convert_region(region)),

@@ -10,7 +10,6 @@ use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
-use roc_error_macros::todo_opaques;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -170,6 +169,11 @@ pub enum Expr {
         variant_var: Variable,
         ext_var: Variable,
         name: TagName,
+        arguments: Vec<(Variable, Loc<Expr>)>,
+    },
+
+    OpaqueRef {
+        name: Symbol,
         arguments: Vec<(Variable, Loc<Expr>)>,
     },
 
@@ -420,6 +424,10 @@ pub fn canonicalize_expr<'a>(
                     name,
                     arguments: args,
                 },
+                OpaqueRef { name, .. } => OpaqueRef {
+                    name,
+                    arguments: args,
+                },
                 ZeroArgumentTag {
                     variant_var,
                     ext_var,
@@ -546,7 +554,7 @@ pub fn canonicalize_expr<'a>(
             output.union(new_output);
 
             // filter out aliases
-            captured_symbols.retain(|s| !output.references.referenced_aliases.contains(s));
+            captured_symbols.retain(|s| !output.references.referenced_type_defs.contains(s));
 
             // filter out functions that don't close over anything
             captured_symbols.retain(|s| !output.non_closures.contains(s));
@@ -697,7 +705,18 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
-        ast::Expr::OpaqueRef(..) => todo_opaques!(),
+        ast::Expr::OpaqueRef(name) => {
+            let name_ident = env.ident_ids.get_or_insert(&(*name).into());
+            let symbol = Symbol::new(env.home, name_ident);
+
+            (
+                OpaqueRef {
+                    name: symbol,
+                    arguments: vec![],
+                },
+                Output::default(),
+            )
+        }
         ast::Expr::Expect(condition, continuation) => {
             let mut output = Output::default();
 
@@ -1473,6 +1492,20 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 name,
                 arguments
             );
+        }
+
+        OpaqueRef { name, arguments } => {
+            let arguments = arguments
+                .into_iter()
+                .map(|(var, loc_expr)| {
+                    (
+                        var,
+                        loc_expr.map_owned(|expr| inline_calls(var_store, scope, expr)),
+                    )
+                })
+                .collect();
+
+            OpaqueRef { name, arguments }
         }
 
         ZeroArgumentTag {
