@@ -1386,9 +1386,6 @@ pub fn listFindUnsafe(
 // List.oks : List (Result a *) -> List a
 pub fn listOks(
     list: RocList,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
     alignment: u32,
     result_width: usize,
     elem_width: usize,
@@ -1398,10 +1395,6 @@ pub fn listOks(
         const size = list.len();
         const only_oks_list = RocList.allocate(alignment, size, elem_width);
         const target_ptr = only_oks_list.bytes orelse unreachable;
-
-        if (data_is_owned) {
-            inc_n_data(data, size);
-        }
 
         var i: usize = 0;
         var kept: usize = 0;

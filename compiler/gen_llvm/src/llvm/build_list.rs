@@ -984,6 +984,43 @@ pub fn list_find_unsafe<'a, 'ctx, 'env>(
         .into()
 }
 
+/// List.oks : List (Result a *) -> List a
+pub fn list_oks<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    list: BasicValueEnum<'ctx>,
+    result_layout: &Layout<'a>, 
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+
+    let function = env
+        .builder
+        .get_insert_block()
+        .unwrap()
+        .get_parent()
+        .unwrap();
+
+    let has_tag_id = match result_layout {
+        Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
+        Layout::Builtin(Builtin::Bool) => {
+            // a `Result whatever []`, so there is nothing to keep
+            return empty_list(env);
+        }
+        _ => unreachable!(),
+    };
+
+    call_bitcode_fn(
+        env,
+        &[
+            pass_list_cc(env, list),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, result_layout),
+            layout_width(env, element_layout),
+            has_tag_id.as_global_value().as_pointer_value().into(),
+        ],
+        bitcode::LIST_OKS,
+    )
+}
+
 pub fn decrementing_elem_loop<'ctx, LoopFn>(
     builder: &Builder<'ctx>,
     ctx: &'ctx Context,
