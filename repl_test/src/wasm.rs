@@ -8,7 +8,7 @@ use std::{
 use wasmer::{imports, Function, Instance, Module, Store};
 use wasmer_wasi::WasiState;
 
-const COMPILER_PATH_ENV_VAR: &str = "COMPILER_PATH";
+const WASM_REPL_COMPILER_PATH: &str = "../repl_wasm/pkg/roc_repl_wasm_bg.wasm";
 
 thread_local! {
     static REPL_STATE: RefCell<Option<ReplState>> = RefCell::new(None)
@@ -115,9 +115,30 @@ fn wasmer_copy_input_string(src_buffer_addr: u32) {
 }
 
 fn init_compiler() -> Instance {
-    let path_str = env::var(COMPILER_PATH_ENV_VAR).unwrap();
-    let path = Path::new(&path_str);
-    let wasm_module_bytes = fs::read(&path).unwrap();
+    let path = Path::new(WASM_REPL_COMPILER_PATH);
+    let wasm_module_bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            if matches!(e.kind(), std::io::ErrorKind::NotFound) {
+                panic!(
+                    "\n\n    {}\n\n",
+                    [
+                        "CANNOT BUILD WASM REPL TESTS",
+                        "Please run repl_www/build.sh and try again!",
+                        "",
+                        "We have not yet automated this build dependency using Cargo.",
+                        "The Cargo build for the tests would have to launch another Cargo build",
+                        "for a *different target* (wasm), which is tricky.",
+                        "It probably requires a second target directory to avoid locks.",
+                        "We'll get to it eventually but it's not done yet.",
+                    ]
+                    .join("\n    ")
+                )
+            } else {
+                panic!("{:?}", e)
+            }
+        }
+    };
 
     let store = Store::default();
     let wasmer_module = Module::new(&store, &wasm_module_bytes).unwrap();
