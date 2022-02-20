@@ -900,6 +900,8 @@ impl<
     pub fn ret_pointer_arg(&mut self, reg: GeneralReg) {
         self.symbol_storage_map
             .insert(Symbol::RET_POINTER, Reg(General(reg)));
+        self.general_free_regs.retain(|x| *x != reg);
+        self.general_used_regs.push((reg, Symbol::RET_POINTER));
     }
 
     /// updates the function call stack size to the max of its current value and the size need for this call.

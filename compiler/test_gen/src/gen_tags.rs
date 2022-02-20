@@ -314,7 +314,7 @@ fn gen_if_float() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_nothing() {
     assert_evals_to!(
         indoc!(
@@ -333,7 +333,7 @@ fn when_on_nothing() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_just() {
     assert_evals_to!(
         indoc!(
@@ -352,7 +352,7 @@ fn when_on_just() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_result() {
     assert_evals_to!(
         indoc!(
@@ -371,7 +371,7 @@ fn when_on_result() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_these() {
     assert_evals_to!(
         indoc!(
@@ -393,7 +393,7 @@ fn when_on_these() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn match_on_two_values() {
     // this will produce a Chain internally
     assert_evals_to!(
@@ -410,7 +410,7 @@ fn match_on_two_values() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pair_with_underscore() {
     assert_evals_to!(
         indoc!(
@@ -427,7 +427,7 @@ fn pair_with_underscore() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn result_with_underscore() {
     // This test revealed an issue with hashing Test values
     assert_evals_to!(
