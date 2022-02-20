@@ -4,7 +4,7 @@ use crate::llvm::bitcode::{
     call_bitcode_fn, call_list_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
-    allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, RocFunctionCall,
+    allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, RocFunctionCall, Scope,
 };
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::increment_refcount_layout;
@@ -15,9 +15,30 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, Str
 use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::UpdateMode;
 use roc_builtins::bitcode::{self, IntWidth};
+use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
-use super::build::{load_roc_value, store_roc_value};
+use super::build::{create_entry_block_alloca, load_roc_value, load_symbol, store_roc_value};
+
+pub fn list_symbol_to_c_abi<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    symbol: Symbol,
+) -> PointerValue<'ctx> {
+    let parent = env
+        .builder
+        .get_insert_block()
+        .and_then(|b| b.get_parent())
+        .unwrap();
+
+    let list_type = super::convert::zig_list_type(env);
+    let list_alloca = create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
+
+    let list = load_symbol(scope, &symbol);
+    env.builder.build_store(list_alloca, list);
+
+    list_alloca
+}
 
 pub fn pass_update_mode<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

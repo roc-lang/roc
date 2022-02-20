@@ -1157,11 +1157,18 @@ test "RocStr.concat: small concat small" {
 pub const RocListStr = extern struct {
     list_elements: ?[*]RocStr,
     list_length: usize,
+    list_capacity: usize,
 };
 
 // Str.joinWith
-pub fn strJoinWithC(list: RocListStr, separator: RocStr) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, strJoinWith, .{ list, separator });
+pub fn strJoinWithC(list: RocList, separator: RocStr) callconv(.C) RocStr {
+    const roc_list_str = RocListStr{
+        .list_elements = @ptrCast(?[*]RocStr, @alignCast(@alignOf(usize), list.bytes)),
+        .list_length = list.length,
+        .list_capacity = list.capacity,
+    };
+
+    return @call(.{ .modifier = always_inline }, strJoinWith, .{ roc_list_str, separator });
 }
 
 fn strJoinWith(list: RocListStr, separator: RocStr) RocStr {

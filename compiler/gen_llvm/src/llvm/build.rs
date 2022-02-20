@@ -5355,17 +5355,14 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.fromUtf8 : List U8 -> Result Str Utf8Problem
             debug_assert_eq!(args.len(), 1);
 
-            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
-
-            str_from_utf8(env, parent, original_wrapper, update_mode)
+            str_from_utf8(env, scope, args[0], update_mode)
         }
         StrFromUtf8Range => {
             debug_assert_eq!(args.len(), 2);
 
-            let list_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let count_and_start = load_symbol(scope, &args[1]).into_struct_value();
 
-            str_from_utf8_range(env, parent, list_wrapper, count_and_start)
+            str_from_utf8_range(env, scope, args[0], count_and_start)
         }
         StrToUtf8 => {
             // Str.fromInt : Str -> List U8

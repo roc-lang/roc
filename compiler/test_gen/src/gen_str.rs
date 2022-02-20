@@ -373,15 +373,15 @@ fn small_str_concat_empty_first_arg() {
             b'J',
             b'J',
             b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            0b1000_0000 | 23
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0b1000_0000 | 15
         ],
         [u8; 24]
     );
@@ -408,15 +408,15 @@ fn small_str_concat_empty_second_arg() {
             b'J',
             b'J',
             b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            0b1000_0000 | 23
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0b1000_0000 | 15
         ],
         [u8; 24]
     );
@@ -453,15 +453,15 @@ fn small_str_concat_small_to_small_staying_small() {
             b'J',
             b'J',
             b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            b'J',
-            0b1000_0000 | 23
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0b1000_0000 | 15
         ],
         [u8; 24]
     );

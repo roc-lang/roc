@@ -4,7 +4,7 @@ use crate::llvm::bitcode::{
 use crate::llvm::build::{complex_bitcast, Env, Scope};
 use crate::llvm::build_list::{allocate_list, pass_update_mode, store_list};
 use inkwell::builder::Builder;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{BasicValueEnum, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use morphic_lib::UpdateMode;
 use roc_builtins::bitcode::{self, IntWidth};
@@ -13,6 +13,7 @@ use roc_mono::layout::{Builtin, Layout};
 use roc_target::PtrWidth;
 
 use super::build::{create_entry_block_alloca, load_symbol};
+use super::build_list::list_symbol_to_c_abi;
 
 pub static CHAR_LAYOUT: Layout = Layout::u8();
 
@@ -40,7 +41,7 @@ pub fn str_split<'a, 'ctx, 'env>(
     let str_c_abi = str_symbol_to_c_abi(env, scope, str_symbol);
     let delim_c_abi = str_symbol_to_c_abi(env, scope, delimiter_symbol);
 
-    let segment_count = call_list_bitcode_fn(
+    let segment_count = call_bitcode_fn(
         env,
         &[str_c_abi.into(), delim_c_abi.into()],
         bitcode::STR_COUNT_SEGMENTS,
@@ -78,15 +79,15 @@ pub fn str_symbol_to_c_abi<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     symbol: Symbol,
 ) -> PointerValue<'ctx> {
-    /*
-    let target_type = match env.target_info.ptr_width() {
-        PtrWidth::Bytes8 => env.context.i128_type().into(),
-        PtrWidth::Bytes4 => env.context.i64_type().into(),
-    };
+    let string = load_symbol(scope, &symbol);
 
-    complex_bitcast(env.builder, string, target_type, "str_to_c_abi").into_int_value()
-    */
+    str_to_c_abi(env, string)
+}
 
+pub fn str_to_c_abi<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: BasicValueEnum<'ctx>,
+) -> PointerValue<'ctx> {
     let parent = env
         .builder
         .get_insert_block()
@@ -96,33 +97,9 @@ pub fn str_symbol_to_c_abi<'a, 'ctx, 'env>(
     let str_type = super::convert::zig_str_type(env);
     let string_alloca = create_entry_block_alloca(env, parent, str_type.into(), "str_alloca");
 
-    let string = load_symbol(scope, &symbol);
-    env.builder.build_store(string_alloca, string);
+    env.builder.build_store(string_alloca, value);
 
     string_alloca
-}
-
-pub fn str_to_c_abi<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    value: BasicValueEnum<'ctx>,
-) -> IntValue<'ctx> {
-    let cell = env.builder.build_alloca(value.get_type(), "cell");
-
-    env.builder.build_store(cell, value);
-
-    let target_type = match env.target_info.ptr_width() {
-        PtrWidth::Bytes8 => env.context.i128_type(),
-        PtrWidth::Bytes4 => env.context.i64_type(),
-    };
-
-    let target_type_ptr = env
-        .builder
-        .build_bitcast(cell, target_type.ptr_type(AddressSpace::Generic), "cast")
-        .into_pointer_value();
-
-    env.builder
-        .build_load(target_type_ptr, "load_as_c_abi")
-        .into_int_value()
 }
 
 pub fn destructure<'ctx>(
@@ -170,7 +147,7 @@ pub fn str_join_with<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     // dirty hack; pretend a `list` is a `str` that works because
     // they have the same stack layout `{ u8*, usize }`
-    let list_i128 = str_symbol_to_c_abi(env, scope, list_symbol);
+    let list_i128 = list_symbol_to_c_abi(env, scope, list_symbol);
     let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
 
     call_str_bitcode_fn(
@@ -366,8 +343,8 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
 /// Str.fromUtf8 : List U8, { count : Nat, start : Nat } -> { a : Bool, b : Str, c : Nat, d : I8 }
 pub fn str_from_utf8_range<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
-    list_wrapper: StructValue<'ctx>,
+    scope: &Scope<'a, 'ctx>,
+    list: Symbol,
     count_and_start: StructValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
@@ -378,12 +355,7 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            complex_bitcast(
-                env.builder,
-                list_wrapper.into(),
-                env.str_list_c_abi().into(),
-                "to_i128",
-            ),
+            list_symbol_to_c_abi(env, scope, list).into(),
             complex_bitcast(
                 env.builder,
                 count_and_start.into(),
@@ -401,8 +373,8 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
 /// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }
 pub fn str_from_utf8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
-    original_wrapper: StructValue<'ctx>,
+    scope: &Scope<'a, 'ctx>,
+    list: Symbol,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
@@ -413,12 +385,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            complex_bitcast(
-                env.builder,
-                original_wrapper.into(),
-                env.str_list_c_abi().into(),
-                "to_i128",
-            ),
+            list_symbol_to_c_abi(env, scope, list).into(),
             pass_update_mode(env, update_mode),
             result_ptr.into(),
         ],
