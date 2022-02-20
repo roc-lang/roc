@@ -73,7 +73,7 @@ pub fn str_split<'a, 'ctx, 'env>(
     store_list(env, ret_list_ptr, segment_count)
 }
 
-fn str_symbol_to_c_abi<'a, 'ctx, 'env>(
+pub fn str_symbol_to_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     symbol: Symbol,
@@ -319,16 +319,12 @@ pub fn str_from_int<'a, 'ctx, 'env>(
 /// Str.toUtf8 : Str -> List U8
 pub fn str_to_utf8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    original_wrapper: StructValue<'ctx>,
+    scope: &Scope<'a, 'ctx>,
+    symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let string = complex_bitcast(
-        env.builder,
-        original_wrapper.into(),
-        env.str_list_c_abi().into(),
-        "to_utf8",
-    );
+    let string = str_symbol_to_c_abi(env, scope, symbol);
 
-    call_list_bitcode_fn(env, &[string], bitcode::STR_TO_UTF8)
+    call_list_bitcode_fn(env, &[string.into()], bitcode::STR_TO_UTF8)
 }
 
 fn decode_from_utf8_result<'a, 'ctx, 'env>(

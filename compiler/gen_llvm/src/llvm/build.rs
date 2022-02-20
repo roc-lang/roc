@@ -5314,8 +5314,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.toNum : Str -> Result (Num *) {}
             debug_assert_eq!(args.len(), 1);
 
-            let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);
-
             let number_layout = match layout {
                 Layout::Struct(fields) => fields[0], // TODO: why is it sometimes a struct?
                 _ => unreachable!(),
@@ -5329,10 +5327,9 @@ fn run_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!(),
             };
 
-            let string =
-                complex_bitcast(env.builder, string, env.str_list_c_abi().into(), "to_utf8");
+            let string = super::build_str::str_symbol_to_c_abi(env, scope, args[0]);
 
-            call_bitcode_fn(env, &[string], intrinsic)
+            call_bitcode_fn(env, &[string.into()], intrinsic)
         }
         StrFromInt => {
             // Str.fromInt : Int -> Str
@@ -5374,11 +5371,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.fromInt : Str -> List U8
             debug_assert_eq!(args.len(), 1);
 
-            // this is an identity conversion
-            // we just implement it here to subvert the type system
-            let string = load_symbol(scope, &args[0]);
-
-            str_to_utf8(env, string.into_struct_value())
+            str_to_utf8(env, scope, args[0])
         }
         StrRepeat => {
             // Str.repeat : Str, Nat -> Str
