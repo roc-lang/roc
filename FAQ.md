@@ -10,6 +10,35 @@ This is an unusual approach, but there are more details in [this 2021 interview]
 
 In the meantime, using CoffeeScript syntax highlighting for .roc files turns out to work surprisingly well!
 
+## Why is there no way to specify "import everything this module exposes" in `imports`?
+
+In [Elm](https://elm-lang.org), it's possible to import a module in a way that brings everything that module
+exposes into scope. It can be convenient, but like all programming language features, it has downsides.
+
+A minor reason Roc doesn't have this feature is that exposing everything can make it more difficult
+outside the editor (e.g. on a website) to tell where something comes from, especially if multiple imports are
+using this. ("I don't see `blah` defined in this module, so it must be coming from an import...but which of
+these several import-exposing-everything modules could it be? I'll have to check all of them, or
+download this code base and open it up in the editor so I can jump to definition!")
+
+The main reason for this design, though, is compiler performance.
+
+Currently, the name resolution step in compilation can be parallelized across modules, because it's possible to
+tell if there's a naming error within a module using only the contents of that module. If "expose everything" is
+allowed, then it's no longer clear whether anything is a naming error or not, until all the "expose everything"
+modules have been processed, so we know exactly which names they expose. Because that feature doesn't exist in Roc,
+all modules can do name resolution in parallel.
+
+Of note, allowing this feature would only slow down modules that used it; modules that didn't use it would still be
+parallelizable. However, when people find out ways to speed up their builds (in any language), advice starts to
+circulate about how to unlock those speed boosts. If Roc had this feature, it's predictable that a commonly-accepted
+piece of advice would eventually circulate: "don't use this feature becuase it slows down your builds."
+
+If a feature exists in a language, but the common recommendation is never to use it, that's cause for reconsidering
+whether the feature should be in the language at all. In the case of this feature, I think it's simpler if the
+language doesn't have it; that way nobody has to learn (or spend time spreading the word) about the
+performance-boosting advice not to use it.
+
 ## Why doesn't Roc have higher-kinded polymorphism or arbitrary-rank types?
 
 _Since this is a FAQ answer, I'm going to assume familiarity with higher-kinded types and higher-rank types instead of including a primer on them._
