@@ -69,6 +69,17 @@ mod cli_run {
         assert_multiline_str_eq!(err, expected.into());
     }
 
+    fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
+        let flags = &["--check"];
+        let out = run_roc(&[&["format", &file.to_str().unwrap()], &flags[..]].concat());
+
+        if expects_success_exit_code {
+            assert!(out.status.success());
+        } else {
+            assert!(!out.status.success());
+        }
+    }
+
     fn check_output_with_stdin(
         file: &Path,
         stdin: &[&str],
@@ -862,6 +873,16 @@ mod cli_run {
                 ────────────────────────────────────────────────────────────────────────────────"#
             ),
         );
+    }
+
+    #[test]
+    fn format_check_good() {
+        check_format_check_as_expected(&fixture_file("format", "Formatted.roc"), true);
+    }
+
+    #[test]
+    fn format_check_reformatting_needed() {
+        check_format_check_as_expected(&fixture_file("format", "NotFormatted.roc"), false);
     }
 }
 

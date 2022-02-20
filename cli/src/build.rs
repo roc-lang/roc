@@ -204,7 +204,11 @@ pub fn build_file<'a>(
     buf.push_str("Code Generation");
     buf.push('\n');
 
-    report_timing(buf, "Generate LLVM IR", code_gen_timing.code_gen);
+    report_timing(
+        buf,
+        "Generate Assembly from Mono IR",
+        code_gen_timing.code_gen,
+    );
     report_timing(buf, "Emit .o file", code_gen_timing.emit_o_file);
 
     let compilation_end = compilation_start.elapsed().unwrap();
