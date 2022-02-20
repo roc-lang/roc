@@ -329,6 +329,14 @@ trait Backend<'a> {
             } => {
                 self.get_tag_id(sym, structure, union_layout);
             }
+            Expr::Tag {
+                tag_layout,
+                tag_id,
+                arguments,
+                ..
+            } => {
+                self.tag(sym, &arguments, tag_layout, *tag_id);
+            }
             x => todo!("the expression, {:?}", x),
         }
     }
@@ -766,6 +774,15 @@ trait Backend<'a> {
 
     /// get_tag_id loads the tag id from a the union.
     fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>);
+
+    /// tag sets the tag for a union.
+    fn tag(
+        &mut self,
+        sym: &Symbol,
+        args: &'a [Symbol],
+        tag_layout: &UnionLayout<'a>,
+        tag_id: TagIdIntType,
+    );
 
     /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>);

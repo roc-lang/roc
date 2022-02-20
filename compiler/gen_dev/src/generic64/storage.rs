@@ -10,7 +10,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::{
     ir::{JoinPointId, Param},
-    layout::{Builtin, Layout, UnionLayout},
+    layout::{Builtin, Layout, TagIdIntType, UnionLayout},
 };
 use roc_target::TargetInfo;
 use std::cmp::max;
@@ -655,6 +655,42 @@ impl<
         }
     }
 
+    /// Creates a union on the stack, moving the data in fields into the union and tagging it.
+    pub fn create_union(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        sym: &Symbol,
+        union_layout: &UnionLayout<'a>,
+        fields: &'a [Symbol],
+        tag_id: TagIdIntType,
+    ) {
+        match union_layout {
+            UnionLayout::NonRecursive(field_layouts) => {
+                let (data_size, data_alignment) =
+                    union_layout.data_size_and_alignment(self.target_info);
+                let id_offset = data_size - data_alignment;
+                if data_alignment < 8 || data_alignment % 8 != 0 {
+                    todo!("small/unaligned tagging");
+                }
+                let base_offset = self.claim_stack_area(sym, data_size);
+                let mut current_offset = base_offset;
+                for (field, field_layout) in
+                    fields.iter().zip(field_layouts[tag_id as usize].iter())
+                {
+                    self.copy_symbol_to_stack_offset(buf, current_offset, field, field_layout);
+                    let field_size = field_layout.stack_size(self.target_info);
+                    current_offset += field_size as i32;
+                }
+                self.with_tmp_general_reg(buf, |_symbol_storage, buf, reg| {
+                    ASM::mov_reg64_imm64(buf, reg, tag_id as i64);
+                    debug_assert!((base_offset + id_offset as i32) % 8 == 0);
+                    ASM::mov_base32_reg64(buf, base_offset + id_offset as i32, reg);
+                });
+            }
+            x => todo!("creating unions with layout: {:?}", x),
+        }
+    }
+
     /// Copies a complex symbol ot the stack to the arg pointer.
     pub fn copy_symbol_to_arg_pionter(
         &mut self,
@@ -678,7 +714,7 @@ impl<
     /// The offset is not guarenteed to be perfectly aligned, it follows Roc's alignment plan.
     /// This means that, for example 2 I32s might be back to back on the stack.
     /// Always interact with the stack using aligned 64bit movement.
-    fn copy_symbol_to_stack_offset(
+    pub fn copy_symbol_to_stack_offset(
         &mut self,
         buf: &mut Vec<'a, u8>,
         to_offset: i32,
@@ -705,6 +741,7 @@ impl<
                     ASM::mov_base32_reg64(buf, to_offset + 8, reg);
                 });
             }
+            _ if layout.stack_size(self.target_info) == 0 => {}
             _ if layout.safe_to_memcpy() => {
                 let (from_offset, size) = self.stack_offset_and_size(sym);
                 debug_assert!(from_offset % 8 == 0);

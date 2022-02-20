@@ -982,6 +982,17 @@ impl<
             .load_union_tag_id(&mut self.buf, sym, structure, union_layout);
     }
 
+    fn tag(
+        &mut self,
+        sym: &Symbol,
+        fields: &'a [Symbol],
+        union_layout: &UnionLayout<'a>,
+        tag_id: TagIdIntType,
+    ) {
+        self.storage_manager
+            .create_union(&mut self.buf, sym, union_layout, fields, tag_id)
+    }
+
     fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>) {
         match (lit, layout) {
             (
