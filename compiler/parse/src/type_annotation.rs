@@ -1,4 +1,4 @@
-use crate::ast::{TypeHeader, AssignedField, Pattern, Tag, TypeAnnotation};
+use crate::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::keyword;
 use crate::parser::{

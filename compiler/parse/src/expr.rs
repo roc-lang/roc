@@ -739,6 +739,7 @@ fn append_expect_definition<'a>(
     defs.push(arena.alloc(loc_def));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_type_definition<'a>(
     arena: &'a Bump,
     defs: &mut Vec<'a, &'a Loc<Def<'a>>>,
@@ -941,6 +942,7 @@ enum TypeKind {
     Opaque,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_parsing_alias_or_opaque<'a>(
     min_indent: u32,
     options: ExprParseOptions,
