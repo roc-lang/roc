@@ -11,33 +11,39 @@ use wasmer_wasi::WasiState;
 const COMPILER_PATH_ENV_VAR: &str = "COMPILER_PATH";
 
 thread_local! {
-    static REPL_STATE: RefCell<Option<Env<'static>>> = RefCell::new(None)
+    static REPL_STATE: RefCell<Option<ReplState>> = RefCell::new(None)
 }
 
-struct Env {
+struct ReplState {
     src: &'static str,
     compiler: Instance,
     app: Option<Instance>,
     result_addr: Option<u32>,
 }
 
-fn wasmer_create_app(app_bytes: &[u8]) {
-    let store = Store::default();
-    let wasmer_module = Module::new(&store, &app_bytes).unwrap();
-
-    // First, we create the `WasiEnv`
-    let mut wasi_env = WasiState::new("hello").finalize().unwrap();
-
-    // Then, we get the import object related to our WASI
-    // and attach it to the Wasm instance.
-    let import_object = wasi_env
-        .import_object(&wasmer_module)
-        .unwrap_or_else(|_| imports!());
-
-    let instance = Instance::new(&wasmer_module, &import_object).unwrap();
-
+fn wasmer_create_app(app_bytes_ptr: i32, app_bytes_len: i32) {
     REPL_STATE.with(|f| {
         if let Some(state) = f.borrow_mut().deref_mut() {
+            let compiler_memory = state.compiler.exports.get_memory("memory").unwrap();
+            let compiler_memory_bytes: &mut [u8] = unsafe { compiler_memory.data_unchecked_mut() };
+
+            // Find the slice of bytes for the compiled Roc app
+            let ptr = app_bytes_ptr as usize;
+            let len = app_bytes_len as usize;
+            let app_module_bytes: &[u8] = &compiler_memory_bytes[ptr..][..len];
+
+            // Parse the bytes into a Wasmer module
+            let store = Store::default();
+            let wasmer_module = Module::new(&store, app_module_bytes).unwrap();
+
+            // Get the WASI imports for the app
+            let mut wasi_env = WasiState::new("hello").finalize().unwrap();
+            let import_object = wasi_env
+                .import_object(&wasmer_module)
+                .unwrap_or_else(|_| imports!());
+
+            // Create an executable instance (give it a stack & heap, etc. For ELF, this would be the OS's job.)
+            let instance = Instance::new(&wasmer_module, &import_object).unwrap();
             state.app = Some(instance)
         } else {
             panic!("REPL state not found")
@@ -108,7 +114,7 @@ fn wasmer_copy_input_string(src_buffer_addr: u32) {
     })
 }
 
-fn init_compiler() -> Vec<u8> {
+fn init_compiler() -> Instance {
     let path_str = env::var(COMPILER_PATH_ENV_VAR).unwrap();
     let path = Path::new(&path_str);
     let wasm_module_bytes = fs::read(&path).unwrap();
@@ -128,7 +134,7 @@ fn init_compiler() -> Vec<u8> {
     Instance::new(&wasmer_module, &import_object).unwrap()
 }
 
-fn run(src: &str) -> String {
+fn run(src: &'static str) -> String {
     let compiler = init_compiler();
 
     let entrypoint = compiler
@@ -137,27 +143,26 @@ fn run(src: &str) -> String {
         .unwrap();
 
     REPL_STATE.with(|f| {
-        let new_state = Env {
+        let new_state = ReplState {
             src,
             compiler,
             app: None,
             result_addr: None,
         };
-        let current_state = f.borrow_mut().deref_mut();
-        assert_eq!(current_state, None);
-        *current_state = Some(new_state);
+
+        *f.borrow_mut().deref_mut() = Some(new_state);
     });
 
     let actual = String::new();
     actual
 }
 
-pub fn expect_success(input: &str, expected: &str) {
+pub fn expect_success(input: &'static str, expected: &str) {
     let actual = run(input);
     assert_eq!(actual, expected);
 }
 
-pub fn expect_failure(input: &str, expected: &str) {
+pub fn expect_failure(input: &'static str, expected: &str) {
     let actual = run(input);
     assert_eq!(actual, expected);
 }
