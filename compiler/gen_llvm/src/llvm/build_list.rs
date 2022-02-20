@@ -4,7 +4,7 @@ use crate::llvm::bitcode::{
     call_bitcode_fn, call_list_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
-    allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, RocFunctionCall, Scope,
+    allocate_with_refcount_help, cast_basic_basic, Env, RocFunctionCall, Scope,
 };
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::increment_refcount_layout;
@@ -40,6 +40,24 @@ pub fn list_symbol_to_c_abi<'a, 'ctx, 'env>(
     list_alloca
 }
 
+pub fn list_to_c_abi<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    list: BasicValueEnum<'ctx>,
+) -> PointerValue<'ctx> {
+    let parent = env
+        .builder
+        .get_insert_block()
+        .and_then(|b| b.get_parent())
+        .unwrap();
+
+    let list_type = super::convert::zig_list_type(env);
+    let list_alloca = create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
+
+    env.builder.build_store(list_alloca, list);
+
+    list_alloca
+}
+
 pub fn pass_update_mode<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     update_mode: UpdateMode,
@@ -65,18 +83,6 @@ fn pass_element_as_opaque<'a, 'ctx, 'env>(
         element_ptr,
         env.context.i8_type().ptr_type(AddressSpace::Generic),
         "to_opaque",
-    )
-}
-
-fn pass_list_cc<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    list: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    complex_bitcast(
-        env.builder,
-        list,
-        env.str_list_c_abi().into(),
-        "to_str_list_int",
     )
 }
 
@@ -149,7 +155,7 @@ pub fn list_join<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, outer_list),
+            list_to_c_abi(env, outer_list).into(),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
         ],
@@ -167,7 +173,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list),
+            list_to_c_abi(env, list).into(),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             pass_update_mode(env, update_mode),
@@ -214,7 +220,7 @@ pub fn list_append<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, original_wrapper.into()),
+            list_to_c_abi(env, original_wrapper.into()).into(),
             env.alignment_intvalue(element_layout),
             pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
@@ -234,7 +240,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, original_wrapper.into()),
+            list_to_c_abi(env, original_wrapper.into()).into(),
             env.alignment_intvalue(element_layout),
             pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
@@ -255,7 +261,7 @@ pub fn list_swap<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, original_wrapper.into()),
+            list_to_c_abi(env, original_wrapper.into()).into(),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             index_1.into(),
@@ -279,7 +285,7 @@ pub fn list_sublist<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, original_wrapper.into()),
+            list_to_c_abi(env, original_wrapper.into()).into(),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             start.into(),
@@ -302,7 +308,7 @@ pub fn list_drop_at<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, original_wrapper.into()),
+            list_to_c_abi(env, original_wrapper.into()).into(),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             count.into(),
@@ -420,7 +426,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
             call_void_bitcode_fn(
                 env,
                 &[
-                    pass_list_cc(env, list),
+                    list_to_c_abi(env, list).into(),
                     roc_function_call.caller.into(),
                     pass_as_opaque(env, roc_function_call.data),
                     roc_function_call.inc_n_data.into(),
@@ -451,7 +457,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
             call_void_bitcode_fn(
                 env,
                 &[
-                    pass_list_cc(env, list),
+                    list_to_c_abi(env, list).into(),
                     roc_function_call.caller.into(),
                     pass_as_opaque(env, roc_function_call.data),
                     roc_function_call.inc_n_data.into(),
@@ -494,7 +500,7 @@ pub fn list_range<'a, 'ctx, 'env>(
         .const_int(int_width as u64, false)
         .into();
 
-    call_bitcode_fn(
+    call_list_bitcode_fn(
         env,
         &[
             int_width,
@@ -521,7 +527,7 @@ pub fn list_contains<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list),
+            list_to_c_abi(env, list).into(),
             pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
             eq_fn,
@@ -544,7 +550,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list),
+            list_to_c_abi(env, list).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -595,10 +601,10 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
         _ => unreachable!(),
     };
 
-    call_bitcode_fn(
+    call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list),
+            list_to_c_abi(env, list).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -643,10 +649,10 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
         _ => unreachable!(),
     };
 
-    call_bitcode_fn(
+    call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list),
+            list_to_c_abi(env, list).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -673,7 +679,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list),
+            list_to_c_abi(env, list).into(),
             compare_wrapper.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -696,7 +702,7 @@ pub fn list_map_with_index<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list),
+            list_to_c_abi(env, list).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -720,7 +726,7 @@ pub fn list_map<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list),
+            list_to_c_abi(env, list).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -746,11 +752,11 @@ pub fn list_map2<'a, 'ctx, 'env>(
     let dec_a = build_dec_wrapper(env, layout_ids, element1_layout);
     let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
 
-    call_bitcode_fn(
+    call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list1),
-            pass_list_cc(env, list2),
+            list_to_c_abi(env, list1).into(),
+            list_to_c_abi(env, list2).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -785,9 +791,9 @@ pub fn list_map3<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list1),
-            pass_list_cc(env, list2),
-            pass_list_cc(env, list3),
+            list_to_c_abi(env, list1).into(),
+            list_to_c_abi(env, list2).into(),
+            list_to_c_abi(env, list3).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -827,10 +833,10 @@ pub fn list_map4<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list1),
-            pass_list_cc(env, list2),
-            pass_list_cc(env, list3),
-            pass_list_cc(env, list4),
+            list_to_c_abi(env, list1).into(),
+            list_to_c_abi(env, list2).into(),
+            list_to_c_abi(env, list3).into(),
+            list_to_c_abi(env, list4).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -860,8 +866,8 @@ pub fn list_concat<'a, 'ctx, 'env>(
     call_list_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, first_list),
-            pass_list_cc(env, second_list),
+            list_to_c_abi(env, first_list).into(),
+            list_to_c_abi(env, second_list).into(),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
         ],
@@ -879,7 +885,7 @@ pub fn list_any<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list),
+            list_to_c_abi(env, list).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -900,7 +906,7 @@ pub fn list_all<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list),
+            list_to_c_abi(env, list).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -926,7 +932,7 @@ pub fn list_find_unsafe<'a, 'ctx, 'env>(
     let result = call_bitcode_fn(
         env,
         &[
-            pass_list_cc(env, list),
+            list_to_c_abi(env, list).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),

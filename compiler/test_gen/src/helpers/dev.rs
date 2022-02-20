@@ -276,4 +276,5 @@ macro_rules! assert_expect_failed {
 
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
+#[allow(unused_imports)]
 pub(crate) use assert_expect_failed;

@@ -12,7 +12,7 @@ use crate::llvm::build_list::{
     list_contains, list_drop_at, list_find_unsafe, list_get_unsafe, list_join, list_keep_errs,
     list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4,
     list_map_with_index, list_prepend, list_range, list_repeat, list_reverse, list_set,
-    list_single, list_sort_with, list_sublist, list_swap,
+    list_single, list_sort_with, list_sublist, list_swap, list_to_c_abi,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
@@ -854,6 +854,16 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                         number_of_elements,
                         Builtin::WRAPPER_LEN,
                         "insert_len",
+                    )
+                    .unwrap();
+
+                // Store the capacity
+                struct_val = builder
+                    .build_insert_value(
+                        struct_val,
+                        number_of_elements,
+                        Builtin::WRAPPER_CAPACITY,
+                        "insert_capacity",
                     )
                     .unwrap();
 
@@ -5668,37 +5678,21 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         NumBytesToU16 => {
             debug_assert_eq!(args.len(), 2);
-            let list = load_symbol(scope, &args[0]).into_struct_value();
+            let list = load_symbol(scope, &args[0]);
             let position = load_symbol(scope, &args[1]);
             call_bitcode_fn(
                 env,
-                &[
-                    complex_bitcast(
-                        env.builder,
-                        list.into(),
-                        env.str_list_c_abi().into(),
-                        "to_i128",
-                    ),
-                    position,
-                ],
+                &[list_to_c_abi(env, list).into(), position],
                 bitcode::NUM_BYTES_TO_U16,
             )
         }
         NumBytesToU32 => {
             debug_assert_eq!(args.len(), 2);
-            let list = load_symbol(scope, &args[0]).into_struct_value();
+            let list = load_symbol(scope, &args[0]);
             let position = load_symbol(scope, &args[1]);
             call_bitcode_fn(
                 env,
-                &[
-                    complex_bitcast(
-                        env.builder,
-                        list.into(),
-                        env.str_list_c_abi().into(),
-                        "to_i128",
-                    ),
-                    position,
-                ],
+                &[list_to_c_abi(env, list).into(), position],
                 bitcode::NUM_BYTES_TO_U32,
             )
         }

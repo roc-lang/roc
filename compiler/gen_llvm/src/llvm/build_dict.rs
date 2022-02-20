@@ -19,6 +19,8 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use roc_target::TargetInfo;
 
+use super::build_list::list_to_c_abi;
+
 #[repr(transparent)]
 struct Alignment(u8);
 
@@ -718,15 +720,6 @@ pub fn set_from_list<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let list_alloca = builder.build_alloca(list.get_type(), "list_alloca");
-    let list_ptr = env.builder.build_bitcast(
-        list_alloca,
-        env.str_list_c_abi().ptr_type(AddressSpace::Generic),
-        "to_zig_list",
-    );
-
-    env.builder.build_store(list_alloca, list);
-
     let key_width = env
         .ptr_int()
         .const_int(key_layout.stack_size(env.target_info) as u64, false);
@@ -747,8 +740,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            env.builder
-                .build_load(list_ptr.into_pointer_value(), "as_i128"),
+            list_to_c_abi(env, list).into(),
             alignment_iv.into(),
             key_width.into(),
             value_width.into(),
