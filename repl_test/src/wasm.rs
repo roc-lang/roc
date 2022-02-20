@@ -135,10 +135,6 @@ fn wasmer_copy_output_string(output_ptr: u32, output_len: u32) {
     })
 }
 
-fn dummy_system_time_now() -> f64 {
-    0.0
-}
-
 fn init_compiler() -> Instance {
     let path = Path::new(WASM_REPL_COMPILER_PATH);
     let wasm_module_bytes = match fs::read(&path) {
@@ -161,26 +157,6 @@ fn init_compiler() -> Instance {
     };
 
     Instance::new(&wasmer_module, &import_object).unwrap()
-}
-
-fn format_compiler_load_error(e: std::io::Error) -> String {
-    if matches!(e.kind(), std::io::ErrorKind::NotFound) {
-        format!(
-            "\n\n    {}\n\n",
-            [
-                "CANNOT BUILD WASM REPL TESTS",
-                "Please run these tests using repl_test/run_wasm.sh!",
-                "",
-                "These tests combine two builds for two different targets,",
-                "which Cargo doesn't handle very well.",
-                "It probably requires a second target directory to avoid locks.",
-                "We'll get to it eventually but it's not done yet.",
-            ]
-            .join("\n    ")
-        )
-    } else {
-        format!("{:?}", e)
-    }
 }
 
 fn run(src: &'static str) -> (bool, String) {
@@ -217,6 +193,30 @@ fn run(src: &'static str) -> (bool, String) {
             panic!()
         }
     })
+}
+
+fn format_compiler_load_error(e: std::io::Error) -> String {
+    if matches!(e.kind(), std::io::ErrorKind::NotFound) {
+        format!(
+            "\n\n    {}\n\n",
+            [
+                "CANNOT BUILD WASM REPL TESTS",
+                "Please run these tests using repl_test/run_wasm.sh!",
+                "",
+                "These tests combine two builds for two different targets,",
+                "which Cargo doesn't handle very well.",
+                "It probably requires a second target directory to avoid locks.",
+                "We'll get to it eventually but it's not done yet.",
+            ]
+            .join("\n    ")
+        )
+    } else {
+        format!("{:?}", e)
+    }
+}
+
+fn dummy_system_time_now() -> f64 {
+    0.0
 }
 
 pub fn expect_success(input: &'static str, expected: &str) {

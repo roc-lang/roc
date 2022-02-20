@@ -3,4 +3,4 @@
 # We can try to make the build nicer later
 
 cargo build --target wasm32-unknown-unknown -p roc_repl_wasm --features wasmer --release
-cargo test -p repl_test --features wasm
+cargo test -p repl_test --features wasm -- --nocapture literal_42
