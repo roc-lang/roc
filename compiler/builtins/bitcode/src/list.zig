@@ -1393,7 +1393,7 @@ pub fn listOks(
 ) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
-        const only_oks_list = RocList.allocate(alignment, size, elem_width);
+        var only_oks_list = RocList.allocate(alignment, size, elem_width);
         const target_ptr = only_oks_list.bytes orelse unreachable;
 
         var i: usize = 0;
