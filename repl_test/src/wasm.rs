@@ -1,14 +1,14 @@
 use std::{
     cell::RefCell,
-    env, fs,
+    fs,
     ops::{Deref, DerefMut},
     path::Path,
     thread_local,
 };
-use wasmer::{imports, Function, Instance, Module, Store};
+use wasmer::{imports, Function, Instance, Module, Store, Value};
 use wasmer_wasi::WasiState;
 
-const WASM_REPL_COMPILER_PATH: &str = "../repl_wasm/pkg/roc_repl_wasm_bg.wasm";
+const WASM_REPL_COMPILER_PATH: &str = "../target/wasm32-unknown-unknown/release/roc_repl_wasm.wasm";
 
 thread_local! {
     static REPL_STATE: RefCell<Option<ReplState>> = RefCell::new(None)
@@ -19,9 +19,10 @@ struct ReplState {
     compiler: Instance,
     app: Option<Instance>,
     result_addr: Option<u32>,
+    output: Option<String>,
 }
 
-fn wasmer_create_app(app_bytes_ptr: i32, app_bytes_len: i32) {
+fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) {
     REPL_STATE.with(|f| {
         if let Some(state) = f.borrow_mut().deref_mut() {
             let compiler_memory = state.compiler.exports.get_memory("memory").unwrap();
@@ -114,30 +115,35 @@ fn wasmer_copy_input_string(src_buffer_addr: u32) {
     })
 }
 
+fn wasmer_copy_output_string(output_ptr: u32, output_len: u32) {
+    REPL_STATE.with(|f| {
+        if let Some(state) = f.borrow_mut().deref_mut() {
+            let compiler_memory = state.compiler.exports.get_memory("memory").unwrap();
+            let compiler_memory_bytes: &mut [u8] = unsafe { compiler_memory.data_unchecked_mut() };
+
+            // Find the slice of bytes for the compiled Roc app
+            let ptr = output_ptr as usize;
+            let len = output_len as usize;
+            let output_bytes: &[u8] = &compiler_memory_bytes[ptr..][..len];
+
+            // Copy it out of the Wasm module
+            let copied_bytes = output_bytes.to_vec();
+            let output = unsafe { String::from_utf8_unchecked(copied_bytes) };
+
+            state.output = Some(output)
+        }
+    })
+}
+
+fn dummy_system_time_now() -> f64 {
+    0.0
+}
+
 fn init_compiler() -> Instance {
     let path = Path::new(WASM_REPL_COMPILER_PATH);
     let wasm_module_bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
-        Err(e) => {
-            if matches!(e.kind(), std::io::ErrorKind::NotFound) {
-                panic!(
-                    "\n\n    {}\n\n",
-                    [
-                        "CANNOT BUILD WASM REPL TESTS",
-                        "Please run repl_www/build.sh and try again!",
-                        "",
-                        "We have not yet automated this build dependency using Cargo.",
-                        "The Cargo build for the tests would have to launch another Cargo build",
-                        "for a *different target* (wasm), which is tricky.",
-                        "It probably requires a second target directory to avoid locks.",
-                        "We'll get to it eventually but it's not done yet.",
-                    ]
-                    .join("\n    ")
-                )
-            } else {
-                panic!("{:?}", e)
-            }
-        }
+        Err(e) => panic!("{}", format_compiler_load_error(e)),
     };
 
     let store = Store::default();
@@ -149,41 +155,78 @@ fn init_compiler() -> Instance {
             "wasmer_run_app" => Function::new_native(&store, wasmer_run_app),
             "wasmer_get_result_and_memory" => Function::new_native(&store, wasmer_get_result_and_memory),
             "wasmer_copy_input_string" => Function::new_native(&store, wasmer_copy_input_string),
+            "wasmer_copy_output_string" => Function::new_native(&store, wasmer_copy_output_string),
+            "now" => Function::new_native(&store, dummy_system_time_now),
         }
     };
 
     Instance::new(&wasmer_module, &import_object).unwrap()
 }
 
-fn run(src: &'static str) -> String {
-    let compiler = init_compiler();
+fn format_compiler_load_error(e: std::io::Error) -> String {
+    if matches!(e.kind(), std::io::ErrorKind::NotFound) {
+        format!(
+            "\n\n    {}\n\n",
+            [
+                "CANNOT BUILD WASM REPL TESTS",
+                "Please run these tests using repl_test/run_wasm.sh!",
+                "",
+                "These tests combine two builds for two different targets,",
+                "which Cargo doesn't handle very well.",
+                "It probably requires a second target directory to avoid locks.",
+                "We'll get to it eventually but it's not done yet.",
+            ]
+            .join("\n    ")
+        )
+    } else {
+        format!("{:?}", e)
+    }
+}
 
-    let entrypoint = compiler
-        .exports
-        .get_function("entrypoint_from_test")
-        .unwrap();
-
+fn run(src: &'static str) -> (bool, String) {
     REPL_STATE.with(|f| {
+        let compiler = init_compiler();
+
         let new_state = ReplState {
             src,
             compiler,
             app: None,
             result_addr: None,
+            output: None,
         };
 
-        *f.borrow_mut().deref_mut() = Some(new_state);
-    });
+        {
+            *f.borrow_mut().deref_mut() = Some(new_state);
+        }
 
-    let actual = String::new();
-    actual
+        if let Some(state) = f.borrow().deref() {
+            let entrypoint = state
+                .compiler
+                .exports
+                .get_function("entrypoint_from_test")
+                .unwrap();
+
+            let src_len = Value::I32(src.len() as i32);
+            let wasm_ok: i32 = entrypoint.call(&[src_len]).unwrap().deref()[0].unwrap_i32();
+            let ok = wasm_ok != 0;
+
+            let final_state = f.take().unwrap();
+
+            (ok, final_state.output.unwrap())
+        } else {
+            panic!()
+        }
+    })
 }
 
 pub fn expect_success(input: &'static str, expected: &str) {
-    let actual = run(input);
-    assert_eq!(actual, expected);
+    let (ok, output) = run(input);
+    assert_eq!(ok, true);
+    assert_eq!(output, expected);
 }
 
 pub fn expect_failure(input: &'static str, expected: &str) {
-    let actual = run(input);
-    assert_eq!(actual, expected);
+    let (ok, output) = run(input);
+    assert_eq!(ok, false);
+    assert_eq!(output, expected);
 }
