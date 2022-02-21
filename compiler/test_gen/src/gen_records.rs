@@ -1019,13 +1019,19 @@ fn different_proc_types_specialized_to_same_layout() {
             r#"
             app "test" provides [ nums ] to "./platform"
 
+            # Top-level values compile to procedure calls with no args
+            # alpha has the generic type { a: Num *, b: Num * }
+            # and gets specialized to two procedure calls below
             alpha = { a: 1, b: 2 }
-            
+
+            # The wider number always comes first in the layout,
+            # which makes the two specializations look very similar.
+            # Test that the compiler doesn't get them mixed up!
             nums : List U8
             nums =
                 [
-                    alpha.a,
-                    alpha.b,
+                    alpha.a,   # alpha specialized to layout { b: I64, a: U8 }
+                    alpha.b,   # alpha specialized to layout { a: I64, b: U8 }
                 ]
             "#
         ),
