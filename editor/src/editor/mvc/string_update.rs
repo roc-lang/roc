@@ -76,7 +76,6 @@ pub fn update_string(new_char: char, ed_model: &mut EdModel) -> EdResult<InputOu
         .get_offset_to_node_id(old_caret_pos, curr_mark_node_id)?;
 
     if node_caret_offset != 0 && node_caret_offset < content_str.len() {
-
         // update ast
         update_str_expr(
             ast_node_id.to_expr_id()?,
@@ -96,10 +95,10 @@ pub fn update_string(new_char: char, ed_model: &mut EdModel) -> EdResult<InputOu
 
 pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let NodeContext {
-        old_caret_pos:_,
-        curr_mark_node_id:_,
+        old_caret_pos: _,
+        curr_mark_node_id: _,
         curr_mark_node,
-        parent_id_opt:_,
+        parent_id_opt: _,
         ast_node_id,
     } = get_node_context(ed_model)?;
 

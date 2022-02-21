@@ -11,10 +11,10 @@ use crate::editor::mvc::ed_update::NodeContext;
 
 pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
     let NodeContext {
-        old_caret_pos:_,
-        curr_mark_node_id:_,
+        old_caret_pos: _,
+        curr_mark_node_id: _,
         curr_mark_node,
-        parent_id_opt:_,
+        parent_id_opt: _,
         ast_node_id,
     } = get_node_context(ed_model)?;
 
@@ -29,7 +29,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         .module
         .env
         .ident_ids
-        .add(val_name_string.clone().into());
+        .add(val_name_string.into());
     let var_symbol = Symbol::new(ed_model.module.env.home, ident_id);
     let body = Expr2::Var(var_symbol);
     let body_id = ed_model.module.env.pool.add(body);

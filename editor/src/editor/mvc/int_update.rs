@@ -15,10 +15,10 @@ use crate::ui::text::lines::SelectableLines;
 // digit_char should be verified to be a digit before calling this function
 pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<InputOutcome> {
     let NodeContext {
-        old_caret_pos:_,
-        curr_mark_node_id:_,
+        old_caret_pos: _,
+        curr_mark_node_id: _,
         curr_mark_node,
-        parent_id_opt:_,
+        parent_id_opt: _,
         ast_node_id,
     } = get_node_context(ed_model)?;
 

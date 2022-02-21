@@ -28,19 +28,10 @@ pub fn break_line(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
                 && ed_model.code_lines.line_len(new_blank_line_nr).unwrap() == 0)
             {
                 // two blank lines between top level definitions
-                EdModel::insert_empty_line(
-                    caret_line_nr + 1,
-                    &mut ed_model.grid_node_map,
-                )?;
-                EdModel::insert_empty_line(
-                    caret_line_nr + 2,
-                    &mut ed_model.grid_node_map,
-                )?;
+                EdModel::insert_empty_line(caret_line_nr + 1, &mut ed_model.grid_node_map)?;
+                EdModel::insert_empty_line(caret_line_nr + 2, &mut ed_model.grid_node_map)?;
                 // third "empty" line will be filled by the blank
-                EdModel::insert_empty_line(
-                    caret_line_nr + 3,
-                    &mut ed_model.grid_node_map,
-                )?;
+                EdModel::insert_empty_line(caret_line_nr + 3, &mut ed_model.grid_node_map)?;
 
                 insert_new_blank(ed_model, caret_pos.line + 3)?;
             }
@@ -52,24 +43,25 @@ pub fn break_line(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     Ok(InputOutcome::Accepted)
 }
 
-pub fn insert_new_blank(
-    ed_model: &mut EdModel,
-    insert_on_line_nr: usize,
-) -> EdResult<()> {
-    println!("{}", ed_model.module.ast.ast_to_string(ed_model.module.env.pool));
+pub fn insert_new_blank(ed_model: &mut EdModel, insert_on_line_nr: usize) -> EdResult<()> {
+    println!(
+        "{}",
+        ed_model.module.ast.ast_to_string(ed_model.module.env.pool)
+    );
 
     // find position of the previous ASTNode to figure out where to add this new Blank ASTNode
-    let def_mark_node_id = ed_model.grid_node_map.get_def_mark_node_id_before_line(
-        insert_on_line_nr,
-        &ed_model.mark_node_pool,
-    )?;
+    let def_mark_node_id = ed_model
+        .grid_node_map
+        .get_def_mark_node_id_before_line(insert_on_line_nr, &ed_model.mark_node_pool)?;
 
     let new_line_blank = Def2::Blank;
     let new_line_blank_id = ed_model.module.env.pool.add(new_line_blank);
 
     let insertion_index = index_of(def_mark_node_id, &ed_model.markup_ids)?;
-    ed_model.module.ast.insert_def_at_index(new_line_blank_id, insertion_index);
-
+    ed_model
+        .module
+        .ast
+        .insert_def_at_index(new_line_blank_id, insertion_index);
 
     Ok(())
 }

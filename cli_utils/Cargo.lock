@@ -965,12 +965,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fixedbitset"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37ab347416e802de484e4d03c7316c48f1ecb56574dfd4a46a80f173ce1de04d"
-
-[[package]]
 name = "flate2"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2047,14 +2041,11 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d76e8e1493bcac0d2766c42737f34458f1c8c50c0d23bcb24ea953affb273216"
 dependencies = [
- "backtrace",
  "cfg-if 1.0.0",
  "instant",
  "libc",
- "petgraph",
  "redox_syscall",
  "smallvec",
- "thread-id",
  "winapi",
 ]
 
@@ -2105,16 +2096,6 @@ dependencies = [
  "maplit",
  "pest",
  "sha-1",
-]
-
-[[package]]
-name = "petgraph"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "467d164a6de56270bd7c4d070df81d07beace25012d5103ced4e9ff08d6afdb7"
-dependencies = [
- "fixedbitset",
- "indexmap",
 ]
 
 [[package]]
@@ -2799,6 +2780,7 @@ dependencies = [
  "bumpalo",
  "lazy_static",
  "roc_collections",
+ "roc_error_macros",
  "roc_ident",
  "roc_region",
  "snafu",
@@ -2815,6 +2797,7 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_problem",
  "roc_region",
@@ -2865,6 +2848,7 @@ dependencies = [
  "inkwell 0.1.0",
  "libloading 0.7.1",
  "roc_build",
+ "roc_builtins",
  "roc_collections",
  "roc_gen_llvm",
  "roc_load",
@@ -2946,6 +2930,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_region",
  "static_assertions",
@@ -2956,6 +2941,7 @@ dependencies = [
 name = "roc_unify"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "roc_collections",
  "roc_module",
  "roc_types",
@@ -3400,17 +3386,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "thread-id"
-version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fdfe0627923f7411a43ec9ec9c39c3a9b4151be313e0922042581fb6c9b717f"
-dependencies = [
- "libc",
- "redox_syscall",
- "winapi",
 ]
 
 [[package]]

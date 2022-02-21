@@ -1,6 +1,6 @@
 use crate::ui::text::lines::Lines;
 use crate::ui::text::text_pos::TextPos;
-use crate::ui::ui_error::{ UIResult};
+use crate::ui::ui_error::UIResult;
 use crate::ui::util::slice_get;
 use std::fmt;
 
@@ -13,14 +13,11 @@ pub struct CodeLines {
 impl CodeLines {
     pub fn from_str(code_str: &str) -> CodeLines {
         CodeLines {
-            lines: code_str
-                .split('\n')
-                .map(|s| s.to_owned())
-                .collect(),
+            lines: code_str.split('\n').map(|s| s.to_owned()).collect(),
             nr_of_chars: code_str.len(),
         }
     }
-    
+
     // last column of last line
     pub fn end_txt_pos(&self) -> TextPos {
         let last_line_nr = self.nr_of_lines() - 1;

@@ -15,18 +15,18 @@ use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_ast::mem_pool::pool_vec::PoolVec;
 use roc_code_markup::markup::attribute::Attributes;
 use roc_code_markup::markup::nodes;
-use roc_code_markup::markup::nodes::COLON;
 use roc_code_markup::markup::nodes::MarkupNode;
+use roc_code_markup::markup::nodes::COLON;
 use roc_code_markup::slow_pool::MarkNodeId;
 use roc_code_markup::syntax_highlight::HighlightStyle;
 use snafu::OptionExt;
 
 pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let NodeContext {
-        old_caret_pos:_,
-        curr_mark_node_id:_,
+        old_caret_pos: _,
+        curr_mark_node_id: _,
         curr_mark_node,
-        parent_id_opt:_,
+        parent_id_opt: _,
         ast_node_id,
     } = get_node_context(ed_model)?;
 
@@ -140,77 +140,75 @@ pub fn update_record_colon(
 ) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,
-        curr_mark_node_id:_,
-        curr_mark_node:_,
-        parent_id_opt:_,
+        curr_mark_node_id: _,
+        curr_mark_node: _,
+        parent_id_opt: _,
         ast_node_id,
     } = get_node_context(ed_model)?;
-        let curr_ast_node = ed_model.module.env.pool.get(ast_node_id.to_expr_id()?);
+    let curr_ast_node = ed_model.module.env.pool.get(ast_node_id.to_expr_id()?);
 
-        let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
-        if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
-            let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
+    let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+    if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
+        let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
 
-            match prev_mark_node.get_ast_node_id() {
-                ASTNodeId::ADefId(_) => Ok(InputOutcome::Ignored),
-                ASTNodeId::AExprId(prev_expr_id) => {
-                    let prev_expr = ed_model.module.env.pool.get(prev_expr_id);
+        match prev_mark_node.get_ast_node_id() {
+            ASTNodeId::ADefId(_) => Ok(InputOutcome::Ignored),
+            ASTNodeId::AExprId(prev_expr_id) => {
+                let prev_expr = ed_model.module.env.pool.get(prev_expr_id);
 
-                    // current and prev node should always point to record when in valid position to add ':'
-                    if matches!(prev_expr, Expr2::Record { .. })
-                        && matches!(curr_ast_node, Expr2::Record { .. })
-                    {
+                // current and prev node should always point to record when in valid position to add ':'
+                if matches!(prev_expr, Expr2::Record { .. })
+                    && matches!(curr_ast_node, Expr2::Record { .. })
+                {
+                    let ast_node_ref = ed_model.module.env.pool.get(record_ast_node_id);
 
-                        let ast_node_ref = ed_model.module.env.pool.get(record_ast_node_id);
+                    match ast_node_ref {
+                        Expr2::Record {
+                            record_var: _,
+                            fields,
+                        } => {
+                            if ed_model.node_exists_at_caret() {
+                                let next_mark_node_id =
+                                    ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
+                                let next_mark_node = ed_model.mark_node_pool.get(next_mark_node_id);
+                                if next_mark_node.get_content() == nodes::RIGHT_ACCOLADE {
+                                    // update AST node
+                                    let new_field_val = Expr2::Blank;
+                                    let new_field_val_id =
+                                        ed_model.module.env.pool.add(new_field_val);
 
-                        match ast_node_ref {
-                            Expr2::Record {
-                                record_var: _,
-                                fields,
-                            } => {
-                                if ed_model.node_exists_at_caret() {
-                                    let next_mark_node_id =
-                                        ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
-                                    let next_mark_node =
-                                        ed_model.mark_node_pool.get(next_mark_node_id);
-                                    if next_mark_node.get_content() == nodes::RIGHT_ACCOLADE {
-                                        // update AST node
-                                        let new_field_val = Expr2::Blank;
-                                        let new_field_val_id =
-                                            ed_model.module.env.pool.add(new_field_val);
+                                    let first_field_mut = fields
+                                        .iter_mut(ed_model.module.env.pool)
+                                        .next()
+                                        .with_context(|| RecordWithoutFields {})?;
 
-                                        let first_field_mut = fields
-                                            .iter_mut(ed_model.module.env.pool)
-                                            .next()
-                                            .with_context(|| RecordWithoutFields {})?;
+                                    *first_field_mut = RecordField::LabeledValue(
+                                        *first_field_mut.get_record_field_pool_str(),
+                                        *first_field_mut.get_record_field_var(),
+                                        new_field_val_id,
+                                    );
 
-                                        *first_field_mut = RecordField::LabeledValue(
-                                            *first_field_mut.get_record_field_pool_str(),
-                                            *first_field_mut.get_record_field_var(),
-                                            new_field_val_id,
-                                        );
+                                    // update caret
+                                    ed_model.simple_move_carets_right(COLON.len());
 
-                                        // update caret
-                                        ed_model.simple_move_carets_right(COLON.len());
-
-                                        Ok(InputOutcome::Accepted)
-                                    } else {
-                                        Ok(InputOutcome::Ignored)
-                                    }
+                                    Ok(InputOutcome::Accepted)
                                 } else {
                                     Ok(InputOutcome::Ignored)
                                 }
+                            } else {
+                                Ok(InputOutcome::Ignored)
                             }
-                            _ => Ok(InputOutcome::Ignored),
                         }
-                    } else {
-                        Ok(InputOutcome::Ignored)
+                        _ => Ok(InputOutcome::Ignored),
                     }
+                } else {
+                    Ok(InputOutcome::Ignored)
                 }
             }
-        } else {
-            Ok(InputOutcome::Ignored)
         }
+    } else {
+        Ok(InputOutcome::Ignored)
+    }
 }
 
 pub fn update_record_field(

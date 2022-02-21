@@ -387,9 +387,14 @@ fn with_indent(indent_level: usize, some_str: &str) -> String {
     full_string
 }
 
-fn string_mark_node(content: &str, indent_level: usize, ast_node_id: ASTNodeId, mark_node_pool: &mut SlowPool) -> MarkNodeId {
+fn string_mark_node(
+    content: &str,
+    indent_level: usize,
+    ast_node_id: ASTNodeId,
+    mark_node_pool: &mut SlowPool,
+) -> MarkNodeId {
     new_markup_node(
-        with_indent(indent_level, &content),
+        with_indent(indent_level, content),
         ast_node_id,
         HighlightStyle::String,
         mark_node_pool,

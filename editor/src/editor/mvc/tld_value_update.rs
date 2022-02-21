@@ -1,7 +1,5 @@
 use roc_ast::lang::core::{def::def2::Def2, expr::expr2::Expr2};
-use roc_code_markup::{
-    slow_pool::MarkNodeId,
-};
+use roc_code_markup::slow_pool::MarkNodeId;
 
 use crate::{
     editor::ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},

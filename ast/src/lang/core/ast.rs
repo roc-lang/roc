@@ -33,8 +33,6 @@ impl AST {
     }
 }
 
-
-
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum ASTNodeId {
     ADefId(DefId),

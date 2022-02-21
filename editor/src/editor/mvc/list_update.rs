@@ -1,4 +1,4 @@
-use roc_ast::lang::core::ast::{ast_node_to_string};
+use roc_ast::lang::core::ast::ast_node_to_string;
 use roc_ast::lang::core::expr::expr2::{Expr2, ExprId};
 use roc_ast::mem_pool::pool_vec::PoolVec;
 use roc_code_markup::markup::nodes::{self};
@@ -13,10 +13,10 @@ use crate::editor::mvc::ed_update::NodeContext;
 
 pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let NodeContext {
-        old_caret_pos:_,
-        curr_mark_node_id:_,
+        old_caret_pos: _,
+        curr_mark_node_id: _,
         curr_mark_node,
-        parent_id_opt:_,
+        parent_id_opt: _,
         ast_node_id,
     } = get_node_context(ed_model)?;
 
@@ -49,7 +49,7 @@ pub fn add_blank_child(
     ed_model: &mut EdModel,
 ) -> EdResult<InputOutcome> {
     let NodeContext {
-        old_caret_pos:_,
+        old_caret_pos: _,
         curr_mark_node_id,
         curr_mark_node: _,
         parent_id_opt,

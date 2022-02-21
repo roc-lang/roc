@@ -75,10 +75,8 @@ pub fn init_model<'a>(
         )?)
     }?;
 
-
-    let code_lines = CodeLines::from_str(
-        &nodes::mark_nodes_to_string(&markup_ids, &mark_node_pool)
-    );
+    let code_lines =
+        CodeLines::from_str(&nodes::mark_nodes_to_string(&markup_ids, &mark_node_pool));
     let mut grid_node_map = GridNodeMap::default();
 
     let mut line_nr = 0;

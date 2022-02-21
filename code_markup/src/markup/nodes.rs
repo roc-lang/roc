@@ -469,10 +469,7 @@ pub fn join_mark_nodes_commas(
     mark_nodes.into_iter().interleave(join_nodes).collect()
 }
 
-pub fn mark_nodes_to_string(
-    markup_node_ids: &[MarkNodeId],
-    mark_node_pool: &SlowPool,
-) -> String {
+pub fn mark_nodes_to_string(markup_node_ids: &[MarkNodeId], mark_node_pool: &SlowPool) -> String {
     let mut all_code_string = String::new();
 
     for mark_node_id in markup_node_ids.iter() {
@@ -482,7 +479,11 @@ pub fn mark_nodes_to_string(
     all_code_string
 }
 
-pub fn node_to_string_w_children(node_id: MarkNodeId, str_buffer: &mut String, mark_node_pool: &SlowPool) {
+pub fn node_to_string_w_children(
+    node_id: MarkNodeId,
+    str_buffer: &mut String,
+    mark_node_pool: &SlowPool,
+) {
     let node = mark_node_pool.get(node_id);
 
     if node.is_nested() {

@@ -300,10 +300,7 @@ impl<'a> EdModel<'a> {
         grid_node_map.break_line(line_nr, col_nr)
     }
 
-    pub fn insert_empty_line(
-        line_nr: usize,
-        grid_node_map: &mut GridNodeMap,
-    ) -> UIResult<()> {
+    pub fn insert_empty_line(line_nr: usize, grid_node_map: &mut GridNodeMap) -> UIResult<()> {
         grid_node_map.insert_empty_line(line_nr)
     }
 
@@ -330,7 +327,7 @@ impl<'a> EdModel<'a> {
         col_range: std::ops::Range<usize>,
     ) -> UIResult<()> {
         self.grid_node_map
-            .del_range_at_line(line_nr, col_range.clone())
+            .del_range_at_line(line_nr, col_range)
     }
 
     pub fn del_blank_expr_node(&mut self, txt_pos: TextPos) -> UIResult<()> {
@@ -663,20 +660,21 @@ impl<'a> EdModel<'a> {
         //dbg!("{}",self.module.ast.ast_to_string(self.module.env.pool));
 
         self.markup_ids = ast_to_mark_nodes(
-                &mut self.module.env,
-                &self.module.ast,
-                &mut self.mark_node_pool,
-                &self.loaded_module.interns,
-            )?;
-    
-        self.code_lines = CodeLines::from_str(
-            &nodes::mark_nodes_to_string(&self.markup_ids, &self.mark_node_pool)
-        );
+            &mut self.module.env,
+            &self.module.ast,
+            &mut self.mark_node_pool,
+            &self.loaded_module.interns,
+        )?;
+
+        self.code_lines = CodeLines::from_str(&nodes::mark_nodes_to_string(
+            &self.markup_ids,
+            &self.mark_node_pool,
+        ));
         self.grid_node_map = GridNodeMap::default();
-    
+
         let mut line_nr = 0;
         let mut col_nr = 0;
-    
+
         for mark_node_id in &self.markup_ids {
             // for debugging:
             //println!("{}", tree_as_string(*mark_node_id, &mark_node_pool));
@@ -1198,7 +1196,7 @@ pub fn handle_new_char_diff_mark_nodes_prev_is_expr(
 // updates the ed_model based on the char the user just typed if the result would be syntactically correct.
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     //dbg!("{}", ed_model.module.ast.ast_to_string(ed_model.module.env.pool));
-    
+
     let input_outcome = match received_char {
             '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
             | '\u{f0000}'..='\u{ffffd}' // ^
@@ -1703,89 +1701,29 @@ pub mod test_ed_update {
     fn test_record() -> Result<(), String> {
         assert_insert_in_def_nls(ovec!["{ ┃ }"], '{')?;
         assert_insert_nls(ovec!["val = { ┃ }"], ovec!["val = { a┃ }"], 'a')?;
-        assert_insert_nls(
-            ovec!["val = { a┃ }"],
-            ovec!["val = { ab┃ }"],
-            'b',
-        )?;
-        assert_insert_nls(
-            ovec!["val = { a┃ }"],
-            ovec!["val = { a1┃ }"],
-            '1',
-        )?;
-        assert_insert_nls(
-            ovec!["val = { a1┃ }"],
-            ovec!["val = { a1z┃ }"],
-            'z',
-        )?;
-        assert_insert_nls(
-            ovec!["val = { a1┃ }"],
-            ovec!["val = { a15┃ }"],
-            '5',
-        )?;
-        assert_insert_nls(
-            ovec!["val = { ab┃ }"],
-            ovec!["val = { abc┃ }"],
-            'c',
-        )?;
-        assert_insert_nls(
-            ovec!["val = { ┃abc }"],
-            ovec!["val = { z┃abc }"],
-            'z',
-        )?;
-        assert_insert_nls(
-            ovec!["val = { a┃b }"],
-            ovec!["val = { az┃b }"],
-            'z',
-        )?;
-        assert_insert_nls(
-            ovec!["val = { a┃b }"],
-            ovec!["val = { a9┃b }"],
-            '9',
-        )?;
+        assert_insert_nls(ovec!["val = { a┃ }"], ovec!["val = { ab┃ }"], 'b')?;
+        assert_insert_nls(ovec!["val = { a┃ }"], ovec!["val = { a1┃ }"], '1')?;
+        assert_insert_nls(ovec!["val = { a1┃ }"], ovec!["val = { a1z┃ }"], 'z')?;
+        assert_insert_nls(ovec!["val = { a1┃ }"], ovec!["val = { a15┃ }"], '5')?;
+        assert_insert_nls(ovec!["val = { ab┃ }"], ovec!["val = { abc┃ }"], 'c')?;
+        assert_insert_nls(ovec!["val = { ┃abc }"], ovec!["val = { z┃abc }"], 'z')?;
+        assert_insert_nls(ovec!["val = { a┃b }"], ovec!["val = { az┃b }"], 'z')?;
+        assert_insert_nls(ovec!["val = { a┃b }"], ovec!["val = { a9┃b }"], '9')?;
 
-        assert_insert_nls(
-            ovec!["val = { a┃ }"],
-            ovec!["val = { a: ┃  }"],
-            ':',
-        )?;
-        assert_insert_nls(
-            ovec!["val = { abc┃ }"],
-            ovec!["val = { abc: ┃  }"],
-            ':',
-        )?;
-        assert_insert_nls(
-            ovec!["val = { aBc┃ }"],
-            ovec!["val = { aBc: ┃  }"],
-            ':',
-        )?;
+        assert_insert_nls(ovec!["val = { a┃ }"], ovec!["val = { a: ┃  }"], ':')?;
+        assert_insert_nls(ovec!["val = { abc┃ }"], ovec!["val = { abc: ┃  }"], ':')?;
+        assert_insert_nls(ovec!["val = { aBc┃ }"], ovec!["val = { aBc: ┃  }"], ':')?;
 
-        assert_insert_seq_nls(
-            ovec!["val = { a┃ }"],
-            ovec!["val = { a: \"┃\" }"],
-            ":\"",
-        )?;
+        assert_insert_seq_nls(ovec!["val = { a┃ }"], ovec!["val = { a: \"┃\" }"], ":\"")?;
         assert_insert_seq_nls(
             ovec!["val = { abc┃ }"],
             ovec!["val = { abc: \"┃\" }"],
             ":\"",
         )?;
 
-        assert_insert_seq_nls(
-            ovec!["val = { a┃ }"],
-            ovec!["val = { a: 0┃ }"],
-            ":0",
-        )?;
-        assert_insert_seq_nls(
-            ovec!["val = { abc┃ }"],
-            ovec!["val = { abc: 9┃ }"],
-            ":9",
-        )?;
-        assert_insert_seq_nls(
-            ovec!["val = { a┃ }"],
-            ovec!["val = { a: 1000┃ }"],
-            ":1000",
-        )?;
+        assert_insert_seq_nls(ovec!["val = { a┃ }"], ovec!["val = { a: 0┃ }"], ":0")?;
+        assert_insert_seq_nls(ovec!["val = { abc┃ }"], ovec!["val = { abc: 9┃ }"], ":9")?;
+        assert_insert_seq_nls(ovec!["val = { a┃ }"], ovec!["val = { a: 1000┃ }"], ":1000")?;
         assert_insert_seq_nls(
             ovec!["val = { abc┃ }"],
             ovec!["val = { abc: 98761┃ }"],
@@ -1938,16 +1876,8 @@ pub mod test_ed_update {
 
     #[test]
     fn test_nested_record() -> Result<(), String> {
-        assert_insert_seq_nls(
-            ovec!["val = { a┃ }"],
-            ovec!["val = { a: { ┃ } }"],
-            ":{",
-        )?;
-        assert_insert_seq_nls(
-            ovec!["val = { abc┃ }"],
-            ovec!["val = { abc: { ┃ } }"],
-            ":{",
-        )?;
+        assert_insert_seq_nls(ovec!["val = { a┃ }"], ovec!["val = { a: { ┃ } }"], ":{")?;
+        assert_insert_seq_nls(ovec!["val = { abc┃ }"], ovec!["val = { abc: { ┃ } }"], ":{")?;
         assert_insert_seq_nls(
             ovec!["val = { camelCase┃ }"],
             ovec!["val = { camelCase: { ┃ } }"],
@@ -2239,14 +2169,8 @@ pub mod test_ed_update {
         assert_insert_seq_ignore_nls(ovec!["val = ┃{ a: {  } }"], IGNORE_NO_LTR)?;
         assert_insert_seq_ignore_nls(ovec!["val = { ┃a: {  } }"], "1")?;
 
-        assert_insert_seq_ignore_nls(
-            ovec!["val = { camelCaseB1: {┃ z15a } }"],
-            IGNORE_NO_LTR,
-        )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = { camelCaseB1: ┃{ z15a } }"],
-            IGNORE_NO_LTR,
-        )?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: {┃ z15a } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: ┃{ z15a } }"], IGNORE_NO_LTR)?;
         assert_insert_seq_nls(
             ovec!["val = { camelCaseB1: { z15a┃ } }"],
             ovec!["val = { camelCaseB1: { z15a:┃   } }"],
@@ -2257,18 +2181,9 @@ pub mod test_ed_update {
             ovec!["val = { camelCaseB1: { z15a:  ┃ } }"],
             &concat_strings(":🡲", IGNORE_CHARS),
         )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = { camelCaseB1:┃ { z15a } }"],
-            IGNORE_NO_LTR,
-        )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = {┃ camelCaseB1: { z15a } }"],
-            IGNORE_NO_LTR,
-        )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = ┃{ camelCaseB1: { z15a } }"],
-            IGNORE_NO_LTR,
-        )?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1:┃ { z15a } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = {┃ camelCaseB1: { z15a } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃{ camelCaseB1: { z15a } }"], IGNORE_NO_LTR)?;
         assert_insert_seq_ignore_nls(ovec!["val = { ┃camelCaseB1: { z15a } }"], "1")?;
         assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { ┃z15a } }"], "1")?;
 
