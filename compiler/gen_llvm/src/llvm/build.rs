@@ -714,8 +714,7 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     );
 
     // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn =
-        function_value_by_func_spec(env, *func_spec, symbol, &[], &Layout::Struct(&[]));
+    let roc_main_fn = function_value_by_func_spec(env, *func_spec, symbol, &[], &Layout::UNIT);
 
     let main_fn_name = "$Test.main";
 
@@ -1188,8 +1187,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             // extract field from a record
             match (value, layout) {
-                (StructValue(argument), Layout::Struct(fields)) => {
-                    debug_assert!(!fields.is_empty());
+                (StructValue(argument), Layout::Struct { field_layouts, .. }) => {
+                    debug_assert!(!field_layouts.is_empty());
 
                     let field_value = env
                         .builder
@@ -1201,14 +1200,14 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         )
                         .unwrap();
 
-                    let field_layout = fields[*index as usize];
+                    let field_layout = field_layouts[*index as usize];
                     use_roc_value(env, field_layout, field_value, "struct_field_tag")
                 }
                 (
                     PointerValue(argument),
                     Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
                 ) => {
-                    let struct_layout = Layout::Struct(fields);
+                    let struct_layout = Layout::struct_no_name_order(fields);
                     let struct_type = basic_type_from_layout(env, &struct_layout);
 
                     let cast_argument = env
@@ -1292,7 +1291,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     )
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    let struct_layout = Layout::Struct(field_layouts);
+                    let struct_layout = Layout::struct_no_name_order(field_layouts);
 
                     let struct_type = basic_type_from_layout(env, &struct_layout);
 
@@ -1341,7 +1340,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     debug_assert_ne!(*tag_id != 0, *nullable_id);
 
                     let field_layouts = other_fields;
-                    let struct_layout = Layout::Struct(field_layouts);
+                    let struct_layout = Layout::struct_no_name_order(field_layouts);
 
                     let struct_type = basic_type_from_layout(env, &struct_layout);
 
@@ -2024,7 +2023,7 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let struct_layout = Layout::Struct(field_layouts);
+    let struct_layout = Layout::struct_no_name_order(field_layouts);
     let struct_type = basic_type_from_layout(env, &struct_layout);
 
     let wrapper_type = env
@@ -3522,7 +3521,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
         call_roc_function(
             env,
             roc_wrapper_function,
-            &Layout::Struct(&[Layout::u64(), return_layout]),
+            &Layout::struct_no_name_order(&[Layout::u64(), return_layout]),
             arguments_for_call,
         )
     };
@@ -3903,7 +3902,7 @@ fn roc_result_layout<'a>(
 ) -> Layout<'a> {
     let elements = [Layout::u64(), Layout::usize(target_info), return_layout];
 
-    Layout::Struct(arena.alloc(elements))
+    Layout::struct_no_name_order(arena.alloc(elements))
 }
 
 fn roc_result_type<'a, 'ctx, 'env>(
@@ -5363,7 +5362,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);
 
             let number_layout = match layout {
-                Layout::Struct(fields) => fields[0], // TODO: why is it sometimes a struct?
+                Layout::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
                 _ => unreachable!(),
             };
 
@@ -6977,9 +6976,9 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             // return_layout : Result N [ OutOfBounds ]* ~ { result: N, out_of_bounds: bool }
 
             let target_int_width = match return_layout {
-                Layout::Struct(layouts) if layouts.len() == 2 => {
-                    debug_assert!(matches!(layouts[1], Layout::Builtin(Builtin::Bool)));
-                    match layouts[0] {
+                Layout::Struct { field_layouts, .. } if field_layouts.len() == 2 => {
+                    debug_assert!(matches!(field_layouts[1], Layout::Builtin(Builtin::Bool)));
+                    match field_layouts[0] {
                         Layout::Builtin(Builtin::Int(iw)) => iw,
                         layout => internal_error!(
                             "There can only be an int layout here, found {:?}!",

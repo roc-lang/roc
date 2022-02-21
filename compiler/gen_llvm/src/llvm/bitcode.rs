@@ -374,7 +374,9 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     }
 
     match closure_data_layout.runtime_representation() {
-        Layout::Struct(&[]) => {
+        Layout::Struct {
+            field_layouts: &[], ..
+        } => {
             // nothing to add
         }
         other => {
@@ -694,7 +696,9 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             let default = [value1.into(), value2.into()];
 
             let arguments_cast = match closure_data_layout.runtime_representation() {
-                Layout::Struct(&[]) => {
+                Layout::Struct {
+                    field_layouts: &[], ..
+                } => {
                     // nothing to add
                     &default
                 }

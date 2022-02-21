@@ -735,8 +735,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
 
     let result_alloca = builder.build_alloca(zig_dict_type(env), "result_alloca");
 
-    let alignment =
-        Alignment::from_key_value_layout(key_layout, &Layout::Struct(&[]), env.target_info);
+    let alignment = Alignment::from_key_value_layout(key_layout, &Layout::UNIT, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);

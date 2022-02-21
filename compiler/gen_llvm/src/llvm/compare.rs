@@ -161,10 +161,10 @@ fn build_eq<'a, 'ctx, 'env>(
             build_eq_builtin(env, layout_ids, lhs_val, rhs_val, builtin, when_recursive)
         }
 
-        Layout::Struct(fields) => build_struct_eq(
+        Layout::Struct { field_layouts, .. } => build_struct_eq(
             env,
             layout_ids,
-            fields,
+            field_layouts,
             when_recursive,
             lhs_val.into_struct_value(),
             rhs_val.into_struct_value(),
@@ -330,11 +330,11 @@ fn build_neq<'a, 'ctx, 'env>(
             build_neq_builtin(env, layout_ids, lhs_val, rhs_val, builtin, when_recursive)
         }
 
-        Layout::Struct(fields) => {
+        Layout::Struct { field_layouts, .. } => {
             let is_equal = build_struct_eq(
                 env,
                 layout_ids,
-                fields,
+                field_layouts,
                 when_recursive,
                 lhs_val.into_struct_value(),
                 rhs_val.into_struct_value(),
@@ -587,7 +587,7 @@ fn build_struct_eq<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let struct_layout = Layout::Struct(field_layouts);
+    let struct_layout = Layout::struct_no_name_order(field_layouts);
 
     let symbol = Symbol::GENERIC_EQ;
     let fn_name = layout_ids
@@ -1208,7 +1208,7 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     tag1: PointerValue<'ctx>,
     tag2: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let struct_layout = Layout::Struct(field_layouts);
+    let struct_layout = Layout::struct_no_name_order(field_layouts);
 
     let wrapper_type = basic_type_from_layout(env, &struct_layout);
     debug_assert!(wrapper_type.is_struct_type());
