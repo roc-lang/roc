@@ -2557,7 +2557,7 @@ pub mod test_ed_update {
         assert_insert_nls(ovec!["┃"], ovec!["z┃ =  "], 'z')?;
 
         assert_insert_seq_nls(ovec!["┃"], ovec!["ab┃ =  "], "ab")?;
-        // TODO make issue for this, see update_key function
+        // TODO see issue #2548
         //assert_insert_seq_nls(ovec!["┃"], ovec!["mainVal┃ =  "], "mainVal")?;
         assert_insert_seq_nls(ovec!["┃"], ovec!["camelCase123┃ =  "], "camelCase123")?;
         assert_insert_seq_nls(ovec!["┃"], ovec!["c137┃ =  "], "c137")?;
