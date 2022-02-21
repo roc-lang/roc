@@ -1333,7 +1333,7 @@ pub enum AliasKind {
     ///   List a : [ Nil, Cons a (List a) ]
     /// It is typed structurally, so that a `List U8` is always equal to a `[ Nil ]_`, for example.
     Structural,
-    /// An opaque alias corresponds to an opaque type from the langauge syntax, like
+    /// An opaque alias corresponds to an opaque type from the language syntax, like
     ///   Age := U32
     /// It is type nominally, so that `Age` is never equal to `U8` - the only way to unwrap the
     /// structural type inside `Age` is to unwrap the opaque, so `Age` = `@Age U8`.
