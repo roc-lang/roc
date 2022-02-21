@@ -6976,9 +6976,9 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             // return_layout : Result N [ OutOfBounds ]* ~ { result: N, out_of_bounds: bool }
 
             let target_int_width = match return_layout {
-                Layout::Struct(layouts) if layouts.len() == 2 => {
-                    debug_assert!(matches!(layouts[1], Layout::Builtin(Builtin::Bool)));
-                    match layouts[0] {
+                Layout::Struct { field_layouts, .. } if field_layouts.len() == 2 => {
+                    debug_assert!(matches!(field_layouts[1], Layout::Builtin(Builtin::Bool)));
+                    match field_layouts[0] {
                         Layout::Builtin(Builtin::Int(iw)) => iw,
                         layout => internal_error!(
                             "There can only be an int layout here, found {:?}!",
