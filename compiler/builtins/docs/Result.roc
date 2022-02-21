@@ -70,7 +70,7 @@ mapErr : Result ok before, (before -> after) -> Result ok after
 ## If both of the results are `Ok`, apply a function giving both result values
 ## as arguments. Then return a new `Ok` holding the return value of that function.
 ##
-## (If either result is `Err`, this has no effect.)
+## (If either result is `Err`, this has no effect. The first `Err` will propagate through.)
 ##
 ## >>> Result.map2 (Ok 2) (Ok 4) (\a, b -> a + b)
 ##
