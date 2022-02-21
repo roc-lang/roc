@@ -98,6 +98,14 @@ comptime {
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
     }
 
+    inline for (INTEGERS) |FROM| {
+        inline for (INTEGERS) |TO| {
+            // We're exporting more than we need here, but that's okay.
+            num.exportToIntCheckingMax(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max.");
+            num.exportToIntCheckingMaxAndMin(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max_and_min.");
+        }
+    }
+
     inline for (FLOATS) |T| {
         num.exportAsin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".asin.");
         num.exportAcos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".acos.");

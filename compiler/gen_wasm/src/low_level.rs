@@ -655,6 +655,9 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
             }
+            NumToIntChecked => {
+                todo!()
+            }
             And => {
                 self.load_args(backend);
                 backend.code_builder.i32_and();
