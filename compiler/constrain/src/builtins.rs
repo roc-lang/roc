@@ -7,9 +7,9 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::subs::Variable;
-use roc_types::types::Category;
 use roc_types::types::Reason;
 use roc_types::types::Type::{self, *};
+use roc_types::types::{AliasKind, Category};
 
 #[must_use]
 pub fn add_numeric_bound_constr(
@@ -163,7 +163,7 @@ fn builtin_alias(
         actual,
         lambda_set_variables: vec![],
         // TODO(opaques): revisit later
-        is_opaque: false,
+        kind: AliasKind::Structural,
     }
 }
 

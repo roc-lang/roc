@@ -6,7 +6,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, LambdaSet, Problem, RecordField, Type};
+use roc_types::types::{Alias, AliasKind, LambdaSet, Problem, RecordField, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -360,7 +360,7 @@ fn can_annotation_help(
                         type_arguments: vars,
                         lambda_set_variables,
                         actual: Box::new(actual),
-                        is_opaque: alias.is_opaque,
+                        kind: alias.kind,
                     }
                 }
                 None => Type::Apply(symbol, args, region),
@@ -499,7 +499,7 @@ fn can_annotation_help(
                 region,
                 lowercase_vars,
                 alias_actual,
-                false, // aliases in "as" are never opaque
+                AliasKind::Structural, // aliases in "as" are never opaque
             );
 
             let alias = scope.lookup_alias(symbol).unwrap();
@@ -523,7 +523,7 @@ fn can_annotation_help(
                     type_arguments: vars,
                     lambda_set_variables: alias.lambda_set_variables.clone(),
                     actual: Box::new(alias.typ.clone()),
-                    is_opaque: alias.is_opaque,
+                    kind: alias.kind,
                 }
             }
         }

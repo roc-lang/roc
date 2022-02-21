@@ -4,7 +4,6 @@ use crate::docs::TypeAnnotation::{
 };
 use crate::file::LoadedModule;
 use roc_can::scope::Scope;
-use roc_error_macros::todo_opaques;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
 use roc_parse::ast::CommentOrNewline;
@@ -229,7 +228,28 @@ fn generate_entry_doc<'a>(
             (acc, None)
         }
 
-        Def::Opaque { .. } => todo_opaques!("figure out documentation for opaques"),
+        Def::Opaque {
+            header: TypeHeader { name, vars },
+            ..
+        } => {
+            let mut type_vars = Vec::new();
+
+            for var in vars.iter() {
+                if let Pattern::Identifier(ident_name) = var.value {
+                    type_vars.push(ident_name.to_string());
+                }
+            }
+
+            let doc_def = DocDef {
+                name: name.value.to_string(),
+                type_annotation: TypeAnnotation::NoTypeAnn,
+                type_vars,
+                docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+            };
+            acc.push(DocEntry::DocDef(doc_def));
+
+            (acc, None)
+        }
 
         Def::Body(_, _) => (acc, None),
 

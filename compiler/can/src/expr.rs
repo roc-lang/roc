@@ -705,18 +705,19 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
-        ast::Expr::OpaqueRef(name) => {
-            let name_ident = env.ident_ids.get_or_insert(&(*name).into());
-            let symbol = Symbol::new(env.home, name_ident);
-
-            (
+        ast::Expr::OpaqueRef(opaque_ref) => match scope.lookup_opaque_ref(opaque_ref, region) {
+            Ok(name) => (
                 OpaqueRef {
-                    name: symbol,
+                    name,
                     arguments: vec![],
                 },
                 Output::default(),
-            )
-        }
+            ),
+            Err(runtime_error) => {
+                env.problem(Problem::RuntimeError(runtime_error.clone()));
+                (RuntimeError(runtime_error), Output::default())
+            }
+        },
         ast::Expr::Expect(condition, continuation) => {
             let mut output = Output::default();
 

@@ -8136,4 +8136,67 @@ I need all branches in an `if` to have the same type!
             "",
         )
     }
+
+    #[test]
+    fn opaque_type_not_in_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                1│  $Age 21
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this module yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_reference_not_opaque_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age : U8
+
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                3│  $Age 21
+                    ^^^^
+
+                Note: There is an alias of the same name:
+
+                1│  Age : U8
+                    ^^^
+
+                Note: It looks like there are no opaque types declared in this module yet!
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                1│  Age : U8
+                    ^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
 }

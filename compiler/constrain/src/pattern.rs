@@ -5,6 +5,7 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, RecordDestruct};
 use roc_collections::all::{Index, SendMap};
+use roc_error_macros::todo_opaques;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -55,6 +56,7 @@ fn headers_from_annotation_help(
         Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
+        | OpaqueNotInScope(..)
         | NumLiteral(..)
         | IntLiteral(..)
         | FloatLiteral(..)
@@ -114,6 +116,8 @@ fn headers_from_annotation_help(
             }
             _ => false,
         },
+
+        UnwrappedOpaque { .. } => todo_opaques!(),
     }
 }
 
@@ -158,7 +162,7 @@ pub fn constrain_pattern(
                 PresenceConstraint::IsOpen,
             ));
         }
-        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) => {
+        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) | OpaqueNotInScope(..) => {
             // Neither the _ pattern nor erroneous ones add any constraints.
         }
 
@@ -444,5 +448,7 @@ pub fn constrain_pattern(
             state.constraints.push(whole_con);
             state.constraints.push(tag_con);
         }
+
+        UnwrappedOpaque { .. } => todo_opaques!(),
     }
 }

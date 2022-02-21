@@ -20,6 +20,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::AliasKind;
 use roc_types::types::{Alias, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -73,28 +74,18 @@ enum PendingDef<'a> {
         &'a Loc<ast::Expr<'a>>,
     ),
 
-    /// A type alias, e.g. `Ints : List Int`
+    /// A structural or opaque type alias, e.g. `Ints : List Int` or `Age := U32` respectively.
     Alias {
         name: Loc<Symbol>,
         vars: Vec<Loc<Lowercase>>,
         ann: &'a Loc<ast::TypeAnnotation<'a>>,
-    },
-
-    /// An opaque type, e.g. `Age := U32`
-    Opaque {
-        name: Loc<Symbol>,
-        vars: Vec<Loc<Lowercase>>,
-        ann: &'a Loc<ast::TypeAnnotation<'a>>,
+        kind: AliasKind,
     },
 
     /// An invalid alias, that is ignored in the rest of the pipeline
     /// e.g. a shadowed alias, or a definition like `MyAlias 1 : Int`
     /// with an incorrect pattern
-    InvalidAlias,
-
-    /// An invalid opaque, that is ignored in the rest of the pipeline.
-    /// E.g. a shadowed opaque, or a definition like `MyOpaq 1 := Int`.
-    InvalidOpaque,
+    InvalidAlias { kind: AliasKind },
 }
 
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
@@ -240,10 +231,7 @@ pub fn canonicalize_defs<'a>(
 
                         // Type definitions aren't value definitions, so we don't need to do
                         // anything for them here.
-                        PendingDef::Alias { .. }
-                        | PendingDef::InvalidAlias
-                        | PendingDef::Opaque { .. }
-                        | PendingDef::InvalidOpaque => {}
+                        PendingDef::Alias { .. } | PendingDef::InvalidAlias { .. } => {}
                     }
                 }
                 // Record the ast::Expr for later. We'll do another pass through these
@@ -264,13 +252,16 @@ pub fn canonicalize_defs<'a>(
     let mut value_defs = Vec::new();
 
     let mut alias_defs = MutMap::default();
-    let mut opaque_defs = MutMap::default();
     let mut referenced_type_symbols = MutMap::default();
 
     for pending_def in pending.into_iter() {
-        let is_alias = matches!(pending_def, PendingDef::Alias { .. });
         match pending_def {
-            PendingDef::Alias { name, vars, ann } | PendingDef::Opaque { name, vars, ann } => {
+            PendingDef::Alias {
+                name,
+                vars,
+                ann,
+                kind,
+            } => {
                 let referenced_symbols = crate::annotation::find_type_def_symbols(
                     env.home,
                     &mut env.ident_ids,
@@ -279,11 +270,7 @@ pub fn canonicalize_defs<'a>(
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
 
-                if is_alias {
-                    alias_defs.insert(name.value, (name, vars, ann));
-                } else {
-                    opaque_defs.insert(name.value, (name, vars, ann));
-                }
+                alias_defs.insert(name.value, (name, vars, ann, kind));
             }
             other => value_defs.push(other),
         }
@@ -292,13 +279,7 @@ pub fn canonicalize_defs<'a>(
     let sorted = sort_type_defs_before_introduction(referenced_type_symbols);
 
     for type_name in sorted {
-        let (is_alias, name, vars, ann) = match alias_defs.remove(&type_name) {
-            Some((name, vars, ann)) => (true, name, vars, ann),
-            None => {
-                let (name, vars, ann) = opaque_defs.remove(&type_name).unwrap();
-                (false, name, vars, ann)
-            }
-        };
+        let (name, vars, ann, kind) = alias_defs.remove(&type_name).unwrap();
 
         let symbol = name.value;
         let can_ann = canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
@@ -343,7 +324,7 @@ pub fn canonicalize_defs<'a>(
             name.region,
             can_vars.clone(),
             can_ann.typ.clone(),
-            !is_alias,
+            kind,
         );
         aliases.insert(symbol, alias.clone());
     }
@@ -357,7 +338,7 @@ pub fn canonicalize_defs<'a>(
             alias.region,
             alias.type_variables.clone(),
             alias.typ.clone(),
-            alias.is_opaque,
+            alias.kind,
         );
     }
 
@@ -854,6 +835,15 @@ fn pattern_to_vars_by_symbol(
             }
         }
 
+        UnwrappedOpaque {
+            arguments, opaque, ..
+        } => {
+            for (var, nested) in arguments {
+                pattern_to_vars_by_symbol(vars_by_symbol, &nested.value, *var);
+            }
+            vars_by_symbol.insert(*opaque, expr_var);
+        }
+
         RecordDestructure { destructs, .. } => {
             for destruct in destructs {
                 vars_by_symbol.insert(destruct.value.symbol, destruct.value.var);
@@ -866,7 +856,8 @@ fn pattern_to_vars_by_symbol(
         | StrLiteral(_)
         | Underscore
         | MalformedPattern(_, _)
-        | UnsupportedPattern(_) => {}
+        | UnsupportedPattern(_)
+        | OpaqueNotInScope(..) => {}
     }
 }
 
@@ -1000,9 +991,8 @@ fn canonicalize_pending_def<'a>(
         }
 
         Alias { .. } => unreachable!("Aliases are handled in a separate pass"),
-        Opaque { .. } => unreachable!("Opaques are handled in a separate pass"),
 
-        InvalidAlias | InvalidOpaque => {
+        InvalidAlias { .. } => {
             // invalid aliases and opaques (shadowed, incorrect patterns) get ignored
         }
         TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
@@ -1493,11 +1483,10 @@ fn to_pending_def<'a>(
             header: TypeHeader { name, vars },
             typ: ann,
         } => {
-            let is_alias = matches!(def, Alias { .. });
-            let invalid_pending_def = if is_alias {
-                PendingDef::InvalidAlias
+            let kind = if matches!(def, Alias { .. }) {
+                AliasKind::Structural
             } else {
-                PendingDef::InvalidOpaque
+                AliasKind::Opaque
             };
 
             let region = Region::span_across(&name.region, &ann.region);
@@ -1524,20 +1513,16 @@ fn to_pending_def<'a>(
                             }
                             _ => {
                                 // any other pattern in this position is a syntax error.
-                                let problem = if is_alias {
-                                    Problem::InvalidAliasRigid {
-                                        alias_name: symbol,
-                                        region: loc_var.region,
-                                    }
-                                } else {
-                                    Problem::InvalidOpaqueRigid {
-                                        opaque_name: symbol,
-                                        region: loc_var.region,
-                                    }
+                                let problem = Problem::InvalidAliasRigid {
+                                    alias_name: symbol,
+                                    region: loc_var.region,
                                 };
                                 env.problems.push(problem);
 
-                                return Some((Output::default(), invalid_pending_def));
+                                return Some((
+                                    Output::default(),
+                                    PendingDef::InvalidAlias { kind },
+                                ));
                             }
                         }
                     }
@@ -1547,18 +1532,11 @@ fn to_pending_def<'a>(
                         value: symbol,
                     };
 
-                    let pending_def = if is_alias {
-                        PendingDef::Alias {
-                            name,
-                            vars: can_rigids,
-                            ann,
-                        }
-                    } else {
-                        PendingDef::Opaque {
-                            name,
-                            vars: can_rigids,
-                            ann,
-                        }
+                    let pending_def = PendingDef::Alias {
+                        name,
+                        vars: can_rigids,
+                        ann,
+                        kind,
                     };
 
                     Some((Output::default(), pending_def))
@@ -1570,7 +1548,7 @@ fn to_pending_def<'a>(
                         shadow: loc_shadowed_symbol,
                     });
 
-                    Some((Output::default(), invalid_pending_def))
+                    Some((Output::default(), PendingDef::InvalidAlias { kind }))
                 }
             }
         }

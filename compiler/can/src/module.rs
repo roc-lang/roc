@@ -16,7 +16,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, Type};
+use roc_types::types::{Alias, AliasKind, Type};
 
 #[derive(Debug)]
 pub struct Module {
@@ -86,7 +86,13 @@ pub fn canonicalize_module_defs<'a>(
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
-        scope.add_alias(name, alias.region, alias.type_variables, alias.typ, false);
+        scope.add_alias(
+            name,
+            alias.region,
+            alias.type_variables,
+            alias.typ,
+            alias.kind,
+        );
     }
 
     struct Hosted {
@@ -131,7 +137,7 @@ pub fn canonicalize_module_defs<'a>(
                 Region::zero(),
                 vec![Loc::at_zero(("a".into(), a_var))],
                 actual,
-                /* is_opaque */ false,
+                AliasKind::Structural,
             );
         }
 
@@ -537,6 +543,10 @@ fn fix_values_captured_in_closure_pattern(
         AppliedTag {
             arguments: loc_args,
             ..
+        }
+        | UnwrappedOpaque {
+            arguments: loc_args,
+            ..
         } => {
             for (_, loc_arg) in loc_args.iter_mut() {
                 fix_values_captured_in_closure_pattern(&mut loc_arg.value, no_capture_symbols);
@@ -565,7 +575,8 @@ fn fix_values_captured_in_closure_pattern(
         | Underscore
         | Shadowed(..)
         | MalformedPattern(_, _)
-        | UnsupportedPattern(_) => (),
+        | UnsupportedPattern(_)
+        | OpaqueNotInScope(..) => (),
     }
 }
 

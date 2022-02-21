@@ -29,6 +29,8 @@ const NESTED_DATATYPE: &str = "NESTED DATATYPE";
 const CONFLICTING_NUMBER_SUFFIX: &str = "CONFLICTING NUMBER SUFFIX";
 const NUMBER_OVERFLOWS_SUFFIX: &str = "NUMBER OVERFLOWS SUFFIX";
 const NUMBER_UNDERFLOWS_SUFFIX: &str = "NUMBER UNDERFLOWS SUFFIX";
+const OPAQUE_NOT_DEFINED: &str = "OPAQUE NOT DEFINED";
+const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE DECLARED OUTSIDE SCOPE";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -388,10 +390,6 @@ pub fn can_problem<'b>(
         }
         Problem::InvalidAliasRigid {
             alias_name: type_name,
-            region,
-        }
-        | Problem::InvalidOpaqueRigid {
-            opaque_name: type_name,
             region,
         } => {
             doc = alloc.stack(vec![
@@ -1334,6 +1332,77 @@ fn pretty_runtime_error<'b>(
                 )]);
 
             title = MISSING_DEFINITION;
+        }
+        RuntimeError::OpaqueNotDefined {
+            usage:
+                Loc {
+                    region: used_region,
+                    value: opaque,
+                },
+            opaques_in_scope,
+            opt_defined_alias,
+        } => {
+            let mut suggestions = suggest::sort(
+                opaque.as_inline_str().as_str(),
+                opaques_in_scope.iter().map(|v| v.as_ref()).collect(),
+            );
+            suggestions.truncate(4);
+
+            let details = if suggestions.is_empty() {
+                alloc.note("It looks like there are no opaque types declared in this module yet!")
+            } else {
+                let qualified_suggestions =
+                    suggestions.into_iter().map(|v| alloc.string(v.to_string()));
+                alloc.stack(vec![
+                    alloc
+                        .tip()
+                        .append(alloc.reflow("Did you mean one of these opaque types?")),
+                    alloc.vcat(qualified_suggestions).indent(4),
+                ])
+            };
+
+            let mut stack = vec![
+                alloc.concat(vec![
+                    alloc.reflow("The opaque type "),
+                    alloc.type_str(opaque.as_inline_str().as_str()),
+                    alloc.reflow(" referenced here is not defined:"),
+                ]),
+                alloc.region(lines.convert_region(used_region)),
+            ];
+
+            if let Some(defined_alias_region) = opt_defined_alias {
+                stack.push(alloc.stack(vec![
+                    alloc.note("There is an alias of the same name:"),
+                    alloc.region(lines.convert_region(defined_alias_region)),
+                ]));
+            }
+
+            stack.push(details);
+
+            doc = alloc.stack(stack);
+
+            title = OPAQUE_NOT_DEFINED;
+        }
+        RuntimeError::OpaqueOutsideScope {
+            opaque,
+            referenced_region,
+            imported_region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The unwrapped opaque type "),
+                    alloc.type_str(opaque.as_inline_str().as_str()),
+                    alloc.reflow(" referenced here:"),
+                ]),
+                alloc.region(lines.convert_region(referenced_region)),
+                alloc.reflow("is imported from another module:"),
+                alloc.region(lines.convert_region(imported_region)),
+                alloc.note(
+                    "Opaque types can only be wrapped and unwrapped in the module they are defined in!",
+                ),
+            ]);
+
+            title = OPAQUE_DECLARED_OUTSIDE_SCOPE;
         }
     }
 

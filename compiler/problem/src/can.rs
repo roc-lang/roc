@@ -76,10 +76,6 @@ pub enum Problem {
         alias_name: Symbol,
         region: Region,
     },
-    InvalidOpaqueRigid {
-        opaque_name: Symbol,
-        region: Region,
-    },
     InvalidInterpolation(Region),
     InvalidHexadecimal(Region),
     InvalidUnicodeCodePt(Region),
@@ -159,6 +155,16 @@ pub enum RuntimeError {
     ErroneousType,
 
     LookupNotInScope(Loc<Ident>, MutSet<Box<str>>),
+    OpaqueNotDefined {
+        usage: Loc<Ident>,
+        opaques_in_scope: MutSet<Box<str>>,
+        opt_defined_alias: Option<Region>,
+    },
+    OpaqueOutsideScope {
+        opaque: Ident,
+        referenced_region: Region,
+        imported_region: Region,
+    },
     ValueNotExposed {
         module_name: ModuleName,
         ident: Ident,

@@ -2013,6 +2013,13 @@ fn pattern_to_when<'a>(
             (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
         }
 
+        OpaqueNotInScope(loc_ident) => {
+            // create the runtime error here, instead of delegating to When.
+            // TODO(opaques) should be `RuntimeError::OpaqueNotDefined`
+            let error = roc_problem::can::RuntimeError::UnsupportedPattern(loc_ident.region);
+            (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
+        }
+
         AppliedTag { .. } | RecordDestructure { .. } => {
             let symbol = env.unique_symbol();
 
@@ -2030,6 +2037,8 @@ fn pattern_to_when<'a>(
 
             (symbol, Loc::at_zero(wrapped_body))
         }
+
+        UnwrappedOpaque { .. } => todo_opaques!(),
 
         IntLiteral(..) | NumLiteral(..) | FloatLiteral(..) | StrLiteral(_) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
@@ -7743,6 +7752,10 @@ fn from_can_pattern_help<'a>(
             // TODO preserve malformed problem information here?
             Err(RuntimeError::UnsupportedPattern(*region))
         }
+        OpaqueNotInScope(loc_ident) => {
+            // TODO(opaques) should be `RuntimeError::OpaqueNotDefined`
+            Err(RuntimeError::UnsupportedPattern(loc_ident.region))
+        }
         NumLiteral(var, num_str, num, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
                 IntOrFloat::Int(precision) => Ok(match num {
@@ -8190,6 +8203,8 @@ fn from_can_pattern_help<'a>(
 
             Ok(result)
         }
+
+        UnwrappedOpaque { .. } => todo_opaques!(),
 
         RecordDestructure {
             whole_var,
