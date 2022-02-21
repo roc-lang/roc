@@ -850,7 +850,14 @@ fn link_macos(
         ld_command.arg(format!("-L{}/swift", sdk_path));
     };
 
-    let roc_link_flags = env::var("ROC_LINK_FLAGS").unwrap_or_else(|_| "".to_string());
+    let roc_link_flags = match env::var("ROC_LINK_FLAGS") {
+        Some(flags) => {
+            println!("⚠️ CAUTION: The ROC_LINK_FLAGS environment variable is a temporary workaround, and will no longer do anything once surgical linking lands! If you're concerned about what this means for your use case, please ask about it on Zulip.");
+            
+            flags
+        }
+        None => "".to_string()
+    }
     for roc_link_flag in roc_link_flags.split_whitespace() {
         ld_command.arg(format!("{}", roc_link_flag));
     }
