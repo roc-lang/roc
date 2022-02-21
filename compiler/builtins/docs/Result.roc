@@ -6,6 +6,7 @@ interface Result
             isOk,
             isErr,
             map,
+            map2,
             mapErr,
             withDefault
         ]
@@ -65,3 +66,19 @@ map : Result before err, (before -> after) -> Result after err
 ##
 ## >>> Result.mapErr (Ok 12) Str.isEmpty
 mapErr : Result ok before, (before -> after) -> Result ok after
+
+## If both of the results are `Ok`, apply a function giving both result values
+## as arguments. Then return a new `Ok` holding the return value of that function.
+##
+## (If either result is `Err`, this has no effect.)
+##
+## >>> Result.map2 (Ok 2) (Ok 4) (\a, b -> a + b)
+##
+## None of the following will have any effect:
+##
+## >>> Result.map2 (Ok 2) (Err "yikes!") (\a, b -> a + b)
+## 
+## >>> Result.map2 (Err "yikes!") (Ok 2) (\a, b -> a + b)
+##
+## >>> Result.map2 (Err "double") (Err "yikes!") (\a, b -> a + b)
+map2 : Result before err, Result before err, (before, before -> Result after err) -> Result after err
