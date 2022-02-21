@@ -1,9 +1,11 @@
 platform "examples/hello-world"
-    requires {} { render : [ Text Str, Button Str ] }
+    requires {} { render : Elem }
     exposes []
     packages {}
     imports []
     provides [ renderForHost ]
 
-renderForHost : [ Text Str, Button Str ]
+Elem : [ Text Str, Button Elem ]
+
+renderForHost : Elem
 renderForHost = render

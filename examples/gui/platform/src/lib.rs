@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
-use core::mem::MaybeUninit;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use roc_std::RocStr;
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -16,10 +16,22 @@ extern "C" {
 }
 
 #[repr(C)]
-#[derive(Debug)]
 struct RocElem {
-    string: RocStr,
-    tag: u8,
+    entry: RocElemEntry,
+    tag: RocElemTag,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy)]
+enum RocElemTag {
+    Button = 0,
+    Text,
+}
+
+#[repr(C)]
+union RocElemEntry {
+    text: ManuallyDrop<RocStr>,
+    button: *const RocElem,
 }
 
 #[no_mangle]
@@ -126,8 +138,49 @@ pub extern "C" fn rust_main() -> i32 {
         ret.assume_init()
     };
 
-    println!("Got this roc_str from roc_render: {}", elem.string);
-    println!("Got this tag: {}", elem.tag);
+    fn display_elem(elem: &RocElem) {
+        use RocElemTag::*;
+
+        println!("Got this tag: {:?}", elem.tag);
+
+        match elem.tag {
+            Button => {
+                println!("Button!");
+
+                let child_ptr = unsafe { &*elem.entry.button };
+
+                println!("Got this child:");
+
+                display_elem(&*child_ptr);
+            }
+            Text => {
+                println!("Text!");
+
+                let text = unsafe { &*elem.entry.text };
+                println!("Got text with this length: {}", text.len());
+            }
+        }
+    }
+
+    display_elem(&elem);
+
+    // #[repr(C)]
+    // struct RocElem {
+    //     entry: RocElemEntry
+    //     tag: RocElemTag,
+    // }
+
+    // #[repr(u8)]
+    // enum RocElemTag {
+    //     Button = 0,
+    //     Text,
+    // }
+
+    // #[repr(C)]
+    // union RocElemEntry {
+    //     text: ManuallyDrop<RocStr>,
+    //     button: *const RocElem,
+    // }
 
     // fn render(clicks: i64) -> Elem<i64> {
     //     let txt = Elem::Text(Key::null(), format!("Clicks: {}", clicks).as_str().into());
