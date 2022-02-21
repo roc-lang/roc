@@ -32,7 +32,7 @@ all modules can do name resolution in parallel.
 Of note, allowing this feature would only slow down modules that used it; modules that didn't use it would still be
 parallelizable. However, when people find out ways to speed up their builds (in any language), advice starts to
 circulate about how to unlock those speed boosts. If Roc had this feature, it's predictable that a commonly-accepted
-piece of advice would eventually circulate: "don't use this feature becuase it slows down your builds."
+piece of advice would eventually circulate: "don't use this feature because it slows down your builds."
 
 If a feature exists in a language, but the common recommendation is never to use it, that's cause for reconsidering
 whether the feature should be in the language at all. In the case of this feature, I think it's simpler if the
