@@ -1,9 +1,9 @@
 procedure Test.2 (Test.4, Test.5):
-    let Test.9 : Builtin(Int(U8)) = 18i64;
+    let Test.9 : U8 = 18i64;
     ret Test.9;
 
 procedure Test.0 ():
-    let Test.7 : Builtin(Bool) = false;
-    let Test.8 : Builtin(Int(U8)) = 0u8;
-    let Test.6 : Builtin(Int(U8)) = CallByName Test.2 Test.7 Test.8;
+    let Test.7 : Int1 = false;
+    let Test.8 : U8 = 0u8;
+    let Test.6 : U8 = CallByName Test.2 Test.7 Test.8;
     ret Test.6;

@@ -1725,11 +1725,11 @@ impl<'a> Stmt<'a> {
         use Stmt::*;
 
         match self {
-            Let(symbol, expr, _layout, cont) => alloc
+            Let(symbol, expr, layout, cont) => alloc
                 .text("let ")
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(" : ")
-                .append(alloc.text(format!("{:?}", _layout)))
+                .append(layout.to_doc(alloc, Parens::NotNeeded))
                 .append(" = ")
                 .append(expr.to_doc(alloc))
                 .append(";")

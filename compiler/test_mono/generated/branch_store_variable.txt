@@ -1,9 +1,9 @@
 procedure Test.0 ():
-    let Test.2 : Builtin(Int(I64)) = 0i64;
-    let Test.5 : Builtin(Int(I64)) = 1i64;
-    let Test.6 : Builtin(Bool) = lowlevel Eq Test.5 Test.2;
+    let Test.2 : I64 = 0i64;
+    let Test.5 : I64 = 1i64;
+    let Test.6 : Int1 = lowlevel Eq Test.5 Test.2;
     if Test.6 then
-        let Test.3 : Builtin(Int(I64)) = 12i64;
+        let Test.3 : I64 = 12i64;
         ret Test.3;
     else
         ret Test.2;
