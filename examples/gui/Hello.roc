@@ -6,4 +6,4 @@ app "hello-gui"
 render =
     # btn = button { onPress : \prev, _ -> Action.none } (text "Hello, button!")
 
-    "Hello, World!"
+    Text "Hello, World!"

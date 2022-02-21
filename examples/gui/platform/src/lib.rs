@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
+use core::mem::MaybeUninit;
 use roc_std::RocStr;
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -11,14 +12,14 @@ mod rects_and_texts;
 
 extern "C" {
     #[link_name = "roc__renderForHost_1_exposed"]
-    fn roc_render() -> RocStr;
+    fn roc_render(elem: &mut RocElem);
 }
 
 #[repr(C)]
 #[derive(Debug)]
 struct RocElem {
-    tag: u8,
     string: RocStr,
+    tag: u8,
 }
 
 #[no_mangle]
@@ -115,57 +116,68 @@ struct AppState {
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    let roc_str = unsafe { roc_render() };
+    println!("Calling roc_render()...");
 
-    fn render(clicks: i64) -> Elem<i64> {
-        let txt = Elem::Text(Key::null(), format!("Clicks: {}", clicks).as_str().into());
+    let elem = unsafe {
+        let mut ret: MaybeUninit<RocElem> = MaybeUninit::uninit();
 
-        Elem::Button(
-            Key::null(),
-            Box::new(move || Action::Update(clicks + 1)),
-            Box::new(txt),
-        )
-    }
+        roc_render(ret.assume_init_mut());
 
-    fn draw_elem<T>(elem: Elem<T>) {
-        use Elem::*;
+        ret.assume_init()
+    };
 
-        match elem {
-            Button(_key, _on_click, label) => {
-                print!("Drawing button label:\n\t");
+    println!("Got this roc_str from roc_render: {}", elem.string);
+    println!("Got this tag: {}", elem.tag);
 
-                draw_elem(*label);
-            }
-            Text(_key, roc_str) => {
-                println!("Drawing string \"{}\"", roc_str);
-            }
-            Col(_key, elems) => {
-                println!("Drawing col contents...");
+    // fn render(clicks: i64) -> Elem<i64> {
+    //     let txt = Elem::Text(Key::null(), format!("Clicks: {}", clicks).as_str().into());
 
-                for elem in elems {
-                    draw_elem(elem);
-                }
-            }
-            Row(_key, elems) => {
-                println!("Drawing row contents...");
+    //     Elem::Button(
+    //         Key::null(),
+    //         Box::new(move || Action::Update(clicks + 1)),
+    //         Box::new(txt),
+    //     )
+    // }
 
-                for elem in elems {
-                    draw_elem(elem);
-                }
-            }
-            TextInput {
-                key: _,
-                text,
-                on_change: _,
-            } => {
-                println!("Drawing text input with current text \"{}\"", text);
-            }
-        }
-    }
+    // fn draw_elem<T>(elem: Elem<T>) {
+    //     use Elem::*;
 
-    draw_elem(render(0));
+    //     match elem {
+    //         Button(_key, _on_click, label) => {
+    //             print!("Drawing button label:\n\t");
 
-    gui::render(roc_str);
+    //             draw_elem(*label);
+    //         }
+    //         Text(_key, roc_str) => {
+    //             println!("Drawing string \"{}\"", roc_str);
+    //         }
+    //         Col(_key, elems) => {
+    //             println!("Drawing col contents...");
+
+    //             for elem in elems {
+    //                 draw_elem(elem);
+    //             }
+    //         }
+    //         Row(_key, elems) => {
+    //             println!("Drawing row contents...");
+
+    //             for elem in elems {
+    //                 draw_elem(elem);
+    //             }
+    //         }
+    //         TextInput {
+    //             key: _,
+    //             text,
+    //             on_change: _,
+    //         } => {
+    //             println!("Drawing text input with current text \"{}\"", text);
+    //         }
+    //     }
+    // }
+
+    // draw_elem(render(0));
+
+    // gui::render(roc_str);
 
     // Exit code
     0
