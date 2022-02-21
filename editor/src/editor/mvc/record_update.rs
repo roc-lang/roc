@@ -14,10 +14,8 @@ use roc_ast::lang::core::expr::record_field::RecordField;
 use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_ast::mem_pool::pool_vec::PoolVec;
 use roc_code_markup::markup::attribute::Attributes;
-use roc_code_markup::markup::common_nodes::new_blank_mn;
-use roc_code_markup::markup::common_nodes::new_left_accolade_mn;
-use roc_code_markup::markup::common_nodes::new_right_accolade_mn;
 use roc_code_markup::markup::nodes;
+use roc_code_markup::markup::nodes::COLON;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::slow_pool::MarkNodeId;
 use roc_code_markup::syntax_highlight::HighlightStyle;
@@ -25,53 +23,22 @@ use snafu::OptionExt;
 
 pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let NodeContext {
-        old_caret_pos,
-        curr_mark_node_id,
+        old_caret_pos:_,
+        curr_mark_node_id:_,
         curr_mark_node,
-        parent_id_opt,
+        parent_id_opt:_,
         ast_node_id,
     } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
-    let curr_mark_node_nls = curr_mark_node.get_newlines_at_end();
 
     let ast_pool = &mut ed_model.module.env.pool;
     let expr2_node = Expr2::EmptyRecord;
 
     ast_pool.set(ast_node_id.to_expr_id()?, expr2_node);
 
-    let left_bracket_node_id = ed_model.add_mark_node(new_left_accolade_mn(
-        ast_node_id.to_expr_id()?,
-        Some(curr_mark_node_id),
-    ));
-
-    let right_bracket_node_id = ed_model.add_mark_node(new_right_accolade_mn(
-        ast_node_id.to_expr_id()?,
-        Some(curr_mark_node_id),
-    ));
-
-    let nested_node = MarkupNode::Nested {
-        ast_node_id,
-        children_ids: vec![left_bracket_node_id, right_bracket_node_id],
-        parent_id_opt,
-        newlines_at_end: curr_mark_node_nls,
-    };
-
     if is_blank_node {
-        ed_model
-            .mark_node_pool
-            .replace_node(curr_mark_node_id, nested_node);
-
-        ed_model.del_blank_expr_node(old_caret_pos)?;
-
         ed_model.simple_move_carets_right(nodes::LEFT_ACCOLADE.len());
-
-        // update GridNodeMap and CodeLines
-        ed_model.insert_all_between_line(
-            old_caret_pos.line,
-            old_caret_pos.column,
-            &[left_bracket_node_id, right_bracket_node_id],
-        )?;
 
         Ok(InputOutcome::Accepted)
     } else {
@@ -173,12 +140,11 @@ pub fn update_record_colon(
 ) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,
-        curr_mark_node_id,
-        curr_mark_node,
-        parent_id_opt,
+        curr_mark_node_id:_,
+        curr_mark_node:_,
+        parent_id_opt:_,
         ast_node_id,
     } = get_node_context(ed_model)?;
-    if let Some(parent_id) = parent_id_opt {
         let curr_ast_node = ed_model.module.env.pool.get(ast_node_id.to_expr_id()?);
 
         let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
@@ -194,9 +160,6 @@ pub fn update_record_colon(
                     if matches!(prev_expr, Expr2::Record { .. })
                         && matches!(curr_ast_node, Expr2::Record { .. })
                     {
-                        let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.mark_node_pool);
-
-                        let new_child_index = index_of(curr_mark_node_id, &sibling_ids)?;
 
                         let ast_node_ref = ed_model.module.env.pool.get(record_ast_node_id);
 
@@ -227,51 +190,8 @@ pub fn update_record_colon(
                                             new_field_val_id,
                                         );
 
-                                        // update Markup
-                                        let record_colon = nodes::COLON;
-
-                                        let record_colon_node = MarkupNode::Text {
-                                            content: record_colon.to_owned(),
-                                            ast_node_id: ASTNodeId::AExprId(record_ast_node_id),
-                                            syn_high_style: HighlightStyle::Operator,
-                                            attributes: Attributes::default(),
-                                            parent_id_opt: Some(parent_id),
-                                            newlines_at_end: 0,
-                                        };
-
-                                        let record_colon_node_id =
-                                            ed_model.add_mark_node(record_colon_node);
-                                        ed_model
-                                            .mark_node_pool
-                                            .get_mut(parent_id)
-                                            .add_child_at_index(
-                                                new_child_index,
-                                                record_colon_node_id,
-                                            )?;
-
-                                        let record_blank_node_id =
-                                            ed_model.add_mark_node(new_blank_mn(
-                                                ASTNodeId::AExprId(new_field_val_id),
-                                                Some(parent_id),
-                                            ));
-
-                                        ed_model
-                                            .mark_node_pool
-                                            .get_mut(parent_id)
-                                            .add_child_at_index(
-                                                new_child_index + 1,
-                                                record_blank_node_id,
-                                            )?;
-
                                         // update caret
-                                        ed_model.simple_move_carets_right(record_colon.len());
-
-                                        // update GridNodeMap and CodeLines
-                                        ed_model.insert_all_between_line(
-                                            old_caret_pos.line,
-                                            old_caret_pos.column,
-                                            &[record_colon_node_id, record_blank_node_id],
-                                        )?;
+                                        ed_model.simple_move_carets_right(COLON.len());
 
                                         Ok(InputOutcome::Accepted)
                                     } else {
@@ -291,12 +211,6 @@ pub fn update_record_colon(
         } else {
             Ok(InputOutcome::Ignored)
         }
-    } else {
-        MissingParent {
-            node_id: curr_mark_node_id,
-        }
-        .fail()
-    }
 }
 
 pub fn update_record_field(
@@ -327,15 +241,6 @@ pub fn update_record_field(
 
     // update caret
     ed_model.simple_move_carets_right(new_input.len());
-
-    // update GridNodeMap and CodeLines
-    EdModel::insert_between_line(
-        old_caret_pos.line,
-        old_caret_pos.column,
-        new_input,
-        curr_mark_node_id,
-        &mut ed_model.grid_node_map,
-    )?;
 
     // update AST Node
     let first_field = record_fields

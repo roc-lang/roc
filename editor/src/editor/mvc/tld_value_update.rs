@@ -1,8 +1,5 @@
-use roc_ast::lang::core::{ast::ASTNodeId, def::def2::Def2, expr::expr2::Expr2};
+use roc_ast::lang::core::{def::def2::Def2, expr::expr2::Expr2};
 use roc_code_markup::{
-    markup::{
-        common_nodes::new_blank_mn_w_nls, nodes::set_parent_for_all, top_level_def::tld_mark_node,
-    },
     slow_pool::MarkNodeId,
 };
 
@@ -20,7 +17,7 @@ use super::{
 // Top Level Defined Value. example: `main = "Hello, World!"`
 pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
     let NodeContext {
-        old_caret_pos,
+        old_caret_pos: _,
         curr_mark_node_id: _,
         curr_mark_node: _,
         parent_id_opt: _,

@@ -64,7 +64,6 @@ pub fn init_model<'a>(
 
     let mut mark_node_pool = SlowPool::default();
 
-    // TODO replace this with post_process_ast_update
     let markup_ids = if code_str.is_empty() {
         EmptyCodeString {}.fail()
     } else {
@@ -77,7 +76,7 @@ pub fn init_model<'a>(
     }?;
 
 
-    let mut code_lines = CodeLines::from_str(
+    let code_lines = CodeLines::from_str(
         &nodes::mark_nodes_to_string(&markup_ids, &mark_node_pool)
     );
     let mut grid_node_map = GridNodeMap::default();

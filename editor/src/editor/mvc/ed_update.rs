@@ -36,7 +36,6 @@ use crate::ui::util::path_to_string;
 use crate::ui::util::write_to_file;
 use crate::window::keyboard_input::Modifiers;
 use bumpalo::Bump;
-use roc_ast::ast_error::ASTResult;
 use roc_ast::constrain::constrain_expr;
 use roc_ast::constrain::Constraint;
 use roc_ast::lang::core::ast::ASTNodeId;
@@ -308,7 +307,7 @@ impl<'a> EdModel<'a> {
         grid_node_map.insert_empty_line(line_nr)
     }
 
-    pub fn push_empty_line(code_lines: &mut CodeLines, grid_node_map: &mut GridNodeMap) {
+    pub fn push_empty_line(grid_node_map: &mut GridNodeMap) {
         grid_node_map.push_empty_line();
     }
 
@@ -1094,6 +1093,7 @@ pub fn handle_new_char_expr(
                 let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
                 // insert a Blank first, this results in cleaner code
                 add_blank_child(new_child_index, new_ast_child_index, ed_model)?;
+                ed_model.post_process_ast_update()?;
                 handle_new_char(received_char, ed_model)?
             } else {
                 InputOutcome::Ignored
@@ -1176,6 +1176,7 @@ pub fn handle_new_char_diff_mark_nodes_prev_is_expr(
                 let new_ast_child_index = 0;
                 // insert a Blank first, this results in cleaner code
                 add_blank_child(new_child_index, new_ast_child_index, ed_model)?;
+                ed_model.post_process_ast_update()?;
                 handle_new_char(received_char, ed_model)?
             } else {
                 InputOutcome::Ignored

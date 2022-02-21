@@ -1,10 +1,7 @@
 use crate::ui::text::lines::Lines;
-use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
-use crate::ui::ui_error::{LineInsertionFailed, OutOfBounds, UIResult};
+use crate::ui::ui_error::{ UIResult};
 use crate::ui::util::slice_get;
-use crate::ui::util::slice_get_mut;
-use std::cmp::Ordering;
 use std::fmt;
 
 #[derive(Debug, Default)]

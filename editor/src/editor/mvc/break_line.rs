@@ -1,6 +1,4 @@
-use roc_ast::lang::core::ast::ASTNodeId;
 use roc_ast::lang::core::def::def2::Def2;
-use roc_code_markup::markup::common_nodes::new_blank_mn_w_nls;
 
 use crate::editor::ed_error::EdResult;
 use crate::editor::mvc::app_update::InputOutcome;
