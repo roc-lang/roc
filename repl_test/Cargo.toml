@@ -12,13 +12,12 @@ roc_cli = {path = "../cli"}
 
 [dev-dependencies]
 indoc = "1.0.3"
-roc_test_utils = {path = "../test_utils"}
 strip-ansi-escapes = "0.1.1"
+wasmer = {version = "2.0.0", default-features = false, features = ["default-singlepass", "default-universal"]}
+wasmer-wasi = "2.0.0"
 
 roc_repl_cli = {path = "../repl_cli"}
-# roc_repl_wasm = {path = "../repl_wasm"}
+roc_test_utils = {path = "../test_utils"}
 
 [features]
-default = ["cli"]
-cli = []
 wasm = []
