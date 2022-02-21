@@ -1011,7 +1011,8 @@ fn both_have_unique_fields() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// TODO(brian-carroll): enable wasm (https://github.com/rtfeldman/roc/issues/2549)
+#[cfg(any(feature = "gen-llvm"))]
 // https://github.com/rtfeldman/roc/issues/2535
 fn different_proc_types_specialized_to_same_layout() {
     assert_evals_to!(
