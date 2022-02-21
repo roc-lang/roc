@@ -850,6 +850,11 @@ fn link_macos(
         ld_command.arg(format!("-L{}/swift", sdk_path));
     };
 
+    let roc_link_flags = env::var("ROC_LINK_FLAGS").unwrap_or_else(|_| "".to_string());
+    for roc_link_flag in roc_link_flags.split_whitespace() {
+        ld_command.arg(format!("{}", roc_link_flag));
+    }
+
     ld_command.args(&[
         // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
         // for discussion and further references
