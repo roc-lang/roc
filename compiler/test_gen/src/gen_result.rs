@@ -269,7 +269,7 @@ fn result_map2() {
             result2 : Result I64 {}
             result2 = Ok 4
 
-            Result.map2 (\x, y -> x + y) result1 result2
+            Result.map2 result1 result2 (\x, y -> x + y)
                 |> Result.withDefault 0
             "#
         ),
@@ -286,7 +286,7 @@ fn result_map2() {
             result2 : Result I64 {}
             result2 = Err {}
 
-            Result.map2 (\x, y -> x + y) result1 result2
+            Result.map2 result1 result2 (\x, y -> x + y)
                 |> Result.withDefault 0
             "#
         ),
@@ -303,7 +303,7 @@ fn result_map2() {
             result2 : Result I64 {}
             result2 = Ok 4
 
-            Result.map2 (\x, y -> x + y) result1 result2
+            Result.map2 result1 result2 (\x, y -> x + y)
                 |> Result.withDefault 0
             "#
         ),
@@ -320,7 +320,7 @@ fn result_map2() {
             result2 : Result I64 {}
             result2 = Err {}
 
-            Result.map2 (\x, y -> x + y) result1 result2
+            Result.map2 result1 result2 (\x, y -> x + y)
                 |> Result.withDefault 0
             "#
         ),
