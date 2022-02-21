@@ -10,7 +10,15 @@ Check [Build from source](BUILDING_FROM_SOURCE.md) for instructions.
 
 ## Running Tests
 
-To run all tests and checks as they are run on CI, [install earthly](https://earthly.dev/get-earthly) and run:
+Most contributors execute the following commands befor pushing their code:
+```
+cargo test
+cargo fmt --all -- --check
+cargo clippy -- -D warnings
+```
+Execute `cargo fmt --all` to fix the formatting.
+
+If you want to run all tests and checks as they are run on CI, [install earthly](https://earthly.dev/get-earthly) and run:
 ```
 earthly +test-all
 ```
