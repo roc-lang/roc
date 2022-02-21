@@ -27,7 +27,6 @@ static_assertions::assert_eq_size!([usize; 3], LambdaSet);
 pub type TagIdIntType = u16;
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<TagIdIntType>() * 8) as usize;
 const GENERATE_NULLABLE: bool = true;
-const IRRELEVANT_FIELD_HASH: u64 = 0;
 
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
@@ -203,6 +202,27 @@ impl<'a> RawFunctionLayout<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FieldOrderHash(u64);
+
+impl FieldOrderHash {
+    // NB: This should really be a proper "zero" hash via `DefaultHasher::new().finish()`, but Rust
+    // stdlib hashers are not (yet) compile-time-computable.
+    const ZERO_FIELD_HASH: Self = Self(0);
+    const IRRELEVANT_NON_ZERO_FIELD_HASH: Self = Self(1);
+
+    pub fn from_ordered_fields(fields: &[&Lowercase]) -> Self {
+        if fields.is_empty() {
+            // HACK: we must make sure this is always equivalent to a `ZERO_FIELD_HASH`.
+            return Self::ZERO_FIELD_HASH;
+        }
+
+        let mut hasher = DefaultHasher::new();
+        fields.iter().for_each(|field| field.hash(&mut hasher));
+        Self(hasher.finish())
+    }
+}
+
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
@@ -217,7 +237,7 @@ pub enum Layout<'a> {
         /// in collisions, but it's unlikely.
         ///
         /// See also https://github.com/rtfeldman/roc/issues/2535.
-        field_order_hash: u64,
+        field_order_hash: FieldOrderHash,
         field_layouts: &'a [Layout<'a>],
     },
     Union(UnionLayout<'a>),
@@ -885,7 +905,7 @@ impl<'a> Layout<'a> {
     pub const VOID: Self = Layout::Union(UnionLayout::NonRecursive(&[]));
     pub const UNIT: Self = Layout::Struct {
         field_layouts: &[],
-        field_order_hash: IRRELEVANT_FIELD_HASH,
+        field_order_hash: FieldOrderHash::ZERO_FIELD_HASH,
     };
 
     fn new_help<'b>(
@@ -1171,9 +1191,13 @@ impl<'a> Layout<'a> {
 
     /// Used to build a `Layout::Struct` where the field name order is irrelevant.
     pub fn struct_no_name_order(field_layouts: &'a [Layout]) -> Self {
-        Self::Struct {
-            field_layouts,
-            field_order_hash: IRRELEVANT_FIELD_HASH,
+        if field_layouts.is_empty() {
+            Self::UNIT
+        } else {
+            Self::Struct {
+                field_layouts,
+                field_order_hash: FieldOrderHash::IRRELEVANT_NON_ZERO_FIELD_HASH,
+            }
         }
     }
 }
@@ -1619,13 +1643,10 @@ fn layout_from_flat_type<'a>(
                 size2.cmp(&size1).then(label1.cmp(label2))
             });
 
-            let field_order_hash = {
-                let mut field_order_hasher = DefaultHasher::new();
-                pairs
-                    .iter()
-                    .for_each(|(label, _)| label.hash(&mut field_order_hasher));
-                field_order_hasher.finish()
-            };
+            let ordered_field_names =
+                Vec::from_iter_in(pairs.iter().map(|(label, _)| *label), arena);
+            let field_order_hash =
+                FieldOrderHash::from_ordered_fields(ordered_field_names.as_slice());
 
             let mut layouts = Vec::from_iter_in(pairs.into_iter().map(|t| t.1), arena);
 
@@ -2264,9 +2285,6 @@ pub fn union_sorted_tags_help<'a>(
             } else {
                 UnionVariant::Newtype {
                     tag_name,
-                    // NB: It may be the case that the order of the layouts chosen here must be
-                    // hashed, in case they differ for two specializations of the same type. If
-                    // there is a problem with newtypes not specializing correctly, this might be why!
                     arguments: layouts,
                 }
             }
@@ -2473,7 +2491,6 @@ fn layout_from_tag_union<'a>(
                     let answer1 = if field_layouts.len() == 1 {
                         field_layouts[0]
                     } else {
-                        // NB: does the field name order here matter, when it comes from the tag payload order?
                         Layout::struct_no_name_order(field_layouts.into_bump_slice())
                     };
 

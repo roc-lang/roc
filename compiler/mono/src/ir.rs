@@ -4701,9 +4701,7 @@ fn construct_closure_data<'a>(
                 Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
 
             debug_assert_eq!(
-                // NB: this may be wrong! If it comes up, we may need to hash the closure
-                // argument name order.
-                Layout::struct_no_name_order(field_layouts,),
+                Layout::struct_no_name_order(field_layouts),
                 lambda_set.runtime_representation()
             );
 
