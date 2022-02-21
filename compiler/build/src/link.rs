@@ -760,7 +760,7 @@ fn link_linux(
                     .map(|segments| segments.join("/"))
                     .collect::<Vec<String>>()
                     .join("\n");
-                eprintln!("We looked in the following directories:\n{dirs}");
+                eprintln!("We looked in the following directories:\n{}", dirs);
                 process::exit(1);
             }
         };
