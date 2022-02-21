@@ -851,13 +851,13 @@ fn link_macos(
     };
 
     let roc_link_flags = match env::var("ROC_LINK_FLAGS") {
-        Some(flags) => {
+        Ok(flags) => {
             println!("⚠️ CAUTION: The ROC_LINK_FLAGS environment variable is a temporary workaround, and will no longer do anything once surgical linking lands! If you're concerned about what this means for your use case, please ask about it on Zulip.");
-            
+
             flags
         }
-        None => "".to_string()
-    }
+        Err(_) => "".to_string()
+    };
     for roc_link_flag in roc_link_flags.split_whitespace() {
         ld_command.arg(format!("{}", roc_link_flag));
     }
