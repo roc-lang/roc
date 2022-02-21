@@ -13,6 +13,9 @@ use crate::helpers::wasm::assert_evals_to;
 // use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
 
+#[cfg(test)]
+use roc_std::RocList;
+
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn basic_record() {
@@ -1004,6 +1007,30 @@ fn both_have_unique_fields() {
         ),
         84,
         i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// https://github.com/rtfeldman/roc/issues/2535
+fn different_proc_types_specialized_to_same_layout() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ nums ] to "./platform"
+
+            alpha = { a: 1, b: 2 }
+            
+            nums : List U8
+            nums =
+                [
+                    alpha.a,
+                    alpha.b,
+                ]
+            "#
+        ),
+        RocList::from_slice(&[1, 2]),
+        RocList<u8>
     );
 }
 
