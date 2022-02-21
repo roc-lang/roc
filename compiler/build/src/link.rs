@@ -699,10 +699,11 @@ fn link_linux(
 
     // Some things we'll need to build a list of dirs to check for libraries
     let maybe_nix_path = nix_path_opt();
-    let architecture_path = ["/usr", "lib", &architecture];
+    let usr_lib_arch = ["/usr", "lib", &architecture];
+    let lib_arch = ["/lib", &architecture];
     let nix_path_segments;
-    let lib_dirs_if_nix: [&[&str]; 4];
-    let lib_dirs_if_nonix: [&[&str]; 3];
+    let lib_dirs_if_nix: [&[&str]; 5];
+    let lib_dirs_if_nonix: [&[&str]; 4];
 
     // Build the aformentioned list
     let lib_dirs: &[&[&str]] =
@@ -711,14 +712,16 @@ fn link_linux(
             nix_path_segments = [nix_path.as_str()];
             lib_dirs_if_nix = [
                 &nix_path_segments,
-                &architecture_path,
+                &usr_lib_arch,
+                &lib_arch,
                 &["/usr", "lib"],
                 &["/usr", "lib64"],
             ];
             &lib_dirs_if_nix
         } else {
             lib_dirs_if_nonix = [
-                &architecture_path,
+                &usr_lib_arch,
+                &lib_arch,
                 &["/usr", "lib"],
                 &["/usr", "lib64"],
             ];
