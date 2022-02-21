@@ -256,3 +256,75 @@ fn roc_result_err() {
         RocResult<i64, RocStr>
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn result_map2() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result1 : Result I64 {}
+            result1 = Ok 2
+            
+            result2 : Result I64 {}
+            result2 = Ok 4
+
+            Result.map2 (\x, y -> x + y) result1 result2
+                |> Result.withDefault 0
+            "#
+        ),
+        6,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result1 : Result I64 {}
+            result1 = Ok 2
+            
+            result2 : Result I64 {}
+            result2 = Err {}
+
+            Result.map2 (\x, y -> x + y) result1 result2
+                |> Result.withDefault 0
+            "#
+        ),
+        0,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result1 : Result I64 {}
+            result1 = Err {}
+            
+            result2 : Result I64 {}
+            result2 = Ok 4
+
+            Result.map2 (\x, y -> x + y) result1 result2
+                |> Result.withDefault 0
+            "#
+        ),
+        0,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result1 : Result I64 {}
+            result1 = Err {}
+            
+            result2 : Result I64 {}
+            result2 = Err {}
+
+            Result.map2 (\x, y -> x + y) result1 result2
+                |> Result.withDefault 0
+            "#
+        ),
+        0,
+        i64
+    );
+}
