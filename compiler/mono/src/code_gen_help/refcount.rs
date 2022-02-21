@@ -12,7 +12,7 @@ use crate::layout::{Builtin, Layout, TagIdIntType, UnionLayout};
 use super::{CodeGenHelp, Context, HelperOp};
 
 const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
-const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
+const LAYOUT_UNIT: Layout = Layout::UNIT;
 const LAYOUT_PTR: Layout = Layout::RecursivePointer;
 const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
 
@@ -69,7 +69,7 @@ pub fn refcount_stmt<'a>(
                 }
 
                 // Struct and non-recursive Unions are stack-only, so DecRef is a no-op
-                Layout::Struct(_) => following,
+                Layout::Struct { .. } => following,
                 Layout::Union(UnionLayout::NonRecursive(_)) => following,
 
                 // Inline the refcounting code instead of making a function. Don't iterate fields,
@@ -111,7 +111,7 @@ pub fn refcount_generic<'a>(
             refcount_list(root, ident_ids, ctx, &layout, elem_layout, structure)
         }
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_)) => rc_todo(),
-        Layout::Struct(field_layouts) => {
+        Layout::Struct { field_layouts, .. } => {
             refcount_struct(root, ident_ids, ctx, field_layouts, structure)
         }
         Layout::Union(union_layout) => {
@@ -135,7 +135,7 @@ pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
         Layout::Builtin(Builtin::Dict(..) | Builtin::Set(_)) => false,
         Layout::Builtin(Builtin::List(elem_layout)) => is_rc_implemented_yet(elem_layout),
         Layout::Builtin(_) => true,
-        Layout::Struct(fields) => fields.iter().all(is_rc_implemented_yet),
+        Layout::Struct { field_layouts, .. } => field_layouts.iter().all(is_rc_implemented_yet),
         Layout::Union(union_layout) => match union_layout {
             NonRecursive(tags) => tags
                 .iter()

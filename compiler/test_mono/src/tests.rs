@@ -1249,6 +1249,24 @@ fn aliased_polymorphic_closure() {
     )
 }
 
+#[mono_test]
+fn issue_2535_polymorphic_fields_referenced_in_list() {
+    indoc!(
+        r#"
+        app "test" provides [ nums ] to "./platform"
+
+        alpha = { a: 1, b: 2 }
+
+        nums : List U8
+        nums =
+            [
+                alpha.a,
+                alpha.b,
+            ]
+        "#
+    )
+}
+
 // #[ignore]
 // #[mono_test]
 // fn static_str_closure() {
