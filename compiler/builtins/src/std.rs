@@ -1734,6 +1734,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(result_type(flex(TVAR1), flex(TVAR2))),
     );
 
+    // map2 : Result a err, Result a err, (a, a -> b) -> Result b err
+    {
+        let_tvars! {a, b, bvar};
+        add_top_level_function_type!(
+            Symbol::RESULT_MAP2,
+            vec![
+                result_type(flex(a)),
+                result_type(flex(a)),
+                closure(vec![flex(a), flex(a)], bvar, Box::new(flex(b))),
+            ],
+            Box::new(result_type(flex(b))),
+        )
+    };
+
     // after : Result a err, (a -> Result b err) -> Result b err
     add_top_level_function_type!(
         Symbol::RESULT_AFTER,
