@@ -621,7 +621,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
 
         Struct { field_layouts, .. } => {
             let function =
-                modify_refcount_struct(env, layout_ids, &field_layouts, mode, when_recursive);
+                modify_refcount_struct(env, layout_ids, field_layouts, mode, when_recursive);
 
             Some(function)
         }
