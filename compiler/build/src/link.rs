@@ -356,6 +356,40 @@ pub fn build_swift_host_native(
     command.output().unwrap()
 }
 
+pub fn build_crystal_host_native(
+    env_path: &str,
+    env_home: &str,
+    dest: &str,
+    sources: &[&str],
+    opt_level: OptLevel,
+    shared_lib_path: Option<&Path>,
+) -> Output {
+    if shared_lib_path.is_some() {
+        unimplemented!("Linking a shared library to Crystal not yet implemented");
+    }
+
+    // dest ends with .o, crystal command is aimed to
+    // produce executable, the --cross-compile addes the .o
+    let mut dest_no_ext = dest.chars();
+    dest_no_ext.next_back();
+    dest_no_ext.next_back();
+
+    let mut command = Command::new("crystal");
+    command
+        .env_clear()
+        .env("PATH", &env_path)
+        .env("HOME", &env_home)
+        .args(&["build"])
+        .args(sources)
+        .args(&["--cross-compile", "-o", dest_no_ext.as_str()]);
+
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.arg("--release");
+    }
+
+    command.output().unwrap()
+}
+
 pub fn rebuild_host(
     opt_level: OptLevel,
     target: &Triple,
@@ -371,6 +405,7 @@ pub fn rebuild_host(
     let cargo_host_src = host_input_path.with_file_name("Cargo.toml");
     let swift_host_src = host_input_path.with_file_name("host.swift");
     let swift_host_header_src = host_input_path.with_file_name("host.h");
+    let crystal_host_header_src = host_input_path.with_file_name("host.cr");
 
     let host_dest_native = host_input_path.with_file_name(if shared_lib_path.is_some() {
         "dynhost"
@@ -617,6 +652,17 @@ pub fn rebuild_host(
                 .then(|| swift_host_header_src.to_str().unwrap()),
         );
         validate_output("host.swift", "swiftc", output);
+    } else if crystal_host_header_src.exists() {
+        // Compile host.cr, if it exists
+        let output = build_crystal_host_native(
+            &env_path,
+            &env_home,
+            host_dest_native.to_str().unwrap(),
+            &[crystal_host_header_src.to_str().unwrap()],
+            opt_level,
+            shared_lib_path,
+        );
+        validate_output("host.cr", "crystal", output);
     }
 }
 

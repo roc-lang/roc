@@ -46,6 +46,7 @@ let
     libxkbcommon
     pkg-config
     zig
+    crystal
 
     # lib deps
     libffi
