@@ -170,7 +170,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         }),
 
         RecordUpdate { fields, update } => {
-            // NOTE the `update` field is always a `Var { .. }` and does not need to be desugared
+            // NOTE the `update` field is always a `Var { .. }`, we only desugar it to get rid of
+            // any spaces before/after
+            let new_update = desugar_expr(arena, update);
+
             let new_fields = fields.map_items(arena, |field| {
                 let value = desugar_field(arena, &field.value);
                 Loc {
@@ -182,7 +185,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             arena.alloc(Loc {
                 region: loc_expr.region,
                 value: RecordUpdate {
-                    update: *update,
+                    update: new_update,
                     fields: new_fields,
                 },
             })
