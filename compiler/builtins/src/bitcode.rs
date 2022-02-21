@@ -260,7 +260,7 @@ macro_rules! int_intrinsic {
     ($name:expr) => {{
         let mut output = IntrinsicName::default();
 
-        // The indeces align with the `Index` impl for `IntrinsicName`.
+        // The indices align with the `Index` impl for `IntrinsicName`.
         output.options[4] = concat!($name, ".u8");
         output.options[5] = concat!($name, ".u16");
         output.options[6] = concat!($name, ".u32");
