@@ -326,8 +326,7 @@ impl<'a> EdModel<'a> {
         line_nr: usize,
         col_range: std::ops::Range<usize>,
     ) -> UIResult<()> {
-        self.grid_node_map
-            .del_range_at_line(line_nr, col_range)
+        self.grid_node_map.del_range_at_line(line_nr, col_range)
     }
 
     pub fn del_blank_expr_node(&mut self, txt_pos: TextPos) -> UIResult<()> {
