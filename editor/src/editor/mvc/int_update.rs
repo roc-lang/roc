@@ -72,7 +72,6 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
             &digit_char.to_string(),
             curr_mark_node_id,
             &mut ed_model.grid_node_map,
-            &mut ed_model.code_lines,
         )?;
 
         Ok(InputOutcome::Accepted)
@@ -116,7 +115,6 @@ pub fn update_int(
                 &ch.to_string(),
                 int_mark_node_id,
                 &mut ed_model.grid_node_map,
-                &mut ed_model.code_lines,
             )?;
 
             // update ast

@@ -67,7 +67,6 @@ pub fn update_small_string(
             new_input,
             curr_mark_node_id,
             &mut ed_model.grid_node_map,
-            &mut ed_model.code_lines,
         )?;
 
         // update caret
@@ -105,7 +104,6 @@ pub fn update_string(new_char: char, ed_model: &mut EdModel) -> EdResult<InputOu
             &new_char.to_string(),
             curr_mark_node_id,
             &mut ed_model.grid_node_map,
-            &mut ed_model.code_lines,
         )?;
 
         // update ast
@@ -167,7 +165,6 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             nodes::STRING_QUOTES,
             curr_mark_node_id,
             &mut ed_model.grid_node_map,
-            &mut ed_model.code_lines,
         )?;
 
         ed_model.simple_move_carets_right(1);

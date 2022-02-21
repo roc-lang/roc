@@ -16,6 +16,7 @@ use roc_ast::lang::env::Env;
 use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_ast::parse::parse_ast;
 use roc_code_markup::markup::convert::from_ast::ast_to_mark_nodes;
+use roc_code_markup::markup::nodes;
 use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
 use roc_load::file::LoadedModule;
 use roc_module::symbol::Interns;
@@ -63,6 +64,7 @@ pub fn init_model<'a>(
 
     let mut mark_node_pool = SlowPool::default();
 
+    // TODO replace this with post_process_ast_update
     let markup_ids = if code_str.is_empty() {
         EmptyCodeString {}.fail()
     } else {
@@ -74,7 +76,10 @@ pub fn init_model<'a>(
         )?)
     }?;
 
-    let mut code_lines = CodeLines::default();
+
+    let mut code_lines = CodeLines::from_str(
+        &nodes::mark_nodes_to_string(&markup_ids, &mark_node_pool)
+    );
     let mut grid_node_map = GridNodeMap::default();
 
     let mut line_nr = 0;
@@ -88,7 +93,6 @@ pub fn init_model<'a>(
             &mut col_nr,
             *mark_node_id,
             &mut grid_node_map,
-            &mut code_lines,
             &mark_node_pool,
         )?
     }

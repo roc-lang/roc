@@ -156,7 +156,6 @@ pub fn update_empty_record(
                 new_input,
                 record_field_node_id,
                 &mut ed_model.grid_node_map,
-                &mut ed_model.code_lines,
             )?;
 
             Ok(InputOutcome::Accepted)
@@ -336,7 +335,6 @@ pub fn update_record_field(
         new_input,
         curr_mark_node_id,
         &mut ed_model.grid_node_map,
-        &mut ed_model.code_lines,
     )?;
 
     // update AST Node

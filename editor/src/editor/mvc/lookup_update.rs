@@ -50,7 +50,6 @@ pub fn update_invalid_lookup(
             input_str,
             curr_mark_node_id,
             &mut ed_model.grid_node_map,
-            &mut ed_model.code_lines,
         )?;
 
         Ok(InputOutcome::Accepted)

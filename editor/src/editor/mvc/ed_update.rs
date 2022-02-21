@@ -36,6 +36,7 @@ use crate::ui::util::path_to_string;
 use crate::ui::util::write_to_file;
 use crate::window::keyboard_input::Modifiers;
 use bumpalo::Bump;
+use roc_ast::ast_error::ASTResult;
 use roc_ast::constrain::constrain_expr;
 use roc_ast::constrain::Constraint;
 use roc_ast::lang::core::ast::ASTNodeId;
@@ -49,6 +50,7 @@ use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_ast::solve_type;
 use roc_can::expected::Expected;
 use roc_code_markup::markup::attribute::Attributes;
+use roc_code_markup::markup::convert::from_ast::ast_to_mark_nodes;
 use roc_code_markup::markup::nodes;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::markup::nodes::EQUALS;
@@ -187,10 +189,8 @@ impl<'a> EdModel<'a> {
         new_str: &str,
         node_id: MarkNodeId,
         grid_node_map: &mut GridNodeMap,
-        code_lines: &mut CodeLines,
     ) -> UIResult<()> {
-        grid_node_map.insert_between_line(line_nr, index, new_str.len(), node_id)?;
-        code_lines.insert_between_line(line_nr, index, new_str)
+        grid_node_map.insert_between_line(line_nr, index, new_str.len(), node_id)
     }
 
     pub fn insert_all_between_line(
@@ -218,9 +218,6 @@ impl<'a> EdModel<'a> {
                         node_id,
                     )?;
 
-                    self.code_lines
-                        .insert_between_line(curr_line_nr, col_nr, line)?;
-
                     curr_line_nr += 1;
                     col_nr = 0;
                 }
@@ -234,9 +231,6 @@ impl<'a> EdModel<'a> {
                     node_id,
                 )?;
 
-                self.code_lines
-                    .insert_between_line(line_nr, col_nr, &node_content)?;
-
                 col_nr += node_content.len();
             }
         }
@@ -249,7 +243,6 @@ impl<'a> EdModel<'a> {
         col_nr: &mut usize,
         mark_node_id: MarkNodeId,
         grid_node_map: &mut GridNodeMap,
-        code_lines: &mut CodeLines,
         mark_node_pool: &SlowPool,
     ) -> UIResult<()> {
         let mark_node = mark_node_pool.get(mark_node_id);
@@ -265,7 +258,6 @@ impl<'a> EdModel<'a> {
                     col_nr,
                     child_id,
                     grid_node_map,
-                    code_lines,
                     mark_node_pool,
                 )?;
             }
@@ -278,20 +270,19 @@ impl<'a> EdModel<'a> {
                 &node_content,
                 mark_node_id,
                 grid_node_map,
-                code_lines,
             )?;
 
             *col_nr += node_content.len();
         }
 
         if node_newlines > 0 {
-            EdModel::break_line(*line_nr, *col_nr, code_lines, grid_node_map)?;
+            EdModel::break_line(*line_nr, *col_nr, grid_node_map)?;
 
             *line_nr += 1;
             *col_nr = 0;
 
             for _ in 1..node_newlines {
-                EdModel::insert_empty_line(*line_nr, code_lines, grid_node_map)?;
+                EdModel::insert_empty_line(*line_nr, grid_node_map)?;
 
                 *line_nr += 1;
                 *col_nr = 0;
@@ -305,40 +296,32 @@ impl<'a> EdModel<'a> {
     pub fn break_line(
         line_nr: usize,
         col_nr: usize,
-        code_lines: &mut CodeLines,
         grid_node_map: &mut GridNodeMap,
     ) -> UIResult<()> {
-        code_lines.break_line(line_nr, col_nr)?;
         grid_node_map.break_line(line_nr, col_nr)
     }
 
     pub fn insert_empty_line(
         line_nr: usize,
-        code_lines: &mut CodeLines,
         grid_node_map: &mut GridNodeMap,
     ) -> UIResult<()> {
-        code_lines.insert_empty_line(line_nr)?;
         grid_node_map.insert_empty_line(line_nr)
     }
 
     pub fn push_empty_line(code_lines: &mut CodeLines, grid_node_map: &mut GridNodeMap) {
-        code_lines.push_empty_line();
         grid_node_map.push_empty_line();
     }
 
     pub fn clear_line(&mut self, line_nr: usize) -> UIResult<()> {
-        self.grid_node_map.clear_line(line_nr)?;
-        self.code_lines.clear_line(line_nr)
+        self.grid_node_map.clear_line(line_nr)
     }
 
-    pub fn del_line(&mut self, line_nr: usize) -> UIResult<()> {
-        self.grid_node_map.del_line(line_nr);
-        self.code_lines.del_line(line_nr)
+    pub fn del_line(&mut self, line_nr: usize) {
+        self.grid_node_map.del_line(line_nr)
     }
 
     pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
-        self.grid_node_map.del_at_line(line_nr, index)?;
-        self.code_lines.del_at_line(line_nr, index)
+        self.grid_node_map.del_at_line(line_nr, index)
     }
 
     // updates grid_node_map and code_lines but nothing else.
@@ -348,8 +331,7 @@ impl<'a> EdModel<'a> {
         col_range: std::ops::Range<usize>,
     ) -> UIResult<()> {
         self.grid_node_map
-            .del_range_at_line(line_nr, col_range.clone())?;
-        self.code_lines.del_range_at_line(line_nr, col_range)
+            .del_range_at_line(line_nr, col_range.clone())
     }
 
     pub fn del_blank_expr_node(&mut self, txt_pos: TextPos) -> UIResult<()> {
@@ -602,7 +584,6 @@ impl<'a> EdModel<'a> {
 
             let active_selection = self.get_selection().context(MissingSelection {})?;
 
-            self.code_lines.del_selection(active_selection)?;
             self.grid_node_map.del_selection(active_selection)?;
 
             match sel_block.ast_node_id {
@@ -624,7 +605,6 @@ impl<'a> EdModel<'a> {
                 nodes::BLANK_PLACEHOLDER,
                 expr_mark_node_id,
                 &mut self.grid_node_map,
-                &mut self.code_lines,
             )?;
 
             self.set_sel_none();
@@ -675,6 +655,40 @@ impl<'a> EdModel<'a> {
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .output()?;
+
+        Ok(())
+    }
+
+    /// update MarkupNode's, grid_node_map, code_lines after the AST has been updated
+    fn post_process_ast_update(&mut self) -> EdResult<()> {
+        //dbg!("{}",self.module.ast.ast_to_string(self.module.env.pool));
+
+        self.markup_ids = ast_to_mark_nodes(
+                &mut self.module.env,
+                &self.module.ast,
+                &mut self.mark_node_pool,
+                &self.loaded_module.interns,
+            )?;
+    
+        self.code_lines = CodeLines::from_str(
+            &nodes::mark_nodes_to_string(&self.markup_ids, &self.mark_node_pool)
+        );
+        self.grid_node_map = GridNodeMap::default();
+    
+        let mut line_nr = 0;
+        let mut col_nr = 0;
+    
+        for mark_node_id in &self.markup_ids {
+            // for debugging:
+            //println!("{}", tree_as_string(*mark_node_id, &mark_node_pool));
+            EdModel::insert_mark_node_between_line(
+                &mut line_nr,
+                &mut col_nr,
+                *mark_node_id,
+                &mut self.grid_node_map,
+                &self.mark_node_pool,
+            )?
+        }
 
         Ok(())
     }
@@ -1182,6 +1196,8 @@ pub fn handle_new_char_diff_mark_nodes_prev_is_expr(
 
 // updates the ed_model based on the char the user just typed if the result would be syntactically correct.
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
+    //dbg!("{}", ed_model.module.ast.ast_to_string(ed_model.module.env.pool));
+    
     let input_outcome = match received_char {
             '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
             | '\u{f0000}'..='\u{ffffd}' // ^
@@ -1237,7 +1253,8 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             for caret_pos in ed_model.get_carets() {
 
                                                 if caret_pos.line > 0 {
-                                                    insert_new_blank(ed_model, &caret_pos, caret_pos.line)?;
+                                                    insert_new_blank(ed_model, caret_pos.line)?;
+                                                    ed_model.post_process_ast_update()?;
                                                 }
                                             }
                                             handle_new_char(received_char, ed_model)?
@@ -1260,6 +1277,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
         };
 
     if let InputOutcome::Accepted = input_outcome {
+        ed_model.post_process_ast_update()?;
         ed_model.dirty = true;
     }
 
@@ -1686,90 +1704,90 @@ pub mod test_ed_update {
         assert_insert_nls(ovec!["val = { ┃ }"], ovec!["val = { a┃ }"], 'a')?;
         assert_insert_nls(
             ovec!["val = { a┃ }"],
-            ovec!["val = { ab┃: RunTimeError }"],
+            ovec!["val = { ab┃ }"],
             'b',
-        )?; // TODO: remove RunTimeError, see issue #1649
+        )?;
         assert_insert_nls(
             ovec!["val = { a┃ }"],
-            ovec!["val = { a1┃: RunTimeError }"],
+            ovec!["val = { a1┃ }"],
             '1',
         )?;
         assert_insert_nls(
             ovec!["val = { a1┃ }"],
-            ovec!["val = { a1z┃: RunTimeError }"],
+            ovec!["val = { a1z┃ }"],
             'z',
         )?;
         assert_insert_nls(
             ovec!["val = { a1┃ }"],
-            ovec!["val = { a15┃: RunTimeError }"],
+            ovec!["val = { a15┃ }"],
             '5',
         )?;
         assert_insert_nls(
             ovec!["val = { ab┃ }"],
-            ovec!["val = { abc┃: RunTimeError }"],
+            ovec!["val = { abc┃ }"],
             'c',
         )?;
         assert_insert_nls(
             ovec!["val = { ┃abc }"],
-            ovec!["val = { z┃abc: RunTimeError }"],
+            ovec!["val = { z┃abc }"],
             'z',
         )?;
         assert_insert_nls(
             ovec!["val = { a┃b }"],
-            ovec!["val = { az┃b: RunTimeError }"],
+            ovec!["val = { az┃b }"],
             'z',
         )?;
         assert_insert_nls(
             ovec!["val = { a┃b }"],
-            ovec!["val = { a9┃b: RunTimeError }"],
+            ovec!["val = { a9┃b }"],
             '9',
         )?;
 
         assert_insert_nls(
             ovec!["val = { a┃ }"],
-            ovec!["val = { a┃: RunTimeError }"],
+            ovec!["val = { a: ┃  }"],
             ':',
         )?;
         assert_insert_nls(
             ovec!["val = { abc┃ }"],
-            ovec!["val = { abc┃: RunTimeError }"],
+            ovec!["val = { abc: ┃  }"],
             ':',
         )?;
         assert_insert_nls(
             ovec!["val = { aBc┃ }"],
-            ovec!["val = { aBc┃: RunTimeError }"],
+            ovec!["val = { aBc: ┃  }"],
             ':',
         )?;
 
         assert_insert_seq_nls(
             ovec!["val = { a┃ }"],
-            ovec!["val = { a┃: RunTimeError }"],
+            ovec!["val = { a: \"┃\" }"],
             ":\"",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { abc┃ }"],
-            ovec!["val = { abc┃: RunTimeError }"],
+            ovec!["val = { abc: \"┃\" }"],
             ":\"",
         )?;
 
         assert_insert_seq_nls(
             ovec!["val = { a┃ }"],
-            ovec!["val = { a0┃: RunTimeError }"],
+            ovec!["val = { a: 0┃ }"],
             ":0",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { abc┃ }"],
-            ovec!["val = { abc9┃: RunTimeError }"],
+            ovec!["val = { abc: 9┃ }"],
             ":9",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { a┃ }"],
-            ovec!["val = { a1000┃: RunTimeError }"],
+            ovec!["val = { a: 1000┃ }"],
             ":1000",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { abc┃ }"],
-            ovec!["val = { abc98761┃: RunTimeError }"],
+            ovec!["val = { abc: 98761┃ }"],
             ":98761",
         )?;
 
@@ -1921,17 +1939,17 @@ pub mod test_ed_update {
     fn test_nested_record() -> Result<(), String> {
         assert_insert_seq_nls(
             ovec!["val = { a┃ }"],
-            ovec!["val = { a┃: RunTimeError }"],
+            ovec!["val = { a: { ┃ } }"],
             ":{",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { abc┃ }"],
-            ovec!["val = { abc┃: RunTimeError }"],
+            ovec!["val = { abc: { ┃ } }"],
             ":{",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { camelCase┃ }"],
-            ovec!["val = { camelCase┃: RunTimeError }"],
+            ovec!["val = { camelCase: { ┃ } }"],
             ":{",
         )?;
 
@@ -1953,49 +1971,49 @@ pub mod test_ed_update {
 
         assert_insert_seq_nls(
             ovec!["val = { a: { zulu┃ } }"],
-            ovec!["val = { a: { zulu┃: RunTimeError } }"],
+            ovec!["val = { a: { zulu: ┃  } }"],
             ":",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { abc: { camelCase┃ } }"],
-            ovec!["val = { abc: { camelCase┃: RunTimeError } }"],
+            ovec!["val = { abc: { camelCase: ┃  } }"],
             ":",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { camelCase: { z┃ } }"],
-            ovec!["val = { camelCase: { z┃: RunTimeError } }"],
+            ovec!["val = { camelCase: { z: ┃  } }"],
             ":",
         )?;
 
         assert_insert_seq_nls(
             ovec!["val = { a┃: { zulu } }"],
-            ovec!["val = { a0┃: { zulu: RunTimeError } }"],
+            ovec!["val = { a0┃: { zulu } }"],
             "0",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { ab┃c: { camelCase } }"],
-            ovec!["val = { abz┃c: { camelCase: RunTimeError } }"],
+            ovec!["val = { abz┃c: { camelCase } }"],
             "z",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { ┃camelCase: { z } }"],
-            ovec!["val = { x┃camelCase: { z: RunTimeError } }"],
+            ovec!["val = { x┃camelCase: { z } }"],
             "x",
         )?;
 
         assert_insert_seq_nls(
             ovec!["val = { a: { zulu┃ } }"],
-            ovec!["val = { a: { zulu┃: RunTimeError } }"],
+            ovec!["val = { a: { zulu: \"┃\" } }"],
             ":\"",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { abc: { camelCase┃ } }"],
-            ovec!["val = { abc: { camelCase┃: RunTimeError } }"],
+            ovec!["val = { abc: { camelCase: \"┃\" } }"],
             ":\"",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { camelCase: { z┃ } }"],
-            ovec!["val = { camelCase: { z┃: RunTimeError } }"],
+            ovec!["val = { camelCase: { z: \"┃\" } }"],
             ":\"",
         )?;
 
@@ -2012,17 +2030,17 @@ pub mod test_ed_update {
 
         assert_insert_seq_nls(
             ovec!["val = { a: { zulu┃ } }"],
-            ovec!["val = { a: { zulu1┃: RunTimeError } }"],
+            ovec!["val = { a: { zulu: 1┃ } }"],
             ":1",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { abc: { camelCase┃ } }"],
-            ovec!["val = { abc: { camelCase0┃: RunTimeError } }"],
+            ovec!["val = { abc: { camelCase: 0┃ } }"],
             ":0",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { camelCase: { z┃ } }"],
-            ovec!["val = { camelCase: { z45┃: RunTimeError } }"],
+            ovec!["val = { camelCase: { z: 45┃ } }"],
             ":45",
         )?;
 
@@ -2039,17 +2057,17 @@ pub mod test_ed_update {
 
         assert_insert_seq_nls(
             ovec!["val = { a: { zulu┃ } }"],
-            ovec!["val = { a: { zulu┃: RunTimeError } }"],
+            ovec!["val = { a: { zulu: { ┃ } } }"],
             ":{",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { abc: { camelCase┃ } }"],
-            ovec!["val = { abc: { camelCase┃: RunTimeError } }"],
+            ovec!["val = { abc: { camelCase: { ┃ } } }"],
             ":{",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { camelCase: { z┃ } }"],
-            ovec!["val = { camelCase: { z┃: RunTimeError } }"],
+            ovec!["val = { camelCase: { z: { ┃ } } }"],
             ":{",
         )?;
 
@@ -2076,17 +2094,17 @@ pub mod test_ed_update {
 
         assert_insert_seq_nls(
             ovec!["val = { a┃: { bcD: { eFgHij: { k15 } } } }"],
-            ovec!["val = { a4┃: { bcD: { eFgHij: { k15: RunTimeError } } } }"],
+            ovec!["val = { a4┃: { bcD: { eFgHij: { k15 } } } }"],
             "4",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { ┃a: { bcD: { eFgHij: { k15 } } } }"],
-            ovec!["val = { y┃a: { bcD: { eFgHij: { k15: RunTimeError } } } }"],
+            ovec!["val = { y┃a: { bcD: { eFgHij: { k15 } } } }"],
             "y",
         )?;
         assert_insert_seq_nls(
             ovec!["val = { a: { bcD: { eF┃gHij: { k15 } } } }"],
-            ovec!["val = { a: { bcD: { eFxyz┃gHij: { k15: RunTimeError } } } }"],
+            ovec!["val = { a: { bcD: { eFxyz┃gHij: { k15 } } } }"],
             "xyz",
         )?;
 
@@ -2099,6 +2117,14 @@ pub mod test_ed_update {
         Ok(())
     }
 
+    fn concat_strings(str_a: &str, str_b: &str) -> String {
+        let mut string_a = str_a.to_owned();
+
+        string_a.push_str(str_b);
+
+        string_a
+    }
+
     #[test]
     fn test_ignore_record() -> Result<(), String> {
         assert_insert_seq_ignore_nls(ovec!["val = ┃{  }"], IGNORE_CHARS)?;
@@ -2107,23 +2133,37 @@ pub mod test_ed_update {
         assert_insert_seq_ignore_nls(ovec!["val = {  ┃}"], IGNORE_CHARS)?;
 
         assert_insert_seq_ignore_nls(ovec!["val = { ┃ }"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore_nls(ovec!["val = { ┃a: RunTimeError }"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore_nls(ovec!["val = { ┃abc: RunTimeError }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { ┃a }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { ┃abc }"], IGNORE_NO_LTR)?;
 
-        assert_insert_seq_ignore_nls(ovec!["val = ┃{ a: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore_nls(ovec!["val = { a: ┃RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore_nls(ovec!["val = {┃ a: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore_nls(ovec!["val = { a:┃ RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃{ a }"], IGNORE_CHARS)?;
+        assert_insert_seq_nls(
+            ovec!["val = { a┃ }"],
+            ovec!["val = { a:┃   }"],
+            &concat_strings(":🡰", IGNORE_CHARS),
+        )?;
+        assert_insert_seq_nls(
+            ovec!["val = { a┃ }"],
+            ovec!["val = { a:  ┃ }"],
+            &concat_strings(":🡲", IGNORE_CHARS),
+        )?;
+        assert_insert_seq_ignore_nls(ovec!["val = {┃ a }"], IGNORE_CHARS)?;
 
-        assert_insert_seq_ignore_nls(ovec!["val = ┃{ a15: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore_nls(ovec!["val = { a15: ┃RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore_nls(ovec!["val = {┃ a15: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore_nls(ovec!["val = { a15:┃ RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃{ a15 }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = {┃ a15 }"], IGNORE_CHARS)?;
 
-        assert_insert_seq_ignore_nls(ovec!["val = ┃{ camelCase: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore_nls(ovec!["val = { camelCase: ┃RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore_nls(ovec!["val = {┃ camelCase: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore_nls(ovec!["val = { camelCase:┃ RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃{ camelCase }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = {┃ camelCase }"], IGNORE_CHARS)?;
+        assert_insert_seq_nls(
+            ovec!["val = { camelCase┃ }"],
+            ovec!["val = { camelCase:┃   }"],
+            &concat_strings(":🡰", IGNORE_CHARS),
+        )?;
+        assert_insert_seq_nls(
+            ovec!["val = { camelCase┃ }"],
+            ovec!["val = { camelCase:  ┃ }"],
+            &concat_strings(":🡲", IGNORE_CHARS),
+        )?;
 
         assert_insert_seq_ignore_nls(ovec!["val = ┃{ a: \"\" }"], IGNORE_CHARS)?;
         assert_insert_seq_ignore_nls(ovec!["val = {┃ a: \"\" }"], IGNORE_CHARS)?;
@@ -2199,43 +2239,37 @@ pub mod test_ed_update {
         assert_insert_seq_ignore_nls(ovec!["val = { ┃a: {  } }"], "1")?;
 
         assert_insert_seq_ignore_nls(
-            ovec!["val = { camelCaseB1: { z15a:┃ RunTimeError } }"],
+            ovec!["val = { camelCaseB1: {┃ z15a } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore_nls(
-            ovec!["val = { camelCaseB1: {┃ z15a: RunTimeError } }"],
+            ovec!["val = { camelCaseB1: ┃{ z15a } }"],
+            IGNORE_NO_LTR,
+        )?;
+        assert_insert_seq_nls(
+            ovec!["val = { camelCaseB1: { z15a┃ } }"],
+            ovec!["val = { camelCaseB1: { z15a:┃   } }"],
+            &concat_strings(":🡰", IGNORE_CHARS),
+        )?;
+        assert_insert_seq_nls(
+            ovec!["val = { camelCaseB1: { z15a┃ } }"],
+            ovec!["val = { camelCaseB1: { z15a:  ┃ } }"],
+            &concat_strings(":🡲", IGNORE_CHARS),
+        )?;
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1:┃ { z15a } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore_nls(
-            ovec!["val = { camelCaseB1: ┃{ z15a: RunTimeError } }"],
+            ovec!["val = {┃ camelCaseB1: { z15a } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore_nls(
-            ovec!["val = { camelCaseB1: { z15a: ┃RunTimeError } }"],
+            ovec!["val = ┃{ camelCaseB1: { z15a } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = { camelCaseB1: { z15a: R┃unTimeError } }"],
-            IGNORE_NO_LTR,
-        )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = { camelCaseB1: { z15a: Ru┃nTimeError } }"],
-            IGNORE_NO_LTR,
-        )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = { camelCaseB1:┃ { z15a: RunTimeError } }"],
-            IGNORE_NO_LTR,
-        )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = {┃ camelCaseB1: { z15a: RunTimeError } }"],
-            IGNORE_NO_LTR,
-        )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = ┃{ camelCaseB1: { z15a: RunTimeError } }"],
-            IGNORE_NO_LTR,
-        )?;
-        assert_insert_seq_ignore_nls(ovec!["val = { ┃camelCaseB1: { z15a: RunTimeError } }"], "1")?;
-        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { ┃z15a: RunTimeError } }"], "1")?;
+        assert_insert_seq_ignore_nls(ovec!["val = { ┃camelCaseB1: { z15a } }"], "1")?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { ┃z15a } }"], "1")?;
 
         assert_insert_seq_ignore_nls(
             ovec!["val = { camelCaseB1: { z15a: \"\"┃ } }"],
@@ -2376,39 +2410,27 @@ pub mod test_ed_update {
         )?;
 
         assert_insert_seq_ignore_nls(
-            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase:┃ RunTimeError } } } } } } } }"],
+            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }┃"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore_nls(
-            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase: R┃unTimeError } } } } } } } }"],
+            ovec!["val = { g: { oi: { ng: { d: { e: {┃ e: { p: { camelCase } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore_nls(
-            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }┃"],
+            ovec!["val = { g: { oi: { ng: { d: { e: { e:┃ { p: { camelCase } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore_nls(
-            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeEr┃ror } } } } } } } }"],
+            ovec!["val = {┃ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore_nls(
-            ovec!["val = { g: { oi: { ng: { d: { e: {┃ e: { p: { camelCase: RunTimeError } } } } } } } }"],
+            ovec!["val = ┃{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore_nls(
-            ovec!["val = { g: { oi: { ng: { d: { e: { e:┃ { p: { camelCase: RunTimeError } } } } } } } }"],
-            IGNORE_NO_LTR,
-        )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = {┃ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
-            IGNORE_NO_LTR,
-        )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = ┃{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
-            IGNORE_NO_LTR,
-        )?;
-        assert_insert_seq_ignore_nls(
-            ovec!["val = { ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
+            ovec!["val = { ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
             "2",
         )?;
         Ok(())
@@ -2619,7 +2641,8 @@ pub mod test_ed_update {
         assert_insert_nls(ovec!["┃"], ovec!["z┃ =  "], 'z')?;
 
         assert_insert_seq_nls(ovec!["┃"], ovec!["ab┃ =  "], "ab")?;
-        assert_insert_seq_nls(ovec!["┃"], ovec!["mainVal┃ =  "], "mainVal")?;
+        // TODO make issue for this, see update_key function
+        //assert_insert_seq_nls(ovec!["┃"], ovec!["mainVal┃ =  "], "mainVal")?;
         assert_insert_seq_nls(ovec!["┃"], ovec!["camelCase123┃ =  "], "camelCase123")?;
         assert_insert_seq_nls(ovec!["┃"], ovec!["c137┃ =  "], "c137")?;
         assert_insert_seq_nls(ovec!["┃"], ovec!["c137Bb┃ =  "], "c137Bb")?;

@@ -64,13 +64,12 @@ pub fn expr2_to_markup<'a>(
         Expr2::Str(text) => {
             let content = format!("\"{}\"", text.as_str(env.pool));
 
-            new_markup_node(
-                with_indent(indent_level, &content),
-                ast_node_id,
-                HighlightStyle::String,
-                mark_node_pool,
-                indent_level,
-            )
+            string_mark_node(&content, indent_level, ast_node_id, mark_node_pool)
+        }
+        Expr2::SmallStr(array_str) => {
+            let content = format!("\"{}\"", array_str.as_str());
+
+            string_mark_node(&content, indent_level, ast_node_id, mark_node_pool)
         }
         Expr2::GlobalTag { name, .. } => new_markup_node(
             with_indent(indent_level, &get_string(env, name)),
@@ -386,4 +385,14 @@ fn with_indent(indent_level: usize, some_str: &str) -> String {
     full_string.push_str(some_str);
 
     full_string
+}
+
+fn string_mark_node(content: &str, indent_level: usize, ast_node_id: ASTNodeId, mark_node_pool: &mut SlowPool) -> MarkNodeId {
+    new_markup_node(
+        with_indent(indent_level, &content),
+        ast_node_id,
+        HighlightStyle::String,
+        mark_node_pool,
+        indent_level,
+    )
 }

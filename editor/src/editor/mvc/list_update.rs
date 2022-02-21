@@ -71,7 +71,6 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             nodes::LEFT_SQUARE_BR,
             left_bracket_node_id,
             &mut ed_model.grid_node_map,
-            &mut ed_model.code_lines,
         )?;
 
         EdModel::insert_between_line(
@@ -80,7 +79,6 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             nodes::RIGHT_SQUARE_BR,
             right_bracket_node_id,
             &mut ed_model.grid_node_map,
-            &mut ed_model.code_lines,
         )?;
 
         Ok(InputOutcome::Accepted)
@@ -210,7 +208,6 @@ pub fn update_mark_children(
             nodes::COMMA,
             comma_mark_node_id,
             &mut ed_model.grid_node_map,
-            &mut ed_model.code_lines,
         )?;
 
         children.push(comma_mark_node_id);
@@ -231,7 +228,6 @@ pub fn update_mark_children(
         nodes::BLANK_PLACEHOLDER,
         blank_mark_node_id,
         &mut ed_model.grid_node_map,
-        &mut ed_model.code_lines,
     )?;
 
     Ok(children)
