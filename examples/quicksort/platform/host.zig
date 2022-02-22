@@ -112,6 +112,10 @@ pub export fn main() u8 {
     const length = std.math.min(20, callresult.length);
     var result = callresult.elements[0..length];
 
+    // end time
+    var ts2: std.os.timespec = undefined;
+    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
+
     for (result) |x, i| {
         if (i == 0) {
             stdout.print("[{}, ", .{x}) catch unreachable;
@@ -121,10 +125,6 @@ pub export fn main() u8 {
             stdout.print("{}, ", .{x}) catch unreachable;
         }
     }
-
-    // end time
-    var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
 
     const delta = to_seconds(ts2) - to_seconds(ts1);
 
