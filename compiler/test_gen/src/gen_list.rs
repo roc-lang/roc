@@ -2743,11 +2743,7 @@ fn monomorphized_lists() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_oks() {
-    assert_evals_to!(
-        "List.oks []",
-        RocList::from_slice(&[]),
-        RocList<()>
-    );
+    assert_evals_to!("List.oks []", RocList::from_slice(&[]), RocList<()>);
     assert_evals_to!(
         "List.oks [Ok {}, Ok {}]",
         RocList::from_slice(&[(), ()]),

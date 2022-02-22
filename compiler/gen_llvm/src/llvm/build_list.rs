@@ -988,10 +988,9 @@ pub fn list_find_unsafe<'a, 'ctx, 'env>(
 pub fn list_oks<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list: BasicValueEnum<'ctx>,
-    result_layout: &Layout<'a>, 
+    result_layout: &Layout<'a>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-
     let function = env
         .builder
         .get_insert_block()
