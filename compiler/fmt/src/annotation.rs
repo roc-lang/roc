@@ -3,7 +3,7 @@ use crate::{
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
-use roc_parse::ast::{AliasHeader, AssignedField, Collection, Expr, Tag, TypeAnnotation};
+use roc_parse::ast::{AssignedField, Collection, Expr, Tag, TypeAnnotation, TypeHeader};
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
@@ -276,7 +276,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 }
             }
 
-            As(lhs, _spaces, AliasHeader { name, vars }) => {
+            As(lhs, _spaces, TypeHeader { name, vars }) => {
                 // TODO use _spaces?
                 lhs.value
                     .format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);

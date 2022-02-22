@@ -1,7 +1,7 @@
 Defs(
     [
         @0-26 Alias {
-            header: AliasHeader {
+            header: TypeHeader {
                 name: @0-4 "Blah",
                 vars: [
                     @5-6 Identifier(
