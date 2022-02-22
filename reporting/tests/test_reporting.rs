@@ -8154,7 +8154,7 @@ I need all branches in an `if` to have the same type!
                 1│  $Age 21
                     ^^^^
 
-                Note: It looks like there are no opaque types declared in this module yet!
+                Note: It looks like there are no opaque types declared in this scope yet!
                 "#
             ),
         )
@@ -8184,7 +8184,7 @@ I need all branches in an `if` to have the same type!
                 1│  Age : U8
                     ^^^
 
-                Note: It looks like there are no opaque types declared in this module yet!
+                Note: It looks like there are no opaque types declared in this scope yet!
 
                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
 
@@ -8229,7 +8229,47 @@ I need all branches in an `if` to have the same type!
                 1│  OtherModule.$Age 21
                                 ^^^^
 
-                Note: It looks like there are no opaque types declared in this module yet!
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_used_outside_declaration_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                age =
+                    Age := U8
+                    21u8
+
+                $Age age
+                "#
+            ),
+            // TODO: there is a potential for a better error message here, if the usage of `$Age` can
+            // be linked to the declaration of `Age` inside `age`, and a suggestion to raise that
+            // declaration to the outer scope.
+            indoc!(
+                r#"
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                2│      Age := U8
+                        ^^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                5│  $Age age
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
                 "#
             ),
         )

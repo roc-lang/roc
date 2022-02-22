@@ -39,6 +39,7 @@ pub enum Ident<'a> {
     /// @Foo or @Bar
     PrivateTag(&'a str),
     /// $Foo or $Bar
+    // TODO(opaques): $->@ in the above comment
     OpaqueRef(&'a str),
     /// foo or foo.bar or Foo.Bar.baz.qux
     Access {

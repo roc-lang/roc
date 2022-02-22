@@ -105,6 +105,7 @@ impl Scope {
     /// Check if there is an opaque type alias referenced by `opaque_ref` referenced in the
     /// current scope. E.g. `$Age` must reference an opaque `Age` declared in this module, not any
     /// other!
+    // TODO(opaques): $->@ in the above comment
     pub fn lookup_opaque_ref(
         &self,
         opaque_ref: &str,

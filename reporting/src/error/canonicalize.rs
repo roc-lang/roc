@@ -1349,7 +1349,7 @@ fn pretty_runtime_error<'b>(
             suggestions.truncate(4);
 
             let details = if suggestions.is_empty() {
-                alloc.note("It looks like there are no opaque types declared in this module yet!")
+                alloc.note("It looks like there are no opaque types declared in this scope yet!")
             } else {
                 let qualified_suggestions =
                     suggestions.into_iter().map(|v| alloc.string(v.to_string()));

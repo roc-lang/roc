@@ -176,6 +176,7 @@ pub enum Expr<'a> {
     PrivateTag(&'a str),
 
     // Reference to an opaque type, e.g. $Opaq
+    // TODO(opaques): $->@ in the above comment
     OpaqueRef(&'a str),
 
     // Pattern Matching
