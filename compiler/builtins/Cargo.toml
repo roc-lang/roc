@@ -11,3 +11,7 @@ roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_target = { path = "../roc_target" }
+
+[build-dependencies]
+# dunce can be removed once ziglang/zig#5109 is fixed
+dunce = "1.0.2"
