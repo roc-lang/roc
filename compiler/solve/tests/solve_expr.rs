@@ -5251,4 +5251,27 @@ mod solve_expr {
             "{ j : a, lst : List a, s : Str }",
         )
     }
+
+    #[test]
+    fn to_int() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                {
+                    toI8: Num.toI8,
+                    toI16: Num.toI16,
+                    toI32: Num.toI32,
+                    toI64: Num.toI64,
+                    toI128: Num.toI128,
+                    toU8: Num.toU8,
+                    toU16: Num.toU16,
+                    toU32: Num.toU32,
+                    toU64: Num.toU64,
+                    toU128: Num.toU128,
+                }
+                "#
+            ),
+            r#"{ toI128 : Int * -> I128, toI16 : Int * -> I16, toI32 : Int * -> I32, toI64 : Int * -> I64, toI8 : Int * -> I8, toU128 : Int * -> U128, toU16 : Int * -> U16, toU32 : Int * -> U32, toU64 : Int * -> U64, toU8 : Int * -> U8 }"#,
+        )
+    }
 }

@@ -1,6 +1,6 @@
 procedure Test.0 ():
-    let Test.4 : Builtin(Int(I64)) = 2i64;
-    let Test.5 : Builtin(Float(F64)) = 3.14f64;
-    let Test.3 : Struct([Builtin(Int(I64)), Builtin(Float(F64))]) = Struct {Test.4, Test.5};
-    let Test.1 : Builtin(Int(I64)) = StructAtIndex 0 Test.3;
+    let Test.4 : I64 = 2i64;
+    let Test.5 : Float64 = 3.14f64;
+    let Test.3 : {I64, Float64} = Struct {Test.4, Test.5};
+    let Test.1 : I64 = StructAtIndex 0 Test.3;
     ret Test.1;

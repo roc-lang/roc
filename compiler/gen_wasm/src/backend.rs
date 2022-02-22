@@ -884,7 +884,7 @@ impl<'a> WasmBackend<'a> {
         storage: &StoredValue,
         fields: &'a [Symbol],
     ) {
-        if matches!(layout, Layout::Struct(_)) {
+        if matches!(layout, Layout::Struct { .. }) {
             match storage {
                 StoredValue::StackMemory { location, size, .. } => {
                     if *size > 0 {

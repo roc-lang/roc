@@ -2101,7 +2101,7 @@ fn finish_specialization(
                 EntryPoint {
                     layout: roc_mono::ir::ProcLayout {
                         arguments: &[],
-                        result: Layout::Struct(&[]),
+                        result: Layout::struct_no_name_order(&[]),
                     },
                     symbol,
                 }

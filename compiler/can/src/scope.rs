@@ -4,7 +4,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, Type};
+use roc_types::types::{Alias, AliasKind, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scope {
@@ -50,6 +50,8 @@ impl Scope {
                 lambda_set_variables: Vec::new(),
                 recursion_variables: MutSet::default(),
                 type_variables: variables,
+                // TODO(opaques): replace when opaques are included in the stdlib
+                kind: AliasKind::Structural,
             };
 
             aliases.insert(symbol, alias);
@@ -98,6 +100,76 @@ impl Scope {
 
     pub fn lookup_alias(&self, symbol: Symbol) -> Option<&Alias> {
         self.aliases.get(&symbol)
+    }
+
+    /// Check if there is an opaque type alias referenced by `opaque_ref` referenced in the
+    /// current scope. E.g. `$Age` must reference an opaque `Age` declared in this module, not any
+    /// other!
+    // TODO(opaques): $->@ in the above comment
+    pub fn lookup_opaque_ref(
+        &self,
+        opaque_ref: &str,
+        lookup_region: Region,
+    ) -> Result<Symbol, RuntimeError> {
+        debug_assert!(opaque_ref.starts_with('$'));
+        let opaque = opaque_ref[1..].into();
+
+        match self.idents.get(&opaque) {
+            // TODO: is it worth caching any of these results?
+            Some((symbol, decl_region)) => {
+                if symbol.module_id() != self.home {
+                    // The reference is to an opaque type declared in another module - this is
+                    // illegal, as opaque types can only be wrapped/unwrapped in the scope they're
+                    // declared.
+                    return Err(RuntimeError::OpaqueOutsideScope {
+                        opaque,
+                        referenced_region: lookup_region,
+                        imported_region: *decl_region,
+                    });
+                }
+
+                match self.aliases.get(symbol) {
+                    None => Err(self.opaque_not_defined_error(opaque, lookup_region, None)),
+
+                    Some(alias) => match alias.kind {
+                        // The reference is to a proper alias like `Age : U32`, not an opaque type!
+                        AliasKind::Structural => Err(self.opaque_not_defined_error(
+                            opaque,
+                            lookup_region,
+                            Some(alias.header_region()),
+                        )),
+                        // All is good
+                        AliasKind::Opaque => Ok(*symbol),
+                    },
+                }
+            }
+            None => Err(self.opaque_not_defined_error(opaque, lookup_region, None)),
+        }
+    }
+
+    fn opaque_not_defined_error(
+        &self,
+        opaque: Ident,
+        lookup_region: Region,
+        opt_defined_alias: Option<Region>,
+    ) -> RuntimeError {
+        let opaques_in_scope = self
+            .idents()
+            .filter(|(_, (sym, _))| {
+                self.aliases
+                    .get(sym)
+                    .map(|alias| alias.kind)
+                    .unwrap_or(AliasKind::Structural)
+                    == AliasKind::Opaque
+            })
+            .map(|(v, _)| v.as_ref().into())
+            .collect();
+
+        RuntimeError::OpaqueNotDefined {
+            usage: Loc::at(lookup_region, opaque),
+            opaques_in_scope,
+            opt_defined_alias,
+        }
     }
 
     /// Introduce a new ident to scope.
@@ -180,8 +252,9 @@ impl Scope {
         region: Region,
         vars: Vec<Loc<(Lowercase, Variable)>>,
         typ: Type,
+        kind: AliasKind,
     ) {
-        let alias = create_alias(name, region, vars, typ);
+        let alias = create_alias(name, region, vars, typ, kind);
         self.aliases.insert(name, alias);
     }
 
@@ -195,6 +268,7 @@ pub fn create_alias(
     region: Region,
     vars: Vec<Loc<(Lowercase, Variable)>>,
     typ: Type,
+    kind: AliasKind,
 ) -> Alias {
     let roc_types::types::VariableDetail {
         type_variables,
@@ -230,5 +304,6 @@ pub fn create_alias(
         lambda_set_variables,
         recursion_variables,
         typ,
+        kind,
     }
 }

@@ -1,21 +1,21 @@
 procedure List.7 (#Attr.2):
-    let Test.8 : Builtin(Int(U64)) = lowlevel ListLen #Attr.2;
+    let Test.8 : U64 = lowlevel ListLen #Attr.2;
     ret Test.8;
 
 procedure Test.1 (Test.5):
-    let Test.2 : Builtin(Int(I64)) = 41i64;
-    let Test.12 : LambdaSet(LambdaSet { set: [( Test.3, [Builtin(Int(I64))])], representation: Struct([Builtin(Int(I64))]) }) = Struct {Test.2};
-    let Test.11 : Builtin(List(LambdaSet(LambdaSet { set: [( Test.3, [Builtin(Int(I64))])], representation: Struct([Builtin(Int(I64))]) }))) = Array [Test.12];
+    let Test.2 : I64 = 41i64;
+    let Test.12 : {I64} = Struct {Test.2};
+    let Test.11 : List {I64} = Array [Test.12];
     ret Test.11;
 
 procedure Test.3 (Test.10, #Attr.12):
-    let Test.2 : Builtin(Int(I64)) = StructAtIndex 0 #Attr.12;
-    let Test.2 : Builtin(Int(I64)) = 41i64;
+    let Test.2 : I64 = StructAtIndex 0 #Attr.12;
+    let Test.2 : I64 = 41i64;
     ret Test.2;
 
 procedure Test.0 ():
-    let Test.9 : Struct([]) = Struct {};
-    let Test.7 : Builtin(List(LambdaSet(LambdaSet { set: [( Test.3, [Builtin(Int(I64))])], representation: Struct([Builtin(Int(I64))]) }))) = CallByName Test.1 Test.9;
-    let Test.6 : Builtin(Int(U64)) = CallByName List.7 Test.7;
+    let Test.9 : {} = Struct {};
+    let Test.7 : List {I64} = CallByName Test.1 Test.9;
+    let Test.6 : U64 = CallByName List.7 Test.7;
     dec Test.7;
     ret Test.6;

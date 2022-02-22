@@ -331,7 +331,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
         }
-        Layout::Struct(field_layouts) => {
+        Layout::Struct { field_layouts, .. } => {
             let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
                     Ok(struct_to_ast(env, mem, addr, field_layouts, *fields))
@@ -382,7 +382,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             };
 
             let fields = [Layout::u64(), *layout];
-            let layout = Layout::Struct(&fields);
+            let layout = Layout::struct_no_name_order(&fields);
 
             let result_stack_size = layout.stack_size(env.target_info);
 
@@ -516,7 +516,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
 
             str_to_ast(env.arena, arena_str)
         }
-        (_, Layout::Struct(field_layouts)) => match content {
+        (_, Layout::Struct{field_layouts, ..}) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
                 struct_to_ast(env, mem, addr, field_layouts, *fields)
             }
@@ -796,7 +796,7 @@ fn single_tag_union_to_ast<'a, M: ReplAppMemory>(
         sequence_of_expr(env, mem, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else if field_layouts.is_empty() && !payload_vars.is_empty() {
         // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
-        let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
+        let it = payload_vars.iter().copied().zip([&Layout::UNIT]);
         sequence_of_expr(env, mem, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else {
         unreachable!()
@@ -864,7 +864,7 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
                 env,
                 mem,
                 addr,
-                &Layout::Struct(field_layouts),
+                &Layout::struct_no_name_order(field_layouts),
                 WhenRecursive::Unreachable,
                 inner_content,
             ),

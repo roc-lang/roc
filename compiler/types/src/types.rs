@@ -185,6 +185,7 @@ pub enum Type {
         type_arguments: Vec<(Lowercase, Type)>,
         lambda_set_variables: Vec<LambdaSet>,
         actual: Box<Type>,
+        kind: AliasKind,
     },
     HostExposedAlias {
         name: Symbol,
@@ -853,6 +854,7 @@ impl Type {
                         type_arguments: named_args,
                         lambda_set_variables,
                         actual: Box::new(actual),
+                        kind: alias.kind,
                     };
                 } else {
                     // one of the special-cased Apply types.
@@ -1325,6 +1327,19 @@ pub enum PatternCategory {
     Float,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AliasKind {
+    /// A structural alias is something like
+    ///   List a : [ Nil, Cons a (List a) ]
+    /// It is typed structurally, so that a `List U8` is always equal to a `[ Nil ]_`, for example.
+    Structural,
+    /// An opaque alias corresponds to an opaque type from the language syntax, like
+    ///   Age := U32
+    /// It is type nominally, so that `Age` is never equal to `U8` - the only way to unwrap the
+    /// structural type inside `Age` is to unwrap the opaque, so `Age` = `@Age U8`.
+    Opaque,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Alias {
     pub region: Region,
@@ -1337,6 +1352,8 @@ pub struct Alias {
     pub recursion_variables: MutSet<Variable>,
 
     pub typ: Type,
+
+    pub kind: AliasKind,
 }
 
 impl Alias {

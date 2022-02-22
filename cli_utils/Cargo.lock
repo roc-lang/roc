@@ -2771,7 +2771,6 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "ven_pretty",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2880,7 +2879,6 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2913,7 +2911,6 @@ dependencies = [
  "roc_region",
  "roc_types",
  "roc_unify",
- "wasm-bindgen",
 ]
 
 [[package]]

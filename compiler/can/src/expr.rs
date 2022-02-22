@@ -172,6 +172,11 @@ pub enum Expr {
         arguments: Vec<(Variable, Loc<Expr>)>,
     },
 
+    OpaqueRef {
+        name: Symbol,
+        arguments: Vec<(Variable, Loc<Expr>)>,
+    },
+
     // Test
     Expect(Box<Loc<Expr>>, Box<Loc<Expr>>),
 
@@ -419,6 +424,10 @@ pub fn canonicalize_expr<'a>(
                     name,
                     arguments: args,
                 },
+                OpaqueRef { name, .. } => OpaqueRef {
+                    name,
+                    arguments: args,
+                },
                 ZeroArgumentTag {
                     variant_var,
                     ext_var,
@@ -545,7 +554,7 @@ pub fn canonicalize_expr<'a>(
             output.union(new_output);
 
             // filter out aliases
-            captured_symbols.retain(|s| !output.references.referenced_aliases.contains(s));
+            captured_symbols.retain(|s| !output.references.referenced_type_defs.contains(s));
 
             // filter out functions that don't close over anything
             captured_symbols.retain(|s| !output.non_closures.contains(s));
@@ -696,6 +705,19 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
+        ast::Expr::OpaqueRef(opaque_ref) => match scope.lookup_opaque_ref(opaque_ref, region) {
+            Ok(name) => (
+                OpaqueRef {
+                    name,
+                    arguments: vec![],
+                },
+                Output::default(),
+            ),
+            Err(runtime_error) => {
+                env.problem(Problem::RuntimeError(runtime_error.clone()));
+                (RuntimeError(runtime_error), Output::default())
+            }
+        },
         ast::Expr::Expect(condition, continuation) => {
             let mut output = Output::default();
 
@@ -1471,6 +1493,20 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 name,
                 arguments
             );
+        }
+
+        OpaqueRef { name, arguments } => {
+            let arguments = arguments
+                .into_iter()
+                .map(|(var, loc_expr)| {
+                    (
+                        var,
+                        loc_expr.map_owned(|expr| inline_calls(var_store, scope, expr)),
+                    )
+                })
+                .collect();
+
+            OpaqueRef { name, arguments }
         }
 
         ZeroArgumentTag {

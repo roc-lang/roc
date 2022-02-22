@@ -12,6 +12,7 @@ use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{ImMap, Index, MutSet, SendMap};
+use roc_error_macros::todo_opaques;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -915,6 +916,8 @@ pub fn constrain_expr(
 
             exists(vars, And(arg_cons))
         }
+
+        OpaqueRef { .. } => todo_opaques!(),
 
         RunLowLevel { args, ret_var, op } => {
             // This is a modified version of what we do for function calls.
