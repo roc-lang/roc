@@ -95,6 +95,7 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         Body(loc_pattern, loc_expr) => Body(loc_pattern, desugar_expr(arena, loc_expr)),
         SpaceBefore(def, _) | SpaceAfter(def, _) => desugar_def(arena, def),
         alias @ Alias { .. } => *alias,
+        opaque @ Opaque { .. } => *opaque,
         ann @ Annotation(_, _) => *ann,
         AnnotatedBody {
             ann_pattern,
@@ -132,7 +133,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | MalformedClosure
         | PrecedenceConflict { .. }
         | GlobalTag(_)
-        | PrivateTag(_) => loc_expr,
+        | PrivateTag(_)
+        | OpaqueRef(_) => loc_expr,
 
         Access(sub_expr, paths) => {
             let region = loc_expr.region;
@@ -418,7 +420,8 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         Or => (ModuleName::BOOL, "or"),
         Pizza => unreachable!("Cannot desugar the |> operator"),
         Assignment => unreachable!("Cannot desugar the = operator"),
-        HasType => unreachable!("Cannot desugar the : operator"),
+        IsAliasType => unreachable!("Cannot desugar the : operator"),
+        IsOpaqueType => unreachable!("Cannot desugar the := operator"),
         Backpassing => unreachable!("Cannot desugar the <- operator"),
     }
 }
