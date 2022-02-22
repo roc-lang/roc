@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
-use core::mem::{ManuallyDrop, MaybeUninit};
+use core::mem::{self, ManuallyDrop};
 use roc_std::RocStr;
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -12,13 +12,36 @@ mod rects_and_texts;
 
 extern "C" {
     #[link_name = "roc__renderForHost_1_exposed"]
-    fn roc_render(elem: &mut RocElem);
+    fn roc_render() -> RocElem;
 }
 
-#[repr(C)]
+#[repr(transparent)]
+#[cfg(target_pointer_width = "64")] // on a 64-bit system, the tag fits in this pointer's spare 3 bits
 struct RocElem {
-    entry: RocElemEntry,
-    tag: RocElemTag,
+    entry: *const RocElemEntry,
+}
+
+impl RocElem {
+    #[cfg(target_pointer_width = "64")]
+    fn tag(&self) -> RocElemTag {
+        // On a 64-bit system, the last 3 bits of the pointer store the tag
+        unsafe { mem::transmute::<u8, RocElemTag>((self.entry as u8) & 0b0000_0111) }
+    }
+
+    pub fn entry(&self) -> &RocElemEntry {
+        // On a 64-bit system, the last 3 bits of the pointer store the tag
+        let cleared = self.entry as usize & !0b111;
+
+        unsafe { &*(cleared as *const RocElemEntry) }
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    pub fn entry_mut(&mut self) -> &mut RocElemEntry {
+        // On a 64-bit system, the last 3 bits of the pointer store the tag
+        let cleared = self.entry as usize & !0b111;
+
+        unsafe { &mut *(cleared as *mut RocElemEntry) }
+    }
 }
 
 #[repr(u8)]
@@ -30,8 +53,8 @@ enum RocElemTag {
 
 #[repr(C)]
 union RocElemEntry {
+    button: ManuallyDrop<RocElem>,
     text: ManuallyDrop<RocStr>,
-    button: *const RocElem,
 }
 
 #[no_mangle]
@@ -130,34 +153,26 @@ struct AppState {
 pub extern "C" fn rust_main() -> i32 {
     println!("Calling roc_render()...");
 
-    let elem = unsafe {
-        let mut ret: MaybeUninit<RocElem> = MaybeUninit::uninit();
-
-        roc_render(ret.assume_init_mut());
-
-        ret.assume_init()
-    };
+    let elem = unsafe { roc_render() };
 
     fn display_elem(elem: &RocElem) {
         use RocElemTag::*;
 
-        println!("Got this tag: {:?}", elem.tag);
+        println!("Got this tag: {:?}", elem.tag());
 
-        match elem.tag {
+        match elem.tag() {
             Button => {
                 println!("Button!");
 
-                let child_ptr = unsafe { &*elem.entry.button };
+                let child = unsafe { &elem.entry().button };
 
                 println!("Got this child:");
 
-                display_elem(&*child_ptr);
+                display_elem(child);
             }
             Text => {
-                println!("Text!");
-
-                let text = unsafe { &*elem.entry.text };
-                println!("Got text with this length: {}", text.len());
+                let text = unsafe { &elem.entry().text };
+                println!("Text: {}", (*text).as_str());
             }
         }
     }
@@ -230,7 +245,7 @@ pub extern "C" fn rust_main() -> i32 {
 
     // draw_elem(render(0));
 
-    // gui::render(roc_str);
+    // gui::render("test title".into());
 
     // Exit code
     0

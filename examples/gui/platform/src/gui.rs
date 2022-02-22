@@ -330,6 +330,26 @@ pub fn render(title: RocStr) {
             color: (0.4, 0.2, 0.5, 1.0),
             border_width: 5.0,
             border_color: (0.75, 0.5, 0.5, 1.0)
+        },
+        RectElt {
+            rect: Rect {
+                top_left_coords: (420.0, 420.0).into(),
+                width: 150.0,
+                height: 150.0
+            },
+            color: (0.9, 0.2, 0.5, 1.0),
+            border_width: 10.0,
+            border_color: (0.2, 0.5, 0.5, 1.0)
+        },
+        RectElt {
+            rect: Rect {
+                top_left_coords: (571.0, 420.0).into(),
+                width: 150.0,
+                height: 150.0
+            },
+            color: (0.2, 0.2, 0.5, 1.0),
+            border_width: 10.0,
+            border_color: (0.2, 0.5, 0.5, 1.0)
         }
     ];
 

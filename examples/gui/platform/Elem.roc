@@ -2,7 +2,12 @@ interface Elem
     exposes [ Elem, PressEvent, row, col, text, button, none, translate, list ]
     imports [ Action.{ Action }]
 
+
 Elem state :
+    # PERFORMANCE NOTE:
+    # If there are 8 or fewer tags here, then on a 64-bit system, the tag can be stored
+    # in the pointer - for massive memory savings. Try extremely hard to always limit the number
+    # of tags in this union to 8 or fewer!
     [
         Button (ButtonConfig state) (Elem state),
         Text Str,
