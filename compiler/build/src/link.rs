@@ -856,7 +856,7 @@ fn link_macos(
 
             flags
         }
-        Err(_) => "".to_string()
+        Err(_) => "".to_string(),
     };
     for roc_link_flag in roc_link_flags.split_whitespace() {
         ld_command.arg(format!("{}", roc_link_flag));
