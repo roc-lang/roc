@@ -2260,6 +2260,25 @@ fn load_module<'a>(
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
+
+    let (filename, opt_shorthand) = module_name_to_path(src_dir, module_name, arc_shorthands);
+
+    load_filename(
+        arena,
+        filename,
+        false,
+        opt_shorthand,
+        module_ids,
+        ident_ids_by_module,
+        module_start_time,
+    )
+}
+
+fn module_name_to_path<'a>(
+    src_dir: &Path,
+    module_name: PQModuleName<'a>,
+    arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
+) -> (PathBuf, Option<&'a str>) {
     let mut filename = PathBuf::new();
 
     filename.push(src_dir);
@@ -2294,15 +2313,7 @@ fn load_module<'a>(
     // End with .roc
     filename.set_extension(ROC_FILE_EXTENSION);
 
-    load_filename(
-        arena,
-        filename,
-        false,
-        opt_shorthand,
-        module_ids,
-        ident_ids_by_module,
-        module_start_time,
-    )
+    (filename, opt_shorthand)
 }
 
 /// Find a task according to the following algorithm:
