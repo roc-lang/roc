@@ -1,6 +1,6 @@
 use crate::{
     graphics::{
-        colors,
+        colors::{self, RgbaTup},
         lowlevel::buffer::create_rect_buffers,
         lowlevel::{buffer::MAX_QUADS, ortho::update_ortho_buffer},
         lowlevel::{buffer::QUAD_INDICES, pipelines},
@@ -434,7 +434,11 @@ enum DrawableContent {
     /// This stores an actual Section because an earlier step needs to know the bounds of
     /// the text, and making a Section is a convenient way to compute those bounds.
     Text(OwnedSection),
-    FillRect,
+    FillRect {
+        color: RgbaTup,
+        border_width: f32,
+        border_color: RgbaTup,
+    },
     // Row(Vec<(Vector2<f32>, Drawable)>),
     // Col(Vec<(Vector2<f32>, Drawable)>),
 }
@@ -505,7 +509,11 @@ fn draw(
                 )
                 .expect("Failed to draw text element");
         }
-        FillRect => {
+        FillRect {
+            color,
+            border_width,
+            border_color,
+        } => {
             // TODO store all these colors and things in FillRect
             let rect_elt = RectElt {
                 rect: Rect {
@@ -513,11 +521,12 @@ fn draw(
                     width: bounds.width,
                     height: bounds.height,
                 },
-                color: (0.2, 0.2, 0.5, 1.0),
-                border_width: 10.0,
-                border_color: (0.2, 0.5, 0.5, 1.0),
+                color,
+                border_width,
+                border_color,
             };
 
+            // TODO inline draw_rects into here!
             draw_rects(
                 &[rect_elt],
                 cmd_encoder,
@@ -546,7 +555,12 @@ fn add_drawable(
             drawables.push(Drawable {
                 bounds: child_bounds,
                 offset: (0.0, 0.0).into(),
-                content: DrawableContent::FillRect,
+                // TODO let buttons specify this
+                content: DrawableContent::FillRect {
+                    color: (0.2, 0.2, 0.5, 1.0),
+                    border_width: 10.0,
+                    border_color: (0.2, 0.5, 0.5, 1.0),
+                },
             });
 
             child_bounds
