@@ -1,419 +1,335 @@
-use core::ffi::c_void;
-use core::fmt;
-use core::ops::{Deref, DerefMut, Drop};
-use core::{mem, ptr};
+#![deny(unsafe_op_in_unsafe_fn)]
 
-use crate::{roc_alloc, roc_dealloc, roc_realloc, Storage, REFCOUNT_1};
+use core::{
+    cell::Cell, cmp, fmt::Debug, intrinsics::copy_nonoverlapping, ops::Deref, ptr::NonNull,
+};
+
+use crate::{rc::ReferenceCount, roc_alloc, roc_dealloc, roc_realloc, storage::Storage};
 
 #[repr(C)]
-pub struct RocList<T> {
-    elements: *mut T,
+pub struct RocList<T>
+where
+    T: ReferenceCount,
+{
+    elements: Option<NonNull<T>>,
     length: usize,
 }
 
-impl<T: Clone> Clone for RocList<T> {
-    fn clone(&self) -> Self {
-        Self::from_slice(self.as_slice())
+impl<T> RocList<T>
+where
+    T: ReferenceCount,
+{
+    pub fn empty() -> Self {
+        RocList {
+            elements: None,
+            length: 0,
+        }
     }
-}
 
-impl<T> RocList<T> {
+    pub fn from_slice(slice: &[T]) -> Self {
+        let mut list = Self::empty();
+        list.extend_from_slice(slice);
+        list
+    }
+
     pub fn len(&self) -> usize {
         self.length
     }
 
     pub fn is_empty(&self) -> bool {
-        self.length == 0
-    }
-
-    pub fn get(&self, index: usize) -> Option<&T> {
-        if index < self.len() {
-            Some(unsafe {
-                let raw = self.elements.add(index);
-
-                &*raw
-            })
-        } else {
-            None
-        }
-    }
-
-    pub fn storage(&self) -> Option<Storage> {
-        use core::cmp::Ordering::*;
-
-        if self.length == 0 {
-            return None;
-        }
-
-        unsafe {
-            let value = *self.get_storage_ptr();
-
-            // NOTE doesn't work with elements of 16 or more bytes
-            match isize::cmp(&value, &0) {
-                Equal => Some(Storage::ReadOnly),
-                Less => Some(Storage::Refcounted(value)),
-                Greater => Some(Storage::Capacity(value as usize)),
-            }
-        }
-    }
-
-    fn get_storage_ptr_help(elements: *mut T) -> *mut isize {
-        let ptr = elements as *mut isize;
-
-        unsafe { ptr.offset(-1) }
-    }
-
-    fn get_storage_ptr(&self) -> *const isize {
-        Self::get_storage_ptr_help(self.elements)
-    }
-
-    fn get_storage_ptr_mut(&mut self) -> *mut isize {
-        self.get_storage_ptr() as *mut isize
-    }
-
-    fn set_storage_ptr(&mut self, ptr: *const isize) {
-        self.elements = unsafe { ptr.offset(1) as *mut T };
-    }
-
-    fn get_element_ptr(elements: *const T) -> *const T {
-        let elem_alignment = core::mem::align_of::<T>();
-        let ptr = elements as *const usize;
-
-        unsafe {
-            if elem_alignment <= core::mem::align_of::<usize>() {
-                ptr.add(1) as *const T
-            } else {
-                // If elements have an alignment bigger than usize (e.g. an i128),
-                // we will have necessarily allocated two usize slots worth of
-                // space for the storage value (with the first usize slot being
-                // padding for alignment's sake), and we need to skip past both.
-                ptr.add(2) as *const T
-            }
-        }
-    }
-
-    pub fn from_slice_with_capacity(slice: &[T], capacity: usize) -> Self
-    where
-        T: Clone,
-    {
-        assert!(capacity > 0);
-        assert!(slice.len() <= capacity);
-
-        let element_bytes = capacity * core::mem::size_of::<T>();
-
-        let padding = {
-            if core::mem::align_of::<T>() <= core::mem::align_of::<usize>() {
-                // aligned on usize (8 bytes on 64-bit systems)
-                0
-            } else {
-                // aligned on 2*usize (16 bytes on 64-bit systems)
-                core::mem::size_of::<usize>()
-            }
-        };
-
-        let num_bytes = core::mem::size_of::<usize>() + padding + element_bytes;
-
-        let elements = unsafe {
-            let raw_ptr = roc_alloc(num_bytes, core::mem::size_of::<usize>() as u32) as *mut u8;
-
-            // pointer to the first element
-            let raw_ptr = Self::get_element_ptr(raw_ptr as *mut T) as *mut T;
-
-            // write the refcount
-            let refcount_ptr = raw_ptr as *mut isize;
-            *(refcount_ptr.offset(-1)) = isize::MIN;
-
-            // Clone the elements into the new array.
-            let target_ptr = raw_ptr;
-            for (i, value) in slice.iter().cloned().enumerate() {
-                let target_ptr = target_ptr.add(i);
-                target_ptr.write(value);
-            }
-
-            raw_ptr
-        };
-
-        Self {
-            length: slice.len(),
-            elements,
-        }
-    }
-
-    pub fn from_slice(slice: &[T]) -> Self
-    where
-        T: Clone,
-    {
-        // Avoid allocation with empty list.
-        if slice.is_empty() {
-            Self::default()
-        } else {
-            Self::from_slice_with_capacity(slice, slice.len())
-        }
+        self.len() == 0
     }
 
     pub fn as_slice(&self) -> &[T] {
-        unsafe { core::slice::from_raw_parts(self.elements, self.length) }
+        &*self
     }
 
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
-        unsafe { core::slice::from_raw_parts_mut(self.elements, self.length) }
-    }
+    pub fn extend_from_slice(&mut self, slice: &[T]) {
+        // TODO: Can we do better for ZSTs? Alignment might be a problem.
 
-    /// Copy the contents of the given slice into the end of this list,
-    /// reallocating and resizing as necessary.
-    pub fn append_slice(&mut self, slice: &[T]) {
-        let new_len = self.len() + slice.len();
-        let storage_ptr = self.get_storage_ptr_mut();
+        if slice.is_empty() {
+            return;
+        }
 
-        // First, ensure that there's enough storage space.
-        unsafe {
-            let storage_val = *storage_ptr as isize;
+        let alignment = cmp::max(core::mem::align_of::<T>(), core::mem::align_of::<Storage>());
+        let elements_offset = alignment;
 
-            // Check if this is refcounted, readonly, or has a capcacity.
-            // (Capacity will be positive if it has a capacity.)
-            if storage_val > 0 {
-                let capacity = storage_val as usize;
+        let new_size = elements_offset + core::mem::size_of::<T>() * (self.len() + slice.len());
 
-                // We don't have enough capacity, so we need to get some more.
-                if capacity < new_len {
-                    // Double our capacity using realloc
-                    let new_cap = 2 * capacity;
-                    let new_ptr = roc_realloc(
-                        storage_ptr as *mut c_void,
-                        new_cap,
-                        capacity,
-                        Self::align_of_storage_ptr(),
-                    ) as *mut isize;
+        let new_ptr = if let Some((elements, storage)) = self.elements_and_storage() {
+            // Decrement the lists refence count.
+            let mut copy = storage.get();
+            let is_unique = copy.decrease();
 
-                    // Write the new capacity into the new memory
-                    *new_ptr = new_cap as isize;
-
-                    // Copy all the existing elements into the new allocation.
-                    ptr::copy_nonoverlapping(self.elements, new_ptr as *mut T, self.len());
-
-                    // Update our storage pointer to be the new one
-                    self.set_storage_ptr(new_ptr);
+            if is_unique {
+                // If the memory is not shared, we can reuse the memory.
+                let old_size = elements_offset + core::mem::size_of::<T>() * self.len();
+                unsafe {
+                    let ptr = elements.as_ptr().cast::<u8>().sub(alignment).cast();
+                    roc_realloc(ptr, new_size, old_size, alignment as u32).cast()
                 }
             } else {
-                // If this was reference counted, decrement the refcount!
-                if storage_val < 0 {
-                    let refcount = storage_val;
-
-                    // Either deallocate or decrement.
-                    if refcount == REFCOUNT_1 {
-                        roc_dealloc(storage_ptr as *mut c_void, Self::align_of_storage_ptr());
-                    } else {
-                        *storage_ptr = refcount - 1;
-                    }
+                if !copy.is_readonly() {
+                    // Write the decremented reference count back.
+                    storage.set(copy);
                 }
 
-                // This is either refcounted or readonly; either way, we need
-                // to clone the elements!
+                // Allocate new memory.
+                let new_ptr = unsafe { roc_alloc(new_size, alignment as u32) };
+                let new_elements = unsafe { new_ptr.cast::<u8>().add(alignment).cast::<T>() };
 
-                // Double the capacity we need, in case there are future additions.
-                let new_cap = new_len * 2;
-                let new_ptr = roc_alloc(new_cap, Self::align_of_storage_ptr()) as *mut isize;
+                // Initialize the reference count.
+                unsafe {
+                    let storage_ptr = new_elements.cast::<Storage>().sub(1);
+                    storage_ptr.write(Storage::new_reference_counted());
+                }
 
-                // Write the new capacity into the new memory; this list is
-                // now unique, and gets its own capacity!
-                *new_ptr = new_cap as isize;
+                // Copy the old elements to the new allocation.
+                unsafe {
+                    copy_nonoverlapping(elements.as_ptr(), new_elements, self.length);
+                }
 
-                // Copy all the existing elements into the new allocation.
-                ptr::copy_nonoverlapping(self.elements, new_ptr as *mut T, self.len());
+                new_ptr
+            }
+        } else {
+            // Allocate new memory.
+            let new_ptr = unsafe { roc_alloc(new_size, alignment as u32) };
+            let new_elements = unsafe { new_ptr.cast::<u8>().add(elements_offset).cast::<T>() };
 
-                // Update our storage pointer to be the new one
-                self.set_storage_ptr(new_ptr);
+            // Initialize the reference count.
+            unsafe {
+                let storage_ptr = new_elements.cast::<Storage>().sub(1);
+                storage_ptr.write(Storage::new_reference_counted());
             }
 
-            // Since this is an append, we want to start writing new elements
-            // into the memory immediately after the current last element.
-            let dest = self.elements.add(self.len());
+            new_ptr
+        };
 
-            // There's now enough storage to append the contents of the slice
-            // in-place, so do that!
-            ptr::copy_nonoverlapping(slice.as_ptr(), dest, self.len());
+        let elements = unsafe { new_ptr.cast::<u8>().add(elements_offset).cast::<T>() };
+
+        let non_null_elements = NonNull::new(elements).unwrap();
+        self.elements = Some(non_null_elements);
+
+        let elements = self.elements.unwrap().as_ptr();
+
+        let append_ptr = unsafe { elements.add(self.len()) };
+        for (i, element) in slice.iter().enumerate() {
+            // Increment the element's reference count.
+            element.increment();
+
+            // Write the element into the slot.
+            unsafe {
+                let element = core::ptr::read(element);
+                append_ptr.add(i).write(element);
+            }
+
+            // It's important that the length is increased one by one, to
+            // make sure that we don't drop uninitialized elements, even when
+            // a incrementing the reference count panics.
+            self.length += 1;
         }
-
-        self.length = new_len;
     }
 
-    /// The alignment we need is either the alignment of T, or else
-    /// the alignment of usize, whichever is higher. That's because we need
-    /// to store both T values as well as the refcount/capacity storage slot.
-    fn align_of_storage_ptr() -> u32 {
-        mem::align_of::<T>().max(mem::align_of::<usize>()) as u32
-    }
-
-    unsafe fn drop_pointer_to_first_argument(ptr: *mut T) {
-        let storage_ptr = Self::get_storage_ptr_help(ptr);
-        let storage_val = *storage_ptr;
-
-        if storage_val == REFCOUNT_1 || storage_val > 0 {
-            // If we have no more references, or if this was unique,
-            // deallocate it.
-            roc_dealloc(storage_ptr as *mut c_void, Self::align_of_storage_ptr());
-        } else if storage_val < 0 {
-            // If this still has more references, decrement one.
-            *storage_ptr = storage_val - 1;
-        }
-
-        // The only remaining option is that this is in readonly memory,
-        // in which case we shouldn't attempt to do anything to it.
+    fn elements_and_storage(&self) -> Option<(NonNull<T>, &Cell<Storage>)> {
+        let elements = self.elements?;
+        let storage = unsafe { &*elements.as_ptr().cast::<Cell<Storage>>().sub(1) };
+        Some((elements, storage))
     }
 }
 
-impl<T> Deref for RocList<T> {
+impl<T> Deref for RocList<T>
+where
+    T: ReferenceCount,
+{
     type Target = [T];
 
-    fn deref(&self) -> &[T] {
-        self.as_slice()
+    fn deref(&self) -> &Self::Target {
+        if let Some(elements) = self.elements {
+            let elements = core::ptr::slice_from_raw_parts(elements.as_ptr(), self.length);
+            unsafe { &*elements }
+        } else {
+            &[]
+        }
     }
 }
 
-impl<T> DerefMut for RocList<T> {
-    fn deref_mut(&mut self) -> &mut [T] {
-        self.as_mut_slice()
+impl<T> Default for RocList<T>
+where
+    T: ReferenceCount,
+{
+    fn default() -> Self {
+        Self::empty()
     }
 }
 
-impl<'a, T> IntoIterator for &'a RocList<T> {
-    type Item = &'a T;
-
-    type IntoIter = <&'a [T] as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_slice().iter()
+impl<T, U> PartialEq<RocList<U>> for RocList<T>
+where
+    T: PartialEq<U> + ReferenceCount,
+    U: ReferenceCount,
+{
+    fn eq(&self, other: &RocList<U>) -> bool {
+        self.deref() == other.deref()
     }
 }
 
-impl<T> IntoIterator for RocList<T> {
+impl<T> Eq for RocList<T> where T: Eq + ReferenceCount {}
+
+impl<T> Debug for RocList<T>
+where
+    T: Debug + ReferenceCount,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
+unsafe impl<T> ReferenceCount for RocList<T>
+where
+    T: ReferenceCount,
+{
+    fn increment(&self) {
+        // Increment list's the reference count.
+        if let Some((_, storage)) = self.elements_and_storage() {
+            let mut copy = storage.get();
+            if !copy.is_readonly() {
+                copy.increment_reference_count();
+                storage.set(copy);
+            }
+
+            // Increment the children's the reference counts.
+            self.iter().for_each(T::increment);
+        }
+    }
+
+    unsafe fn decrement(ptr: *const Self) {
+        let this = unsafe { &*ptr };
+        let (elements, storage) = if let Some((elements, storage)) = this.elements_and_storage() {
+            (elements, storage)
+        } else {
+            return;
+        };
+
+        // Decrement the refence counts of the contained values.
+        for i in 0..this.len() {
+            unsafe {
+                T::decrement(elements.as_ptr().add(i));
+            }
+        }
+
+        // Decrease the list's reference count.
+        let mut copy = storage.get();
+        let can_be_released = copy.decrease();
+
+        if !can_be_released {
+            if !copy.is_readonly() {
+                // Write the storage back.
+                storage.set(copy);
+            }
+            return;
+        }
+
+        // Release the memory.
+        let alignment = cmp::max(core::mem::align_of::<T>(), core::mem::align_of::<Storage>());
+        unsafe {
+            roc_dealloc(
+                elements.as_ptr().cast::<u8>().sub(alignment).cast(),
+                alignment as u32,
+            );
+        }
+    }
+}
+
+impl<T> Clone for RocList<T>
+where
+    T: ReferenceCount,
+{
+    fn clone(&self) -> Self {
+        // Increment the reference counts.
+        self.increment();
+
+        // Create a copy.
+        Self {
+            elements: self.elements,
+            length: self.length,
+        }
+    }
+}
+
+impl<T> Drop for RocList<T>
+where
+    T: ReferenceCount,
+{
+    fn drop(&mut self) {
+        unsafe {
+            Self::decrement(self);
+        }
+    }
+}
+
+impl<T> IntoIterator for RocList<T>
+where
+    T: ReferenceCount,
+{
     type Item = T;
-
     type IntoIter = IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let remaining = self.len();
-
-        let buf = unsafe { NonNull::new_unchecked(self.elements as _) };
-        let ptr = self.elements;
-
-        IntoIter {
-            buf,
-            ptr,
-            remaining,
-        }
+        IntoIter { list: self, idx: 0 }
     }
 }
 
-use core::ptr::NonNull;
-
-pub struct IntoIter<T> {
-    buf: NonNull<T>,
-    // pub cap: usize,
-    ptr: *const T,
-    remaining: usize,
+pub struct IntoIter<T>
+where
+    T: ReferenceCount,
+{
+    list: RocList<T>,
+    idx: usize,
 }
 
-impl<T> Iterator for IntoIter<T> {
+impl<T> Iterator for IntoIter<T>
+where
+    T: ReferenceCount,
+{
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        next_help(self)
+        if self.list.len() <= self.idx {
+            return None;
+        }
+
+        let elements = self.list.elements?;
+        let element_ptr = unsafe { elements.as_ptr().add(self.idx) };
+        self.idx += 1;
+
+        // Return the element.
+        let element = unsafe { element_ptr.read() };
+        Some(element)
     }
 }
 
-fn next_help<T>(this: &mut IntoIter<T>) -> Option<T> {
-    if this.remaining == 0 {
-        None
-    } else if mem::size_of::<T>() == 0 {
-        // purposefully don't use 'ptr.offset' because for
-        // vectors with 0-size elements this would return the
-        // same pointer.
-        this.remaining -= 1;
-
-        // Make up a value of this ZST.
-        Some(unsafe { mem::zeroed() })
-    } else {
-        let old = this.ptr;
-        this.ptr = unsafe { this.ptr.offset(1) };
-        this.remaining -= 1;
-
-        Some(unsafe { ptr::read(old) })
-    }
-}
-
-impl<T> Drop for IntoIter<T> {
+impl<T> Drop for IntoIter<T>
+where
+    T: ReferenceCount,
+{
     fn drop(&mut self) {
-        // drop the elements that we have not yet returned.
-        while let Some(item) = next_help(self) {
-            drop(item);
-        }
+        // Check if there are any elements left of which we need to decrement
+        // the refence counts.
+        let elements = if let Some(elements) = self.list.elements {
+            elements
+        } else {
+            return;
+        };
 
-        // deallocate the whole buffer
-        unsafe {
-            RocList::drop_pointer_to_first_argument(self.buf.as_mut());
-        }
-    }
-}
+        // Set the list's length to zero to prevent double-frees.
+        // Note that this leaks if decrementing any of the elements' reference
+        // counts panics.
+        let len = core::mem::take(&mut self.list.length);
 
-impl<T> Default for RocList<T> {
-    fn default() -> Self {
-        Self {
-            length: 0,
-            elements: core::ptr::null_mut(),
-        }
-    }
-}
-
-impl<T: fmt::Debug> fmt::Debug for RocList<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // RocList { storage: Refcounted(3), elements: [ 1,2,3,4] }
-        f.debug_struct("RocList")
-            .field("storage", &self.storage())
-            .field("elements", &self.as_slice())
-            .finish()
-    }
-}
-
-impl<T: PartialEq> PartialEq for RocList<T> {
-    fn eq(&self, other: &Self) -> bool {
-        if self.length != other.length {
-            return false;
-        }
-
-        for i in 0..self.length {
+        // Decrement the reference counts of the elements that haven't been
+        // returned from the iterator.
+        for i in self.idx..len {
             unsafe {
-                if *self.elements.add(i) != *other.elements.add(i) {
-                    return false;
-                }
-            }
-        }
-
-        true
-    }
-}
-
-impl<T: Eq> Eq for RocList<T> {}
-
-impl<T> Drop for RocList<T> {
-    fn drop(&mut self) {
-        if !self.is_empty() {
-            let storage_ptr = self.get_storage_ptr_mut();
-
-            unsafe {
-                let storage_val = *storage_ptr;
-
-                if storage_val == REFCOUNT_1 || storage_val > 0 {
-                    // If we have no more references, or if this was unique,
-                    // deallocate it.
-                    roc_dealloc(storage_ptr as *mut c_void, Self::align_of_storage_ptr());
-                } else if storage_val < 0 {
-                    // If this still has more references, decrement one.
-                    *storage_ptr = storage_val - 1;
-                }
-
-                // The only remaining option is that this is in readonly memory,
-                // in which case we shouldn't attempt to do anything to it.
+                T::decrement(elements.as_ptr().add(i));
             }
         }
     }

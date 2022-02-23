@@ -2486,29 +2486,21 @@ fn when_on_i16() {
 fn num_to_str() {
     use roc_std::RocStr;
 
-    assert_evals_to!(
-        r#"Num.toStr 1234"#,
-        RocStr::from_slice("1234".as_bytes()),
-        RocStr
-    );
-    assert_evals_to!(r#"Num.toStr 0"#, RocStr::from_slice("0".as_bytes()), RocStr);
-    assert_evals_to!(
-        r#"Num.toStr -1"#,
-        RocStr::from_slice("-1".as_bytes()),
-        RocStr
-    );
+    assert_evals_to!(r#"Num.toStr 1234"#, RocStr::from("1234"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1"#, RocStr::from("-1"), RocStr);
 
     let max = format!("{}", i64::MAX);
     assert_evals_to!(
         r#"Num.toStr Num.maxI64"#,
-        RocStr::from_slice(max.as_bytes()),
+        RocStr::from(max.as_str()),
         RocStr
     );
 
     let min = format!("{}", i64::MIN);
     assert_evals_to!(
         r#"Num.toStr Num.minI64"#,
-        RocStr::from_slice(min.as_bytes()),
+        RocStr::from(min.as_str()),
         RocStr
     );
 }

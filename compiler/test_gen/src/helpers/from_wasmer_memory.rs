@@ -1,5 +1,5 @@
 use roc_gen_wasm::wasm32_sized::Wasm32Sized;
-use roc_std::{RocDec, RocList, RocOrder, RocStr};
+use roc_std::{ReferenceCount, RocDec, RocList, RocOrder, RocStr};
 
 pub trait FromWasmerMemory: Wasm32Sized {
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self;
@@ -61,19 +61,19 @@ impl FromWasmerMemory for RocStr {
             let actual_length = (last_byte ^ 0b1000_0000) as usize;
 
             let slice = &bytes.to_ne_bytes()[..actual_length as usize];
-            RocStr::from_slice(slice)
+            unsafe { RocStr::from_slice(slice) }
         } else {
             // this is a big string
             let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(elements);
             let foobar = (ptr.deref(memory, 0, length)).unwrap();
             let wasm_slice = unsafe { std::mem::transmute(foobar) };
 
-            RocStr::from_slice(wasm_slice)
+            unsafe { RocStr::from_slice(wasm_slice) }
         }
     }
 }
 
-impl<T: FromWasmerMemory + Clone> FromWasmerMemory for RocList<T> {
+impl<T: FromWasmerMemory + Clone + ReferenceCount> FromWasmerMemory for RocList<T> {
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
         let bytes = <u64 as FromWasmerMemory>::decode(memory, offset);
 

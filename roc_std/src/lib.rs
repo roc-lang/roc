@@ -1,14 +1,16 @@
 #![crate_type = "lib"]
 #![no_std]
-use core::convert::From;
 use core::ffi::c_void;
 use core::fmt;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 
+mod rc;
 mod roc_list;
 mod roc_str;
+mod storage;
 
+pub use rc::ReferenceCount;
 pub use roc_list::RocList;
 pub use roc_str::RocStr;
 
@@ -24,21 +26,12 @@ extern "C" {
     pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
 }
 
-const REFCOUNT_1: isize = isize::MIN;
-
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RocOrder {
     Eq = 0,
     Gt = 1,
     Lt = 2,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum Storage {
-    ReadOnly,
-    Refcounted(isize),
-    Capacity(usize),
 }
 
 /// Like a Rust `Result`, but following Roc's ABI instead of Rust's.
