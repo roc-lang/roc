@@ -231,12 +231,21 @@ fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
                 //     wgpu::LoadOp::Load,
                 // );
 
-                display_elem(
+                // TODO use with_capacity based on some heuristic
+                let mut drawables = Vec::new();
+
+                add_drawable(
                     &root,
                     Bounds {
                         width: size.width as f32,
                         height: size.height as f32,
                     },
+                    &mut drawables,
+                    &mut glyph_brush,
+                );
+
+                process_drawables(
+                    drawables,
                     &mut staging_belt,
                     &mut glyph_brush,
                     &mut cmd_encoder,
@@ -415,21 +424,23 @@ struct Bounds {
 
 #[derive(Clone, Debug)]
 struct Drawable {
+    offset: Vector2<f32>,
     bounds: Bounds,
     content: DrawableContent,
 }
 
 #[derive(Clone, Debug)]
 enum DrawableContent {
+    /// This stores an actual Section because an earlier step needs to know
+    /// the bounds of the text, and making a Section is a convenient way to compute them.
     Text(OwnedSection),
     FillRect,
     // Row(Vec<(Vector2<f32>, Drawable)>),
     // Col(Vec<(Vector2<f32>, Drawable)>),
 }
 
-fn display_elem(
-    elem: &RocElem,
-    bounds: Bounds,
+fn process_drawables(
+    drawables: Vec<Drawable>,
     staging_belt: &mut wgpu::util::StagingBelt,
     glyph_brush: &mut GlyphBrush<()>,
     cmd_encoder: &mut CommandEncoder,
@@ -438,31 +449,66 @@ fn display_elem(
     rect_resources: &RectResources,
     load_op: LoadOp<wgpu::Color>,
     texture_size: Bounds,
-) -> Drawable {
-    use RocElemTag::*;
+) {
+    // TODO iterate through drawables,
+    // calculating a pos using offset,
+    // calling draw and updating boiunding boxes
+    let pos: Vector2<f32> = (0.0, 0.0).into();
 
-    match elem.tag() {
-        Button => {
-            let button = unsafe { &elem.entry().button };
-            let child = display_elem(
-                &*button.child,
-                bounds,
-                staging_belt,
-                glyph_brush,
-                cmd_encoder,
-                texture_view,
-                gpu_device,
-                rect_resources,
-                load_op,
-                texture_size,
-            );
+    for drawable in drawables.into_iter() {
+        draw(
+            drawable.bounds,
+            drawable.content,
+            pos + drawable.offset,
+            staging_belt,
+            glyph_brush,
+            cmd_encoder,
+            texture_view,
+            gpu_device,
+            rect_resources,
+            load_op,
+            texture_size,
+        );
+    }
+}
 
-            let pos = (0.0, 0.0).into();
+fn draw(
+    bounds: Bounds,
+    content: DrawableContent,
+    pos: Vector2<f32>,
+    staging_belt: &mut wgpu::util::StagingBelt,
+    glyph_brush: &mut GlyphBrush<()>,
+    cmd_encoder: &mut CommandEncoder,
+    texture_view: &TextureView,
+    gpu_device: &wgpu::Device,
+    rect_resources: &RectResources,
+    load_op: LoadOp<wgpu::Color>,
+    texture_size: Bounds,
+) {
+    use DrawableContent::*;
+
+    match content {
+        Text(section) => {
+            glyph_brush.queue(section.with_screen_position(pos).to_borrowed());
+
+            glyph_brush
+                .draw_queued(
+                    gpu_device,
+                    staging_belt,
+                    cmd_encoder,
+                    texture_view,
+                    texture_size.width as u32, // TODO why do we make these be u32 and then cast to f32 in orthorgraphic_projection?
+                    texture_size.height as u32,
+                )
+                .expect("Failed to draw text element");
+        }
+        FillRect => {
+            // TODO store all these colors and things in FillRect
             let rect_elt = RectElt {
                 rect: Rect {
                     pos,
-                    width: child.bounds.width,
-                    height: child.bounds.height,
+                    width: bounds.width,
+                    height: bounds.height,
                 },
                 color: (0.2, 0.2, 0.5, 0.5),
                 border_width: 10.0,
@@ -477,11 +523,30 @@ fn display_elem(
                 rect_resources,
                 load_op,
             );
+        }
+    }
+}
 
-            Drawable {
-                bounds: child.bounds,
+fn add_drawable(
+    elem: &RocElem,
+    bounds: Bounds,
+    drawables: &mut Vec<Drawable>,
+    glyph_brush: &mut GlyphBrush<()>,
+) -> Bounds {
+    use RocElemTag::*;
+
+    match elem.tag() {
+        Button => {
+            let button = unsafe { &elem.entry().button };
+            let child_bounds = add_drawable(&*button.child, bounds, drawables, glyph_brush);
+
+            drawables.push(Drawable {
+                bounds: child_bounds,
+                offset: (0.0, 0.0).into(),
                 content: DrawableContent::FillRect,
-            }
+            });
+
+            child_bounds
         }
         Text => {
             let text = unsafe { &elem.entry().text };
@@ -494,7 +559,7 @@ fn display_elem(
 
             let section = owned_section_from_str(text.as_str(), bounds, layout);
 
-            // Calculate the bounds
+            // Calculate the bounds and offset by measuring glyphs
             let text_bounds;
             let offset;
 
@@ -505,7 +570,7 @@ fn display_elem(
                         height: glyph_bounds.max.y - glyph_bounds.min.y,
                     };
 
-                    offset = (-glyph_bounds.min.x, -glyph_bounds.min.y);
+                    offset = (-glyph_bounds.min.x, -glyph_bounds.min.y).into();
                 }
                 None => {
                     text_bounds = Bounds {
@@ -513,27 +578,17 @@ fn display_elem(
                         height: 0.0,
                     };
 
-                    offset = (0.0, 0.0);
+                    offset = (0.0, 0.0).into();
                 }
             }
 
-            glyph_brush.queue(section.with_screen_position(offset).to_borrowed());
-
-            glyph_brush
-                .draw_queued(
-                    gpu_device,
-                    staging_belt,
-                    cmd_encoder,
-                    texture_view,
-                    texture_size.width as u32, // TODO why do we make these be u32 and then cast to f32 in orthorgraphic_projection?
-                    texture_size.height as u32,
-                )
-                .expect("Failed to draw text element");
-
-            Drawable {
+            drawables.push(Drawable {
                 bounds: text_bounds,
-                content: DrawableContent::FillRect,
-            }
+                offset,
+                content: DrawableContent::Text(section),
+            });
+
+            text_bounds
         }
         Row => {
             todo!("Row");
