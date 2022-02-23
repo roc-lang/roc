@@ -1,3 +1,4 @@
+use crate::annotation::freshen_opaque_def;
 use crate::env::Env;
 use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
 use crate::num::{
@@ -5,7 +6,6 @@ use crate::num::{
     NumericBound, ParsedNumResult,
 };
 use crate::scope::Scope;
-use roc_error_macros::todo_opaques;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
@@ -13,6 +13,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::{LambdaSet, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -28,7 +29,26 @@ pub enum Pattern {
     UnwrappedOpaque {
         whole_var: Variable,
         opaque: Symbol,
-        arguments: Vec<(Variable, Loc<Pattern>)>,
+        argument: Box<(Variable, Loc<Pattern>)>,
+
+        // The following help us link this opaque reference to the type specified by its
+        // definition, which we then use during constraint generation. For example
+        // suppose we have
+        //
+        //   Id n := [ Id U64 n ]
+        //   strToBool : Str -> Bool
+        //
+        //   f = \@Id who -> strToBool who
+        //
+        // Then `name` is "Id", `argument` is "who", but this is not enough for us to
+        // infer the type of the expression as "Id Str" - we need to link the specialized type of
+        // the variable "n".
+        // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
+        // for the expression from the opaque definition. `type_arguments` is something like
+        // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
+        specialized_def_type: Box<Type>,
+        type_arguments: Vec<(Lowercase, Type)>,
+        lambda_set_variables: Vec<LambdaSet>,
     },
     RecordDestructure {
         whole_var: Variable,
@@ -87,12 +107,11 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
             }
         }
         UnwrappedOpaque {
-            opaque, arguments, ..
+            opaque, argument, ..
         } => {
             symbols.push(*opaque);
-            for (_, nested) in arguments {
-                symbols_from_pattern_help(&nested.value, symbols);
-            }
+            let (_, nested) = &**argument;
+            symbols_from_pattern_help(&nested.value, symbols);
         }
         RecordDestructure { destructs, .. } => {
             for destruct in destructs {
@@ -171,7 +190,14 @@ pub fn canonicalize_pattern<'a>(
                 arguments: vec![],
             }
         }
-        OpaqueRef(..) => todo_opaques!(),
+        OpaqueRef(name) => {
+            // If this opaque ref had an argument, we would be in the "Apply" branch.
+            let loc_name = Loc::at(region, (*name).into());
+            env.problem(Problem::RuntimeError(RuntimeError::OpaqueNotApplied(
+                loc_name.clone(),
+            )));
+            Pattern::OpaqueNotInScope(loc_name)
+        }
         Apply(tag, patterns) => {
             let mut can_patterns = Vec::with_capacity(patterns.len());
             for loc_pattern in *patterns {
@@ -212,11 +238,31 @@ pub fn canonicalize_pattern<'a>(
                 }
 
                 OpaqueRef(name) => match scope.lookup_opaque_ref(name, tag.region) {
-                    Ok(opaque) => Pattern::UnwrappedOpaque {
-                        whole_var: var_store.fresh(),
-                        opaque,
-                        arguments: can_patterns,
-                    },
+                    Ok((opaque, opaque_def)) => {
+                        debug_assert!(can_patterns.len() >= 1);
+
+                        if can_patterns.len() > 1 {
+                            env.problem(Problem::RuntimeError(
+                                RuntimeError::OpaqueAppliedToMultipleArgs(region),
+                            ));
+
+                            Pattern::UnsupportedPattern(region)
+                        } else {
+                            let argument = Box::new(can_patterns.pop().unwrap());
+
+                            let (type_arguments, lambda_set_variables, specialized_def_type) =
+                                freshen_opaque_def(var_store, opaque_def);
+
+                            Pattern::UnwrappedOpaque {
+                                whole_var: var_store.fresh(),
+                                opaque,
+                                argument,
+                                specialized_def_type: Box::new(specialized_def_type),
+                                type_arguments,
+                                lambda_set_variables,
+                            }
+                        }
+                    }
                     Err(runtime_error) => {
                         env.problem(Problem::RuntimeError(runtime_error));
 
@@ -557,13 +603,10 @@ fn add_bindings_from_patterns(
             }
         }
         UnwrappedOpaque {
-            arguments: loc_args,
-            opaque,
-            ..
+            argument, opaque, ..
         } => {
-            for (_, loc_arg) in loc_args {
-                add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
-            }
+            let (_, loc_arg) = &**argument;
+            add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
             answer.push((*opaque, *region));
         }
         RecordDestructure { destructs, .. } => {

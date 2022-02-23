@@ -1447,6 +1447,24 @@ fn pretty_runtime_error<'b>(
 
             title = OPAQUE_DECLARED_OUTSIDE_SCOPE;
         }
+        RuntimeError::OpaqueNotApplied(loc_ident) => {
+            doc = alloc.stack(vec![
+                alloc.reflow("This opaque is not applied to an argument:"),
+                alloc.region(lines.convert_region(loc_ident.region)),
+                alloc.note("Opaque types always wrap exactly one argument!"),
+            ]);
+
+            title = OPAQUE_DECLARED_OUTSIDE_SCOPE;
+        }
+        RuntimeError::OpaqueAppliedToMultipleArgs(region) => {
+            doc = alloc.stack(vec![
+                alloc.reflow("This opaque is applied to multiple arguments:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.note("Opaque types always wrap exactly one argument!"),
+            ]);
+
+            title = OPAQUE_DECLARED_OUTSIDE_SCOPE;
+        }
     }
 
     (doc, title)

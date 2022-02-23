@@ -1139,6 +1139,16 @@ fn format_category<'b>(
             alloc.concat(vec![this_is, alloc.text(" the closure size of a function")]),
             alloc.text(" of type:"),
         ),
+
+        OpaqueWrap(opaque) => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.opaque_name(*opaque),
+                alloc.text(" opaque wrapping"),
+            ]),
+            alloc.text(" has the type:"),
+        ),
+
         TagApply {
             tag_name: TagName::Global(name),
             args_count: 0,
@@ -1467,6 +1477,10 @@ fn add_pattern_category<'b>(
         Ctor(tag_name) => alloc.concat(vec![
             alloc.tag_name(tag_name.clone()),
             alloc.reflow(" values of type:"),
+        ]),
+        Opaque(opaque) => alloc.concat(vec![
+            alloc.opaque_name(*opaque),
+            alloc.reflow(" unwrappings of type:"),
         ]),
         Str => alloc.reflow(" strings:"),
         Num => alloc.reflow(" numbers:"),
