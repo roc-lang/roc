@@ -1,3 +1,4 @@
+use crate::graphics::colors::RgbaTup;
 use crate::graphics::primitives::rect::Rect;
 use core::ffi::c_void;
 use core::mem::{self, ManuallyDrop};
@@ -70,6 +71,7 @@ impl RocElem {
 }
 
 #[repr(u8)]
+#[allow(unused)] // This is actually used, just via a mem::transmute from u8
 #[derive(Debug, Clone, Copy)]
 pub enum RocElemTag {
     Button = 0,
@@ -81,7 +83,16 @@ pub enum RocElemTag {
 #[repr(C)]
 pub struct RocButton {
     pub child: ManuallyDrop<RocElem>,
-    pub bounds: Rect,
+    pub styles: ButtonStyles,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct ButtonStyles {
+    pub bg_color: RgbaTup,
+    pub border_color: RgbaTup,
+    pub border_width: f32,
+    pub text_color: RgbaTup,
 }
 
 #[repr(C)]

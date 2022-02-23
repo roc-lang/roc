@@ -550,6 +550,7 @@ fn add_drawable(
     match elem.tag() {
         Button => {
             let button = unsafe { &elem.entry().button };
+            let styles = button.styles;
             let child_bounds = add_drawable(&*button.child, bounds, drawables, glyph_brush);
 
             drawables.push(Drawable {
@@ -557,9 +558,9 @@ fn add_drawable(
                 offset: (0.0, 0.0).into(),
                 // TODO let buttons specify this
                 content: DrawableContent::FillRect {
-                    color: (0.2, 0.2, 0.5, 1.0),
-                    border_width: 10.0,
-                    border_color: (0.2, 0.5, 0.5, 1.0),
+                    color: styles.bg_color,
+                    border_width: styles.border_width,
+                    border_color: styles.border_color,
                 },
             });
 

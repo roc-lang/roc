@@ -5,9 +5,11 @@ platform "examples/hello-world"
     imports []
     provides [ renderForHost ]
 
-Dim : { left : F32, top : F32, width : F32, height : F32 }
+Rgba : { r : F32, g : F32, b : F32, a : F32 }
 
-Elem : [ Button Elem Dim, Col (List Elem), Row (List Elem), Text Str ]
+ButtonStyles : { bgColor : Rgba, borderColor : Rgba,  borderWidth : F32, textColor : Rgba }
+
+Elem : [ Button Elem ButtonStyles, Col (List Elem), Row (List Elem), Text Str ]
 
 renderForHost : Elem
 renderForHost = render
