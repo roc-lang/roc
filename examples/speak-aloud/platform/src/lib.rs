@@ -59,7 +59,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 pub extern "C" fn rust_main() -> i32 {
     let text_to_speak = unsafe { roc_main() }.to_string();
 
-    tts::speak(&text_to_speak).expect("failed to speak text");
+    tts::speak(&text_to_speak);
 
     // Exit code
     0

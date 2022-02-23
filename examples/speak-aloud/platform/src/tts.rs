@@ -1,6 +1,6 @@
 use std::{io::Write, process};
 
-pub fn speak(text: &str) -> Result<(), ()> {
+pub fn speak(text: &str) {
     let mut festival_child = process::Command::new("festival")
         .arg("--pipe")
         .stdin(process::Stdio::piped())
@@ -17,6 +17,4 @@ pub fn speak(text: &str) -> Result<(), ()> {
     println!(r#"Speaking "{}"..."#, text);
 
     festival_child.wait().expect("failed to wait for festival");
-
-    Ok(())
 }
