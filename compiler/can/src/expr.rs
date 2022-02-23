@@ -423,7 +423,7 @@ pub fn canonicalize_expr<'a>(
             if let ast::Expr::OpaqueRef(name) = loc_fn.value {
                 // We treat opaques specially, since an opaque can wrap exactly one argument.
 
-                debug_assert!(args.len() >= 1);
+                debug_assert!(!args.is_empty());
 
                 if args.len() > 1 {
                     let problem =

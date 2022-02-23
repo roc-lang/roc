@@ -239,7 +239,7 @@ pub fn canonicalize_pattern<'a>(
 
                 OpaqueRef(name) => match scope.lookup_opaque_ref(name, tag.region) {
                     Ok((opaque, opaque_def)) => {
-                        debug_assert!(can_patterns.len() >= 1);
+                        debug_assert!(!can_patterns.is_empty());
 
                         if can_patterns.len() > 1 {
                             env.problem(Problem::RuntimeError(
