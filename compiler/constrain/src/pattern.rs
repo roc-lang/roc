@@ -5,7 +5,6 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, RecordDestruct};
 use roc_collections::all::{Index, SendMap};
-use roc_error_macros::todo_opaques;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -118,7 +117,35 @@ fn headers_from_annotation_help(
             _ => false,
         },
 
-        UnwrappedOpaque { .. } => todo_opaques!(),
+        UnwrappedOpaque {
+            whole_var: _,
+            opaque,
+            argument,
+            specialized_def_type: _,
+            type_arguments: pat_type_arguments,
+            lambda_set_variables: pat_lambda_set_variables,
+        } => match &annotation.value {
+            Type::Alias {
+                symbol,
+                kind: AliasKind::Opaque,
+                actual,
+                type_arguments,
+                lambda_set_variables,
+            } if symbol == opaque
+                && type_arguments.len() == pat_type_arguments.len()
+                && lambda_set_variables.len() == pat_lambda_set_variables.len() =>
+            {
+                headers.insert(*opaque, annotation.clone());
+
+                let (_, argument_pat) = &**argument;
+                headers_from_annotation_help(
+                    &argument_pat.value,
+                    &Loc::at(annotation.region, (**actual).clone()),
+                    headers,
+                )
+            }
+            _ => false,
+        },
     }
 }
 
@@ -467,10 +494,17 @@ pub fn constrain_pattern(
                 PresenceConstraint::Pattern(region, PatternCategory::Opaque(*opaque), expected),
             );
 
-            // TODO: may need to extend with vars from `type_arguments` and `lambda_set_variables` here!
             state
                 .vars
                 .extend_from_slice(&[*arg_pattern_var, *whole_var]);
+            // Also add the fresh variables we created for the type argument and lambda sets
+            state.vars.extend(type_arguments.iter().map(|(_, t)| {
+                t.expect_variable("all type arguments should be fresh variables here")
+            }));
+            state.vars.extend(lambda_set_variables.iter().map(|v| {
+                v.0.expect_variable("all lambda sets should be fresh variables here")
+            }));
+
             state.constraints.extend_from_slice(&[
                 whole_con,
                 link_type_variables_con,

@@ -970,9 +970,17 @@ pub fn constrain_expr(
                 region,
             );
 
+            let mut vars = vec![*arg_var, *opaque_var];
+            // Also add the fresh variables we created for the type argument and lambda sets
+            vars.extend(type_arguments.iter().map(|(_, t)| {
+                t.expect_variable("all type arguments should be fresh variables here")
+            }));
+            vars.extend(lambda_set_variables.iter().map(|v| {
+                v.0.expect_variable("all lambda sets should be fresh variables here")
+            }));
+
             exists(
-                // TODO: may need to extend with vars from `type_arguments` and `lambda_set_variables` here!
-                vec![*arg_var, *opaque_var],
+                vars,
                 And(vec![
                     arg_con,
                     opaque_con,

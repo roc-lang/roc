@@ -924,6 +924,13 @@ impl Type {
             _ => true,
         }
     }
+
+    pub fn expect_variable(&self, reason: &'static str) -> Variable {
+        match self {
+            Type::Variable(v) => *v,
+            _ => internal_error!(reason),
+        }
+    }
 }
 
 fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
