@@ -5,7 +5,7 @@ use crate::graphics::primitives::text::{owned_section_from_text, Text};
 pub struct RectsAndTexts {
     pub text_sections_behind: Vec<glyph_brush::OwnedSection>, // displayed in front of rect_behind, behind everything else
     pub text_sections_front: Vec<glyph_brush::OwnedSection>,  // displayed in front of everything
-    pub rects_behind: Vec<RectElt>,                              // displayed at lowest depth
+    pub rects_behind: Vec<RectElt>,                           // displayed at lowest depth
     pub rects_front: Vec<RectElt>, // displayed in front of text_sections_behind, behind text_sections_front
 }
 
@@ -19,10 +19,21 @@ impl RectsAndTexts {
         }
     }
 
-    pub fn init(rects_behind: Vec<RectElt>, texts_behind: Vec<Text>, rects_front: Vec<RectElt>, texts_front: Vec<Text>) -> Self {
+    pub fn init(
+        rects_behind: Vec<RectElt>,
+        texts_behind: Vec<Text>,
+        rects_front: Vec<RectElt>,
+        texts_front: Vec<Text>,
+    ) -> Self {
         Self {
-            text_sections_behind: texts_behind.iter().map(|txt| owned_section_from_text(txt)).collect(),
-            text_sections_front: texts_front.iter().map(|txt| owned_section_from_text(txt)).collect(),
+            text_sections_behind: texts_behind
+                .iter()
+                .map(|txt| owned_section_from_text(txt))
+                .collect(),
+            text_sections_front: texts_front
+                .iter()
+                .map(|txt| owned_section_from_text(txt))
+                .collect(),
             rects_behind,
             rects_front,
         }

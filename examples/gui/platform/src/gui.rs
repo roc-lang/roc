@@ -11,10 +11,13 @@ use crate::{
     },
     roc::{RocElem, RocElemTag},
 };
+use cgmath::{Vector2, Vector4};
+use glyph_brush::OwnedSection;
 use pipelines::RectResources;
 use roc_std::RocStr;
 use std::error::Error;
 use wgpu::{CommandEncoder, LoadOp, RenderPass, TextureView};
+use wgpu_glyph::GlyphBrush;
 use winit::{
     dpi::PhysicalSize,
     event,
@@ -230,6 +233,8 @@ fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
 
                 display_elem(
                     &root,
+                    &mut staging_belt,
+                    &mut glyph_brush,
                     &mut cmd_encoder,
                     &view,
                     &gpu_device,
@@ -396,6 +401,8 @@ pub fn render(title: RocStr, root: RocElem) {
 
 fn display_elem(
     elem: &RocElem,
+    staging_belt: &mut wgpu::util::StagingBelt,
+    glyph_brush: &mut GlyphBrush<()>,
     cmd_encoder: &mut CommandEncoder,
     texture_view: &TextureView,
     gpu_device: &wgpu::Device,
@@ -425,6 +432,8 @@ fn display_elem(
 
             display_elem(
                 &*button.child,
+                staging_belt,
+                glyph_brush,
                 cmd_encoder,
                 texture_view,
                 gpu_device,
@@ -434,6 +443,22 @@ fn display_elem(
         }
         Text => {
             let text = unsafe { &elem.entry().text };
+
+            glyph_brush.queue(owned_section_from_str(text.as_str()).to_borrowed());
+
+            // TODO don't hardcode any of this!
+            let area_bounds = (200, 300);
+
+            glyph_brush
+                .draw_queued(
+                    gpu_device,
+                    staging_belt,
+                    cmd_encoder,
+                    texture_view,
+                    area_bounds.0,
+                    area_bounds.1,
+                )
+                .expect("Failed to draw text element");
         }
         Row => {
             todo!("Row");
@@ -442,4 +467,37 @@ fn display_elem(
             todo!("Col");
         }
     }
+}
+
+fn owned_section_from_str(string: &str) -> OwnedSection {
+    let layout = layout_from_str(string, false);
+
+    // TODO don't hardcode any of this!
+    let position: Vector2<f32> = Vector2::new(50.0, 60.0);
+    let area_bounds: Vector2<f32> = Vector2::new(200.0, 300.0);
+    let color /*: RgbaTup */ = colors::WHITE;
+    let size: f32 = 40.0;
+
+    OwnedSection {
+        screen_position: position.into(),
+        bounds: area_bounds.into(),
+        layout,
+        ..OwnedSection::default()
+    }
+    .add_text(
+        glyph_brush::OwnedText::new(string)
+            .with_color(Vector4::from(color))
+            .with_scale(size),
+    )
+}
+
+fn layout_from_str(
+    string: &str,
+    is_centered: bool,
+) -> wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker> {
+    wgpu_glyph::Layout::default().h_align(if is_centered {
+        wgpu_glyph::HorizontalAlign::Center
+    } else {
+        wgpu_glyph::HorizontalAlign::Left
+    })
 }
