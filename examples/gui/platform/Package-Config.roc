@@ -5,7 +5,9 @@ platform "examples/hello-world"
     imports []
     provides [ renderForHost ]
 
-Elem : [ Text Str, Button Elem ]
+Dim : { left : F32, top : F32, width : F32, height : F32 }
+
+Elem : [ Button Elem Dim, Col (List Elem), Row (List Elem), Text Str ]
 
 renderForHost : Elem
 renderForHost = render

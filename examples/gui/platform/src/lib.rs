@@ -1,103 +1,14 @@
-#![allow(non_snake_case)]
-
-use core::ffi::c_void;
-use core::mem::{self, ManuallyDrop};
-use roc_std::RocStr;
-use std::ffi::CStr;
-use std::os::raw::c_char;
-
 mod graphics;
 mod gui;
 mod rects_and_texts;
+mod roc;
+
+use crate::roc::RocElem;
+use roc_std::RocStr;
 
 extern "C" {
     #[link_name = "roc__renderForHost_1_exposed"]
     fn roc_render() -> RocElem;
-}
-
-#[repr(transparent)]
-#[cfg(target_pointer_width = "64")] // on a 64-bit system, the tag fits in this pointer's spare 3 bits
-struct RocElem {
-    entry: *const RocElemEntry,
-}
-
-impl RocElem {
-    #[cfg(target_pointer_width = "64")]
-    fn tag(&self) -> RocElemTag {
-        // On a 64-bit system, the last 3 bits of the pointer store the tag
-        unsafe { mem::transmute::<u8, RocElemTag>((self.entry as u8) & 0b0000_0111) }
-    }
-
-    pub fn entry(&self) -> &RocElemEntry {
-        // On a 64-bit system, the last 3 bits of the pointer store the tag
-        let cleared = self.entry as usize & !0b111;
-
-        unsafe { &*(cleared as *const RocElemEntry) }
-    }
-
-    #[cfg(target_pointer_width = "64")]
-    pub fn entry_mut(&mut self) -> &mut RocElemEntry {
-        // On a 64-bit system, the last 3 bits of the pointer store the tag
-        let cleared = self.entry as usize & !0b111;
-
-        unsafe { &mut *(cleared as *mut RocElemEntry) }
-    }
-}
-
-#[repr(u8)]
-#[derive(Debug, Clone, Copy)]
-enum RocElemTag {
-    Button = 0,
-    Text,
-}
-
-#[repr(C)]
-union RocElemEntry {
-    button: ManuallyDrop<RocElem>,
-    text: ManuallyDrop<RocStr>,
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
-    return libc::malloc(size);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_realloc(
-    c_ptr: *mut c_void,
-    new_size: usize,
-    _old_size: usize,
-    _alignment: u32,
-) -> *mut c_void {
-    return libc::realloc(c_ptr, new_size);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
-    return libc::free(c_ptr);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
-    match tag_id {
-        0 => {
-            let slice = CStr::from_ptr(c_ptr as *const c_char);
-            let string = slice.to_str().unwrap();
-            eprintln!("Roc hit a panic: {}", string);
-            std::process::exit(1);
-        }
-        _ => todo!(),
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void {
-    libc::memset(dst, c, n)
 }
 
 enum Action<State> {
@@ -151,101 +62,9 @@ struct AppState {
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    println!("Calling roc_render()...");
+    let root_elem = unsafe { roc_render() };
 
-    let elem = unsafe { roc_render() };
-
-    fn display_elem(elem: &RocElem) {
-        use RocElemTag::*;
-
-        println!("Got this tag: {:?}", elem.tag());
-
-        match elem.tag() {
-            Button => {
-                println!("Button!");
-
-                let child = unsafe { &elem.entry().button };
-
-                println!("Got this child:");
-
-                display_elem(child);
-            }
-            Text => {
-                let text = unsafe { &elem.entry().text };
-                println!("Text: {}", (*text).as_str());
-            }
-        }
-    }
-
-    display_elem(&elem);
-
-    // #[repr(C)]
-    // struct RocElem {
-    //     entry: RocElemEntry
-    //     tag: RocElemTag,
-    // }
-
-    // #[repr(u8)]
-    // enum RocElemTag {
-    //     Button = 0,
-    //     Text,
-    // }
-
-    // #[repr(C)]
-    // union RocElemEntry {
-    //     text: ManuallyDrop<RocStr>,
-    //     button: *const RocElem,
-    // }
-
-    // fn render(clicks: i64) -> Elem<i64> {
-    //     let txt = Elem::Text(Key::null(), format!("Clicks: {}", clicks).as_str().into());
-
-    //     Elem::Button(
-    //         Key::null(),
-    //         Box::new(move || Action::Update(clicks + 1)),
-    //         Box::new(txt),
-    //     )
-    // }
-
-    // fn draw_elem<T>(elem: Elem<T>) {
-    //     use Elem::*;
-
-    //     match elem {
-    //         Button(_key, _on_click, label) => {
-    //             print!("Drawing button label:\n\t");
-
-    //             draw_elem(*label);
-    //         }
-    //         Text(_key, roc_str) => {
-    //             println!("Drawing string \"{}\"", roc_str);
-    //         }
-    //         Col(_key, elems) => {
-    //             println!("Drawing col contents...");
-
-    //             for elem in elems {
-    //                 draw_elem(elem);
-    //             }
-    //         }
-    //         Row(_key, elems) => {
-    //             println!("Drawing row contents...");
-
-    //             for elem in elems {
-    //                 draw_elem(elem);
-    //             }
-    //         }
-    //         TextInput {
-    //             key: _,
-    //             text,
-    //             on_change: _,
-    //         } => {
-    //             println!("Drawing text input with current text \"{}\"", text);
-    //         }
-    //     }
-    // }
-
-    // draw_elem(render(0));
-
-    // gui::render("test title".into());
+    gui::render("test title".into(), root_elem);
 
     // Exit code
     0

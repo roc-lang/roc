@@ -134,7 +134,7 @@ fn glyph_to_rect(glyph: &wgpu_glyph::SectionGlyph) -> Rect {
     let top_y = glyph_top_y(&glyph.glyph);
 
     Rect {
-        top_left_coords: [position.x, top_y].into(),
+        pos: [position.x, top_y].into(),
         width,
         height,
     }

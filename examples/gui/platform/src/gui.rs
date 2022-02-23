@@ -2,11 +2,14 @@ use crate::{
     graphics::{
         colors::{self, from_hsb, to_wgpu_color},
         lowlevel::buffer::create_rect_buffers,
-        lowlevel::{ortho::update_ortho_buffer, buffer::MAX_QUADS},
-        lowlevel::{pipelines, buffer::QUAD_INDICES},
-        primitives::{text::{build_glyph_brush, Text}, rect::{Rect, RectElt}},
+        lowlevel::{buffer::MAX_QUADS, ortho::update_ortho_buffer},
+        lowlevel::{buffer::QUAD_INDICES, pipelines},
+        primitives::{
+            rect::{Rect, RectElt},
+            text::{build_glyph_brush, Text},
+        },
     },
-    rects_and_texts::RectsAndTexts,
+    roc::{RocElem, RocElemTag},
 };
 use pipelines::RectResources;
 use roc_std::RocStr;
@@ -26,7 +29,7 @@ use winit::{
 //
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
-fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box<dyn Error>> {
+fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
 
@@ -197,36 +200,36 @@ fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                draw_rects(
-                    &rects_and_texts.rects_behind,
-                    &mut cmd_encoder,
-                    &view,
-                    &gpu_device,
-                    &rect_resources,
-                    wgpu::LoadOp::Clear(to_wgpu_color(from_hsb(240, 10, 19))),
-                );
+                // for text_section in &rects_and_texts.text_sections_behind {
+                //     let borrowed_text = text_section.to_borrowed();
 
-                for text_section in &rects_and_texts.text_sections_behind {
-                    let borrowed_text = text_section.to_borrowed();
-
-                    glyph_brush.queue(borrowed_text);
-                }
+                //     glyph_brush.queue(borrowed_text);
+                // }
 
                 // draw first layer of text
-                glyph_brush
-                    .draw_queued(
-                        &gpu_device,
-                        &mut staging_belt,
-                        &mut cmd_encoder,
-                        &view,
-                        size.width,
-                        size.height,
-                    )
-                    .expect("Failed to draw first layer of text.");
+                // glyph_brush
+                //     .draw_queued(
+                //         &gpu_device,
+                //         &mut staging_belt,
+                //         &mut cmd_encoder,
+                //         &view,
+                //         size.width,
+                //         size.height,
+                //     )
+                //     .expect("Failed to draw first layer of text.");
 
                 // draw rects on top of first text layer
-                draw_rects(
-                    &rects_and_texts.rects_front,
+                // draw_rects(
+                //     &rects_and_texts.rects_front,
+                //     &mut cmd_encoder,
+                //     &view,
+                //     &gpu_device,
+                //     &rect_resources,
+                //     wgpu::LoadOp::Load,
+                // );
+
+                display_elem(
+                    &root,
                     &mut cmd_encoder,
                     &view,
                     &gpu_device,
@@ -234,23 +237,23 @@ fn run_event_loop(title: &str, rects_and_texts: RectsAndTexts) -> Result<(), Box
                     wgpu::LoadOp::Load,
                 );
 
-                for text_section in &rects_and_texts.text_sections_front {
-                    let borrowed_text = text_section.to_borrowed();
+                // for text_section in &rects_and_texts.text_sections_front {
+                //     let borrowed_text = text_section.to_borrowed();
 
-                    glyph_brush.queue(borrowed_text);
-                }
+                //     glyph_brush.queue(borrowed_text);
+                // }
 
                 // draw text
-                glyph_brush
-                    .draw_queued(
-                        &gpu_device,
-                        &mut staging_belt,
-                        &mut cmd_encoder,
-                        &view,
-                        size.width,
-                        size.height,
-                    )
-                    .expect("Failed to draw queued text.");
+                // glyph_brush
+                //     .draw_queued(
+                //         &gpu_device,
+                //         &mut staging_belt,
+                //         &mut cmd_encoder,
+                //         &view,
+                //         size.width,
+                //         size.height,
+                //     )
+                //     .expect("Failed to draw queued text.");
 
                 staging_belt.finish();
                 cmd_queue.submit(Some(cmd_encoder.finish()));
@@ -319,74 +322,124 @@ fn begin_render_pass<'a>(
     })
 }
 
-pub fn render(title: RocStr) {
-    let rects_behind = vec![
-        RectElt {
-            rect: Rect {
-                top_left_coords: (20.0, 20.0).into(),
-                width: 200.0,
-                height: 100.0
-            },
-            color: (0.4, 0.2, 0.5, 1.0),
-            border_width: 5.0,
-            border_color: (0.75, 0.5, 0.5, 1.0)
-        },
-        RectElt {
-            rect: Rect {
-                top_left_coords: (420.0, 420.0).into(),
-                width: 150.0,
-                height: 150.0
-            },
-            color: (0.9, 0.2, 0.5, 1.0),
-            border_width: 10.0,
-            border_color: (0.2, 0.5, 0.5, 1.0)
-        },
-        RectElt {
-            rect: Rect {
-                top_left_coords: (571.0, 420.0).into(),
-                width: 150.0,
-                height: 150.0
-            },
-            color: (0.2, 0.2, 0.5, 1.0),
-            border_width: 10.0,
-            border_color: (0.2, 0.5, 0.5, 1.0)
+pub fn render(title: RocStr, root: RocElem) {
+    // let rects_behind = vec![
+    //     RectElt {
+    // rect: Rect {
+    //     top_left_coords: (20.0, 20.0).into(),
+    //     width: 200.0,
+    //     height: 100.0
+    // },
+    // color: (0.4, 0.2, 0.5, 1.0),
+    // border_width: 5.0,
+    // border_color: (0.75, 0.5, 0.5, 1.0)
+    // },
+    // RectElt {
+    // rect: Rect {
+    //     top_left_coords: (420.0, 420.0).into(),
+    //     width: 150.0,
+    //     height: 150.0
+    // },
+    // color: (0.9, 0.2, 0.5, 1.0),
+    // border_width: 10.0,
+    // border_color: (0.2, 0.5, 0.5, 1.0)
+    // },
+    // RectElt {
+    //     rect: Rect {
+    //         top_left_coords: (571.0, 420.0).into(),
+    //         width: 150.0,
+    //         height: 150.0
+    //     },
+    //     color: (0.2, 0.2, 0.5, 1.0),
+    //     border_width: 10.0,
+    //     border_color: (0.2, 0.5, 0.5, 1.0)
+    // }
+    // ];
+
+    // let texts_behind = vec![
+    // Text {
+    //     position: (50.0, 50.0).into(),
+    //     color: colors::WHITE,
+    //     text: "Back",
+    //     size: 40.0,
+    //     ..Default::default()
+    // }
+    // ];
+
+    // let rects_front = vec![
+    // RectElt {
+    //     rect: Rect {
+    //         top_left_coords: (30.0, 30.0).into(),
+    //         width: 70.0,
+    //         height: 70.0
+    //     },
+    //     color: (0.7, 0.2, 0.2, 0.6),
+    //     border_width: 10.0,
+    //     border_color: (0.75, 0.5, 0.5, 1.0)
+    // }
+    // ];
+
+    // let texts_front = vec![
+    // Text {
+    //     position: (70.0, 70.0).into(),
+    // color: colors::WHITE,
+    // text: "Front",
+    // size: 40.0,
+    // ..Default::default()
+    // }
+    // ];
+
+    // let rects_and_texts = RectsAndTexts::init(rects_behind, texts_behind, rects_front, texts_front);
+
+    run_event_loop(title.as_str(), root).expect("Error running event loop");
+}
+
+fn display_elem(
+    elem: &RocElem,
+    cmd_encoder: &mut CommandEncoder,
+    texture_view: &TextureView,
+    gpu_device: &wgpu::Device,
+    rect_resources: &RectResources,
+    load_op: LoadOp<wgpu::Color>,
+) {
+    use RocElemTag::*;
+
+    match elem.tag() {
+        Button => {
+            let button = unsafe { &elem.entry().button };
+            let rect_elt = RectElt {
+                rect: button.bounds,
+                color: (0.2, 0.2, 0.5, 1.0),
+                border_width: 10.0,
+                border_color: (0.2, 0.5, 0.5, 1.0),
+            };
+
+            draw_rects(
+                &[rect_elt],
+                cmd_encoder,
+                texture_view,
+                gpu_device,
+                rect_resources,
+                load_op,
+            );
+
+            display_elem(
+                &*button.child,
+                cmd_encoder,
+                texture_view,
+                gpu_device,
+                rect_resources,
+                load_op,
+            );
         }
-    ];
-
-    let texts_behind = vec![
-        Text {
-            position: (50.0, 50.0).into(),
-            color: colors::WHITE,
-            text: "Back",
-            size: 40.0,
-            ..Default::default()
+        Text => {
+            let text = unsafe { &elem.entry().text };
         }
-    ];
-
-    let rects_front = vec![
-        RectElt {
-            rect: Rect {
-                top_left_coords: (30.0, 30.0).into(),
-                width: 70.0,
-                height: 70.0
-            },
-            color: (0.7, 0.2, 0.2, 0.6),
-            border_width: 10.0,
-            border_color: (0.75, 0.5, 0.5, 1.0)
+        Row => {
+            todo!("Row");
         }
-    ];
-
-    let texts_front = vec![
-        Text {
-            position: (70.0, 70.0).into(),
-        color: colors::WHITE,
-        text: "Front",
-        size: 40.0,
-        ..Default::default()
+        Col => {
+            todo!("Col");
         }
-    ];
-
-    let rects_and_texts = RectsAndTexts::init(rects_behind, texts_behind, rects_front, texts_front);
-
-    run_event_loop(title.as_str(), rects_and_texts).expect("Error running event loop");
+    }
 }

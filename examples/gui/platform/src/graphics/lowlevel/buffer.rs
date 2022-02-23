@@ -4,7 +4,6 @@
 //
 // Thank you, Benjamin!
 
-
 // Contains parts of https://github.com/iced-rs/iced/blob/adce9e04213803bd775538efddf6e7908d1c605e/wgpu/src/shader/quad.wgsl
 // By Héctor Ramón, Iced contributors Licensed under the MIT license.
 // The license is included in the LEGAL_DETAILS file in the root directory of this distribution.
@@ -13,9 +12,9 @@
 
 use std::mem;
 
-use super::{vertex::Vertex, quad::Quad};
+use super::{quad::Quad, vertex::Vertex};
 use crate::graphics::{colors::to_slice, primitives::rect::RectElt};
-use wgpu::util::{ DeviceExt};
+use wgpu::util::DeviceExt;
 
 pub struct RectBuffers {
     pub vertex_buffer: wgpu::Buffer,
@@ -47,7 +46,6 @@ pub fn create_rect_buffers(
     cmd_encoder: &mut wgpu::CommandEncoder,
     rects: &[RectElt],
 ) -> RectBuffers {
-
     let vertex_buffer = gpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::cast_slice(&QUAD_VERTS),
@@ -67,10 +65,9 @@ pub fn create_rect_buffers(
         mapped_at_creation: false,
     });
 
-    
-    let quads: Vec<Quad> = rects.iter().map(|rect| {to_quad(rect)}).collect();
+    let quads: Vec<Quad> = rects.iter().map(|rect| to_quad(rect)).collect();
 
-    let buffer_size = (quads.len() as u64 ) * Quad::SIZE;
+    let buffer_size = (quads.len() as u64) * Quad::SIZE;
 
     let staging_buffer = gpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
@@ -79,7 +76,6 @@ pub fn create_rect_buffers(
     });
 
     cmd_encoder.copy_buffer_to_buffer(&staging_buffer, 0, &quad_buffer, 0, buffer_size);
-    
 
     RectBuffers {
         vertex_buffer,
@@ -90,7 +86,7 @@ pub fn create_rect_buffers(
 
 pub fn to_quad(rect_elt: &RectElt) -> Quad {
     Quad {
-        pos: rect_elt.rect.top_left_coords.into(),
+        pos: rect_elt.rect.pos.into(),
         width: rect_elt.rect.width,
         height: rect_elt.rect.height,
         color: to_slice(rect_elt.color),
