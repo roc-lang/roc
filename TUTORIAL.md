@@ -6,6 +6,10 @@ and more!
 
 Enjoy!
 
+## Getting started
+
+Learn how to install roc on your machine [here](https://github.com/rtfeldman/roc#getting-started).
+
 ## Strings and Numbers
 
 Let’s start by getting acquainted with Roc’s Read Eval Print Loop, or REPL for
