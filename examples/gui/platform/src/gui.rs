@@ -1,12 +1,12 @@
 use crate::{
     graphics::{
-        colors::{self, from_hsb, to_wgpu_color},
+        colors,
         lowlevel::buffer::create_rect_buffers,
         lowlevel::{buffer::MAX_QUADS, ortho::update_ortho_buffer},
         lowlevel::{buffer::QUAD_INDICES, pipelines},
         primitives::{
             rect::{Rect, RectElt},
-            text::{build_glyph_brush, Text},
+            text::build_glyph_brush,
         },
     },
     roc::{RocElem, RocElemTag},
@@ -17,7 +17,7 @@ use pipelines::RectResources;
 use roc_std::RocStr;
 use std::error::Error;
 use wgpu::{CommandEncoder, LoadOp, RenderPass, TextureView};
-use wgpu_glyph::GlyphBrush;
+use wgpu_glyph::{GlyphBrush, GlyphCruncher};
 use winit::{
     dpi::PhysicalSize,
     event,
@@ -145,7 +145,7 @@ fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
             }
             //Received Character
             Event::WindowEvent {
-                event: event::WindowEvent::ReceivedCharacter(ch),
+                event: event::WindowEvent::ReceivedCharacter(_ch),
                 ..
             } => {
                 // let input_outcome_res =
@@ -159,7 +159,7 @@ fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
             }
             //Keyboard Input
             Event::WindowEvent {
-                event: event::WindowEvent::KeyboardInput { input, .. },
+                event: event::WindowEvent::KeyboardInput { input: _, .. },
                 ..
             } => {
                 // if let Some(virtual_keycode) = input.virtual_keycode {
@@ -233,6 +233,10 @@ fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
 
                 display_elem(
                     &root,
+                    Bounds {
+                        width: size.width as f32,
+                        height: size.height as f32,
+                    },
                     &mut staging_belt,
                     &mut glyph_brush,
                     &mut cmd_encoder,
@@ -240,6 +244,10 @@ fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
                     &gpu_device,
                     &rect_resources,
                     wgpu::LoadOp::Load,
+                    Bounds {
+                        width: size.width as f32,
+                        height: size.height as f32,
+                    },
                 );
 
                 // for text_section in &rects_and_texts.text_sections_front {
@@ -399,8 +407,29 @@ pub fn render(title: RocStr, root: RocElem) {
     run_event_loop(title.as_str(), root).expect("Error running event loop");
 }
 
+#[derive(Copy, Clone, Debug)]
+struct Bounds {
+    width: f32,
+    height: f32,
+}
+
+#[derive(Clone, Debug)]
+struct Drawable {
+    bounds: Bounds,
+    content: DrawableContent,
+}
+
+#[derive(Clone, Debug)]
+enum DrawableContent {
+    Text(OwnedSection),
+    FillRect,
+    // Row(Vec<(Vector2<f32>, Drawable)>),
+    // Col(Vec<(Vector2<f32>, Drawable)>),
+}
+
 fn display_elem(
     elem: &RocElem,
+    bounds: Bounds,
     staging_belt: &mut wgpu::util::StagingBelt,
     glyph_brush: &mut GlyphBrush<()>,
     cmd_encoder: &mut CommandEncoder,
@@ -408,15 +437,34 @@ fn display_elem(
     gpu_device: &wgpu::Device,
     rect_resources: &RectResources,
     load_op: LoadOp<wgpu::Color>,
-) {
+    texture_size: Bounds,
+) -> Drawable {
     use RocElemTag::*;
 
     match elem.tag() {
         Button => {
             let button = unsafe { &elem.entry().button };
+            let child = display_elem(
+                &*button.child,
+                bounds,
+                staging_belt,
+                glyph_brush,
+                cmd_encoder,
+                texture_view,
+                gpu_device,
+                rect_resources,
+                load_op,
+                texture_size,
+            );
+
+            let pos = (0.0, 0.0).into();
             let rect_elt = RectElt {
-                rect: button.bounds,
-                color: (0.2, 0.2, 0.5, 1.0),
+                rect: Rect {
+                    pos,
+                    width: child.bounds.width,
+                    height: child.bounds.height,
+                },
+                color: (0.2, 0.2, 0.5, 0.5),
                 border_width: 10.0,
                 border_color: (0.2, 0.5, 0.5, 1.0),
             };
@@ -430,24 +478,46 @@ fn display_elem(
                 load_op,
             );
 
-            display_elem(
-                &*button.child,
-                staging_belt,
-                glyph_brush,
-                cmd_encoder,
-                texture_view,
-                gpu_device,
-                rect_resources,
-                load_op,
-            );
+            Drawable {
+                bounds: child.bounds,
+                content: DrawableContent::FillRect,
+            }
         }
         Text => {
             let text = unsafe { &elem.entry().text };
+            let is_centered = true; // TODO don't hardcode this
+            let layout = wgpu_glyph::Layout::default().h_align(if is_centered {
+                wgpu_glyph::HorizontalAlign::Center
+            } else {
+                wgpu_glyph::HorizontalAlign::Left
+            });
 
-            glyph_brush.queue(owned_section_from_str(text.as_str()).to_borrowed());
+            let section = owned_section_from_str(text.as_str(), bounds, layout);
 
-            // TODO don't hardcode any of this!
-            let area_bounds = (200, 300);
+            // Calculate the bounds
+            let text_bounds;
+            let offset;
+
+            match glyph_brush.glyph_bounds(section.to_borrowed()) {
+                Some(glyph_bounds) => {
+                    text_bounds = Bounds {
+                        width: glyph_bounds.max.x - glyph_bounds.min.x,
+                        height: glyph_bounds.max.y - glyph_bounds.min.y,
+                    };
+
+                    offset = (-glyph_bounds.min.x, -glyph_bounds.min.y);
+                }
+                None => {
+                    text_bounds = Bounds {
+                        width: 0.0,
+                        height: 0.0,
+                    };
+
+                    offset = (0.0, 0.0);
+                }
+            }
+
+            glyph_brush.queue(section.with_screen_position(offset).to_borrowed());
 
             glyph_brush
                 .draw_queued(
@@ -455,10 +525,15 @@ fn display_elem(
                     staging_belt,
                     cmd_encoder,
                     texture_view,
-                    area_bounds.0,
-                    area_bounds.1,
+                    texture_size.width as u32, // TODO why do we make these be u32 and then cast to f32 in orthorgraphic_projection?
+                    texture_size.height as u32,
                 )
                 .expect("Failed to draw text element");
+
+            Drawable {
+                bounds: text_bounds,
+                content: DrawableContent::FillRect,
+            }
         }
         Row => {
             todo!("Row");
@@ -469,18 +544,19 @@ fn display_elem(
     }
 }
 
-fn owned_section_from_str(string: &str) -> OwnedSection {
-    let layout = layout_from_str(string, false);
-
+fn owned_section_from_str(
+    string: &str,
+    bounds: Bounds,
+    layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
+) -> OwnedSection {
+    let is_centered = false;
     // TODO don't hardcode any of this!
-    let position: Vector2<f32> = Vector2::new(50.0, 60.0);
     let area_bounds: Vector2<f32> = Vector2::new(200.0, 300.0);
     let color /*: RgbaTup */ = colors::WHITE;
     let size: f32 = 40.0;
 
     OwnedSection {
-        screen_position: position.into(),
-        bounds: area_bounds.into(),
+        bounds: (bounds.width, bounds.height),
         layout,
         ..OwnedSection::default()
     }
@@ -489,15 +565,4 @@ fn owned_section_from_str(string: &str) -> OwnedSection {
             .with_color(Vector4::from(color))
             .with_scale(size),
     )
-}
-
-fn layout_from_str(
-    string: &str,
-    is_centered: bool,
-) -> wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker> {
-    wgpu_glyph::Layout::default().h_align(if is_centered {
-        wgpu_glyph::HorizontalAlign::Center
-    } else {
-        wgpu_glyph::HorizontalAlign::Left
-    })
 }
