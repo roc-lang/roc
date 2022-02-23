@@ -1108,7 +1108,8 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
-        symbol.module_id() != self.home && !symbol.is_builtin()
+        // symbol.module_id() != self.home && !symbol.is_builtin()
+        symbol.module_id() != self.home
     }
 }
 

@@ -74,6 +74,8 @@ macro_rules! log {
     ($($arg:tt)*) => (if SHOW_MESSAGE_LOG { println!($($arg)*); } else {})
 }
 
+const BUILTIN_MODULES: &[(ModuleId, &[ModuleId])] = &[(ModuleId::RESULT, &[])];
+
 /// Struct storing various intermediate stages by their ModuleId
 #[derive(Debug, Default)]
 struct ModuleCache<'a> {
@@ -2259,7 +2261,104 @@ fn load_module<'a>(
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+    use PackageQualified::*;
+
     let module_start_time = SystemTime::now();
+
+    dbg!(&module_name);
+
+    match module_name.as_inner().as_str() {
+        "Result" => {
+            let parse_start = SystemTime::now();
+            let parse_header_duration = parse_start.elapsed().unwrap();
+
+            // Insert the first entries for this module's timings
+            let mut module_timing = ModuleTiming::new(module_start_time);
+
+            module_timing.read_roc_file = Default::default();
+            module_timing.parse_header = parse_header_duration;
+
+            let filename = PathBuf::from("Result.roc");
+
+            const EXPOSES: &[Loc<ExposedName>] = &[
+                Loc::at_zero(ExposedName::new("Result")),
+                Loc::at_zero(ExposedName::new("isOk")),
+                Loc::at_zero(ExposedName::new("isErr")),
+                Loc::at_zero(ExposedName::new("map")),
+                Loc::at_zero(ExposedName::new("mapErr")),
+                Loc::at_zero(ExposedName::new("after")),
+                Loc::at_zero(ExposedName::new("withDefault")),
+            ];
+            let imports = &[];
+
+            let info = HeaderInfo {
+                loc_name: Loc {
+                    region: Region::zero(),
+                    value: ModuleNameEnum::Interface(roc_parse::header::ModuleName::new("Result")),
+                },
+                filename,
+                is_root_module: false,
+                opt_shorthand: None,
+                packages: &[],
+                exposes: &EXPOSES,
+                imports,
+                extra: HeaderFor::Interface,
+            };
+
+            let src_bytes = r#"
+                Result ok err : [ Ok ok, Err err ]
+
+                isOk : Result ok err -> Bool
+                isOk = \result ->
+                    when result is
+                        Ok _ -> True
+                        Err _ -> False
+
+                isErr : Result ok err -> Bool
+                isErr = \result ->
+                    when result is
+                        Ok _ -> False
+                        Err _ -> True
+
+                withDefault : Result ok err, ok -> ok
+                withDefault = \result, default ->
+                    when result is
+                        Ok value -> value 
+                        Err _ -> default
+
+                map : Result a err, (a -> b) -> Result b err
+                map = \result, transform ->
+                    when result is
+                        Ok v -> Ok (transform v)
+                        Err e -> Err e
+
+                mapErr : Result ok a, (a -> b) -> Result ok b
+                mapErr = \result, transform ->
+                    when result is
+                        Ok v -> Ok v 
+                        Err e -> Err (transform e)
+
+                after : Result a err, (a -> Result b err) -> Result b err
+                after = \result, transform ->
+                    when result is
+                        Ok v -> transform v
+                        Err e -> Err e
+                "#;
+
+            let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
+
+            return Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ));
+        }
+        _ => {
+            // fall through
+        }
+    }
 
     let (filename, opt_shorthand) = module_name_to_path(src_dir, module_name, arc_shorthands);
 

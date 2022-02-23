@@ -319,6 +319,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
+    /*
     // Result ok err : [ Ok ok, Err err ]
     add_alias(
         Symbol::RESULT_RESULT,
@@ -331,6 +332,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             typ: result_alias_content(flex(TVAR1), flex(TVAR2)),
         },
     );
+    */
 
     // Utf8ByteProblem : [ InvalidStartByte, UnexpectedEndOfSequence, ExpectedContinuation, OverlongEncoding, CodepointTooLarge, EncodesSurrogateHalf ]
     add_alias(

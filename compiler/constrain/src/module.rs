@@ -160,6 +160,53 @@ pub fn pre_constrain_imports(
                     });
                 }
                 None => {
+                    if module_id == home {
+                        continue;
+                    }
+
+                    if module_id == ModuleId::RESULT {
+                        let region = Region::zero(); // TODO this should be the region where this symbol was declared in its home module. Look that up!
+                        let loc_symbol = Loc {
+                            value: symbol,
+                            region,
+                        };
+
+                        match exposed_types.get(&module_id) {
+                            Some(ExposedModuleTypes::Valid(solved_types, new_aliases)) => {
+                                // If the exposed value was invalid (e.g. it didn't have
+                                // a corresponding definition), it won't have an entry
+                                // in solved_types
+                                if let Some(solved_type) = solved_types.get(&symbol) {
+                                    // TODO should this be a union?
+                                    for (k, v) in new_aliases.clone() {
+                                        imported_aliases.insert(k, v);
+                                    }
+
+                                    imported_symbols.push(Import {
+                                        loc_symbol,
+                                        solved_type: solved_type.clone(),
+                                    });
+                                }
+                            }
+                            Some(ExposedModuleTypes::Invalid) => {
+                                // If that module was invalid, use True constraints
+                                // for everything imported from it.
+                                imported_symbols.push(Import {
+                                    loc_symbol,
+                                    solved_type: SolvedType::Erroneous(Problem::InvalidModule),
+                                });
+                            }
+                            None => {
+                                panic!(
+                                    "Could not find module {:?} in exposed_types {:?}",
+                                    module_id, exposed_types
+                                );
+                            }
+                        }
+
+                        continue;
+                    }
+
                     let is_valid_alias = stdlib.applies.contains(&symbol)
                         // This wasn't a builtin value or Apply; maybe it was a builtin alias.
                         || roc_types::builtin_aliases::aliases().contains_key(&symbol);

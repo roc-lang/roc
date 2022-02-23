@@ -1143,7 +1143,7 @@ define_builtins! {
         57 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
     }
     5 RESULT: "Result" => {
-        0 RESULT_RESULT: "Result" imported // the Result.Result type alias
+        0 RESULT_RESULT: "Result" // the Result.Result type alias
         1 RESULT_OK: "Ok" imported // Result.Result a e = [ Ok a, Err e ]
                                    // NB: not strictly needed; used for finding global tag names in error suggestions
         2 RESULT_ERR: "Err" imported // Result.Result a e = [ Ok a, Err e ]

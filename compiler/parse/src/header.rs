@@ -88,7 +88,7 @@ impl<'a> From<ExposedName<'a>> for &'a str {
 }
 
 impl<'a> ExposedName<'a> {
-    pub fn new(name: &'a str) -> Self {
+    pub const fn new(name: &'a str) -> Self {
         ExposedName(name)
     }
 
