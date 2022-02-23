@@ -3713,6 +3713,7 @@ dependencies = [
  "roc_mono",
  "roc_parse",
  "roc_repl_eval",
+ "roc_std",
  "roc_target",
  "roc_types",
  "rustyline",

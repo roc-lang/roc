@@ -254,6 +254,7 @@ pub fn expect_success(input: &'static str, expected: &str) {
     assert_eq!(output, expected);
 }
 
+#[allow(dead_code)]
 pub fn expect_failure(input: &'static str, expected: &str) {
     let (ok, output) = run(input);
     assert_eq!(ok, false);

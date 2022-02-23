@@ -221,19 +221,16 @@ fn literal_empty_str() {
     expect_success("\"\"", "\"\" : Str");
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn literal_ascii_str() {
     expect_success("\"Hello, World!\"", "\"Hello, World!\" : Str");
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn literal_utf8_str() {
     expect_success("\"👩‍👩‍👦‍👦\"", "\"👩‍👩‍👦‍👦\" : Str");
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn str_concat() {
     expect_success(
