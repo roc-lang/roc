@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output};
+use std::process::{self, Child, Command, Output};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 fn zig_executable() -> String {
@@ -636,6 +636,33 @@ fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
     }
 }
 
+/// Given a list of library directories and the name of a library, find the 1st match
+///
+/// The provided list of library directories should be in the form of a list of
+/// directories, where each directory is represented by a series of path segments, like
+///
+/// ["/usr", "lib"]
+///
+/// Each directory will be checked for a file with the provided filename, and the first
+/// match will be returned.
+///
+/// If there are no matches, [`None`] will be returned.
+fn look_for_library(lib_dirs: &[&[&str]], lib_filename: &str) -> Option<PathBuf> {
+    lib_dirs
+        .iter()
+        .map(|lib_dir| {
+            lib_dir.iter().fold(PathBuf::new(), |mut path, segment| {
+                path.push(segment);
+                path
+            })
+        })
+        .map(|mut path| {
+            path.push(lib_filename);
+            path
+        })
+        .find(|path| path.exists())
+}
+
 fn link_linux(
     target: &Triple,
     output_path: PathBuf,
@@ -670,28 +697,75 @@ fn link_linux(
         ));
     }
 
-    let libcrt_path =
+    // Some things we'll need to build a list of dirs to check for libraries
+    let maybe_nix_path = nix_path_opt();
+    let usr_lib_arch = ["/usr", "lib", &architecture];
+    let lib_arch = ["/lib", &architecture];
+    let nix_path_segments;
+    let lib_dirs_if_nix: [&[&str]; 5];
+    let lib_dirs_if_nonix: [&[&str]; 4];
+
+    // Build the aformentioned list
+    let lib_dirs: &[&[&str]] =
         // give preference to nix_path if it's defined, this prevents bugs
-        if let Some(nix_path) = nix_path_opt() {
-            library_path([&nix_path])
-            .unwrap()
+        if let Some(nix_path) = &maybe_nix_path {
+            nix_path_segments = [nix_path.as_str()];
+            lib_dirs_if_nix = [
+                &nix_path_segments,
+                &usr_lib_arch,
+                &lib_arch,
+                &["/usr", "lib"],
+                &["/usr", "lib64"],
+            ];
+            &lib_dirs_if_nix
         } else {
-            library_path(["/usr", "lib", &architecture])
-            .or_else(|| library_path(["/usr", "lib"]))
-            .unwrap()
+            lib_dirs_if_nonix = [
+                &usr_lib_arch,
+                &lib_arch,
+                &["/usr", "lib"],
+                &["/usr", "lib64"],
+            ];
+            &lib_dirs_if_nonix
         };
 
+    // Look for the libraries we'll need
+
     let libgcc_name = "libgcc_s.so.1";
-    let libgcc_path =
-        // give preference to nix_path if it's defined, this prevents bugs
-        if let Some(nix_path) = nix_path_opt() {
-            library_path([&nix_path, libgcc_name])
-            .unwrap()
-        } else {
-            library_path(["/lib", &architecture, libgcc_name])
-            .or_else(|| library_path(["/usr", "lib", &architecture, libgcc_name]))
-            .or_else(|| library_path(["/usr", "lib", libgcc_name]))
-            .unwrap()
+    let libgcc_path = look_for_library(lib_dirs, libgcc_name);
+
+    let crti_name = "crti.o";
+    let crti_path = look_for_library(lib_dirs, crti_name);
+
+    let crtn_name = "crtn.o";
+    let crtn_path = look_for_library(lib_dirs, crtn_name);
+
+    let scrt1_name = "Scrt1.o";
+    let scrt1_path = look_for_library(lib_dirs, scrt1_name);
+
+    // Unwrap all the paths at once so we can inform the user of all missing libs at once
+    let (libgcc_path, crti_path, crtn_path, scrt1_path) =
+        match (libgcc_path, crti_path, crtn_path, scrt1_path) {
+            (Some(libgcc), Some(crti), Some(crtn), Some(scrt1)) => (libgcc, crti, crtn, scrt1),
+            (maybe_gcc, maybe_crti, maybe_crtn, maybe_scrt1) => {
+                if maybe_gcc.is_none() {
+                    eprintln!("Couldn't find libgcc_s.so.1!");
+                    eprintln!("You may need to install libgcc\n");
+                }
+                if maybe_crti.is_none() | maybe_crtn.is_none() | maybe_scrt1.is_none() {
+                    eprintln!("Couldn't find the glibc development files!");
+                    eprintln!("We need the objects crti.o, crtn.o, and Scrt1.o");
+                    eprintln!("You may need to install the glibc development package");
+                    eprintln!("(probably called glibc-dev or glibc-devel)\n");
+                }
+
+                let dirs = lib_dirs
+                    .iter()
+                    .map(|segments| segments.join("/"))
+                    .collect::<Vec<String>>()
+                    .join("\n");
+                eprintln!("We looked in the following directories:\n{}", dirs);
+                process::exit(1);
+            }
         };
 
     let ld_linux = match target.architecture {
@@ -717,7 +791,7 @@ fn link_linux(
         LinkType::Executable => (
             // Presumably this S stands for Static, since if we include Scrt1.o
             // in the linking for dynamic builds, linking fails.
-            vec![libcrt_path.join("Scrt1.o").to_str().unwrap().to_string()],
+            vec![scrt1_path.to_string_lossy().into_owned()],
             output_path,
         ),
         LinkType::Dylib => {
@@ -772,8 +846,8 @@ fn link_linux(
             "-A",
             arch_str(target),
             "-pie",
-            libcrt_path.join("crti.o").to_str().unwrap(),
-            libcrt_path.join("crtn.o").to_str().unwrap(),
+            &*crti_path.to_string_lossy(),
+            &*crtn_path.to_string_lossy(),
         ])
         .args(&base_args)
         .args(&["-dynamic-linker", ld_linux])
