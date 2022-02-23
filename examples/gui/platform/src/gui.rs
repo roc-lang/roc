@@ -431,8 +431,8 @@ struct Drawable {
 
 #[derive(Clone, Debug)]
 enum DrawableContent {
-    /// This stores an actual Section because an earlier step needs to know
-    /// the bounds of the text, and making a Section is a convenient way to compute them.
+    /// This stores an actual Section because an earlier step needs to know the bounds of
+    /// the text, and making a Section is a convenient way to compute those bounds.
     Text(OwnedSection),
     FillRect,
     // Row(Vec<(Vector2<f32>, Drawable)>),
@@ -455,7 +455,10 @@ fn process_drawables(
     // calling draw and updating boiunding boxes
     let pos: Vector2<f32> = (0.0, 0.0).into();
 
-    for drawable in drawables.into_iter() {
+    // Draw these in reverse order, since when traversing the tree, we added them in the
+    // opposite order from how they should be rendered. (If we didn't reverse here, then
+    // for example we would draw children and then their parents, which wouldn't go well.)
+    for drawable in drawables.into_iter().rev() {
         draw(
             drawable.bounds,
             drawable.content,
@@ -510,7 +513,7 @@ fn draw(
                     width: bounds.width,
                     height: bounds.height,
                 },
-                color: (0.2, 0.2, 0.5, 0.5),
+                color: (0.2, 0.2, 0.5, 1.0),
                 border_width: 10.0,
                 border_color: (0.2, 0.5, 0.5, 1.0),
             };
