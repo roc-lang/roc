@@ -194,10 +194,11 @@ impl<'a> CodeGenHelp<'a> {
             let proc_name = self.find_or_create_proc(ident_ids, ctx, layout);
 
             let (ret_layout, arg_layouts): (&'a Layout<'a>, &'a [Layout<'a>]) = {
+                let arg = self.replace_rec_ptr(ctx, layout);
                 match ctx.op {
-                    Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([layout])),
-                    Inc => (&LAYOUT_UNIT, self.arena.alloc([layout, self.layout_isize])),
-                    Eq => (&LAYOUT_BOOL, self.arena.alloc([layout, layout])),
+                    Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([arg])),
+                    Inc => (&LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
+                    Eq => (&LAYOUT_BOOL, self.arena.alloc([arg, arg])),
                 }
             };
 
