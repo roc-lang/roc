@@ -19,10 +19,20 @@ use ven_pretty::{DocAllocator, DocBuilder};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([usize; 3], Builtin);
-static_assertions::assert_eq_size!([usize; 4], Layout);
-static_assertions::assert_eq_size!([usize; 3], UnionLayout);
-static_assertions::assert_eq_size!([usize; 3], LambdaSet);
+roc_error_macros::assert_sizeof_aarch64!(Builtin, 3 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Layout, 4 * 8);
+roc_error_macros::assert_sizeof_aarch64!(UnionLayout, 3 * 8);
+roc_error_macros::assert_sizeof_aarch64!(LambdaSet, 3 * 8);
+
+roc_error_macros::assert_sizeof_wasm!(Builtin, 3 * 4);
+roc_error_macros::assert_sizeof_wasm!(Layout, 6 * 4);
+roc_error_macros::assert_sizeof_wasm!(UnionLayout, 3 * 4);
+roc_error_macros::assert_sizeof_wasm!(LambdaSet, 3 * 4);
+
+roc_error_macros::assert_sizeof_default!(Builtin, 3 * 8);
+roc_error_macros::assert_sizeof_default!(Layout, 4 * 8);
+roc_error_macros::assert_sizeof_default!(UnionLayout, 3 * 8);
+roc_error_macros::assert_sizeof_default!(LambdaSet, 3 * 8);
 
 pub type TagIdIntType = u16;
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<TagIdIntType>() * 8) as usize;
