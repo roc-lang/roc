@@ -61,6 +61,8 @@ fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> 
             files.push(path)
         }
     }
+
+    files
 }
 
 pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
