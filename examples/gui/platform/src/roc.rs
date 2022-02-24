@@ -96,6 +96,7 @@ pub struct ButtonStyles {
     pub bg_color: Rgba,
     pub border_color: Rgba,
     pub border_width: f32,
+    pub on_click: *mut u8,
     pub text_color: Rgba,
 }
 

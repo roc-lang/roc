@@ -7,9 +7,5 @@ platform "examples/hello-world"
 
 Rgba : { r : F32, g : F32, b : F32, a : F32 }
 
-ButtonStyles : { bgColor : Rgba, borderColor : Rgba,  borderWidth : F32, textColor : Rgba }
-
-Elem : [ Button Elem ButtonStyles, Col (List Elem), Row (List Elem), Text Str ]
-
-renderForHost : Elem
+renderForHost : [ Button Elem { bgColor : Rgba, borderColor : Rgba,  borderWidth : F32, onClick : (Str -> Str), textColor : Rgba }, Col (List Elem), Row (List Elem), Text Str ] as Elem
 renderForHost = render
