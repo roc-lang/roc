@@ -1147,17 +1147,6 @@ fn unify_shared_tags_merge_new(
     merge(subs, ctx, Structure(flat_type))
 }
 
-/// Is the given variable a structure. Does not consider Attr itself a structure, and instead looks
-/// into it.
-#[allow(dead_code)]
-fn is_structure(var: Variable, subs: &mut Subs) -> bool {
-    match subs.get_content_without_compacting(var) {
-        Content::Alias(_, _, actual, _) => is_structure(*actual, subs),
-        Content::Structure(_) => true,
-        _ => false,
-    }
-}
-
 #[inline(always)]
 fn unify_flat_type(
     subs: &mut Subs,
