@@ -252,7 +252,7 @@ fn roc_result_err() {
             result
             "#
         ),
-        RocResult::err(RocStr::from_slice(b"foo")),
+        RocResult::err(RocStr::from("foo")),
         RocResult<i64, RocStr>
     );
 }
