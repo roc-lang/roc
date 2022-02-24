@@ -244,6 +244,12 @@ mod cli_run {
                                 return;
                             }
                         }
+                        "gui" => {
+                            // Since this one requires opening a window, we do `roc build` on it but don't runt i.t
+                            build_example(&Path::new(example.filename), &["--optimize"]);
+
+                            return;
+                        }
                         _ => {}
                     }
 
