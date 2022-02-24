@@ -45,8 +45,8 @@ fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> 
                             }
 
                             Err(error) => internal_error!(
-                            "There was an error while trying to read a file from a directory: {:?}",
-                            error
+                                "There was an error while trying to read a file from a directory: {:?}",
+                                error
                             ),
                         }
                     }
