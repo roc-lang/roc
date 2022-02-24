@@ -26,42 +26,41 @@ use roc_parse::{
 use roc_region::all::{Loc, Region};
 
 fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> {
-    files
-        .into_iter()
-        .flat_map(|file| {
-            if file.is_dir() {
-                match file.read_dir() {
-                    Ok(directory) => directory
-                        .flat_map(|result| match result {
-                            Ok(file) => {
-                                let path = file.path();
+    let mut to_flatten = files;
+    let mut files = vec![];
 
-                                if path.is_dir() {
-                                    flatten_directories(vec![path])
-                                } else if path.ends_with(".roc") {
-                                    vec![path]
-                                } else {
-                                    vec![]
+    while let Some(path) = to_flatten.pop() {
+        if path.is_dir() {
+            match path.read_dir() {
+                Ok(directory) => {
+                    for item in directory {
+                        match item {
+                            Ok(file) => {
+                                let file_path = file.path();
+                                if file_path.is_dir() {
+                                    to_flatten.push(file_path);
+                                } else if file_path.ends_with(".roc") {
+                                    files.push(file_path);
                                 }
                             }
+
                             Err(error) => internal_error!(
                             "There was an error while trying to read a file from a directory: {:?}",
                             error
-                        ),
-                        })
-                        .collect(),
-                    Err(error) => {
-                        internal_error!(
-                        "There was an error while trying to read the contents of a directory: {:?}",
-                        error
-                    );
+                            ),
+                        }
                     }
                 }
-            } else {
-                vec![file]
+
+                Err(error) => internal_error!(
+                    "There was an error while trying to read the contents of a directory: {:?}",
+                    error
+                ),
             }
-        })
-        .collect()
+        } else {
+            files.push(path)
+        }
+    }
 }
 
 pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
