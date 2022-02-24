@@ -25,6 +25,7 @@ pub enum Problem {
     UnusedDef(Symbol, Region),
     UnusedImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
+    UnknownGeneratesWith(Loc<Ident>),
     /// First symbol is the name of the closure with that argument
     /// Second symbol is the name of the argument that is unused
     UnusedArgument(Symbol, Symbol, Region),
@@ -38,7 +39,7 @@ pub enum Problem {
     CyclicAlias(Symbol, Region, Vec<Symbol>),
     BadRecursion(Vec<CycleEntry>),
     PhantomTypeArgument {
-        alias: Symbol,
+        typ: Symbol,
         variable_region: Region,
         variable_name: Lowercase,
     },
@@ -154,6 +155,16 @@ pub enum RuntimeError {
     ErroneousType,
 
     LookupNotInScope(Loc<Ident>, MutSet<Box<str>>),
+    OpaqueNotDefined {
+        usage: Loc<Ident>,
+        opaques_in_scope: MutSet<Box<str>>,
+        opt_defined_alias: Option<Region>,
+    },
+    OpaqueOutsideScope {
+        opaque: Ident,
+        referenced_region: Region,
+        imported_region: Region,
+    },
     ValueNotExposed {
         module_name: ModuleName,
         ident: Ident,

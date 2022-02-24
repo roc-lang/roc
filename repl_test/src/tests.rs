@@ -1,9 +1,15 @@
 use indoc::indoc;
 
+#[cfg(not(feature = "wasm"))]
 mod cli;
-
-#[cfg(feature = "cli")]
+#[cfg(not(feature = "wasm"))]
 use crate::cli::{expect_failure, expect_success};
+
+#[cfg(feature = "wasm")]
+mod wasm;
+#[cfg(feature = "wasm")]
+#[allow(unused_imports)]
+use crate::wasm::{expect_failure, expect_success};
 
 #[test]
 fn literal_0() {
@@ -50,16 +56,19 @@ fn float_addition() {
     expect_success("1.1 + 2", "3.1 : F64");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_rem() {
     expect_success("299 % 10", "Ok 9 : Result (Int *) [ DivByZero ]*");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_floor_division_success() {
     expect_success("Num.divFloor 4 3", "Ok 1 : Result (Int *) [ DivByZero ]*");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_floor_division_divby_zero() {
     expect_success(
@@ -68,11 +77,13 @@ fn num_floor_division_divby_zero() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_ceil_division_success() {
     expect_success("Num.divCeil 4 3", "Ok 2 : Result (Int *) [ DivByZero ]*")
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn bool_in_record() {
     expect_success("{ x: 1 == 1 }", "{ x: True } : { x : Bool }");
@@ -87,18 +98,21 @@ fn bool_in_record() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn bool_basic_equality() {
     expect_success("1 == 1", "True : Bool");
     expect_success("1 != 1", "False : Bool");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn arbitrary_tag_unions() {
     expect_success("if 1 == 1 then Red else Green", "Red : [ Green, Red ]*");
     expect_success("if 1 != 1 then Red else Green", "Green : [ Green, Red ]*");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn tag_without_arguments() {
     expect_success("True", "True : [ True ]*");
@@ -118,6 +132,7 @@ fn byte_tag_union() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn tag_in_record() {
     expect_success(
@@ -137,11 +152,13 @@ fn single_element_tag_union() {
     expect_success("Foo 1 3.14", "Foo 1 3.14 : [ Foo (Num *) (Float *) ]*");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn newtype_of_unit() {
     expect_success("Foo Bar", "Foo Bar : [ Foo [ Bar ]* ]*");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn newtype_of_big_data() {
     expect_success(
@@ -157,6 +174,7 @@ fn newtype_of_big_data() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn newtype_nested() {
     expect_success(
@@ -172,6 +190,7 @@ fn newtype_nested() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn newtype_of_big_of_newtype() {
     expect_success(
@@ -202,16 +221,19 @@ fn literal_empty_str() {
     expect_success("\"\"", "\"\" : Str");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn literal_ascii_str() {
     expect_success("\"Hello, World!\"", "\"Hello, World!\" : Str");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn literal_utf8_str() {
     expect_success("\"👩‍👩‍👦‍👦\"", "\"👩‍👩‍👦‍👦\" : Str");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn str_concat() {
     expect_success(
@@ -230,6 +252,7 @@ fn literal_empty_list() {
     expect_success("[]", "[] : List *");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn literal_empty_list_empty_record() {
     expect_success("[ {} ]", "[ {} ] : List {}");
@@ -250,11 +273,13 @@ fn literal_float_list() {
     expect_success("[ 1.1, 2.2, 3.3 ]", "[ 1.1, 2.2, 3.3 ] : List (Float *)");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn literal_string_list() {
     expect_success(r#"[ "a", "b", "cd" ]"#, r#"[ "a", "b", "cd" ] : List Str"#);
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn nested_string_list() {
     expect_success(
@@ -322,6 +347,7 @@ fn num_mul_wrap() {
     expect_success("Num.mulWrap Num.maxI64 2", "-2 : I64");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_add_checked() {
     expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [ Overflow ]*");
@@ -331,6 +357,7 @@ fn num_add_checked() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_sub_checked() {
     expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [ Overflow ]*");
@@ -340,6 +367,7 @@ fn num_sub_checked() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_mul_checked() {
     expect_success(
@@ -352,6 +380,7 @@ fn num_mul_checked() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn list_concat() {
     expect_success(
@@ -360,6 +389,7 @@ fn list_concat() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn list_contains() {
     expect_success("List.contains [] 0", "False : Bool");
@@ -367,6 +397,7 @@ fn list_contains() {
     expect_success("List.contains [ 1, 2, 3 ] 4", "False : Bool");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn list_sum() {
     expect_success("List.sum []", "0 : Num *");
@@ -374,6 +405,7 @@ fn list_sum() {
     expect_success("List.sum [ 1.1, 2.2, 3.3 ]", "6.6 : F64");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn list_first() {
     expect_success(
@@ -386,6 +418,7 @@ fn list_first() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn list_last() {
     expect_success(
@@ -399,6 +432,7 @@ fn list_last() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn empty_record() {
     expect_success("{}", "{} : {}");
@@ -522,16 +556,19 @@ fn identity_lambda() {
     expect_success("\\x -> x", "<function> : a -> a");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn sum_lambda() {
     expect_success("\\x, y -> x + y", "<function> : Num a, Num a -> Num a");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn stdlib_function() {
     expect_success("Num.abs", "<function> : Num a -> Num a");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn too_few_args() {
     expect_failure(
@@ -552,6 +589,7 @@ fn too_few_args() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn type_problem() {
     expect_failure(
@@ -608,6 +646,7 @@ fn multiline_input() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn recursive_tag_union_flat_variant() {
     expect_success(
@@ -623,6 +662,7 @@ fn recursive_tag_union_flat_variant() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn large_recursive_tag_union_flat_variant() {
     expect_success(
@@ -639,6 +679,7 @@ fn large_recursive_tag_union_flat_variant() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn recursive_tag_union_recursive_variant() {
     expect_success(
@@ -654,6 +695,7 @@ fn recursive_tag_union_recursive_variant() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn large_recursive_tag_union_recursive_variant() {
     expect_success(
@@ -670,6 +712,7 @@ fn large_recursive_tag_union_recursive_variant() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn recursive_tag_union_into_flat_tag_union() {
     expect_success(
@@ -685,6 +728,7 @@ fn recursive_tag_union_into_flat_tag_union() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn non_nullable_unwrapped_tag_union() {
     expect_success(
@@ -704,6 +748,7 @@ fn non_nullable_unwrapped_tag_union() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn nullable_unwrapped_tag_union() {
     expect_success(
@@ -723,6 +768,7 @@ fn nullable_unwrapped_tag_union() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn nullable_wrapped_tag_union() {
     expect_success(
@@ -746,6 +792,7 @@ fn nullable_wrapped_tag_union() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn large_nullable_wrapped_tag_union() {
     // > 7 non-empty variants so that to force tag storage alongside the data
@@ -770,6 +817,7 @@ fn large_nullable_wrapped_tag_union() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn issue_2300() {
     expect_success(
@@ -778,6 +826,7 @@ fn issue_2300() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn function_in_list() {
     expect_success(
@@ -786,6 +835,7 @@ fn function_in_list() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn function_in_record() {
     expect_success(
@@ -794,6 +844,7 @@ fn function_in_record() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn function_in_unwrapped_record() {
     expect_success(
@@ -802,6 +853,7 @@ fn function_in_unwrapped_record() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn function_in_tag() {
     expect_success(
@@ -832,6 +884,7 @@ fn print_u8s() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn parse_problem() {
     expect_failure(
@@ -855,6 +908,7 @@ fn parse_problem() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn mono_problem() {
     expect_failure(
@@ -887,6 +941,7 @@ fn mono_problem() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn issue_2343_complete_mono_with_shadowed_vars() {
     expect_failure(

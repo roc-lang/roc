@@ -28,7 +28,10 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     use Layout::*;
 
     match layout {
-        Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
+        Struct {
+            field_layouts: sorted_fields,
+            ..
+        } => basic_type_from_record(env, sorted_fields),
         LambdaSet(lambda_set) => basic_type_from_layout(env, &lambda_set.runtime_representation()),
         Union(union_layout) => {
             use UnionLayout::*;
@@ -86,7 +89,10 @@ pub fn basic_type_from_layout_1<'a, 'ctx, 'env>(
     use Layout::*;
 
     match layout {
-        Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
+        Struct {
+            field_layouts: sorted_fields,
+            ..
+        } => basic_type_from_record(env, sorted_fields),
         LambdaSet(lambda_set) => {
             basic_type_from_layout_1(env, &lambda_set.runtime_representation())
         }

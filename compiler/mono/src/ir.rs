@@ -10,6 +10,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
+use roc_error_macros::todo_opaques;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -34,18 +35,26 @@ pub fn pretty_print_ir_symbols() -> bool {
 // if it went up, maybe check that the change is really required
 
 // i128 alignment is different on arm
-#[cfg(target_arch = "aarch64")]
-static_assertions::assert_eq_size!([u8; 4 * 8], Literal);
-#[cfg(not(target_arch = "aarch64"))]
-static_assertions::assert_eq_size!([u8; 3 * 8], Literal);
-static_assertions::assert_eq_size!([u8; 10 * 8], Expr);
-#[cfg(not(target_arch = "aarch64"))]
-static_assertions::assert_eq_size!([u8; 19 * 8], Stmt);
-#[cfg(target_arch = "aarch64")]
-static_assertions::assert_eq_size!([u8; 20 * 8], Stmt);
-static_assertions::assert_eq_size!([u8; 6 * 8], ProcLayout);
-static_assertions::assert_eq_size!([u8; 7 * 8], Call);
-static_assertions::assert_eq_size!([u8; 5 * 8], CallType);
+roc_error_macros::assert_sizeof_aarch64!(Literal, 4 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Expr, 10 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Stmt, 20 * 8);
+roc_error_macros::assert_sizeof_aarch64!(ProcLayout, 6 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Call, 7 * 8);
+roc_error_macros::assert_sizeof_aarch64!(CallType, 5 * 8);
+
+roc_error_macros::assert_sizeof_wasm!(Literal, 24);
+roc_error_macros::assert_sizeof_wasm!(Expr, 56);
+roc_error_macros::assert_sizeof_wasm!(Stmt, 96);
+roc_error_macros::assert_sizeof_wasm!(ProcLayout, 24);
+roc_error_macros::assert_sizeof_wasm!(Call, 40);
+roc_error_macros::assert_sizeof_wasm!(CallType, 32);
+
+roc_error_macros::assert_sizeof_default!(Literal, 3 * 8);
+roc_error_macros::assert_sizeof_default!(Expr, 10 * 8);
+roc_error_macros::assert_sizeof_default!(Stmt, 19 * 8);
+roc_error_macros::assert_sizeof_default!(ProcLayout, 6 * 8);
+roc_error_macros::assert_sizeof_default!(Call, 7 * 8);
+roc_error_macros::assert_sizeof_default!(CallType, 5 * 8);
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -1117,7 +1126,7 @@ impl<'a> Param<'a> {
     pub const EMPTY: Self = Param {
         symbol: Symbol::EMPTY_PARAM,
         borrow: false,
-        layout: Layout::Struct(&[]),
+        layout: Layout::UNIT,
     };
 }
 
@@ -1717,11 +1726,11 @@ impl<'a> Stmt<'a> {
         use Stmt::*;
 
         match self {
-            Let(symbol, expr, _layout, cont) => alloc
+            Let(symbol, expr, layout, cont) => alloc
                 .text("let ")
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(" : ")
-                .append(alloc.text(format!("{:?}", _layout)))
+                .append(layout.to_doc(alloc, Parens::NotNeeded))
                 .append(" = ")
                 .append(expr.to_doc(alloc))
                 .append(";")
@@ -2004,6 +2013,13 @@ fn pattern_to_when<'a>(
             (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
         }
 
+        OpaqueNotInScope(loc_ident) => {
+            // create the runtime error here, instead of delegating to When.
+            // TODO(opaques) should be `RuntimeError::OpaqueNotDefined`
+            let error = roc_problem::can::RuntimeError::UnsupportedPattern(loc_ident.region);
+            (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
+        }
+
         AppliedTag { .. } | RecordDestructure { .. } => {
             let symbol = env.unique_symbol();
 
@@ -2021,6 +2037,8 @@ fn pattern_to_when<'a>(
 
             (symbol, Loc::at_zero(wrapped_body))
         }
+
+        UnwrappedOpaque { .. } => todo_opaques!(),
 
         IntLiteral(..) | NumLiteral(..) | FloatLiteral(..) | StrLiteral(_) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
@@ -2292,7 +2310,7 @@ fn specialize_external<'a>(
         env.subs,
         partial_proc.annotation,
         fn_var,
-        roc_unify::unify::Mode::Eq,
+        roc_unify::unify::Mode::EQ,
     );
 
     // This will not hold for programs with type errors
@@ -2428,7 +2446,7 @@ fn specialize_external<'a>(
 
             let closure_data_layout = match opt_closure_layout {
                 Some(lambda_set) => Layout::LambdaSet(lambda_set),
-                None => Layout::Struct(&[]),
+                None => Layout::UNIT,
             };
 
             // I'm not sure how to handle the closure case, does it ever occur?
@@ -2941,8 +2959,7 @@ fn specialize_naked_symbol<'a>(
     symbol: Symbol,
 ) -> Stmt<'a> {
     if procs.is_module_thunk(symbol) {
-        let partial_proc = procs.get_partial_proc(symbol).unwrap();
-        let fn_var = partial_proc.annotation;
+        let fn_var = variable;
 
         // This is a top-level declaration, which will code gen to a 0-arity thunk.
         let result = call_by_name(
@@ -3405,6 +3422,8 @@ pub fn with_hole<'a>(
             }
         }
 
+        OpaqueRef { .. } => todo_opaques!(),
+
         Record {
             record_var,
             mut fields,
@@ -3423,6 +3442,7 @@ pub fn with_hole<'a>(
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
 
+            #[allow(clippy::enum_variant_names)]
             enum Field {
                 // TODO: rename this since it can handle unspecialized expressions now too
                 Function(Symbol, Variable),
@@ -3977,7 +3997,7 @@ pub fn with_hole<'a>(
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let field_layouts = match &record_layout {
-                Layout::Struct(layouts) => *layouts,
+                Layout::Struct { field_layouts, .. } => *field_layouts,
                 other => arena.alloc([*other]),
             };
 
@@ -4281,7 +4301,7 @@ pub fn with_hole<'a>(
                                     env.subs,
                                     fn_var,
                                     lambda_expr_var,
-                                    roc_unify::unify::Mode::Eq,
+                                    roc_unify::unify::Mode::EQ,
                                 );
 
                                 result = with_hole(
@@ -4693,7 +4713,7 @@ fn construct_closure_data<'a>(
                 Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
 
             debug_assert_eq!(
-                Layout::Struct(field_layouts),
+                Layout::struct_no_name_order(field_layouts),
                 lambda_set.runtime_representation()
             );
 
@@ -4777,9 +4797,7 @@ fn convert_tag_union<'a>(
             "The `[]` type has no constructors, source var {:?}",
             variant_var
         ),
-        Unit | UnitWithArguments => {
-            Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
-        }
+        Unit | UnitWithArguments => Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole),
         BoolUnion { ttrue, .. } => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Bool(tag_name == ttrue)),
@@ -5088,7 +5106,7 @@ fn sorted_field_symbols<'a>(
                 // Note it does not catch the use of `[]` currently.
                 use roc_can::expr::Expr;
                 arg.value = Expr::RuntimeError(RuntimeError::VoidValue);
-                Layout::Struct(&[])
+                Layout::UNIT
             }
             Err(LayoutProblem::Erroneous) => {
                 // something went very wrong
@@ -5183,7 +5201,10 @@ fn register_capturing_closure<'a>(
             Content::Structure(FlatType::Func(_, closure_var, _)) => {
                 match LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info) {
                     Ok(lambda_set) => {
-                        if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
+                        if let Layout::Struct {
+                            field_layouts: &[], ..
+                        } = lambda_set.runtime_representation()
+                        {
                             CapturedSymbols::None
                         } else {
                             let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
@@ -6247,7 +6268,7 @@ fn store_pattern_help<'a>(
                 let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
                 fields.extend(arguments.iter().map(|x| x.1));
 
-                let layout = Layout::Struct(fields.into_bump_slice());
+                let layout = Layout::struct_no_name_order(fields.into_bump_slice());
 
                 return store_newtype_pattern(
                     env,
@@ -6668,7 +6689,7 @@ fn force_thunk<'a>(
 }
 
 fn let_empty_struct<'a>(assigned: Symbol, hole: &'a Stmt<'a>) -> Stmt<'a> {
-    Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
+    Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole)
 }
 
 /// If the symbol is a function, make sure it is properly specialized
@@ -6691,7 +6712,7 @@ fn reuse_function_symbol<'a>(
             env.subs,
             arg_var.unwrap(),
             expr_var,
-            roc_unify::unify::Mode::Eq,
+            roc_unify::unify::Mode::EQ,
         );
 
         let result = with_hole(
@@ -7733,6 +7754,10 @@ fn from_can_pattern_help<'a>(
             // TODO preserve malformed problem information here?
             Err(RuntimeError::UnsupportedPattern(*region))
         }
+        OpaqueNotInScope(loc_ident) => {
+            // TODO(opaques) should be `RuntimeError::OpaqueNotDefined`
+            Err(RuntimeError::UnsupportedPattern(loc_ident.region))
+        }
         NumLiteral(var, num_str, num, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
                 IntOrFloat::Int(precision) => Ok(match num {
@@ -8181,6 +8206,8 @@ fn from_can_pattern_help<'a>(
             Ok(result)
         }
 
+        UnwrappedOpaque { .. } => todo_opaques!(),
+
         RecordDestructure {
             whole_var,
             destructs,
@@ -8450,7 +8477,7 @@ where
                 env.arena.alloc(result),
             )
         }
-        Layout::Struct(_) => match lambda_set.set.get(0) {
+        Layout::Struct { .. } => match lambda_set.set.get(0) {
             Some((function_symbol, _)) => {
                 let call_spec_id = env.next_call_specialization_id();
                 let update_mode = env.next_update_mode_id();
@@ -8623,7 +8650,10 @@ fn match_on_lambda_set<'a>(
                 env.arena.alloc(result),
             )
         }
-        Layout::Struct(fields) => {
+        Layout::Struct {
+            field_layouts,
+            field_order_hash,
+        } => {
             let function_symbol = lambda_set.set[0].0;
 
             union_lambda_set_branch_help(
@@ -8631,7 +8661,10 @@ fn match_on_lambda_set<'a>(
                 function_symbol,
                 lambda_set,
                 closure_data_symbol,
-                Layout::Struct(fields),
+                Layout::Struct {
+                    field_layouts,
+                    field_order_hash,
+                },
                 argument_symbols,
                 argument_layouts,
                 return_layout,
@@ -8790,7 +8823,9 @@ fn union_lambda_set_branch_help<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let (argument_layouts, argument_symbols) = match closure_data_layout {
-        Layout::Struct(&[])
+        Layout::Struct {
+            field_layouts: &[], ..
+        }
         | Layout::Builtin(Builtin::Bool)
         | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
             (argument_layouts_slice, argument_symbols_slice)
@@ -8917,7 +8952,9 @@ fn enum_lambda_set_branch<'a>(
     let assigned = result_symbol;
 
     let (argument_layouts, argument_symbols) = match closure_data_layout {
-        Layout::Struct(&[])
+        Layout::Struct {
+            field_layouts: &[], ..
+        }
         | Layout::Builtin(Builtin::Bool)
         | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
             (argument_layouts_slice, argument_symbols_slice)

@@ -19,7 +19,7 @@ use roc_parse::ast::Expr;
 use roc_parse::parser::{EExpr, ELambda, SyntaxError};
 use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{compile_to_mono, format_answer, ReplOutput};
-use roc_repl_eval::ReplApp;
+use roc_repl_eval::{ReplApp, ReplAppMemory};
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
@@ -117,8 +117,40 @@ impl Validator for InputValidator {
     }
 }
 
-struct CliReplApp {
+struct CliApp {
     lib: Library,
+}
+
+struct CliMemory;
+
+impl<'a> ReplApp<'a> for CliApp {
+    type Memory = CliMemory;
+
+    /// Run user code that returns a type with a `Builtin` layout
+    /// Size of the return value is statically determined from its Rust type
+    fn call_function<Return, F>(&self, main_fn_name: &str, transform: F) -> Expr<'a>
+    where
+        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
+        Self::Memory: 'a,
+    {
+        run_jit_function!(self.lib, main_fn_name, Return, |v| transform(&CliMemory, v))
+    }
+
+    /// Run user code that returns a struct or union, whose size is provided as an argument
+    fn call_function_dynamic_size<T, F>(
+        &self,
+        main_fn_name: &str,
+        ret_bytes: usize,
+        transform: F,
+    ) -> T
+    where
+        F: Fn(&'a Self::Memory, usize) -> T,
+        Self::Memory: 'a,
+    {
+        run_jit_function_dynamic_type!(self.lib, main_fn_name, ret_bytes, |v| transform(
+            &CliMemory, v
+        ))
+    }
 }
 
 macro_rules! deref_number {
@@ -130,7 +162,7 @@ macro_rules! deref_number {
     };
 }
 
-impl ReplApp for CliReplApp {
+impl ReplAppMemory for CliMemory {
     deref_number!(deref_bool, bool);
 
     deref_number!(deref_u8, u8);
@@ -152,26 +184,6 @@ impl ReplApp for CliReplApp {
 
     fn deref_str(&self, addr: usize) -> &str {
         unsafe { *(addr as *const &'static str) }
-    }
-
-    /// Run user code that returns a type with a `Builtin` layout
-    /// Size of the return value is statically determined from its Rust type
-    fn call_function<'a, T: Sized, F: Fn(T) -> Expr<'a>>(
-        &self,
-        main_fn_name: &str,
-        transform: F,
-    ) -> Expr<'a> {
-        run_jit_function!(self.lib, main_fn_name, T, transform)
-    }
-
-    /// Run user code that returns a struct or union, whose size is provided as an argument
-    fn call_function_dynamic_size<T: Sized, F: Fn(usize) -> T>(
-        &self,
-        main_fn_name: &str,
-        bytes: usize,
-        transform: F,
-    ) -> T {
-        run_jit_function_dynamic_type!(self.lib, main_fn_name, bytes, transform)
     }
 }
 
@@ -288,7 +300,7 @@ fn gen_and_eval_llvm<'a>(
     let lib = module_to_dylib(env.module, &target, opt_level)
         .expect("Error loading compiled dylib for test");
 
-    let app = CliReplApp { lib };
+    let app = CliApp { lib };
 
     let res_answer = jit_to_ast(
         &arena,

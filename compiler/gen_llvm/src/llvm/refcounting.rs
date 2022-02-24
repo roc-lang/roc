@@ -280,7 +280,7 @@ fn modify_refcount_struct<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let layout = Layout::Struct(layouts);
+    let layout = Layout::struct_no_name_order(layouts);
 
     let (_, fn_name) = function_name_from_mode(
         layout_ids,
@@ -440,7 +440,7 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
         }
         Set(element_layout) => {
             let key_layout = element_layout;
-            let value_layout = &Layout::Struct(&[]);
+            let value_layout = &Layout::UNIT;
 
             let function = modify_refcount_dict(
                 env,
@@ -619,8 +619,9 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             }
         }
 
-        Struct(layouts) => {
-            let function = modify_refcount_struct(env, layout_ids, layouts, mode, when_recursive);
+        Struct { field_layouts, .. } => {
+            let function =
+                modify_refcount_struct(env, layout_ids, field_layouts, mode, when_recursive);
 
             Some(function)
         }
@@ -1312,7 +1313,8 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
 
         env.builder.position_at_end(block);
 
-        let wrapper_type = basic_type_from_layout(env, &Layout::Struct(field_layouts));
+        let wrapper_type =
+            basic_type_from_layout(env, &Layout::struct_no_name_order(field_layouts));
 
         // cast the opaque pointer to a pointer of the correct shape
         let struct_ptr = env
@@ -1720,7 +1722,8 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         let block = env.context.append_basic_block(parent, "tag_id_modify");
         env.builder.position_at_end(block);
 
-        let wrapper_type = basic_type_from_layout(env, &Layout::Struct(field_layouts));
+        let wrapper_type =
+            basic_type_from_layout(env, &Layout::struct_no_name_order(field_layouts));
 
         debug_assert!(wrapper_type.is_struct_type());
         let opaque_tag_data_ptr = env

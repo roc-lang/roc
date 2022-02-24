@@ -1,7 +1,7 @@
 use roc_cli::build::check_file;
 use roc_cli::{
-    build_app, docs, format, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_FORMAT,
-    CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
+    build_app, docs, format, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
+    CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_TIME, ROC_FILE,
 };
 use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
@@ -150,9 +150,20 @@ fn main() -> io::Result<()> {
                 roc_files_recursive(os_str.as_os_str(), metadata.file_type(), &mut roc_files)?;
             }
 
-            format(roc_files);
+            let format_mode = match matches.is_present(FLAG_CHECK) {
+                true => FormatMode::CheckOnly,
+                false => FormatMode::Format,
+            };
 
-            Ok(0)
+            let format_exit_code = match format(roc_files, format_mode) {
+                Ok(_) => 0,
+                Err(message) => {
+                    eprintln!("{}", message);
+                    1
+                }
+            };
+
+            Ok(format_exit_code)
         }
         Some((CMD_VERSION, _)) => {
             println!("roc {}", concatcp!(include_str!("../../version.txt"), "\n"));

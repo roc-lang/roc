@@ -678,39 +678,6 @@ mod test_reporting {
         );
     }
 
-    // #[test]
-    // fn report_unused_import() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //              interface Report
-    //                  exposes [
-    //                      plainText,
-    //                      emText
-    //                  ]
-    //                  imports [
-    //                      Symbol.{ Interns }
-    //                  ]
-
-    //              plainText = \str -> PlainText str
-
-    //              emText = \str -> EmText str
-    //          "#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //              Nothing from Symbol is used in this module.
-
-    //              6│ imports [
-    //              7│     Symbol.{ Interns }
-    //                      ^^^^^^
-    //              8│ ]
-
-    //              Since Symbol isn't used, you don't need to import it."#
-    //         ),
-    //     );
-    // }
-
     #[test]
     fn report_value_color() {
         let src: &str = indoc!(
@@ -2885,7 +2852,7 @@ mod test_reporting {
                     ^^^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -3168,6 +3135,32 @@ mod test_reporting {
     }
 
     #[test]
+    fn invalid_opaque_rigid_var_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age 1 := I64
+
+                a : Age
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This pattern in the definition of `Age` is not what I expect:
+
+                1│  Age 1 := I64
+                        ^
+
+                Only type variables like `a` or `value` can occur in this position.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn invalid_num() {
         report_problem_as(
             indoc!(
@@ -3381,6 +3374,8 @@ mod test_reporting {
                 { x, y }
                 "#
             ),
+            // TODO render tag unions across multiple lines
+            // TODO do not show recursion var if the recursion var does not render on the surface of a type
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
@@ -3393,12 +3388,13 @@ mod test_reporting {
 
                 This `ACons` global tag application has the type:
 
-                    [ ACons Num (Integer Signed64) [ BCons (Num a) [ ACons Str [ BNil
-                    ]b ]c ]d, ANil ]
+                    [ ACons (Num (Integer Signed64)) [
+                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 a, BNil ],
+                    ANil ], BNil ], ANil ]
 
                 But the type annotation on `x` says it should be:
 
-                    [ ACons I64 BList I64 I64, ANil ]
+                    [ ACons I64 (BList I64 I64), ANil ] as a
                 "#
             ),
         )
@@ -5851,6 +5847,29 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
+    fn opaque_ref_field_access() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $UUID.bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am very confused by this field access:
+
+                1│  $UUID.bar
+                         ^^^^
+
+                It looks like a record field access on an opaque reference.
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn weird_accessor() {
         report_problem_as(
             indoc!(
@@ -6135,6 +6154,12 @@ I need all branches in an `if` to have the same type!
                     packages {}
                     imports [Task]
                     provides [ mainForHost ]
+                    effects fx.Effect
+                         {
+                             putChar : I64 -> Effect {},
+                             putLine : Str -> Effect {},
+                             getLine : Effect Str
+                         }
                 "#
             ),
             indoc!(
@@ -7102,7 +7127,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7129,7 +7154,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7155,7 +7180,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7877,6 +7902,374 @@ I need all branches in an `if` to have the same type!
 
                 Tip: The suffix indicates this integer is a I128, whose maximum value
                 is 170_141_183_460_469_231_731_687_303_715_884_105_727.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_get_negative_number() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 List.get [1,2,3] -1
+                 "#
+            ),
+            // TODO: this error message could be improved, e.g. something like "This argument can
+            // be used as ... because of its literal value"
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `get` is not what I expect:
+
+                1│  List.get [1,2,3] -1
+                                     ^^
+
+                This argument is a number of type:
+
+                    I8, I16, I32, I64, I128, F32, F64, or Dec
+
+                But `get` needs the 2nd argument to be:
+
+                    Nat
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_get_negative_number_indirect() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 a = -9_223_372_036_854
+                 List.get [1,2,3] a
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `get` is not what I expect:
+
+                2│  List.get [1,2,3] a
+                                     ^
+
+                This `a` value is a:
+
+                    I64, I128, F32, F64, or Dec
+
+                But `get` needs the 2nd argument to be:
+
+                    Nat
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_get_negative_number_double_indirect() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 a = -9_223_372_036_854
+                 b = a
+                 List.get [1,2,3] b
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `get` is not what I expect:
+
+                3│  List.get [1,2,3] b
+                                     ^
+
+                This `b` value is a:
+
+                    I64, I128, F32, F64, or Dec
+
+                But `get` needs the 2nd argument to be:
+
+                    Nat
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn compare_unsigned_to_signed() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when -1 is
+                   1u8 -> 1
+                   _ -> 1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st pattern in this `when` is causing a mismatch:
+
+                2│     1u8 -> 1
+                       ^^^
+
+                The first pattern is trying to match integers:
+
+                    U8
+
+                But the expression between `when` and `is` has the type:
+
+                    I8, I16, I32, I64, I128, F32, F64, or Dec
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype() {
+        report_problem_as(
+            indoc!(
+                r#"
+                R a : [ Only (R a) ]
+
+                v : R U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `R` alias is self-recursive in an invalid way:
+
+                1│  R a : [ Only (R a) ]
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype_deep() {
+        report_problem_as(
+            indoc!(
+                r#"
+                R a : [ Only { very: [ Deep (R a) ] } ]
+
+                v : R U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `R` alias is self-recursive in an invalid way:
+
+                1│  R a : [ Only { very: [ Deep (R a) ] } ]
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype_mutual() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo a : [ Thing (Bar a) ]
+                Bar a : [ Stuff (Foo a) ]
+
+                v : Bar U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `Bar` alias is recursive in an invalid way:
+
+                2│  Bar a : [ Stuff (Foo a) ]
+                    ^^^^^
+
+                The `Bar` alias depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     Bar
+                    │     ↓
+                    │     Foo
+                    └─────┘
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2458() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo a : [ Blah (Result (Bar a) []) ]
+                Bar a : Foo a
+
+                v : Bar U8
+                v
+                "#
+            ),
+            "",
+        )
+    }
+
+    #[test]
+    fn opaque_type_not_in_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                1│  $Age 21
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_reference_not_opaque_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age : U8
+
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                3│  $Age 21
+                    ^^^^
+
+                Note: There is an alias of the same name:
+
+                1│  Age : U8
+                    ^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                1│  Age : U8
+                    ^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn qualified_opaque_reference() {
+        report_problem_as(
+            indoc!(
+                r#"
+                OtherModule.$Age 21
+                "#
+            ),
+            // TODO: get rid of the second error. Consider parsing OtherModule.$Age to completion
+            // and checking it during can.
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am trying to parse a qualified name here:
+
+                1│  OtherModule.$Age 21
+                                ^
+
+                I was expecting to see an identifier next, like height. A complete
+                qualified name looks something like Json.Decode.string.
+
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                1│  OtherModule.$Age 21
+                                ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_used_outside_declaration_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                age =
+                    Age := U8
+                    21u8
+
+                $Age age
+                "#
+            ),
+            // TODO: there is a potential for a better error message here, if the usage of `$Age` can
+            // be linked to the declaration of `Age` inside `age`, and a suggestion to raise that
+            // declaration to the outer scope.
+            indoc!(
+                r#"
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                2│      Age := U8
+                        ^^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                5│  $Age age
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
                 "#
             ),
         )

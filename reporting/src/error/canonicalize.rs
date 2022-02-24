@@ -16,7 +16,8 @@ const UNUSED_DEF: &str = "UNUSED DEFINITION";
 const UNUSED_IMPORT: &str = "UNUSED IMPORT";
 const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
-const MISSING_DEFINITION: &str = "MISSING_DEFINITION";
+const MISSING_DEFINITION: &str = "MISSING DEFINITION";
+const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
 const DUPLICATE_FIELD_NAME: &str = "DUPLICATE FIELD NAME";
 const DUPLICATE_TAG_NAME: &str = "DUPLICATE TAG NAME";
 const INVALID_UNICODE: &str = "INVALID UNICODE";
@@ -28,6 +29,8 @@ const NESTED_DATATYPE: &str = "NESTED DATATYPE";
 const CONFLICTING_NUMBER_SUFFIX: &str = "CONFLICTING NUMBER SUFFIX";
 const NUMBER_OVERFLOWS_SUFFIX: &str = "NUMBER OVERFLOWS SUFFIX";
 const NUMBER_UNDERFLOWS_SUFFIX: &str = "NUMBER UNDERFLOWS SUFFIX";
+const OPAQUE_NOT_DEFINED: &str = "OPAQUE NOT DEFINED";
+const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE DECLARED OUTSIDE SCOPE";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -90,6 +93,21 @@ pub fn can_problem<'b>(
             ]);
 
             title = MISSING_DEFINITION.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::UnknownGeneratesWith(loc_ident) => {
+            doc = alloc.stack(vec![
+                alloc
+                    .reflow("I don't know how to generate the ")
+                    .append(alloc.ident(loc_ident.value))
+                    .append(alloc.reflow(" function.")),
+                alloc.region(lines.convert_region(loc_ident.region)),
+                alloc
+                    .reflow("Only specific functions like `after` and `map` can be generated.")
+                    .append(alloc.reflow("Learn more about hosted modules at TODO.")),
+            ]);
+
+            title = UNKNOWN_GENERATES_WITH.to_string();
             severity = Severity::RuntimeError;
         }
         Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
@@ -205,7 +223,7 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
         Problem::PhantomTypeArgument {
-            alias,
+            typ: alias,
             variable_region,
             variable_name,
         } => {
@@ -370,11 +388,14 @@ pub fn can_problem<'b>(
             title = NAMING_PROBLEM.to_string();
             severity = Severity::RuntimeError;
         }
-        Problem::InvalidAliasRigid { alias_name, region } => {
+        Problem::InvalidAliasRigid {
+            alias_name: type_name,
+            region,
+        } => {
             doc = alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.reflow("This pattern in the definition of "),
-                    alloc.symbol_unqualified(alias_name),
+                    alloc.symbol_unqualified(type_name),
                     alloc.reflow(" is not what I expect:"),
                 ]),
                 alloc.region(lines.convert_region(region)),
@@ -615,8 +636,13 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
 
-        BadPrivateTag(pos) => {
+        BadPrivateTag(pos) | BadOpaqueRef(pos) => {
             use BadIdentNext::*;
+            let kind = if matches!(bad_ident, BadPrivateTag(..)) {
+                "a private tag"
+            } else {
+                "an opaque reference"
+            };
             match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
                 LowercaseAccess(width) => {
                     let region = Region::new(pos, pos.bump_column(width));
@@ -627,7 +653,9 @@ fn to_bad_ident_expr_report<'b>(
                             lines.convert_region(region),
                         ),
                         alloc.concat(vec![
-                            alloc.reflow(r"It looks like a record field access on a private tag.")
+                            alloc.reflow(r"It looks like a record field access on "),
+                            alloc.reflow(kind),
+                            alloc.text("."),
                         ]),
                     ])
                 }
@@ -640,9 +668,9 @@ fn to_bad_ident_expr_report<'b>(
                             lines.convert_region(region),
                         ),
                         alloc.concat(vec![
-                            alloc.reflow(
-                                r"Looks like a private tag is treated like a module name. ",
-                            ),
+                            alloc.reflow(r"Looks like "),
+                            alloc.reflow(kind),
+                            alloc.reflow(" is treated like a module name. "),
                             alloc.reflow(r"Maybe you wanted a qualified name, like "),
                             alloc.parser_suggestion("Json.Decode.string"),
                             alloc.text("?"),
@@ -653,7 +681,11 @@ fn to_bad_ident_expr_report<'b>(
                     let region =
                         Region::new(surroundings.start().bump_column(1), pos.bump_column(1));
                     alloc.stack(vec![
-                        alloc.reflow("I am trying to parse a private tag here:"),
+                        alloc.concat(vec![
+                            alloc.reflow("I am trying to parse "),
+                            alloc.reflow(kind),
+                            alloc.reflow(" here:"),
+                        ]),
                         alloc.region_with_subregion(
                             lines.convert_region(surroundings),
                             lines.convert_region(region),
@@ -1300,6 +1332,77 @@ fn pretty_runtime_error<'b>(
                 )]);
 
             title = MISSING_DEFINITION;
+        }
+        RuntimeError::OpaqueNotDefined {
+            usage:
+                Loc {
+                    region: used_region,
+                    value: opaque,
+                },
+            opaques_in_scope,
+            opt_defined_alias,
+        } => {
+            let mut suggestions = suggest::sort(
+                opaque.as_inline_str().as_str(),
+                opaques_in_scope.iter().map(|v| v.as_ref()).collect(),
+            );
+            suggestions.truncate(4);
+
+            let details = if suggestions.is_empty() {
+                alloc.note("It looks like there are no opaque types declared in this scope yet!")
+            } else {
+                let qualified_suggestions =
+                    suggestions.into_iter().map(|v| alloc.string(v.to_string()));
+                alloc.stack(vec![
+                    alloc
+                        .tip()
+                        .append(alloc.reflow("Did you mean one of these opaque types?")),
+                    alloc.vcat(qualified_suggestions).indent(4),
+                ])
+            };
+
+            let mut stack = vec![
+                alloc.concat(vec![
+                    alloc.reflow("The opaque type "),
+                    alloc.type_str(opaque.as_inline_str().as_str()),
+                    alloc.reflow(" referenced here is not defined:"),
+                ]),
+                alloc.region(lines.convert_region(used_region)),
+            ];
+
+            if let Some(defined_alias_region) = opt_defined_alias {
+                stack.push(alloc.stack(vec![
+                    alloc.note("There is an alias of the same name:"),
+                    alloc.region(lines.convert_region(defined_alias_region)),
+                ]));
+            }
+
+            stack.push(details);
+
+            doc = alloc.stack(stack);
+
+            title = OPAQUE_NOT_DEFINED;
+        }
+        RuntimeError::OpaqueOutsideScope {
+            opaque,
+            referenced_region,
+            imported_region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The unwrapped opaque type "),
+                    alloc.type_str(opaque.as_inline_str().as_str()),
+                    alloc.reflow(" referenced here:"),
+                ]),
+                alloc.region(lines.convert_region(referenced_region)),
+                alloc.reflow("is imported from another module:"),
+                alloc.region(lines.convert_region(imported_region)),
+                alloc.note(
+                    "Opaque types can only be wrapped and unwrapped in the module they are defined in!",
+                ),
+            ]);
+
+            title = OPAQUE_DECLARED_OUTSIDE_SCOPE;
         }
     }
 

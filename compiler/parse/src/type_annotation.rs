@@ -1,4 +1,4 @@
-use crate::ast::{AliasHeader, AssignedField, Pattern, Tag, TypeAnnotation};
+use crate::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::keyword;
 use crate::parser::{
@@ -28,7 +28,6 @@ fn tag_union_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, ET
             word1(b']', ETypeTagUnion::End),
             min_indent,
             ETypeTagUnion::Open,
-            ETypeTagUnion::Space,
             ETypeTagUnion::IndentEnd,
             Tag::SpaceBefore
         )
@@ -50,7 +49,7 @@ fn tag_union_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, ET
 fn check_type_alias(
     p: Progress,
     annot: Loc<TypeAnnotation>,
-) -> impl Parser<AliasHeader, ETypeInlineAlias> {
+) -> impl Parser<TypeHeader, ETypeInlineAlias> {
     move |arena, state| match annot.value {
         TypeAnnotation::Apply("", tag_name, vars) => {
             let mut var_names = Vec::new_in(arena);
@@ -71,7 +70,7 @@ fn check_type_alias(
             let name_region =
                 Region::between(name_start, name_start.bump_column(tag_name.len() as u32));
 
-            let header = AliasHeader {
+            let header = TypeHeader {
                 name: Loc::at(name_region, tag_name),
                 vars: var_names.into_bump_slice(),
             };
@@ -85,18 +84,13 @@ fn check_type_alias(
     }
 }
 
-fn parse_type_alias_after_as<'a>(min_indent: u32) -> impl Parser<'a, AliasHeader<'a>, EType<'a>> {
+fn parse_type_alias_after_as<'a>(min_indent: u32) -> impl Parser<'a, TypeHeader<'a>, EType<'a>> {
     move |arena, state| {
-        space0_before_e(
-            term(min_indent),
-            min_indent,
-            EType::TSpace,
-            EType::TAsIndentStart,
-        )
-        .parse(arena, state)
-        .and_then(|(p, annot, state)| {
-            specialize(EType::TInlineAlias, check_type_alias(p, annot)).parse(arena, state)
-        })
+        space0_before_e(term(min_indent), min_indent, EType::TAsIndentStart)
+            .parse(arena, state)
+            .and_then(|(p, annot, state)| {
+                specialize(EType::TInlineAlias, check_type_alias(p, annot)).parse(arena, state)
+            })
     }
 }
 
@@ -122,7 +116,7 @@ fn term<'a>(min_indent: u32) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'
                 map!(
                     and!(
                         skip_second!(
-                            backtrackable(space0_e(min_indent, EType::TSpace, EType::TIndentEnd)),
+                            backtrackable(space0_e(min_indent, EType::TIndentEnd)),
                             crate::parser::keyword_e(keyword::AS, EType::TEnd)
                         ),
                         parse_type_alias_after_as(min_indent)
@@ -133,7 +127,7 @@ fn term<'a>(min_indent: u32) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'
             ]
         ),
         |arena: &'a Bump,
-         (loc_ann, opt_as): (Loc<TypeAnnotation<'a>>, Option<(&'a [_], AliasHeader<'a>)>)| {
+         (loc_ann, opt_as): (Loc<TypeAnnotation<'a>>, Option<(&'a [_], TypeHeader<'a>)>)| {
             match opt_as {
                 Some((spaces, alias)) => {
                     let alias_vars_region =
@@ -170,7 +164,7 @@ fn loc_applied_arg<'a>(min_indent: u32) -> impl Parser<'a, Loc<TypeAnnotation<'a
 
     map_with_arena!(
         and!(
-            backtrackable(space0_e(min_indent, EType::TSpace, EType::TIndentStart)),
+            backtrackable(space0_e(min_indent, EType::TIndentStart)),
             one_of!(
                 loc_wildcard(),
                 loc_inferred(),
@@ -201,7 +195,6 @@ fn loc_type_in_parens<'a>(
             move |arena, state| specialize_ref(ETypeInParens::Type, expression(min_indent, true))
                 .parse(arena, state),
             min_indent,
-            ETypeInParens::Space,
             ETypeInParens::IndentOpen,
             ETypeInParens::IndentEnd,
         ),
@@ -263,7 +256,7 @@ fn record_type_field<'a>(
         debug_assert_eq!(progress, MadeProgress);
 
         let (_, spaces, state) =
-            space0_e(min_indent, ETypeRecord::Space, ETypeRecord::IndentEnd).parse(arena, state)?;
+            space0_e(min_indent, ETypeRecord::IndentEnd).parse(arena, state)?;
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
@@ -277,13 +270,9 @@ fn record_type_field<'a>(
 
         match opt_loc_val {
             Some(First(_)) => {
-                let (_, loc_val, state) = space0_before_e(
-                    val_parser,
-                    min_indent,
-                    ETypeRecord::Space,
-                    ETypeRecord::IndentColon,
-                )
-                .parse(arena, state)?;
+                let (_, loc_val, state) =
+                    space0_before_e(val_parser, min_indent, ETypeRecord::IndentColon)
+                        .parse(arena, state)?;
 
                 Ok((
                     MadeProgress,
@@ -292,13 +281,9 @@ fn record_type_field<'a>(
                 ))
             }
             Some(Second(_)) => {
-                let (_, loc_val, state) = space0_before_e(
-                    val_parser,
-                    min_indent,
-                    ETypeRecord::Space,
-                    ETypeRecord::IndentOptional,
-                )
-                .parse(arena, state)?;
+                let (_, loc_val, state) =
+                    space0_before_e(val_parser, min_indent, ETypeRecord::IndentOptional)
+                        .parse(arena, state)?;
 
                 Ok((
                     MadeProgress,
@@ -336,7 +321,6 @@ fn record_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, EType
             word1(b'}', ETypeRecord::End),
             min_indent,
             ETypeRecord::Open,
-            ETypeRecord::Space,
             ETypeRecord::IndentEnd,
             AssignedField::SpaceBefore
         )
@@ -389,13 +373,8 @@ fn expression<'a>(
     is_trailing_comma_valid: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     (move |arena, state: State<'a>| {
-        let (p1, first, state) = space0_before_e(
-            term(min_indent),
-            min_indent,
-            EType::TSpace,
-            EType::TIndentStart,
-        )
-        .parse(arena, state)?;
+        let (p1, first, state) = space0_before_e(term(min_indent), min_indent, EType::TIndentStart)
+            .parse(arena, state)?;
 
         let result = and![
             zero_or_more!(skip_first!(
@@ -404,7 +383,6 @@ fn expression<'a>(
                     space0_around_ee(
                         term(min_indent),
                         min_indent,
-                        EType::TSpace,
                         EType::TIndentStart,
                         EType::TIndentEnd
                     ),
@@ -419,7 +397,7 @@ fn expression<'a>(
             // TODO this space0 is dropped, so newlines just before the function arrow when there
             // is only one argument are not seen by the formatter. Can we do better?
             skip_second!(
-                space0_e(min_indent, EType::TSpace, EType::TIndentStart),
+                space0_e(min_indent, EType::TIndentStart),
                 word2(b'-', b'>', EType::TStart)
             )
             .trace("type_annotation:expression:arrow")
@@ -428,13 +406,9 @@ fn expression<'a>(
 
         match result {
             Ok((p2, (rest, _dropped_spaces), state)) => {
-                let (p3, return_type, state) = space0_before_e(
-                    term(min_indent),
-                    min_indent,
-                    EType::TSpace,
-                    EType::TIndentStart,
-                )
-                .parse(arena, state)?;
+                let (p3, return_type, state) =
+                    space0_before_e(term(min_indent), min_indent, EType::TIndentStart)
+                        .parse(arena, state)?;
 
                 // prepare arguments
                 let mut arguments = Vec::with_capacity_in(rest.len() + 1, arena);
@@ -452,7 +426,7 @@ fn expression<'a>(
             Err(err) => {
                 if !is_trailing_comma_valid {
                     let (_, comma, _) = optional(skip_first!(
-                        space0_e(min_indent, EType::TSpace, EType::TIndentStart),
+                        space0_e(min_indent, EType::TIndentStart),
                         word1(b',', EType::TStart)
                     ))
                     .trace("check trailing comma")

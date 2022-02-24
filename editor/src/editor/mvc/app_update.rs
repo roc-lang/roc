@@ -52,6 +52,7 @@ pub fn pass_keydown_to_focused(
     Ok(())
 }
 
+#[derive(Debug)]
 pub enum InputOutcome {
     Accepted,
     Ignored,

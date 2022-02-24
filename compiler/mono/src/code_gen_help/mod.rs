@@ -15,7 +15,7 @@ mod equality;
 mod refcount;
 
 const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
-const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
+const LAYOUT_UNIT: Layout = Layout::UNIT;
 
 const ARG_1: Symbol = Symbol::ARG_1;
 const ARG_2: Symbol = Symbol::ARG_2;
@@ -194,10 +194,11 @@ impl<'a> CodeGenHelp<'a> {
             let proc_name = self.find_or_create_proc(ident_ids, ctx, layout);
 
             let (ret_layout, arg_layouts): (&'a Layout<'a>, &'a [Layout<'a>]) = {
+                let arg = self.replace_rec_ptr(ctx, layout);
                 match ctx.op {
-                    Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([layout])),
-                    Inc => (&LAYOUT_UNIT, self.arena.alloc([layout, self.layout_isize])),
-                    Eq => (&LAYOUT_BOOL, self.arena.alloc([layout, layout])),
+                    Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([arg])),
+                    Inc => (&LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
+                    Eq => (&LAYOUT_BOOL, self.arena.alloc([arg, arg])),
                 }
             };
 
@@ -354,9 +355,15 @@ impl<'a> CodeGenHelp<'a> {
 
             Layout::Builtin(_) => layout,
 
-            Layout::Struct(fields) => {
-                let new_fields_iter = fields.iter().map(|f| self.replace_rec_ptr(ctx, *f));
-                Layout::Struct(self.arena.alloc_slice_fill_iter(new_fields_iter))
+            Layout::Struct {
+                field_layouts,
+                field_order_hash,
+            } => {
+                let new_fields_iter = field_layouts.iter().map(|f| self.replace_rec_ptr(ctx, *f));
+                Layout::Struct {
+                    field_layouts: self.arena.alloc_slice_fill_iter(new_fields_iter),
+                    field_order_hash,
+                }
             }
 
             Layout::Union(UnionLayout::NonRecursive(tags)) => {
@@ -462,7 +469,7 @@ fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
 
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_)) => true,
 
-        Layout::Struct(fields) => !fields.is_empty(),
+        Layout::Struct { field_layouts, .. } => !field_layouts.is_empty(),
 
         Layout::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
 

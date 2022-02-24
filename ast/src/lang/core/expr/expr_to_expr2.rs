@@ -76,7 +76,7 @@ pub fn expr_to_expr2<'a>(
         }
         Num(string) => {
             match finish_parsing_num(string) {
-                Ok(ParsedNumResult::UnknownNum(int) | ParsedNumResult::Int(int, _)) => {
+                Ok(ParsedNumResult::UnknownNum(int, _) | ParsedNumResult::Int(int, _)) => {
                     let expr = Expr2::SmallInt {
                         number: IntVal::I64(match int {
                             IntValue::U128(_) => todo!(),

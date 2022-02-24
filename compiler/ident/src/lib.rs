@@ -311,7 +311,7 @@ impl Clone for IdentStr {
 
 impl Drop for IdentStr {
     fn drop(&mut self) {
-        if !self.is_small_str() {
+        if !self.is_empty() && !self.is_small_str() {
             unsafe {
                 let align = mem::align_of::<u8>();
                 let layout = Layout::from_size_align_unchecked(self.length, align);

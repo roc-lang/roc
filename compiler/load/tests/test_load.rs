@@ -16,7 +16,6 @@ mod helpers;
 mod test_load {
     use crate::helpers::fixtures_dir;
     use bumpalo::Bump;
-    use roc_can::builtins::builtin_defs_map;
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
     use roc_collections::all::MutMap;
@@ -24,13 +23,44 @@ mod test_load {
     use roc_load::file::LoadedModule;
     use roc_module::ident::ModuleName;
     use roc_module::symbol::{Interns, ModuleId};
+    use roc_problem::can::Problem;
+    use roc_region::all::LineInfo;
+    use roc_reporting::report::can_problem;
+    use roc_reporting::report::RocDocAllocator;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
 
     // HELPERS
+
+    fn format_can_problems(
+        problems: Vec<Problem>,
+        home: ModuleId,
+        interns: &Interns,
+        filename: PathBuf,
+        src: &str,
+    ) -> String {
+        use ven_pretty::DocAllocator;
+
+        let src_lines: Vec<&str> = src.split('\n').collect();
+        let lines = LineInfo::new(src);
+        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+        let reports = problems
+            .into_iter()
+            .map(|problem| can_problem(&alloc, &lines, filename.clone(), problem).pretty(&alloc));
+
+        let mut buf = String::new();
+        alloc
+            .stack(reports)
+            .append(alloc.line())
+            .1
+            .render_raw(70, &mut roc_reporting::report::CiWrite::new(&mut buf))
+            .unwrap();
+        buf
+    }
 
     fn multiple_modules(files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
         use roc_load::file::LoadingProblem;
@@ -44,11 +74,19 @@ mod test_load {
             Ok(Err(loading_problem)) => Err(format!("{:?}", loading_problem)),
             Ok(Ok(mut loaded_module)) => {
                 let home = loaded_module.module_id;
+                let (filepath, src) = loaded_module.sources.get(&home).unwrap();
 
-                assert_eq!(
-                    loaded_module.can_problems.remove(&home).unwrap_or_default(),
-                    Vec::new()
-                );
+                let can_problems = loaded_module.can_problems.remove(&home).unwrap_or_default();
+                if !can_problems.is_empty() {
+                    return Err(format_can_problems(
+                        can_problems,
+                        home,
+                        &loaded_module.interns,
+                        filepath.clone(),
+                        src,
+                    ));
+                }
+
                 assert_eq!(
                     loaded_module
                         .type_problems
@@ -66,9 +104,8 @@ mod test_load {
         arena: &'a Bump,
         mut files: Vec<(&str, &str)>,
     ) -> Result<Result<LoadedModule, roc_load::file::LoadingProblem<'a>>, std::io::Error> {
-        use std::fs::File;
+        use std::fs::{self, File};
         use std::io::Write;
-        use std::path::PathBuf;
         use tempfile::tempdir;
 
         let stdlib = roc_builtins::std::standard_stdlib();
@@ -80,12 +117,15 @@ mod test_load {
         let dir = tempdir()?;
 
         let app_module = files.pop().unwrap();
-        let interfaces = files;
 
-        for (name, source) in interfaces {
+        for (name, source) in files {
             let mut filename = PathBuf::from(name);
             filename.set_extension("roc");
             let file_path = dir.path().join(filename.clone());
+
+            // Create any necessary intermediate directories (e.g. /platform)
+            fs::create_dir_all(file_path.parent().unwrap())?;
+
             let mut file = File::create(file_path)?;
             writeln!(file, "{}", source)?;
             file_handles.push(file);
@@ -108,7 +148,6 @@ mod test_load {
                 dir.path(),
                 exposed_types,
                 TARGET_INFO,
-                builtin_defs_map,
             )
         };
 
@@ -132,7 +171,6 @@ mod test_load {
             src_dir.as_path(),
             subs_by_module,
             TARGET_INFO,
-            builtin_defs_map,
         );
         let mut loaded_module = match loaded {
             Ok(x) => x,
@@ -298,7 +336,6 @@ mod test_load {
             src_dir.as_path(),
             subs_by_module,
             TARGET_INFO,
-            builtin_defs_map,
         );
 
         let mut loaded_module = loaded.expect("Test module failed to load");
@@ -601,5 +638,163 @@ mod test_load {
             }
             Ok(_) => unreachable!("we expect failure here"),
         }
+    }
+
+    #[test]
+    fn platform_parse_error() {
+        let modules = vec![
+            (
+                "platform/Package-Config.roc",
+                indoc!(
+                    r#"
+                        platform "examples/hello-world"
+                            requires {} { main : Str }
+                            exposes []
+                            packages {}
+                            imports []
+                            provides [ mainForHost ]
+                            blah 1 2 3 # causing a parse error on purpose
+
+                        mainForHost : Str
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                        app "hello-world"
+                            packages { pf: "platform" }
+                            imports []
+                            provides [ main ] to pf
+
+                        main = "Hello, World!\n"
+                    "#
+                ),
+            ),
+        ];
+
+        match multiple_modules(modules) {
+            Err(report) => {
+                assert!(report.contains("NOT END OF FILE"));
+                assert!(report.contains("blah 1 2 3 # causing a parse error on purpose"));
+            }
+            Ok(_) => unreachable!("we expect failure here"),
+        }
+    }
+
+    #[test]
+    // See https://github.com/rtfeldman/roc/issues/2413
+    fn platform_exposes_main_return_by_pointer_issue() {
+        let modules = vec![
+            (
+                "platform/Package-Config.roc",
+                indoc!(
+                    r#"
+                    platform "examples/hello-world"
+                        requires {} { main : { content: Str, other: Str } }
+                        exposes []
+                        packages {}
+                        imports []
+                        provides [ mainForHost ]
+
+                    mainForHost : { content: Str, other: Str }
+                    mainForHost = main
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                    app "hello-world"
+                        packages { pf: "platform" }
+                        imports []
+                        provides [ main ] to pf
+
+                    main = { content: "Hello, World!\n", other: "" }
+                    "#
+                ),
+            ),
+        ];
+
+        assert!(multiple_modules(modules).is_ok());
+    }
+
+    #[test]
+    fn opaque_wrapped_unwrapped_outside_defining_module() {
+        let modules = vec![
+            (
+                "Age",
+                indoc!(
+                    r#"
+                    interface Age exposes [ Age ] imports []
+
+                    Age := U32
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                    interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
+
+                    twenty = $Age 20
+
+                    readAge = \$Age n -> n
+                    "#
+                ),
+            ),
+        ];
+
+        let err = multiple_modules(modules).unwrap_err();
+        let err = strip_ansi_escapes::strip(err).unwrap();
+        let err = String::from_utf8(err).unwrap();
+        assert_eq!(
+            err,
+            indoc!(
+                r#"
+                ── OPAQUE DECLARED OUTSIDE SCOPE ───────────────────────────────────────────────
+
+                The unwrapped opaque type Age referenced here:
+
+                3│  twenty = $Age 20
+                             ^^^^
+
+                is imported from another module:
+
+                1│  interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
+                                                                         ^^^^^^^^^^^
+
+                Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
+
+                ── OPAQUE DECLARED OUTSIDE SCOPE ───────────────────────────────────────────────
+
+                The unwrapped opaque type Age referenced here:
+
+                5│  readAge = \$Age n -> n
+                               ^^^^
+
+                is imported from another module:
+
+                1│  interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
+                                                                         ^^^^^^^^^^^
+
+                Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
+
+                ── UNUSED IMPORT ───────────────────────────────────────────────────────────────
+
+                Nothing from Age is used in this module.
+
+                1│  interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
+                                                                         ^^^^^^^^^^^
+
+                Since Age isn't used, you don't need to import it.
+                "#
+            ),
+            "\n{}",
+            err
+        );
     }
 }

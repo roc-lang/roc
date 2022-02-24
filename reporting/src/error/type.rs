@@ -148,6 +148,9 @@ pub fn cyclic_alias<'b>(
     region: roc_region::all::Region,
     others: Vec<Symbol>,
 ) -> (RocDocBuilder<'b>, String) {
+    let when_is_recursion_legal =
+        alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive.");
+
     let doc = if others.is_empty() {
         alloc.stack(vec![
             alloc
@@ -155,7 +158,7 @@ pub fn cyclic_alias<'b>(
                 .append(alloc.symbol_unqualified(symbol))
                 .append(alloc.reflow(" alias is self-recursive in an invalid way:")),
             alloc.region(lines.convert_region(region)),
-            alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
+            when_is_recursion_legal,
         ])
     } else {
         alloc.stack(vec![
@@ -179,7 +182,7 @@ pub fn cyclic_alias<'b>(
                     .map(|other| alloc.symbol_unqualified(other))
                     .collect::<Vec<_>>(),
             ),
-            alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
+            when_is_recursion_legal,
         ])
     };
 
@@ -1780,6 +1783,15 @@ pub fn to_doc<'b>(
                 ext_to_doc(alloc, ext),
             )
         }
+
+        Range(typ, range_types) => {
+            let typ = to_doc(alloc, parens, *typ);
+            let range_types = range_types
+                .into_iter()
+                .map(|arg| to_doc(alloc, Parens::Unnecessary, arg))
+                .collect();
+            report_text::range(alloc, typ, range_types)
+        }
     }
 }
 
@@ -2634,6 +2646,29 @@ mod report_text {
                 .append(rec_var)
         }
     }
+
+    pub fn range<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        _encompassing_type: RocDocBuilder<'b>,
+        ranged_types: Vec<RocDocBuilder<'b>>,
+    ) -> RocDocBuilder<'b> {
+        let mut doc = Vec::with_capacity(ranged_types.len() * 2);
+
+        let last = ranged_types.len() - 1;
+        for (i, choice) in ranged_types.into_iter().enumerate() {
+            if i == last && i == 1 {
+                doc.push(alloc.reflow(" or "));
+            } else if i == last && i > 1 {
+                doc.push(alloc.reflow(", or "));
+            } else if i > 0 {
+                doc.push(alloc.reflow(", "));
+            }
+
+            doc.push(choice);
+        }
+
+        alloc.concat(doc)
+    }
 }
 
 fn type_problem_to_pretty<'b>(
@@ -2801,6 +2836,7 @@ fn type_problem_to_pretty<'b>(
                         alloc.reflow(" value"),
                     ]),
                 ),
+                Range(..) => bad_rigid_var(x, alloc.reflow("a range")),
             }
         }
 

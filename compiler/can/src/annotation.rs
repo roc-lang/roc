@@ -3,10 +3,10 @@ use crate::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_parse::ast::{AliasHeader, AssignedField, Pattern, Tag, TypeAnnotation};
+use roc_parse::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, LambdaSet, Problem, RecordField, Type};
+use roc_types::types::{Alias, AliasKind, LambdaSet, Problem, RecordField, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -136,7 +136,12 @@ fn make_apply_symbol(
     }
 }
 
-pub fn find_alias_symbols(
+/// Retrieves all symbols in an annotations that reference a type definition, that is either an
+/// alias or an opaque type.
+///
+/// For example, in `[ A Age U8, B Str {} ]`, there are three type definition references - `Age`,
+/// `U8`, and `Str`.
+pub fn find_type_def_symbols(
     module_id: ModuleId,
     ident_ids: &mut IdentIds,
     initial_annotation: &roc_parse::ast::TypeAnnotation,
@@ -355,6 +360,7 @@ fn can_annotation_help(
                         type_arguments: vars,
                         lambda_set_variables,
                         actual: Box::new(actual),
+                        kind: alias.kind,
                     }
                 }
                 None => Type::Apply(symbol, args, region),
@@ -378,7 +384,7 @@ fn can_annotation_help(
             loc_inner,
             _spaces,
             alias_header
-            @ AliasHeader {
+            @ TypeHeader {
                 name,
                 vars: loc_vars,
             },
@@ -488,7 +494,13 @@ fn can_annotation_help(
                 hidden_variables.remove(&loc_var.value.1);
             }
 
-            scope.add_alias(symbol, region, lowercase_vars, alias_actual);
+            scope.add_alias(
+                symbol,
+                region,
+                lowercase_vars,
+                alias_actual,
+                AliasKind::Structural, // aliases in "as" are never opaque
+            );
 
             let alias = scope.lookup_alias(symbol).unwrap();
             local_aliases.insert(symbol, alias.clone());
@@ -511,6 +523,7 @@ fn can_annotation_help(
                     type_arguments: vars,
                     lambda_set_variables: alias.lambda_set_variables.clone(),
                     actual: Box::new(alias.typ.clone()),
+                    kind: alias.kind,
                 }
             }
         }

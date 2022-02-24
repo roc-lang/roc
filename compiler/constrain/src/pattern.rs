@@ -5,6 +5,7 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, RecordDestruct};
 use roc_collections::all::{Index, SendMap};
+use roc_error_macros::todo_opaques;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -55,6 +56,7 @@ fn headers_from_annotation_help(
         Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
+        | OpaqueNotInScope(..)
         | NumLiteral(..)
         | IntLiteral(..)
         | FloatLiteral(..)
@@ -114,6 +116,8 @@ fn headers_from_annotation_help(
             }
             _ => false,
         },
+
+        UnwrappedOpaque { .. } => todo_opaques!(),
     }
 }
 
@@ -158,7 +162,7 @@ pub fn constrain_pattern(
                 PresenceConstraint::IsOpen,
             ));
         }
-        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) => {
+        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) | OpaqueNotInScope(..) => {
             // Neither the _ pattern nor erroneous ones add any constraints.
         }
 
@@ -183,9 +187,9 @@ pub fn constrain_pattern(
 
             let num_type = builtins::num_num(Type::Variable(var));
 
-            builtins::add_numeric_bound_constr(
+            let num_type = builtins::add_numeric_bound_constr(
                 &mut state.constraints,
-                num_type.clone(),
+                num_type,
                 bound,
                 region,
                 Category::Num,
@@ -202,7 +206,7 @@ pub fn constrain_pattern(
         &IntLiteral(num_var, precision_var, _, _, bound) => {
             // First constraint on the free num var; this improves the resolved type quality in
             // case the bound is an alias.
-            builtins::add_numeric_bound_constr(
+            let num_type = builtins::add_numeric_bound_constr(
                 &mut state.constraints,
                 Type::Variable(num_var),
                 bound,
@@ -214,7 +218,7 @@ pub fn constrain_pattern(
             let int_type = builtins::num_int(Type::Variable(precision_var));
 
             state.constraints.push(Constraint::Eq(
-                Type::Variable(num_var),
+                num_type, // TODO check me if something breaks!
                 Expected::NoExpectation(int_type),
                 Category::Int,
                 region,
@@ -232,7 +236,7 @@ pub fn constrain_pattern(
         &FloatLiteral(num_var, precision_var, _, _, bound) => {
             // First constraint on the free num var; this improves the resolved type quality in
             // case the bound is an alias.
-            builtins::add_numeric_bound_constr(
+            let num_type = builtins::add_numeric_bound_constr(
                 &mut state.constraints,
                 Type::Variable(num_var),
                 bound,
@@ -244,7 +248,7 @@ pub fn constrain_pattern(
             let float_type = builtins::num_float(Type::Variable(precision_var));
 
             state.constraints.push(Constraint::Eq(
-                Type::Variable(num_var),
+                num_type.clone(), // TODO check me if something breaks!
                 Expected::NoExpectation(float_type),
                 Category::Float,
                 region,
@@ -254,7 +258,7 @@ pub fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Float,
-                Type::Variable(num_var),
+                num_type, // TODO check me if something breaks!
                 expected,
             ));
         }
@@ -444,5 +448,7 @@ pub fn constrain_pattern(
             state.constraints.push(whole_con);
             state.constraints.push(tag_con);
         }
+
+        UnwrappedOpaque { .. } => todo_opaques!(),
     }
 }

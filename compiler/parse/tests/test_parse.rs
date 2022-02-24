@@ -105,6 +105,7 @@ mod test_parse {
         };
     }
 
+    // see tests/snapshots to see test input(.roc) and expected output(.result-ast)
     snapshot_tests! {
         fail/type_argument_no_arrow.expr,
         fail/type_double_comma.expr,
@@ -126,6 +127,7 @@ mod test_parse {
         pass/basic_private_tag.expr,
         pass/basic_var.expr,
         pass/closure_with_underscores.expr,
+        pass/comment_after_def.module,
         pass/comment_after_op.expr,
         pass/comment_before_op.expr,
         pass/comment_inside_empty_list.expr,
@@ -189,6 +191,12 @@ mod test_parse {
         pass/one_minus_two.expr,
         pass/one_plus_two.expr,
         pass/one_spaced_def.expr,
+        pass/opaque_simple.module,
+        pass/opaque_with_type_arguments.module,
+        pass/opaque_reference_expr.expr,
+        pass/opaque_reference_expr_with_arguments.expr,
+        pass/opaque_reference_pattern.expr,
+        pass/opaque_reference_pattern_with_arguments.expr,
         pass/ops_with_newlines.expr,
         pass/packed_singleton_list.expr,
         pass/parenthetical_apply.expr,

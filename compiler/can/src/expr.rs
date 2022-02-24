@@ -4,7 +4,7 @@ use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
-    int_expr_from_result, num_expr_from_result, FloatWidth, IntWidth, NumWidth, NumericBound,
+    int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumericBound,
 };
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
@@ -67,17 +67,11 @@ pub enum Expr {
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, Box<str>, IntValue, NumericBound<NumWidth>),
+    Num(Variable, Box<str>, IntValue, NumericBound),
 
     // Int and Float store a variable to generate better error messages
-    Int(
-        Variable,
-        Variable,
-        Box<str>,
-        IntValue,
-        NumericBound<IntWidth>,
-    ),
-    Float(Variable, Variable, Box<str>, f64, NumericBound<FloatWidth>),
+    Int(Variable, Variable, Box<str>, IntValue, IntBound),
+    Float(Variable, Variable, Box<str>, f64, FloatBound),
     Str(Box<str>),
     List {
         elem_var: Variable,
@@ -175,6 +169,11 @@ pub enum Expr {
         variant_var: Variable,
         ext_var: Variable,
         name: TagName,
+        arguments: Vec<(Variable, Loc<Expr>)>,
+    },
+
+    OpaqueRef {
+        name: Symbol,
         arguments: Vec<(Variable, Loc<Expr>)>,
     },
 
@@ -425,6 +424,10 @@ pub fn canonicalize_expr<'a>(
                     name,
                     arguments: args,
                 },
+                OpaqueRef { name, .. } => OpaqueRef {
+                    name,
+                    arguments: args,
+                },
                 ZeroArgumentTag {
                     variant_var,
                     ext_var,
@@ -551,7 +554,7 @@ pub fn canonicalize_expr<'a>(
             output.union(new_output);
 
             // filter out aliases
-            captured_symbols.retain(|s| !output.references.referenced_aliases.contains(s));
+            captured_symbols.retain(|s| !output.references.referenced_type_defs.contains(s));
 
             // filter out functions that don't close over anything
             captured_symbols.retain(|s| !output.non_closures.contains(s));
@@ -702,6 +705,19 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
+        ast::Expr::OpaqueRef(opaque_ref) => match scope.lookup_opaque_ref(opaque_ref, region) {
+            Ok(name) => (
+                OpaqueRef {
+                    name,
+                    arguments: vec![],
+                },
+                Output::default(),
+            ),
+            Err(runtime_error) => {
+                env.problem(Problem::RuntimeError(runtime_error.clone()));
+                (RuntimeError(runtime_error), Output::default())
+            }
+        },
         ast::Expr::Expect(condition, continuation) => {
             let mut output = Output::default();
 
@@ -1477,6 +1493,20 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 name,
                 arguments
             );
+        }
+
+        OpaqueRef { name, arguments } => {
+            let arguments = arguments
+                .into_iter()
+                .map(|(var, loc_expr)| {
+                    (
+                        var,
+                        loc_expr.map_owned(|expr| inline_calls(var_store, scope, expr)),
+                    )
+                })
+                .collect();
+
+            OpaqueRef { name, arguments }
         }
 
         ZeroArgumentTag {

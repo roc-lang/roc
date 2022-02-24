@@ -1,7 +1,8 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
 use crate::llvm::build::{
-    load_roc_value, struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX,
+    complex_bitcast_check_size, load_roc_value, struct_from_fields, to_cc_return, CCReturn, Env,
+    C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX,
 };
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
@@ -11,10 +12,45 @@ use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue};
 use inkwell::AddressSpace;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{LambdaSet, Layout, LayoutIds, UnionLayout};
 
+use std::convert::TryInto;
+
 pub fn call_bitcode_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn_help(env, args, fn_name)
+        .try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| {
+            panic!(
+                "LLVM error: Did not get return value from bitcode function {:?}",
+                fn_name
+            )
+        })
+}
+
+pub fn call_list_bitcode_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn_help(env, args, fn_name)
+        .try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| {
+            panic!(
+                "LLVM error: Did not get return value from bitcode function {:?}",
+                fn_name
+            )
+        })
+}
+
+pub fn call_str_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
@@ -58,6 +94,63 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
 
     call.set_call_convention(fn_val.get_call_conventions());
     call
+}
+
+pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    return_layout: &Layout<'_>,
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    // Calling zig bitcode, so we must follow C calling conventions.
+    let cc_return = to_cc_return(env, return_layout);
+    match cc_return {
+        CCReturn::Return => {
+            // We'll get a return value
+            call_bitcode_fn(env, args, fn_name)
+        }
+        CCReturn::ByPointer => {
+            // We need to pass the return value by pointer.
+            let roc_return_type = basic_type_from_layout(env, return_layout);
+
+            let cc_ptr_return_type = env
+                .module
+                .get_function(fn_name)
+                .unwrap()
+                .get_type()
+                .get_param_types()[0]
+                .into_pointer_type();
+            let cc_return_type: BasicTypeEnum<'ctx> = cc_ptr_return_type
+                .get_element_type()
+                .try_into()
+                .expect("Zig bitcode return type is not a basic type!");
+
+            let cc_return_value_ptr = env.builder.build_alloca(cc_return_type, "return_value");
+            let fixed_args: Vec<BasicValueEnum<'ctx>> = [cc_return_value_ptr.into()]
+                .iter()
+                .chain(args)
+                .copied()
+                .collect();
+            call_void_bitcode_fn(env, &fixed_args, fn_name);
+
+            let cc_return_value = env.builder.build_load(cc_return_value_ptr, "read_result");
+            if roc_return_type.size_of() == cc_return_type.size_of() {
+                cc_return_value
+            } else {
+                // We need to convert the C-callconv return type, which may be larger than the Roc
+                // return type, into the Roc return type.
+                complex_bitcast_check_size(
+                    env,
+                    cc_return_value,
+                    roc_return_type,
+                    "c_value_to_roc_value",
+                )
+            }
+        }
+        CCReturn::Void => {
+            internal_error!("Tried to call valued bitcode function, but it has no return type")
+        }
+    }
 }
 
 const ARGUMENT_SYMBOLS: [Symbol; 8] = [
@@ -281,7 +374,9 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     }
 
     match closure_data_layout.runtime_representation() {
-        Layout::Struct(&[]) => {
+        Layout::Struct {
+            field_layouts: &[], ..
+        } => {
             // nothing to add
         }
         other => {
@@ -601,7 +696,9 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             let default = [value1.into(), value2.into()];
 
             let arguments_cast = match closure_data_layout.runtime_representation() {
-                Layout::Struct(&[]) => {
+                Layout::Struct {
+                    field_layouts: &[], ..
+                } => {
                     // nothing to add
                     &default
                 }

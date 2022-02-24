@@ -516,6 +516,24 @@ fn to_expr_report<'a>(
             }
         }
 
+        EExpr::Record(_erecord, pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing an record, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat(vec![alloc.reflow("TODO provide more context.")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "RECORD PARSE PROBLEM".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
         EExpr::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
 
         &EExpr::Number(ENumber::End, pos) => {

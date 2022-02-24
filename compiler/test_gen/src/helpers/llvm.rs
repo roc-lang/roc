@@ -1,16 +1,12 @@
-use crate::helpers::from_wasm32_memory::FromWasm32Memory;
+use crate::helpers::from_wasmer_memory::FromWasmerMemory;
 use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
-use roc_can::builtins::builtin_defs_map;
-use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
-use roc_module::symbol::Symbol;
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
-use roc_types::subs::VarStore;
 use target_lexicon::Triple;
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -24,9 +20,6 @@ fn promote_expr_to_module(src: &str) -> String {
     }
 
     buffer
-}
-pub fn test_builtin_defs(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
-    builtin_defs_map(symbol, var_store)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -67,7 +60,6 @@ fn create_llvm_module<'a>(
         src_dir,
         exposed_types,
         target_info,
-        test_builtin_defs,
     );
 
     let mut loaded = match loaded {
@@ -468,7 +460,7 @@ fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
 #[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
 where
-    T: FromWasm32Memory,
+    T: FromWasmerMemory,
 {
     let arena = bumpalo::Bump::new();
     let context = inkwell::context::Context::create();
@@ -497,12 +489,9 @@ where
     match test_wrapper.call(&[]) {
         Err(e) => Err(format!("call to `test_wrapper`: {:?}", e)),
         Ok(result) => {
-            let address = match result[0] {
-                wasmer::Value::I32(a) => a,
-                _ => panic!(),
-            };
+            let address = result[0].unwrap_i32();
 
-            let output = <T as crate::helpers::llvm::FromWasm32Memory>::decode(
+            let output = <T as crate::helpers::llvm::FromWasmerMemory>::decode(
                 memory,
                 // skip the RocCallResult tag id
                 address as u32 + 8,

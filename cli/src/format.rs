@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::FormatMode;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_error_macros::{internal_error, user_error};
@@ -8,8 +9,8 @@ use roc_fmt::module::fmt_module;
 use roc_fmt::Buf;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::ast::{
-    AliasHeader, AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag,
-    TypeAnnotation, WhenBranch,
+    AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation,
+    TypeHeader, WhenBranch,
 };
 use roc_parse::header::{
     AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
@@ -24,7 +25,7 @@ use roc_parse::{
 };
 use roc_region::all::{Loc, Region};
 
-pub fn format(files: std::vec::Vec<PathBuf>) {
+pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
     for file in files {
         let arena = Bump::new();
 
@@ -99,9 +100,22 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
                 unstable_2_file.display());
         }
 
-        // If all the checks above passed, actually write out the new file.
-        std::fs::write(&file, buf.as_str()).unwrap();
+        match mode {
+            FormatMode::CheckOnly => {
+                // If we notice that this file needs to be formatted, return early
+                if buf.as_str() != src {
+                    return Err("One or more files need to be reformatted.".to_string());
+                }
+            }
+
+            FormatMode::Format => {
+                // If all the checks above passed, actually write out the new file.
+                std::fs::write(&file, buf.as_str()).unwrap();
+            }
+        }
     }
+
+    Ok(())
 }
 
 #[derive(Debug, PartialEq)]
@@ -388,14 +402,24 @@ impl<'a> RemoveSpaces<'a> for Def<'a> {
                 Def::Annotation(a.remove_spaces(arena), b.remove_spaces(arena))
             }
             Def::Alias {
-                header: AliasHeader { name, vars },
+                header: TypeHeader { name, vars },
                 ann,
             } => Def::Alias {
-                header: AliasHeader {
+                header: TypeHeader {
                     name: name.remove_spaces(arena),
                     vars: vars.remove_spaces(arena),
                 },
                 ann: ann.remove_spaces(arena),
+            },
+            Def::Opaque {
+                header: TypeHeader { name, vars },
+                typ,
+            } => Def::Opaque {
+                header: TypeHeader {
+                    name: name.remove_spaces(arena),
+                    vars: vars.remove_spaces(arena),
+                },
+                typ: typ.remove_spaces(arena),
             },
             Def::Body(a, b) => Def::Body(
                 arena.alloc(a.remove_spaces(arena)),
@@ -500,6 +524,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::GlobalTag(a) => Expr::GlobalTag(a),
             Expr::PrivateTag(a) => Expr::PrivateTag(a),
+            Expr::OpaqueRef(a) => Expr::OpaqueRef(a),
             Expr::Closure(a, b) => Expr::Closure(
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),
@@ -550,6 +575,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::Identifier(a) => Pattern::Identifier(a),
             Pattern::GlobalTag(a) => Pattern::GlobalTag(a),
             Pattern::PrivateTag(a) => Pattern::PrivateTag(a),
+            Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
             Pattern::Apply(a, b) => Pattern::Apply(
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),

@@ -21,7 +21,6 @@ pub fn load_module(src_file: &Path) -> LoadedModule {
         }),
         subs_by_module,
         TargetInfo::default_x86_64(),
-        roc_can::builtins::builtin_defs_map,
     );
 
     match loaded {

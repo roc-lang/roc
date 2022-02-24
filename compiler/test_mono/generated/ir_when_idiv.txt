@@ -1,25 +1,25 @@
 procedure Num.40 (#Attr.2, #Attr.3):
-    let Test.15 : Builtin(Int(I64)) = 0i64;
-    let Test.12 : Builtin(Bool) = lowlevel NotEq #Attr.3 Test.15;
+    let Test.15 : I64 = 0i64;
+    let Test.12 : Int1 = lowlevel NotEq #Attr.3 Test.15;
     if Test.12 then
-        let Test.14 : Builtin(Int(I64)) = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
-        let Test.13 : Union(NonRecursive([[Struct([])], [Builtin(Int(I64))]])) = Ok Test.14;
+        let Test.14 : I64 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
+        let Test.13 : [C {}, C I64] = Ok Test.14;
         ret Test.13;
     else
-        let Test.11 : Struct([]) = Struct {};
-        let Test.10 : Union(NonRecursive([[Struct([])], [Builtin(Int(I64))]])) = Err Test.11;
+        let Test.11 : {} = Struct {};
+        let Test.10 : [C {}, C I64] = Err Test.11;
         ret Test.10;
 
 procedure Test.0 ():
-    let Test.8 : Builtin(Int(I64)) = 1000i64;
-    let Test.9 : Builtin(Int(I64)) = 10i64;
-    let Test.2 : Union(NonRecursive([[Struct([])], [Builtin(Int(I64))]])) = CallByName Num.40 Test.8 Test.9;
-    let Test.5 : Builtin(Int(U8)) = 1i64;
-    let Test.6 : Builtin(Int(U8)) = GetTagId Test.2;
-    let Test.7 : Builtin(Bool) = lowlevel Eq Test.5 Test.6;
+    let Test.8 : I64 = 1000i64;
+    let Test.9 : I64 = 10i64;
+    let Test.2 : [C {}, C I64] = CallByName Num.40 Test.8 Test.9;
+    let Test.5 : U8 = 1i64;
+    let Test.6 : U8 = GetTagId Test.2;
+    let Test.7 : Int1 = lowlevel Eq Test.5 Test.6;
     if Test.7 then
-        let Test.1 : Builtin(Int(I64)) = UnionAtIndex (Id 1) (Index 0) Test.2;
+        let Test.1 : I64 = UnionAtIndex (Id 1) (Index 0) Test.2;
         ret Test.1;
     else
-        let Test.4 : Builtin(Int(I64)) = -1i64;
+        let Test.4 : I64 = -1i64;
         ret Test.4;

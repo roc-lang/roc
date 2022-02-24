@@ -3,7 +3,31 @@ use roc_parse::ast::Expr;
 pub mod eval;
 pub mod gen;
 
-pub trait ReplApp {
+pub trait ReplApp<'a> {
+    type Memory: 'a + ReplAppMemory;
+
+    /// Run user code that returns a type with a `Builtin` layout
+    /// Size of the return value is statically determined from its Rust type
+    /// The `transform` callback takes the app's memory and the returned value
+    fn call_function<Return, F>(&self, main_fn_name: &str, transform: F) -> Expr<'a>
+    where
+        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
+        Self::Memory: 'a;
+
+    /// Run user code that returns a struct or union, whose size is provided as an argument
+    /// The `transform` callback takes the app's memory and the address of the returned value
+    fn call_function_dynamic_size<T, F>(
+        &self,
+        main_fn_name: &str,
+        ret_bytes: usize,
+        transform: F,
+    ) -> T
+    where
+        F: Fn(&'a Self::Memory, usize) -> T,
+        Self::Memory: 'a;
+}
+
+pub trait ReplAppMemory {
     fn deref_bool(&self, addr: usize) -> bool;
 
     fn deref_u8(&self, addr: usize) -> u8;
@@ -24,17 +48,4 @@ pub trait ReplApp {
     fn deref_f64(&self, addr: usize) -> f64;
 
     fn deref_str(&self, addr: usize) -> &str;
-
-    fn call_function<'a, Return: Sized, F: Fn(Return) -> Expr<'a>>(
-        &self,
-        main_fn_name: &str,
-        transform: F,
-    ) -> Expr<'a>;
-
-    fn call_function_dynamic_size<T: Sized, F: Fn(usize) -> T>(
-        &self,
-        main_fn_name: &str,
-        ret_bytes: usize,
-        transform: F,
-    ) -> T;
 }

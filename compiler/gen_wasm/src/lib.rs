@@ -4,6 +4,10 @@ mod low_level;
 mod storage;
 pub mod wasm_module;
 
+// Helpers for interfacing to a Wasm module from outside
+pub mod wasm32_result;
+pub mod wasm32_sized;
+
 use bumpalo::{self, collections::Vec, Bump};
 
 use roc_collections::all::{MutMap, MutSet};
@@ -43,25 +47,25 @@ pub struct Env<'a> {
     pub exposed_to_host: MutSet<Symbol>,
 }
 
-/// Entry point for production
+/// Entry point for Roc CLI
 pub fn build_module<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
     preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<std::vec::Vec<u8>, String> {
+) -> std::vec::Vec<u8> {
     let (mut wasm_module, called_preload_fns, _) =
-        build_module_without_test_wrapper(env, interns, preload_bytes, procedures);
+        build_module_without_wrapper(env, interns, preload_bytes, procedures);
 
     wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
 
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
-    Ok(buffer)
+    buffer
 }
 
-/// Entry point for integration tests (test_gen)
-pub fn build_module_without_test_wrapper<'a>(
+/// Entry point for REPL (repl_wasm) and integration tests (test_gen)
+pub fn build_module_without_wrapper<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
     preload_bytes: &[u8],
@@ -69,7 +73,7 @@ pub fn build_module_without_test_wrapper<'a>(
 ) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
-    let mut proc_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
+    let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut exports = Vec::with_capacity_in(4, env.arena);
     let mut maybe_main_fn_index = None;
@@ -77,7 +81,7 @@ pub fn build_module_without_test_wrapper<'a>(
     // Collect the symbols & names for the procedures,
     // and filter out procs we're going to inline
     let mut fn_index: u32 = 0;
-    for ((sym, layout), proc) in procedures.into_iter() {
+    for ((sym, proc_layout), proc) in procedures.into_iter() {
         if matches!(
             LowLevelWrapperType::from_symbol(sym),
             LowLevelWrapperType::CanBeReplacedBy(_)
@@ -87,7 +91,7 @@ pub fn build_module_without_test_wrapper<'a>(
         procs.push(proc);
 
         let fn_name = layout_ids
-            .get_toplevel(sym, &layout)
+            .get_toplevel(sym, &proc_layout)
             .to_symbol_string(sym, interns);
 
         if env.exposed_to_host.contains(&sym) {
@@ -100,7 +104,10 @@ pub fn build_module_without_test_wrapper<'a>(
         }
 
         let linker_sym = SymInfo::for_function(fn_index, fn_name);
-        proc_symbols.push((sym, linker_symbols.len() as u32));
+        let linker_sym_index = linker_symbols.len() as u32;
+
+        // linker_sym_index is redundant for these procs from user code, but needed for generated helpers!
+        proc_lookup.push((sym, proc_layout, linker_sym_index));
         linker_symbols.push(linker_sym);
 
         fn_index += 1;
@@ -117,7 +124,7 @@ pub fn build_module_without_test_wrapper<'a>(
         env,
         interns,
         layout_ids,
-        proc_symbols,
+        proc_lookup,
         initial_module,
         fn_index_offset,
         CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),

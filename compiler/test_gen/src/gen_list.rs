@@ -99,7 +99,7 @@ fn bool_list_literal() {
                true : Bool
                true = True
 
-               List.repeat 23 true
+               List.repeat true 23
                "#
         ),
         RocList::from_slice(&[true; 23]),
@@ -112,7 +112,7 @@ fn bool_list_literal() {
                true : Bool
                true = True
 
-               List.repeat 23 { x: true, y: true }
+               List.repeat { x: true, y: true } 23
                "#
         ),
         RocList::from_slice(&[[true, true]; 23]),
@@ -125,7 +125,7 @@ fn bool_list_literal() {
                true : Bool
                true = True
 
-               List.repeat 23 { x: true, y: true, a: true, b: true, c: true, d : true, e: true, f: true }
+               List.repeat { x: true, y: true, a: true, b: true, c: true, d : true, e: true, f: true } 23
                "#
         ),
         RocList::from_slice(&[[true, true, true, true, true, true, true, true]; 23]),
@@ -1240,18 +1240,18 @@ fn list_single() {
 #[cfg(any(feature = "gen-llvm"))]
 fn list_repeat() {
     assert_evals_to!(
-        "List.repeat 5 1",
+        "List.repeat 1 5",
         RocList::from_slice(&[1, 1, 1, 1, 1]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.repeat 4 2",
+        "List.repeat 2 4",
         RocList::from_slice(&[2, 2, 2, 2]),
         RocList<i64>
     );
 
     assert_evals_to!(
-        "List.repeat 2 []",
+        "List.repeat [] 2",
         RocList::from_slice(&[RocList::default(), RocList::default()]),
         RocList<RocList<i64>>
     );
@@ -1263,7 +1263,7 @@ fn list_repeat() {
                 noStrs =
                     []
 
-                List.repeat 2 noStrs
+                List.repeat noStrs 2
             "#
         ),
         RocList::from_slice(&[RocList::default(), RocList::default()]),
@@ -1271,7 +1271,7 @@ fn list_repeat() {
     );
 
     assert_evals_to!(
-        "List.repeat 15 4",
+        "List.repeat 4 15",
         RocList::from_slice(&[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]),
         RocList<i64>
     );
@@ -2363,7 +2363,7 @@ fn list_keep_errs() {
 #[cfg(any(feature = "gen-llvm"))]
 fn list_map_with_index() {
     assert_evals_to!(
-        "List.mapWithIndex [0,0,0] (\\index, x -> Num.intCast index + x)",
+        "List.mapWithIndex [0,0,0] (\\x, index -> Num.intCast index + x)",
         RocList::from_slice(&[0, 1, 2]),
         RocList<i64>
     );

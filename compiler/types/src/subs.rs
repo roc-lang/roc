@@ -9,12 +9,15 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([u8; 6 * 8], Descriptor);
-static_assertions::assert_eq_size!([u8; 4 * 8], Content);
-static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
-static_assertions::assert_eq_size!([u8; 6 * 8], Problem);
-static_assertions::assert_eq_size!([u8; 12], UnionTags);
-static_assertions::assert_eq_size!([u8; 2 * 8], RecordFields);
+roc_error_macros::assert_sizeof_all!(Descriptor, 6 * 8);
+roc_error_macros::assert_sizeof_all!(Content, 4 * 8);
+roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
+roc_error_macros::assert_sizeof_all!(UnionTags, 12);
+roc_error_macros::assert_sizeof_all!(RecordFields, 2 * 8);
+
+roc_error_macros::assert_sizeof_aarch64!(Problem, 6 * 8);
+roc_error_macros::assert_sizeof_wasm!(Problem, 32);
+roc_error_macros::assert_sizeof_default!(Problem, 6 * 8);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
@@ -44,11 +47,17 @@ impl fmt::Debug for Mark {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ErrorTypeContext {
+    None,
+    ExpandRanges,
+}
+
 struct ErrorTypeState {
     taken: MutSet<Lowercase>,
     normals: u32,
     problems: Vec<crate::types::Problem>,
+    context: ErrorTypeContext,
 }
 
 #[derive(Clone)]
@@ -371,6 +380,10 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
 
             write!(f, "Alias({:?}, {:?}, {:?})", name, slice, actual)
         }
+        Content::RangedNumber(typ, range) => {
+            let slice = subs.get_subs_slice(*range);
+            write!(f, "RangedNumber({:?}, {:?})", typ, slice)
+        }
         Content::Error => write!(f, "Error"),
     }
 }
@@ -588,11 +601,6 @@ define_const_var! {
 
     AT_NATURAL,
 
-    AT_BINARY32,
-    AT_BINARY64,
-
-    AT_DECIMAL,
-
     // Signed8 : [ @Signed8 ]
     :pub SIGNED8,
     :pub SIGNED16,
@@ -607,11 +615,6 @@ define_const_var! {
     :pub UNSIGNED128,
 
     :pub NATURAL,
-
-    :pub BINARY32,
-    :pub BINARY64,
-
-    :pub DECIMAL,
 
     // [ @Integer Signed8 ]
     AT_INTEGER_SIGNED8,
@@ -687,6 +690,36 @@ define_const_var! {
     :pub U128,
 
     :pub NAT,
+
+    // [ @Binary32 ]
+    AT_BINARY32,
+    AT_BINARY64,
+    AT_DECIMAL,
+
+    // Binary32 : [ @Binary32 ]
+    BINARY32,
+    BINARY64,
+    DECIMAL,
+
+    // [ @Float Binary32 ]
+    AT_FLOAT_BINARY32,
+    AT_FLOAT_BINARY64,
+    AT_FLOAT_DECIMAL,
+
+    // Float Binary32 : [ @Float Binary32 ]
+    FLOAT_BINARY32,
+    FLOAT_BINARY64,
+    FLOAT_DECIMAL,
+
+    // [ @Num (Float Binary32) ]
+    AT_NUM_FLOAT_BINARY32,
+    AT_NUM_FLOAT_BINARY64,
+    AT_NUM_FLOAT_DECIMAL,
+
+    // Num (Float Binary32)
+    NUM_FLOAT_BINARY32,
+    NUM_FLOAT_BINARY64,
+    NUM_FLOAT_DECIMAL,
 
     :pub F32,
     :pub F64,
@@ -1034,6 +1067,119 @@ fn define_integer_types(subs: &mut Subs) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
+fn float_type(
+    subs: &mut Subs,
+
+    num_at_binary64: Symbol,
+    num_binary64: Symbol,
+    num_f64: Symbol,
+
+    at_binary64: Variable,
+    binary64: Variable,
+
+    at_float_binary64: Variable,
+    float_binary64: Variable,
+
+    at_num_float_binary64: Variable,
+    num_float_binary64: Variable,
+
+    var_f64: Variable,
+) {
+    // define the type Binary64 (which is an alias for [ @Binary64 ])
+    {
+        let tags = UnionTags::insert_into_subs(subs, [(TagName::Private(num_at_binary64), [])]);
+
+        subs.set_content(at_binary64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
+
+        subs.set_content(binary64, {
+            Content::Alias(num_binary64, AliasVariables::default(), at_binary64)
+        });
+    }
+
+    // define the type `Num.Float Num.Binary64`
+    {
+        let tags = UnionTags::insert_into_subs(
+            subs,
+            [(TagName::Private(Symbol::NUM_AT_FLOATINGPOINT), [binary64])],
+        );
+        subs.set_content(at_float_binary64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
+
+        let vars = AliasVariables::insert_into_subs(subs, [binary64], []);
+        subs.set_content(float_binary64, {
+            Content::Alias(Symbol::NUM_FLOATINGPOINT, vars, at_binary64)
+        });
+    }
+
+    // define the type `F64: Num.Num (Num.Float Num.Binary64)`
+    {
+        let tags = UnionTags::insert_into_subs(
+            subs,
+            [(TagName::Private(Symbol::NUM_AT_NUM), [float_binary64])],
+        );
+        subs.set_content(at_num_float_binary64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
+
+        let vars = AliasVariables::insert_into_subs(subs, [float_binary64], []);
+        subs.set_content(num_float_binary64, {
+            Content::Alias(Symbol::NUM_NUM, vars, at_num_float_binary64)
+        });
+
+        subs.set_content(var_f64, {
+            Content::Alias(num_f64, AliasVariables::default(), num_float_binary64)
+        });
+    }
+}
+
+fn define_float_types(subs: &mut Subs) {
+    float_type(
+        subs,
+        Symbol::NUM_AT_BINARY32,
+        Symbol::NUM_BINARY32,
+        Symbol::NUM_F32,
+        Variable::AT_BINARY32,
+        Variable::BINARY32,
+        Variable::AT_FLOAT_BINARY32,
+        Variable::FLOAT_BINARY32,
+        Variable::AT_NUM_FLOAT_BINARY32,
+        Variable::NUM_FLOAT_BINARY32,
+        Variable::F32,
+    );
+
+    float_type(
+        subs,
+        Symbol::NUM_AT_BINARY64,
+        Symbol::NUM_BINARY64,
+        Symbol::NUM_F64,
+        Variable::AT_BINARY64,
+        Variable::BINARY64,
+        Variable::AT_FLOAT_BINARY64,
+        Variable::FLOAT_BINARY64,
+        Variable::AT_NUM_FLOAT_BINARY64,
+        Variable::NUM_FLOAT_BINARY64,
+        Variable::F64,
+    );
+
+    float_type(
+        subs,
+        Symbol::NUM_AT_DECIMAL,
+        Symbol::NUM_DECIMAL,
+        Symbol::NUM_DEC,
+        Variable::AT_DECIMAL,
+        Variable::DECIMAL,
+        Variable::AT_FLOAT_DECIMAL,
+        Variable::FLOAT_DECIMAL,
+        Variable::AT_NUM_FLOAT_DECIMAL,
+        Variable::NUM_FLOAT_DECIMAL,
+        Variable::DEC,
+    );
+}
+
 impl Subs {
     pub const RESULT_TAG_NAMES: SubsSlice<TagName> = SubsSlice::new(0, 2);
 
@@ -1072,6 +1218,7 @@ impl Subs {
         }
 
         define_integer_types(&mut subs);
+        define_float_types(&mut subs);
 
         subs.set_content(
             Variable::EMPTY_RECORD,
@@ -1320,7 +1467,15 @@ impl Subs {
         explicit_substitute(self, x, y, z, &mut seen)
     }
 
-    pub fn var_to_error_type(&mut self, var: Variable) -> (ErrorType, Vec<crate::types::Problem>) {
+    pub fn var_to_error_type(&mut self, var: Variable) -> (ErrorType, Vec<Problem>) {
+        self.var_to_error_type_contextual(var, ErrorTypeContext::None)
+    }
+
+    pub fn var_to_error_type_contextual(
+        &mut self,
+        var: Variable,
+        context: ErrorTypeContext,
+    ) -> (ErrorType, Vec<Problem>) {
         let names = get_var_names(self, var, ImMap::default());
         let mut taken = MutSet::default();
 
@@ -1332,6 +1487,7 @@ impl Subs {
             taken,
             normals: 0,
             problems: Vec::new(),
+            context,
         };
 
         (var_to_err_type(self, &mut state, var), state.problems)
@@ -1470,11 +1626,14 @@ impl From<Content> for Descriptor {
     }
 }
 
-static_assertions::assert_eq_size!([u8; 4 * 8], Content);
-static_assertions::assert_eq_size!([u8; 4 * 8], (Variable, Option<Lowercase>));
-static_assertions::assert_eq_size!([u8; 3 * 8], (Symbol, AliasVariables, Variable));
-static_assertions::assert_eq_size!([u8; 8], AliasVariables);
-static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
+roc_error_macros::assert_sizeof_all!(Content, 4 * 8);
+roc_error_macros::assert_sizeof_all!((Symbol, AliasVariables, Variable), 3 * 8);
+roc_error_macros::assert_sizeof_all!(AliasVariables, 8);
+roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
+
+roc_error_macros::assert_sizeof_aarch64!((Variable, Option<Lowercase>), 4 * 8);
+roc_error_macros::assert_sizeof_wasm!((Variable, Option<Lowercase>), 4 * 4);
+roc_error_macros::assert_sizeof_default!((Variable, Option<Lowercase>), 4 * 8);
 
 #[derive(Clone, Debug)]
 pub enum Content {
@@ -1492,6 +1651,7 @@ pub enum Content {
     },
     Structure(FlatType),
     Alias(Symbol, AliasVariables, Variable),
+    RangedNumber(Variable, VariableSubsSlice),
     Error,
 }
 
@@ -1610,8 +1770,6 @@ impl Content {
         self
     }
 }
-
-static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
 
 #[derive(Clone, Debug)]
 pub enum FlatType {
@@ -2246,6 +2404,15 @@ fn occurs(
 
                 Ok(())
             }
+            RangedNumber(typ, _range_vars) => {
+                let mut new_seen = seen.clone();
+                new_seen.insert(root_var);
+
+                short_circuit_help(subs, root_var, &new_seen, *typ)?;
+                // _range_vars excluded because they are not explicitly part of the type.
+
+                Ok(())
+            }
         }
     }
 }
@@ -2435,6 +2602,19 @@ fn explicit_substitute(
 
                     in_var
                 }
+                RangedNumber(typ, vars) => {
+                    for index in vars.into_iter() {
+                        let var = subs[index];
+                        let new_var = explicit_substitute(subs, from, to, var, seen);
+                        subs[index] = new_var;
+                    }
+
+                    let new_typ = explicit_substitute(subs, from, to, typ, seen);
+
+                    subs.set_content(in_var, RangedNumber(new_typ, vars));
+
+                    in_var
+                }
             }
         }
     }
@@ -2483,6 +2663,13 @@ fn get_var_names(
             Alias(_, args, _) => args.into_iter().fold(taken_names, |answer, arg_var| {
                 get_var_names(subs, subs[arg_var], answer)
             }),
+
+            RangedNumber(typ, vars) => {
+                let taken_names = get_var_names(subs, typ, taken_names);
+                vars.into_iter().fold(taken_names, |answer, var| {
+                    get_var_names(subs, subs[var], answer)
+                })
+            }
 
             Structure(flat_type) => match flat_type {
                 FlatType::Apply(_, args) => {
@@ -2694,6 +2881,22 @@ fn content_to_err_type(
             }
 
             ErrorType::Alias(symbol, err_args, Box::new(err_type))
+        }
+
+        RangedNumber(typ, range) => {
+            let err_type = var_to_err_type(subs, state, typ);
+
+            if state.context == ErrorTypeContext::ExpandRanges {
+                let mut types = Vec::with_capacity(range.len());
+                for var_index in range {
+                    let var = subs[var_index];
+
+                    types.push(var_to_err_type(subs, state, var));
+                }
+                ErrorType::Range(Box::new(err_type), types)
+            } else {
+                err_type
+            }
         }
 
         Error => ErrorType::Error,
@@ -2974,6 +3177,11 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
 
                     stack.push(*var);
                 }
+
+                RangedNumber(typ, vars) => {
+                    stack.push(*typ);
+                    stack.extend(var_slice(*vars));
+                }
             }
         }
     }
@@ -3132,6 +3340,10 @@ impl StorageSubs {
                 *symbol,
                 Self::offset_alias_variables(offsets, *alias_variables),
                 Self::offset_variable(offsets, *actual),
+            ),
+            RangedNumber(typ, vars) => RangedNumber(
+                Self::offset_variable(offsets, *typ),
+                Self::offset_variable_slice(offsets, *vars),
             ),
             Error => Content::Error,
         }
@@ -3525,6 +3737,23 @@ fn deep_copy_var_to_help<'a>(
 
             copy
         }
+
+        RangedNumber(typ, vars) => {
+            let new_typ = deep_copy_var_to_help(arena, visited, source, target, max_rank, typ);
+
+            let new_vars = SubsSlice::reserve_into_subs(target, vars.len());
+
+            for (target_index, var_index) in (new_vars.indices()).zip(vars) {
+                let var = source[var_index];
+                let copy_var = deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
+                target.variables[target_index] = copy_var;
+            }
+
+            let new_content = RangedNumber(new_typ, new_vars);
+
+            target.set(copy, make_descriptor(new_content));
+            copy
+        }
     }
 }
 
@@ -3597,6 +3826,10 @@ where
             Alias(_, arguments, real_type_var) => {
                 push_var_slice!(arguments.variables());
                 stack.push(*real_type_var);
+            }
+            RangedNumber(typ, vars) => {
+                stack.push(*typ);
+                push_var_slice!(*vars);
             }
             Error => {}
         }

@@ -10,71 +10,83 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::Type;
+use roc_types::types::{AliasKind, Type};
 
-/// Functions that are always implemented for Effect
-type Builder = for<'r, 's, 't0, 't1> fn(
-    &'r mut Env<'s>,
-    &'t0 mut Scope,
-    Symbol,
-    TagName,
-    &'t1 mut VarStore,
-) -> (Symbol, Def);
+#[derive(Default, Clone, Copy)]
+pub(crate) struct HostedGeneratedFunctions {
+    pub(crate) after: bool,
+    pub(crate) map: bool,
+    pub(crate) always: bool,
+    pub(crate) loop_: bool,
+    pub(crate) forever: bool,
+}
 
-pub const BUILTIN_EFFECT_FUNCTIONS: &[(&str, Builder)] = &[
-    // Effect.after : Effect a, (a -> Effect b) -> Effect b
-    ("after", build_effect_after),
-    // Effect.map : Effect a, (a -> b) -> Effect b
-    ("map", build_effect_map),
-    // Effect.always : a -> Effect a
-    ("always", build_effect_always),
-    // Effect.forever : Effect a -> Effect b
-    ("forever", build_effect_forever),
-    // Effect.loop : a, (a -> Effect [ Step a, Done b ]) -> Effect b
-    ("loop", build_effect_loop),
-];
-
-const RECURSIVE_BUILTIN_EFFECT_FUNCTIONS: &[&str] = &["forever", "loop"];
-
-// the Effects alias & associated functions
-//
-// A platform can define an Effect type in its header. It can have an arbitrary name
-// (e.g. Task, IO), but we'll call it an Effect in general.
-//
-// From that name, we generate an effect module, an effect alias, and some functions.
-//
-// The effect alias is implemented as
-//
-//  Effect a : [ @Effect ({} -> a) ]
-//
-// For this alias we implement the functions defined in BUILTIN_EFFECT_FUNCTIONS with the
-// standard implementation.
-
-pub fn build_effect_builtins(
+/// the Effects alias & associated functions
+///
+/// A platform can define an Effect type in its header. It can have an arbitrary name
+/// (e.g. Task, IO), but we'll call it an Effect in general.
+///
+/// From that name, we generate an effect module, an effect alias, and some functions.
+///
+/// The effect alias is implemented as
+///
+///  Effect a : [ @Effect ({} -> a) ]
+///
+/// For this alias we implement the functions specified in HostedGeneratedFunctions with the
+/// standard implementation.
+pub(crate) fn build_effect_builtins(
     env: &mut Env,
     scope: &mut Scope,
     effect_symbol: Symbol,
     var_store: &mut VarStore,
     exposed_symbols: &mut MutSet<Symbol>,
     declarations: &mut Vec<Declaration>,
+    generated_functions: HostedGeneratedFunctions,
 ) {
-    for (name, f) in BUILTIN_EFFECT_FUNCTIONS.iter() {
-        let (symbol, def) = f(
-            env,
-            scope,
-            effect_symbol,
-            TagName::Private(effect_symbol),
-            var_store,
-        );
+    macro_rules! helper {
+        ($f:expr) => {{
+            let (symbol, def) = $f(
+                env,
+                scope,
+                effect_symbol,
+                TagName::Private(effect_symbol),
+                var_store,
+            );
 
-        exposed_symbols.insert(symbol);
+            // make the outside world know this symbol exists
+            exposed_symbols.insert(symbol);
 
-        let is_recursive = RECURSIVE_BUILTIN_EFFECT_FUNCTIONS.iter().any(|n| n == name);
-        if is_recursive {
-            declarations.push(Declaration::DeclareRec(vec![def]));
-        } else {
-            declarations.push(Declaration::Declare(def));
-        }
+            def
+        }};
+    }
+
+    if generated_functions.after {
+        let def = helper!(build_effect_after);
+        declarations.push(Declaration::Declare(def));
+    }
+
+    // Effect.map : Effect a, (a -> b) -> Effect b
+    if generated_functions.map {
+        let def = helper!(build_effect_map);
+        declarations.push(Declaration::Declare(def));
+    }
+
+    // Effect.always : a -> Effect a
+    if generated_functions.always {
+        let def = helper!(build_effect_always);
+        declarations.push(Declaration::Declare(def));
+    }
+
+    // Effect.forever : Effect a -> Effect b
+    if generated_functions.forever {
+        let def = helper!(build_effect_forever);
+        declarations.push(Declaration::DeclareRec(vec![def]));
+    }
+
+    // Effect.loop : a, (a -> Effect [ Step a, Done b ]) -> Effect b
+    if generated_functions.loop_ {
+        let def = helper!(build_effect_loop);
+        declarations.push(Declaration::DeclareRec(vec![def]));
     }
 
     // Useful when working on functions in this module. By default symbols that we named do now
@@ -1128,6 +1140,7 @@ fn build_effect_loop(
                     closure_var,
                 ))],
                 actual: Box::new(actual),
+                kind: AliasKind::Structural,
             }
         };
 
@@ -1567,6 +1580,7 @@ fn build_effect_alias(
         type_arguments: vec![(a_name.into(), Type::Variable(a_var))],
         lambda_set_variables: vec![roc_types::types::LambdaSet(Type::Variable(closure_var))],
         actual: Box::new(actual),
+        kind: AliasKind::Structural,
     }
 }
 

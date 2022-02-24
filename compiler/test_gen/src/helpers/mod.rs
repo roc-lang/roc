@@ -2,13 +2,11 @@ extern crate bumpalo;
 
 #[cfg(feature = "gen-dev")]
 pub mod dev;
-pub mod from_wasm32_memory;
+pub mod from_wasmer_memory;
 #[cfg(feature = "gen-llvm")]
 pub mod llvm;
 #[cfg(feature = "gen-wasm")]
 pub mod wasm;
-#[cfg(feature = "gen-wasm")]
-pub mod wasm32_test_result;
 
 #[allow(dead_code)]
 pub fn zig_executable() -> String {

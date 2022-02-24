@@ -142,6 +142,7 @@ impl FunctionLayout {
             Content::RecursionVar { .. } => Err(TypeError(())),
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(_, _, actual) => Self::from_var_help(layouts, subs, *actual),
+            Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::Error => Err(TypeError(())),
         }
     }
@@ -249,6 +250,7 @@ impl LambdaSet {
             }
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(_, _, actual) => Self::from_var_help(layouts, subs, *actual),
+            Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::Error => Err(TypeError(())),
         }
     }
@@ -682,6 +684,7 @@ impl Layout {
                     }
                 }
             }
+            Content::RangedNumber(typ, _) => Self::from_var_help(layouts, subs, *typ),
             Content::Error => Err(TypeError(())),
         }
     }

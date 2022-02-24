@@ -7,7 +7,7 @@ use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use roc_collections::all::MutMap;
 #[cfg(feature = "target-wasm32")]
@@ -230,7 +230,6 @@ pub fn gen_from_mono_module_llvm(
     use inkwell::context::Context;
     use inkwell::module::Linkage;
     use inkwell::targets::{CodeModel, FileType, RelocMode};
-    use std::time::SystemTime;
 
     let code_gen_start = SystemTime::now();
 
@@ -486,6 +485,7 @@ fn gen_from_mono_module_dev_wasm32(
     loaded: MonomorphizedModule,
     app_o_file: &Path,
 ) -> CodeGenTiming {
+    let code_gen_start = SystemTime::now();
     let MonomorphizedModule {
         module_id,
         procedures,
@@ -517,12 +517,19 @@ fn gen_from_mono_module_dev_wasm32(
         &mut interns,
         platform_and_builtins_object_file_bytes,
         procedures,
-    )
-    .unwrap();
+    );
+
+    let code_gen = code_gen_start.elapsed().unwrap();
+    let emit_o_file_start = SystemTime::now();
 
     std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
 
-    CodeGenTiming::default()
+    let emit_o_file = emit_o_file_start.elapsed().unwrap();
+
+    CodeGenTiming {
+        code_gen,
+        emit_o_file,
+    }
 }
 
 fn gen_from_mono_module_dev_assembly(
@@ -531,6 +538,8 @@ fn gen_from_mono_module_dev_assembly(
     target: &target_lexicon::Triple,
     app_o_file: &Path,
 ) -> CodeGenTiming {
+    let code_gen_start = SystemTime::now();
+
     let lazy_literals = true;
     let generate_allocators = false; // provided by the platform
 
@@ -552,10 +561,18 @@ fn gen_from_mono_module_dev_assembly(
 
     let module_object = roc_gen_dev::build_module(&env, &mut interns, target, procedures);
 
+    let code_gen = code_gen_start.elapsed().unwrap();
+    let emit_o_file_start = SystemTime::now();
+
     let module_out = module_object
         .write()
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
-    CodeGenTiming::default()
+    let emit_o_file = emit_o_file_start.elapsed().unwrap();
+
+    CodeGenTiming {
+        code_gen,
+        emit_o_file,
+    }
 }

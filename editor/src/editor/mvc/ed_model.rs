@@ -55,7 +55,10 @@ pub fn init_model<'a>(
     code_arena: &'a Bump,        // bump allocation arena, used for fast memory allocation
     caret_pos: CaretPos,         // to set caret position when the file is displayed
 ) -> EdResult<EdModel<'a>> {
+    // for debugging
+    //println!("{}", code_str);
     let mut owned_loaded_module = loaded_module;
+
     let mut module = EdModule::new(code_str, env, &mut owned_loaded_module.interns, code_arena)?;
 
     let mut mark_node_pool = SlowPool::default();
@@ -78,6 +81,8 @@ pub fn init_model<'a>(
     let mut col_nr = 0;
 
     for mark_node_id in &markup_ids {
+        // for debugging:
+        //println!("{}", tree_as_string(*mark_node_id, &mark_node_pool));
         EdModel::insert_mark_node_between_line(
             &mut line_nr,
             &mut col_nr,
@@ -287,8 +292,9 @@ pub mod test_ed_model {
         code_arena: &'a Bump,
     ) -> Result<EdModel<'a>, String> {
         // to be able to load the code as a LoadedModule we add a roc app header and a main function
-        let full_code = vec![HELLO_WORLD, clean_code_str.as_str()];
-        *clean_code_str = full_code.join("\n");
+        *clean_code_str = vec![HELLO_WORLD, clean_code_str.as_str()].join("");
+        // for debugging
+        //println!("{}", clean_code_str);
 
         let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
 
@@ -323,8 +329,8 @@ pub mod test_ed_model {
             code_arena,
         )?;
 
-        // adjust caret position for header and main function
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 2;
+        // adjust caret for header and main function
+        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
         let caret_w_select = convert_dsl_to_selection(&code_lines)?;
         let adjusted_caret_pos = TextPos {
             line: caret_w_select.caret_pos.line + nr_hello_world_lines,

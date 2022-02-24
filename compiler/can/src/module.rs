@@ -1,4 +1,5 @@
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
+use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{ClosureData, Expr, Output};
 use crate::operator::desugar_def;
@@ -15,7 +16,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, Type};
+use roc_types::types::{Alias, AliasKind, Type};
 
 #[derive(Debug)]
 pub struct Module {
@@ -40,9 +41,33 @@ pub struct ModuleOutput {
     pub scope: Scope,
 }
 
+fn validate_generate_with<'a>(
+    generate_with: &'a [Loc<roc_parse::header::ExposedName<'a>>],
+) -> (HostedGeneratedFunctions, Vec<Loc<Ident>>) {
+    let mut functions = HostedGeneratedFunctions::default();
+    let mut unknown = Vec::new();
+
+    for generated in generate_with {
+        match generated.value.as_str() {
+            "after" => functions.after = true,
+            "map" => functions.map = true,
+            "always" => functions.always = true,
+            "loop" => functions.loop_ = true,
+            "forever" => functions.forever = true,
+            other => {
+                // we don't know how to generate this function
+                let ident = Ident::from(other);
+                unknown.push(Loc::at(generated.region, ident));
+            }
+        }
+    }
+
+    (functions, unknown)
+}
+
 // TODO trim these down
 #[allow(clippy::too_many_arguments)]
-pub fn canonicalize_module_defs<'a, F>(
+pub fn canonicalize_module_defs<'a>(
     arena: &Bump,
     loc_defs: &'a [Loc<ast::Def<'a>>],
     header_for: &roc_parse::header::HeaderFor,
@@ -54,23 +79,39 @@ pub fn canonicalize_module_defs<'a, F>(
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &MutSet<Symbol>,
     var_store: &mut VarStore,
-    look_up_builtin: F,
-) -> Result<ModuleOutput, RuntimeError>
-where
-    F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
-{
+) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home, var_store);
     let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
-        scope.add_alias(name, alias.region, alias.type_variables, alias.typ);
+        scope.add_alias(
+            name,
+            alias.region,
+            alias.type_variables,
+            alias.typ,
+            alias.kind,
+        );
     }
 
-    let effect_symbol = if let HeaderFor::Hosted { generates, .. } = header_for {
-        // TODO extract effect name from the header
+    struct Hosted {
+        effect_symbol: Symbol,
+        generated_functions: HostedGeneratedFunctions,
+    }
+
+    let hosted_info = if let HeaderFor::Hosted {
+        generates,
+        generates_with,
+    } = header_for
+    {
         let name: &str = generates.into();
+        let (generated_functions, unknown_generated) = validate_generate_with(generates_with);
+
+        for unknown in unknown_generated {
+            env.problem(Problem::UnknownGeneratesWith(unknown));
+        }
+
         let effect_symbol = scope
             .introduce(
                 name.into(),
@@ -96,10 +137,14 @@ where
                 Region::zero(),
                 vec![Loc::at_zero(("a".into(), a_var))],
                 actual,
+                AliasKind::Structural,
             );
         }
 
-        Some(effect_symbol)
+        Some(Hosted {
+            effect_symbol,
+            generated_functions,
+        })
     } else {
         None
     };
@@ -246,7 +291,11 @@ where
         (Ok(mut declarations), output) => {
             use crate::def::Declaration::*;
 
-            if let Some(effect_symbol) = effect_symbol {
+            if let Some(Hosted {
+                effect_symbol,
+                generated_functions,
+            }) = hosted_info
+            {
                 let mut exposed_symbols = MutSet::default();
 
                 // NOTE this currently builds all functions, not just the ones that the user requested
@@ -257,6 +306,7 @@ where
                     var_store,
                     &mut exposed_symbols,
                     &mut declarations,
+                    generated_functions,
                 );
             }
 
@@ -277,7 +327,7 @@ where
                         // Temporary hack: we don't know exactly what symbols are hosted symbols,
                         // and which are meant to be normal definitions without a body. So for now
                         // we just assume they are hosted functions (meant to be provided by the platform)
-                        if let Some(effect_symbol) = effect_symbol {
+                        if let Some(Hosted { effect_symbol, .. }) = hosted_info {
                             macro_rules! make_hosted_def {
                                 () => {
                                     let symbol = def.pattern_vars.iter().next().unwrap().0;
@@ -358,7 +408,7 @@ where
 
             let mut aliases = MutMap::default();
 
-            if let Some(effect_symbol) = effect_symbol {
+            if let Some(Hosted { effect_symbol, .. }) = hosted_info {
                 // Remove this from exposed_symbols,
                 // so that at the end of the process,
                 // we can see if there were any
@@ -435,7 +485,7 @@ where
             for symbol in references.iter() {
                 if symbol.is_builtin() {
                     // this can fail when the symbol is for builtin types, or has no implementation yet
-                    if let Some(def) = look_up_builtin(*symbol, var_store) {
+                    if let Some(def) = crate::builtins::builtin_defs_map(*symbol, var_store) {
                         declarations.push(Declaration::Builtin(def));
                     }
                 }
@@ -493,6 +543,10 @@ fn fix_values_captured_in_closure_pattern(
         AppliedTag {
             arguments: loc_args,
             ..
+        }
+        | UnwrappedOpaque {
+            arguments: loc_args,
+            ..
         } => {
             for (_, loc_arg) in loc_args.iter_mut() {
                 fix_values_captured_in_closure_pattern(&mut loc_arg.value, no_capture_symbols);
@@ -521,7 +575,8 @@ fn fix_values_captured_in_closure_pattern(
         | Underscore
         | Shadowed(..)
         | MalformedPattern(_, _)
-        | UnsupportedPattern(_) => (),
+        | UnsupportedPattern(_)
+        | OpaqueNotInScope(..) => (),
     }
 }
 
@@ -643,7 +698,7 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
 
-        Tag { arguments, .. } | ZeroArgumentTag { arguments, .. } => {
+        Tag { arguments, .. } | ZeroArgumentTag { arguments, .. } | OpaqueRef { arguments, .. } => {
             for (_, loc_arg) in arguments.iter_mut() {
                 fix_values_captured_in_closure_expr(&mut loc_arg.value, no_capture_symbols);
             }
