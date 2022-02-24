@@ -366,6 +366,14 @@ mod cli_run {
             expected_ending:"55\n",
             use_valgrind: true,
         },
+        gui:"gui" => Example {
+            filename: "Hello.roc",
+            executable_filename: "hello-gui",
+            stdin: &[],
+            input_file: None,
+            expected_ending: "",
+            use_valgrind: false,
+        },
         quicksort:"quicksort" => Example {
             filename: "Quicksort.roc",
             executable_filename: "quicksort",
