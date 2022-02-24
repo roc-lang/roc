@@ -1,11 +1,12 @@
+use crate::graphics::colors::Rgba;
 use cgmath::Vector2;
 
 #[derive(Debug, Copy, Clone)]
 pub struct RectElt {
     pub rect: Rect,
-    pub color: (f32, f32, f32, f32),
+    pub color: Rgba,
     pub border_width: f32,
-    pub border_color: (f32, f32, f32, f32),
+    pub border_color: Rgba,
 }
 
 /// These fields are ordered this way because in Roc, the corresponding stuct is:

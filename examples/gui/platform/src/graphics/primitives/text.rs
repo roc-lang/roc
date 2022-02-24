@@ -4,8 +4,7 @@
 //
 // Thank you, Benjamin!
 
-use crate::graphics::colors;
-use crate::graphics::colors::RgbaTup;
+use crate::graphics::colors::Rgba;
 use crate::graphics::style::DEFAULT_FONT_SIZE;
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
@@ -18,7 +17,7 @@ use super::rect::Rect;
 pub struct Text<'a> {
     pub position: Vector2<f32>,
     pub area_bounds: Vector2<f32>,
-    pub color: RgbaTup,
+    pub color: Rgba,
     pub text: &'a str,
     pub size: f32,
     pub visible: bool,
@@ -30,7 +29,7 @@ impl<'a> Default for Text<'a> {
         Self {
             position: (0.0, 0.0).into(),
             area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
-            color: colors::WHITE,
+            color: Rgba::WHITE,
             text: "",
             size: DEFAULT_FONT_SIZE,
             visible: true,
@@ -44,7 +43,7 @@ pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>, font_size: f32)
     let code_text = Text {
         position: (0.0, 0.0).into(),
         area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
-        color: colors::WHITE,
+        color: Rgba::WHITE,
         text: "a",
         size: font_size,
         ..Default::default()
@@ -83,7 +82,7 @@ fn section_from_text<'a>(
     }
     .add_text(
         wgpu_glyph::Text::new(text.text)
-            .with_color(Vector4::from(text.color))
+            .with_color(text.color)
             .with_scale(text.size),
     )
 }

@@ -1,4 +1,4 @@
-use crate::graphics::colors::RgbaTup;
+use crate::graphics::colors::Rgba;
 use core::ffi::c_void;
 use core::mem::{self, ManuallyDrop};
 use roc_std::{RocList, RocStr};
@@ -94,10 +94,10 @@ pub struct RocRowOrCol {
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ButtonStyles {
-    pub bg_color: RgbaTup,
-    pub border_color: RgbaTup,
+    pub bg_color: Rgba,
+    pub border_color: Rgba,
     pub border_width: f32,
-    pub text_color: RgbaTup,
+    pub text_color: Rgba,
 }
 
 #[repr(C)]

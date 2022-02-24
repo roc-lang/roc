@@ -1,6 +1,6 @@
 use crate::{
     graphics::{
-        colors::{self, RgbaTup},
+        colors::Rgba,
         lowlevel::buffer::create_rect_buffers,
         lowlevel::{buffer::MAX_QUADS, ortho::update_ortho_buffer},
         lowlevel::{buffer::QUAD_INDICES, pipelines},
@@ -431,9 +431,9 @@ enum DrawableContent {
     /// the text, and making a Section is a convenient way to compute those bounds.
     Text(OwnedSection, Vector2<f32>),
     FillRect {
-        color: RgbaTup,
+        color: Rgba,
         border_width: f32,
-        border_color: RgbaTup,
+        border_color: Rgba,
     },
     Multi(Vec<Drawable>),
     Offset(Vec<(Vector2<f32>, Drawable)>),
@@ -453,7 +453,7 @@ fn process_drawable(
     // TODO iterate through drawables,
     // calculating a pos using offset,
     // calling draw and updating bounding boxes
-    let mut pos: Vector2<f32> = (0.0, 0.0).into();
+    let pos: Vector2<f32> = (0.0, 0.0).into();
 
     draw(
         drawable.bounds,
@@ -702,7 +702,7 @@ fn owned_section_from_str(
     layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
 ) -> OwnedSection {
     // TODO don't hardcode any of this!
-    let color /*: RgbaTup */ = colors::WHITE;
+    let color = Rgba::WHITE;
     let size: f32 = 40.0;
 
     OwnedSection {

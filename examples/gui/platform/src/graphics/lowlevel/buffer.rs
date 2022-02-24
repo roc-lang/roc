@@ -13,7 +13,7 @@
 use std::mem;
 
 use super::{quad::Quad, vertex::Vertex};
-use crate::graphics::{colors::to_slice, primitives::rect::RectElt};
+use crate::graphics::primitives::rect::RectElt;
 use wgpu::util::DeviceExt;
 
 pub struct RectBuffers {
@@ -89,8 +89,8 @@ pub fn to_quad(rect_elt: &RectElt) -> Quad {
         pos: rect_elt.rect.pos.into(),
         width: rect_elt.rect.width,
         height: rect_elt.rect.height,
-        color: to_slice(rect_elt.color),
-        border_color: to_slice(rect_elt.border_color),
+        color: (rect_elt.color.to_array()),
+        border_color: rect_elt.border_color.into(),
         border_width: rect_elt.border_width,
     }
 }
