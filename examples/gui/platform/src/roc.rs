@@ -1,8 +1,7 @@
 use crate::graphics::colors::RgbaTup;
-use crate::graphics::primitives::rect::Rect;
 use core::ffi::c_void;
 use core::mem::{self, ManuallyDrop};
-use roc_std::RocStr;
+use roc_std::{RocList, RocStr};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
@@ -87,6 +86,12 @@ pub struct RocButton {
 }
 
 #[repr(C)]
+pub struct RocRowOrCol {
+    pub children: RocList<RocElem>,
+    pub styles: ButtonStyles,
+}
+
+#[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ButtonStyles {
     pub bg_color: RgbaTup,
@@ -99,4 +104,5 @@ pub struct ButtonStyles {
 pub union RocElemEntry {
     pub button: ManuallyDrop<RocButton>,
     pub text: ManuallyDrop<RocStr>,
+    pub row_or_col: ManuallyDrop<RocRowOrCol>,
 }

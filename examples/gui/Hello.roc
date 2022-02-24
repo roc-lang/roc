@@ -12,4 +12,14 @@ render =
 
     styles = { bgColor: rgba 100 200 250 1, borderColor: rgba 10 20 30 1,  borderWidth : 10, textColor : rgba 220 220 250 1 }
 
-    Button (Text "Hello, World!") styles
+    Col
+        [
+            Row
+                [
+                    Button (Text "Corner     ") styles,
+                    Button (Text "Top Mid    ") { styles & bgColor: rgba 200 200 50 1 },
+                    Button (Text "Top Right  ") { styles & bgColor: rgba 50 50 250 1 }
+                ],
+            Button (Text "Mid Left   ") { styles & bgColor: rgba 150 100 200 1 },
+            Button (Text "Bottom Left") { styles & bgColor: rgba 250 50 50 1 }
+        ]

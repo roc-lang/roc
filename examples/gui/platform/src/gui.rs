@@ -232,20 +232,17 @@ fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
                 // );
 
                 // TODO use with_capacity based on some heuristic
-                let mut drawables = Vec::new();
-
-                add_drawable(
+                let (_bounds, drawable) = to_drawable(
                     &root,
                     Bounds {
                         width: size.width as f32,
                         height: size.height as f32,
                     },
-                    &mut drawables,
                     &mut glyph_brush,
                 );
 
-                process_drawables(
-                    drawables,
+                process_drawable(
+                    drawable,
                     &mut staging_belt,
                     &mut glyph_brush,
                     &mut cmd_encoder,
@@ -416,7 +413,7 @@ pub fn render(title: RocStr, root: RocElem) {
     run_event_loop(title.as_str(), root).expect("Error running event loop");
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 struct Bounds {
     width: f32,
     height: f32,
@@ -424,7 +421,6 @@ struct Bounds {
 
 #[derive(Clone, Debug)]
 struct Drawable {
-    offset: Vector2<f32>,
     bounds: Bounds,
     content: DrawableContent,
 }
@@ -433,18 +429,18 @@ struct Drawable {
 enum DrawableContent {
     /// This stores an actual Section because an earlier step needs to know the bounds of
     /// the text, and making a Section is a convenient way to compute those bounds.
-    Text(OwnedSection),
+    Text(OwnedSection, Vector2<f32>),
     FillRect {
         color: RgbaTup,
         border_width: f32,
         border_color: RgbaTup,
     },
-    // Row(Vec<(Vector2<f32>, Drawable)>),
-    // Col(Vec<(Vector2<f32>, Drawable)>),
+    Multi(Vec<Drawable>),
+    Offset(Vec<(Vector2<f32>, Drawable)>),
 }
 
-fn process_drawables(
-    drawables: Vec<Drawable>,
+fn process_drawable(
+    drawable: Drawable,
     staging_belt: &mut wgpu::util::StagingBelt,
     glyph_brush: &mut GlyphBrush<()>,
     cmd_encoder: &mut CommandEncoder,
@@ -456,27 +452,22 @@ fn process_drawables(
 ) {
     // TODO iterate through drawables,
     // calculating a pos using offset,
-    // calling draw and updating boiunding boxes
-    let pos: Vector2<f32> = (0.0, 0.0).into();
+    // calling draw and updating bounding boxes
+    let mut pos: Vector2<f32> = (0.0, 0.0).into();
 
-    // Draw these in reverse order, since when traversing the tree, we added them in the
-    // opposite order from how they should be rendered. (If we didn't reverse here, then
-    // for example we would draw children and then their parents, which wouldn't go well.)
-    for drawable in drawables.into_iter().rev() {
-        draw(
-            drawable.bounds,
-            drawable.content,
-            pos + drawable.offset,
-            staging_belt,
-            glyph_brush,
-            cmd_encoder,
-            texture_view,
-            gpu_device,
-            rect_resources,
-            load_op,
-            texture_size,
-        );
-    }
+    draw(
+        drawable.bounds,
+        drawable.content,
+        pos,
+        staging_belt,
+        glyph_brush,
+        cmd_encoder,
+        texture_view,
+        gpu_device,
+        rect_resources,
+        load_op,
+        texture_size,
+    );
 }
 
 fn draw(
@@ -495,8 +486,8 @@ fn draw(
     use DrawableContent::*;
 
     match content {
-        Text(section) => {
-            glyph_brush.queue(section.with_screen_position(pos).to_borrowed());
+        Text(section, offset) => {
+            glyph_brush.queue(section.with_screen_position(pos + offset).to_borrowed());
 
             glyph_brush
                 .draw_queued(
@@ -536,37 +527,74 @@ fn draw(
                 load_op,
             );
         }
+        Offset(children) => {
+            for (offset, child) in children.into_iter() {
+                draw(
+                    child.bounds,
+                    child.content,
+                    pos + offset,
+                    staging_belt,
+                    glyph_brush,
+                    cmd_encoder,
+                    texture_view,
+                    gpu_device,
+                    rect_resources,
+                    load_op,
+                    texture_size,
+                );
+            }
+        }
+        Multi(children) => {
+            for child in children.into_iter() {
+                draw(
+                    child.bounds,
+                    child.content,
+                    pos,
+                    staging_belt,
+                    glyph_brush,
+                    cmd_encoder,
+                    texture_view,
+                    gpu_device,
+                    rect_resources,
+                    load_op,
+                    texture_size,
+                );
+            }
+        }
     }
 }
 
-fn add_drawable(
+fn to_drawable(
     elem: &RocElem,
     bounds: Bounds,
-    drawables: &mut Vec<Drawable>,
     glyph_brush: &mut GlyphBrush<()>,
-) -> Bounds {
+) -> (Bounds, Drawable) {
     use RocElemTag::*;
 
     match elem.tag() {
         Button => {
             let button = unsafe { &elem.entry().button };
             let styles = button.styles;
-            let child_bounds = add_drawable(&*button.child, bounds, drawables, glyph_brush);
+            let (child_bounds, child_drawable) = to_drawable(&*button.child, bounds, glyph_brush);
 
-            drawables.push(Drawable {
+            let button_drawable = Drawable {
                 bounds: child_bounds,
-                offset: (0.0, 0.0).into(),
-                // TODO let buttons specify this
                 content: DrawableContent::FillRect {
                     color: styles.bg_color,
                     border_width: styles.border_width,
                     border_color: styles.border_color,
                 },
-            });
+            };
 
-            child_bounds
+            let drawable = Drawable {
+                bounds: child_bounds,
+                content: DrawableContent::Multi(vec![button_drawable, child_drawable]),
+            };
+
+            (child_bounds, drawable)
         }
         Text => {
+            // TODO let text color and font settings inherit from parent
             let text = unsafe { &elem.entry().text };
             let is_centered = true; // TODO don't hardcode this
             let layout = wgpu_glyph::Layout::default().h_align(if is_centered {
@@ -600,19 +628,70 @@ fn add_drawable(
                 }
             }
 
-            drawables.push(Drawable {
+            let drawable = Drawable {
                 bounds: text_bounds,
-                offset,
-                content: DrawableContent::Text(section),
-            });
+                content: DrawableContent::Text(section, offset),
+            };
 
-            text_bounds
+            (text_bounds, drawable)
         }
         Row => {
-            todo!("Row");
+            let row = unsafe { &elem.entry().row_or_col };
+            let mut final_bounds = Bounds::default();
+            let mut offset: Vector2<f32> = (0.0, 0.0).into();
+            let mut offset_entries = Vec::with_capacity(row.children.len());
+
+            for child in row.children.as_slice().iter() {
+                let (child_bounds, child_drawable) = to_drawable(&child, bounds, glyph_brush);
+
+                offset_entries.push((offset, child_drawable));
+
+                // Make sure the final height is enough to fit this child
+                final_bounds.height = final_bounds.height.max(child_bounds.height);
+
+                // Add the child's width to the final width
+                final_bounds.width = final_bounds.width + child_bounds.width;
+
+                // Offset the next child to make sure it appears after this one.
+                offset.x += child_bounds.width;
+            }
+
+            (
+                final_bounds,
+                Drawable {
+                    bounds: final_bounds,
+                    content: DrawableContent::Offset(offset_entries),
+                },
+            )
         }
         Col => {
-            todo!("Col");
+            let col = unsafe { &elem.entry().row_or_col };
+            let mut final_bounds = Bounds::default();
+            let mut offset: Vector2<f32> = (0.0, 0.0).into();
+            let mut offset_entries = Vec::with_capacity(col.children.len());
+
+            for child in col.children.as_slice().iter() {
+                let (child_bounds, child_drawable) = to_drawable(&child, bounds, glyph_brush);
+
+                offset_entries.push((offset, child_drawable));
+
+                // Make sure the final width is enough to fit this child
+                final_bounds.width = final_bounds.width.max(child_bounds.width);
+
+                // Add the child's height to the final height
+                final_bounds.height = final_bounds.height + child_bounds.height;
+
+                // Offset the next child to make sure it appears after this one.
+                offset.y += child_bounds.height;
+            }
+
+            (
+                final_bounds,
+                Drawable {
+                    bounds: final_bounds,
+                    content: DrawableContent::Offset(offset_entries),
+                },
+            )
         }
     }
 }
@@ -622,9 +701,7 @@ fn owned_section_from_str(
     bounds: Bounds,
     layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
 ) -> OwnedSection {
-    let is_centered = false;
     // TODO don't hardcode any of this!
-    let area_bounds: Vector2<f32> = Vector2::new(200.0, 300.0);
     let color /*: RgbaTup */ = colors::WHITE;
     let size: f32 = 40.0;
 

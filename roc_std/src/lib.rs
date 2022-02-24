@@ -211,6 +211,10 @@ impl<T> RocList<T> {
         unsafe { core::slice::from_raw_parts(self.elements, self.length) }
     }
 
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        unsafe { core::slice::from_raw_parts_mut(self.elements, self.length) }
+    }
+
     /// Copy the contents of the given slice into the end of this list,
     /// reallocating and resizing as necessary.
     pub fn append_slice(&mut self, slice: &[T]) {
