@@ -115,12 +115,11 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
     let stdin = io::stdin();
     let line1 = stdin.lock().lines().next().unwrap().unwrap();
 
-    RocStr::from_slice(line1.as_bytes())
+    RocStr::from(line1.as_str())
 }
 
 #[no_mangle]
 pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) {
-    let bytes = line.as_slice();
-    let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+    let string = line.as_str();
     println!("{}", string);
 }

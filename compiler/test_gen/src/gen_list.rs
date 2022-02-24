@@ -453,10 +453,7 @@ fn list_drop_if_string_eq() {
              List.dropIf ["x", "y", "x"] (\s -> s == "y")
              "#
         ),
-        RocList::from_slice(&[
-            RocStr::from_slice("x".as_bytes()),
-            RocStr::from_slice("x".as_bytes())
-        ]),
+        RocList::from_slice(&[RocStr::from("x"), RocStr::from("x")]),
         RocList<RocStr>
     );
 }
@@ -621,7 +618,7 @@ fn list_prepend() {
                 List.prepend init "bar"
             "#
         ),
-        RocList::from_slice(&[RocStr::from_slice(b"bar"), RocStr::from_slice(b"foo"),]),
+        RocList::from_slice(&[RocStr::from("bar"), RocStr::from("foo"),]),
         RocList<RocStr>
     );
 }
@@ -874,10 +871,7 @@ fn list_keep_if_str_is_hello() {
              List.keepIf ["x", "y", "x"] (\x -> x == "x")
              "#
         ),
-        RocList::from_slice(&[
-            RocStr::from_slice("x".as_bytes()),
-            RocStr::from_slice("x".as_bytes())
-        ]),
+        RocList::from_slice(&[RocStr::from("x"), RocStr::from("x")]),
         RocList<RocStr>
     );
 }
@@ -1060,7 +1054,7 @@ fn list_map4_different_length() {
                 (\a, b, c, d -> Str.concat a (Str.concat b (Str.concat c d)))
             "#
         ),
-        RocList::from_slice(&[RocStr::from_slice("hola".as_bytes()),]),
+        RocList::from_slice(&[RocStr::from("hola"),]),
         RocList<RocStr>
     );
 }
@@ -1092,7 +1086,7 @@ fn list_map3_different_length() {
                 (\a, b, c -> Str.concat a (Str.concat b c))
             "#
         ),
-        RocList::from_slice(&[RocStr::from_slice("abc".as_bytes()),]),
+        RocList::from_slice(&[RocStr::from("abc"),]),
         RocList<RocStr>
     );
 }
@@ -1124,7 +1118,7 @@ fn list_map2_different_lengths() {
                 (\a, b -> Str.concat a b)
             "#
         ),
-        RocList::from_slice(&[RocStr::from_slice("ab".as_bytes()),]),
+        RocList::from_slice(&[RocStr::from("ab"),]),
         RocList<RocStr>
     );
 }
@@ -2552,7 +2546,7 @@ fn empty_list_of_function_type() {
                 Err _ -> "bad!"
             "#
         ),
-        RocStr::from_slice(b"bar"),
+        RocStr::from("bar"),
         RocStr
     );
 }
@@ -2567,11 +2561,11 @@ fn list_join_map() {
             "#
         ),
         RocList::from_slice(&[
-            RocStr::from_slice("guava".as_bytes()),
-            RocStr::from_slice("apple".as_bytes()),
-            RocStr::from_slice("pear".as_bytes()),
-            RocStr::from_slice("bailey".as_bytes()),
-            RocStr::from_slice("cyrus".as_bytes()),
+            RocStr::from("guava"),
+            RocStr::from("apple"),
+            RocStr::from("pear"),
+            RocStr::from("bailey"),
+            RocStr::from("cyrus"),
         ]),
         RocList<RocStr>
     )
@@ -2602,7 +2596,7 @@ fn list_find() {
                 Err _ -> "not found"
             "#
         ),
-        RocStr::from_slice(b"bc"),
+        RocStr::from("bc"),
         RocStr
     );
 }
@@ -2618,7 +2612,7 @@ fn list_find_not_found() {
                 Err _ -> "not found"
             "#
         ),
-        RocStr::from_slice(b"not found"),
+        RocStr::from("not found"),
         RocStr
     );
 }
@@ -2634,7 +2628,7 @@ fn list_find_empty_typed_list() {
                 Err _ -> "not found"
             "#
         ),
-        RocStr::from_slice(b"not found"),
+        RocStr::from("not found"),
         RocStr
     );
 }
