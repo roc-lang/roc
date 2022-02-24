@@ -80,7 +80,6 @@ fn constrain_untyped_args(
             loc_pattern.region,
             pattern_expected,
             &mut pattern_state,
-            true,
         );
 
         vars.push(*pattern_var);
@@ -1039,7 +1038,6 @@ fn constrain_when_branch(
             loc_pattern.region,
             pattern_expected.clone(),
             &mut state,
-            true,
         );
     }
 
@@ -1143,7 +1141,6 @@ fn constrain_def_pattern(env: &Env, loc_pattern: &Loc<Pattern>, expr_type: Type)
         loc_pattern.region,
         pattern_expected,
         &mut state,
-        true,
     );
 
     state
@@ -1264,7 +1261,6 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 loc_pattern.region,
                                 pattern_expected,
                                 &mut state,
-                                false,
                             );
                         }
 
@@ -1632,7 +1628,6 @@ pub fn rec_defs_help(
                                     loc_pattern.region,
                                     pattern_expected,
                                     &mut state,
-                                    false,
                                 );
                             }
 
