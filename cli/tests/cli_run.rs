@@ -887,7 +887,10 @@ mod cli_run {
 
     #[test]
     fn format_check_folders() {
+        // This fails, because "NotFormatted.roc" is present in this folder
         check_format_check_as_expected(&fixtures_dir("format"), false);
+
+        // This doesn't fail, since only "Formatted.roc" is present in this folder
         check_format_check_as_expected(&fixtures_dir("format/formatted_directory"), true);
     }
 }
