@@ -5,8 +5,9 @@ pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_load::file::{LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
+use roc_region::all::LineInfo;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use roc_collections::all::MutMap;
 #[cfg(feature = "target-wasm32")]
@@ -30,7 +31,6 @@ const LLVM_VERSION: &str = "12";
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> usize {
     report_problems_help(
         loaded.total_problems(),
-        &loaded.header_sources,
         &loaded.sources,
         &loaded.interns,
         &mut loaded.can_problems,
@@ -42,7 +42,6 @@ pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> usize 
 pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> usize {
     report_problems_help(
         loaded.total_problems(),
-        &loaded.header_sources,
         &loaded.sources,
         &loaded.interns,
         &mut loaded.can_problems,
@@ -53,7 +52,6 @@ pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> usize {
 
 fn report_problems_help(
     total_problems: usize,
-    header_sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
     sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
     interns: &Interns,
     can_problems: &mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
@@ -74,12 +72,9 @@ fn report_problems_help(
     for (home, (module_path, src)) in sources.iter() {
         let mut src_lines: Vec<&str> = Vec::new();
 
-        if let Some((_, header_src)) = header_sources.get(home) {
-            src_lines.extend(header_src.split('\n'));
-            src_lines.extend(src.split('\n').skip(1));
-        } else {
-            src_lines.extend(src.split('\n'));
-        }
+        src_lines.extend(src.split('\n'));
+
+        let lines = LineInfo::new(&src_lines.join("\n"));
 
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, *home, interns);
@@ -87,7 +82,7 @@ fn report_problems_help(
         let problems = can_problems.remove(home).unwrap_or_default();
 
         for problem in problems.into_iter() {
-            let report = can_problem(&alloc, module_path.clone(), problem);
+            let report = can_problem(&alloc, &lines, module_path.clone(), problem);
             let severity = report.severity;
             let mut buf = String::new();
 
@@ -106,7 +101,7 @@ fn report_problems_help(
         let problems = type_problems.remove(home).unwrap_or_default();
 
         for problem in problems {
-            if let Some(report) = type_problem(&alloc, module_path.clone(), problem) {
+            if let Some(report) = type_problem(&alloc, &lines, module_path.clone(), problem) {
                 let severity = report.severity;
                 let mut buf = String::new();
 
@@ -126,7 +121,7 @@ fn report_problems_help(
         let problems = mono_problems.remove(home).unwrap_or_default();
 
         for problem in problems {
-            let report = mono_problem(&alloc, module_path.clone(), problem);
+            let report = mono_problem(&alloc, &lines, module_path.clone(), problem);
             let severity = report.severity;
             let mut buf = String::new();
 
@@ -235,12 +230,11 @@ pub fn gen_from_mono_module_llvm(
     use inkwell::context::Context;
     use inkwell::module::Linkage;
     use inkwell::targets::{CodeModel, FileType, RelocMode};
-    use std::time::SystemTime;
 
     let code_gen_start = SystemTime::now();
 
     // Generate the binary
-    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+    let target_info = roc_target::TargetInfo::from(target);
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(target, &context, "app"));
 
@@ -291,11 +285,11 @@ pub fn gen_from_mono_module_llvm(
         context: &context,
         interns: loaded.interns,
         module,
-        ptr_bytes,
+        target_info,
         // in gen_tests, the compiler provides roc_panic
         // and sets up the setjump/longjump exception handling
         is_gen_test: false,
-        exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
+        exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
     };
 
     roc_gen_llvm::llvm::build::build_procedures(
@@ -491,29 +485,51 @@ fn gen_from_mono_module_dev_wasm32(
     loaded: MonomorphizedModule,
     app_o_file: &Path,
 ) -> CodeGenTiming {
-    let mut procedures = MutMap::default();
-
-    for (key, proc) in loaded.procedures {
-        procedures.insert(key, proc);
-    }
+    let code_gen_start = SystemTime::now();
+    let MonomorphizedModule {
+        module_id,
+        procedures,
+        mut interns,
+        ..
+    } = loaded;
 
     let exposed_to_host = loaded
         .exposed_to_host
+        .values
         .keys()
         .copied()
         .collect::<MutSet<_>>();
 
     let env = roc_gen_wasm::Env {
         arena,
-        interns: loaded.interns,
+        module_id,
         exposed_to_host,
     };
 
-    let bytes = roc_gen_wasm::build_module(&env, procedures).unwrap();
+    let platform_and_builtins_object_file_bytes: &[u8] = if true {
+        todo!("The WebAssembly dev backend is a work in progress. Coming soon!")
+    } else {
+        &[] // This `if` gets rid of "unreachable code" warnings. When we're ready to use it, we'll notice!
+    };
+
+    let bytes = roc_gen_wasm::build_module(
+        &env,
+        &mut interns,
+        platform_and_builtins_object_file_bytes,
+        procedures,
+    );
+
+    let code_gen = code_gen_start.elapsed().unwrap();
+    let emit_o_file_start = SystemTime::now();
 
     std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
 
-    CodeGenTiming::default()
+    let emit_o_file = emit_o_file_start.elapsed().unwrap();
+
+    CodeGenTiming {
+        code_gen,
+        emit_o_file,
+    }
 }
 
 fn gen_from_mono_module_dev_assembly(
@@ -522,23 +538,41 @@ fn gen_from_mono_module_dev_assembly(
     target: &target_lexicon::Triple,
     app_o_file: &Path,
 ) -> CodeGenTiming {
+    let code_gen_start = SystemTime::now();
+
     let lazy_literals = true;
     let generate_allocators = false; // provided by the platform
 
+    let MonomorphizedModule {
+        module_id,
+        procedures,
+        mut interns,
+        exposed_to_host,
+        ..
+    } = loaded;
+
     let env = roc_gen_dev::Env {
         arena,
-        interns: loaded.interns,
-        exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
+        module_id,
+        exposed_to_host: exposed_to_host.values.keys().copied().collect(),
         lazy_literals,
         generate_allocators,
     };
 
-    let module_object = roc_gen_dev::build_module(&env, target, loaded.procedures);
+    let module_object = roc_gen_dev::build_module(&env, &mut interns, target, procedures);
+
+    let code_gen = code_gen_start.elapsed().unwrap();
+    let emit_o_file_start = SystemTime::now();
 
     let module_out = module_object
         .write()
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
-    CodeGenTiming::default()
+    let emit_o_file = emit_o_file_start.elapsed().unwrap();
+
+    CodeGenTiming {
+        code_gen,
+        emit_o_file,
+    }
 }

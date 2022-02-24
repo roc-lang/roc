@@ -1,9 +1,10 @@
 use roc_can::constraint::Constraint::{self, *};
+use roc_can::constraint::PresenceConstraint;
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
     AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
@@ -11,7 +12,7 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory};
-use roc_unify::unify::{unify, Unified::*};
+use roc_unify::unify::{unify, Mode, Unified::*};
 use std::collections::hash_map::Entry;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
@@ -205,7 +206,7 @@ fn solve(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected) {
+            match unify(subs, actual, expected, Mode::EQ) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -240,7 +241,7 @@ fn solve(
             let actual = type_to_var(subs, rank, pools, cached_aliases, source);
             let target = *target;
 
-            match unify(subs, actual, target) {
+            match unify(subs, actual, target, Mode::EQ) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -253,7 +254,7 @@ fn solve(
 
                     state
                 }
-                BadType(vars, _problem) => {
+                BadType(vars, _) => {
                     introduce(subs, rank, pools, &vars);
 
                     // ERROR NOT REPORTED
@@ -294,7 +295,7 @@ fn solve(
                         cached_aliases,
                         expectation.get_type_ref(),
                     );
-                    match unify(subs, actual, expected) {
+                    match unify(subs, actual, expected, Mode::EQ) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);
 
@@ -349,7 +350,8 @@ fn solve(
 
             state
         }
-        Pattern(region, category, typ, expectation) => {
+        Pattern(region, category, typ, expectation)
+        | Present(typ, PresenceConstraint::Pattern(region, category, expectation)) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
             let expected = type_to_var(
                 subs,
@@ -359,7 +361,12 @@ fn solve(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected) {
+            let mode = match constraint {
+                Present(_, _) => Mode::PRESENT,
+                _ => Mode::EQ,
+            };
+
+            match unify(subs, actual, expected, mode) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -426,7 +433,7 @@ fn solve(
 
                         local_def_vars.push((
                             *symbol,
-                            Located {
+                            Loc {
                                 value: var,
                                 region: loc_type.region,
                             },
@@ -506,7 +513,7 @@ fn solve(
 
                         local_def_vars.push((
                             *symbol,
-                            Located {
+                            Loc {
                                 value: var,
                                 region: loc_type.region,
                             },
@@ -622,6 +629,66 @@ fn solve(
                 }
             }
         }
+        Present(typ, PresenceConstraint::IsOpen) => {
+            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+            let mut new_desc = subs.get(actual);
+            match new_desc.content {
+                Content::Structure(FlatType::TagUnion(tags, _)) => {
+                    let new_ext = subs.fresh_unnamed_flex_var();
+                    let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
+                    new_desc.content = new_union;
+                    subs.set(actual, new_desc);
+                    state
+                }
+                _ => {
+                    // Today, an "open" constraint doesn't affect any types
+                    // other than tag unions. Recursive tag unions are constructed
+                    // at a later time (during occurs checks after tag unions are
+                    // resolved), so that's not handled here either.
+                    // NB: Handle record types here if we add presence constraints
+                    // to their type inference as well.
+                    state
+                }
+            }
+        }
+        Present(typ, PresenceConstraint::IncludesTag(tag_name, tys)) => {
+            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+            let tag_ty = Type::TagUnion(
+                vec![(tag_name.clone(), tys.clone())],
+                Box::new(Type::EmptyTagUnion),
+            );
+            let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
+
+            match unify(subs, actual, includes, Mode::PRESENT) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    state
+                }
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    // TODO: do we need a better error type here?
+                    let problem = TypeError::BadExpr(
+                        Region::zero(),
+                        Category::When,
+                        actual_type,
+                        Expected::NoExpectation(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
+                BadType(vars, problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::BadType(problem));
+
+                    state
+                }
+            }
+        }
     }
 }
 
@@ -704,7 +771,14 @@ fn type_to_variable<'a>(
 
     match typ {
         Variable(var) => *var,
-        Apply(symbol, arguments) => {
+        RangedNumber(typ, vars) => {
+            let ty_var = type_to_variable(subs, rank, pools, arena, typ);
+            let vars = VariableSubsSlice::insert_into_subs(subs, vars.iter().copied());
+            let content = Content::RangedNumber(ty_var, vars);
+
+            register(subs, rank, pools, content)
+        }
+        Apply(symbol, arguments, _) => {
             let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
             for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
                 let var = type_to_variable(subs, rank, pools, arena, var_index);
@@ -764,7 +838,8 @@ fn type_to_variable<'a>(
             let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
 
             let (it, new_ext_var) =
-                gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var);
+                gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var)
+                    .expect("Something ended up weird in this record type");
 
             let it = it
                 .into_iter()
@@ -820,8 +895,11 @@ fn type_to_variable<'a>(
 
             let tag_union_var = register(subs, rank, pools, content);
 
-            subs.set_content(
+            register_with_known_var(
+                subs,
                 *rec_var,
+                rank,
+                pools,
                 Content::RecursionVar {
                     opt_name: None,
                     structure: tag_union_var,
@@ -836,26 +914,16 @@ fn type_to_variable<'a>(
             type_arguments,
             actual,
             lambda_set_variables,
+            // TODO(opaques): revisit kind
+            kind: _,
         } => {
-            // the rank of these variables is NONE (encoded as 0 in practice)
-            // using them for other ranks causes issues
-            if rank.is_none() {
-                // TODO replace by arithmetic?
-                match *symbol {
-                    Symbol::NUM_I128 => return Variable::I128,
-                    Symbol::NUM_I64 => return Variable::I64,
-                    Symbol::NUM_I32 => return Variable::I32,
-                    Symbol::NUM_I16 => return Variable::I16,
-                    Symbol::NUM_I8 => return Variable::I8,
-
-                    Symbol::NUM_U128 => return Variable::U128,
-                    Symbol::NUM_U64 => return Variable::U64,
-                    Symbol::NUM_U32 => return Variable::U32,
-                    Symbol::NUM_U16 => return Variable::U16,
-                    Symbol::NUM_U8 => return Variable::U8,
-
-                    Symbol::NUM_NAT => return Variable::NAT,
-                    _ => {}
+            if let Some(reserved) = Variable::get_reserved(*symbol) {
+                if rank.is_none() {
+                    // reserved variables are stored with rank NONE
+                    return reserved;
+                } else {
+                    // for any other rank, we need to copy; it takes care of adjusting the rank
+                    return deep_copy_var(subs, rank, pools, reserved);
                 }
             }
 
@@ -868,7 +936,11 @@ fn type_to_variable<'a>(
                 lambda_set_variables,
             );
 
-            let alias_variable = type_to_variable(subs, rank, pools, arena, actual);
+            let alias_variable = if let Symbol::RESULT_RESULT = *symbol {
+                roc_result_to_var(subs, rank, pools, arena, actual)
+            } else {
+                type_to_variable(subs, rank, pools, arena, actual)
+            };
             let content = Content::Alias(*symbol, alias_variables, alias_variable);
 
             register(subs, rank, pools, content)
@@ -938,6 +1010,52 @@ fn alias_to_var<'a>(
         variables_start: new_variables.start,
         type_variables_len: type_arguments.len() as _,
         all_variables_len: length as _,
+    }
+}
+
+fn roc_result_to_var<'a>(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    arena: &'a bumpalo::Bump,
+    result_type: &Type,
+) -> Variable {
+    match result_type {
+        Type::TagUnion(tags, ext) => {
+            debug_assert!(ext.is_empty_tag_union());
+            debug_assert!(tags.len() == 2);
+
+            if let [(err, err_args), (ok, ok_args)] = &tags[..] {
+                debug_assert_eq!(err, &subs.tag_names[0]);
+                debug_assert_eq!(ok, &subs.tag_names[1]);
+
+                if let ([err_type], [ok_type]) = (err_args.as_slice(), ok_args.as_slice()) {
+                    let err_var = type_to_variable(subs, rank, pools, arena, err_type);
+                    let ok_var = type_to_variable(subs, rank, pools, arena, ok_type);
+
+                    let start = subs.variables.len() as u32;
+                    let err_slice = SubsSlice::new(start, 1);
+                    let ok_slice = SubsSlice::new(start + 1, 1);
+
+                    subs.variables.push(err_var);
+                    subs.variables.push(ok_var);
+
+                    let variables = SubsSlice::new(subs.variable_slices.len() as _, 2);
+                    subs.variable_slices.push(err_slice);
+                    subs.variable_slices.push(ok_slice);
+
+                    let union_tags = UnionTags::from_slices(Subs::RESULT_TAG_NAMES, variables);
+                    let ext = Variable::EMPTY_TAG_UNION;
+
+                    let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
+
+                    return register(subs, rank, pools, content);
+                }
+            }
+
+            unreachable!("invalid arguments to Result.Result; canonicalization should catch this!")
+        }
+        _ => unreachable!("not a valid type inside a Result.Result alias"),
     }
 }
 
@@ -1183,50 +1301,17 @@ fn check_for_infinite_type(
     subs: &mut Subs,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
-    loc_var: Located<Variable>,
+    loc_var: Loc<Variable>,
 ) {
     let var = loc_var.value;
 
     while let Err((recursive, _chain)) = subs.occurs(var) {
         let description = subs.get(recursive);
-        let content = description.content;
 
         // try to make a tag union recursive, see if that helps
-        match content {
+        match description.content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                let rec_var = subs.fresh_unnamed_flex_var();
-                subs.set_rank(rec_var, description.rank);
-                subs.set_content(
-                    rec_var,
-                    Content::RecursionVar {
-                        opt_name: None,
-                        structure: recursive,
-                    },
-                );
-
-                let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-
-                let it = new_variable_slices.indices().zip(tags.iter_all());
-                for (variable_slice_index, (_, slice_index)) in it {
-                    let slice = subs[slice_index];
-
-                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
-                    for (target_index, var_index) in new_variables.indices().zip(slice) {
-                        let var = subs[var_index];
-                        subs.variables[target_index] =
-                            subs.explicit_substitute(recursive, rec_var, var);
-                    }
-
-                    subs.variable_slices[variable_slice_index] = new_variables;
-                }
-
-                let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
-
-                let new_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
-
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
-
-                subs.set_content(recursive, Content::Structure(flat_type));
+                subs.mark_tag_union_recursive(recursive, tags, ext_var);
             }
 
             _other => circular_error(subs, problems, symbol, &loc_var),
@@ -1238,7 +1323,7 @@ fn circular_error(
     subs: &mut Subs,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
-    loc_var: &Located<Variable>,
+    loc_var: &Loc<Variable>,
 ) {
     let var = loc_var.value;
     let (error_type, _) = subs.var_to_error_type(var);
@@ -1431,6 +1516,24 @@ fn adjust_rank_content(
 
                 TagUnion(tags, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    // For performance reasons, we only keep one representation of empty tag unions
+                    // in subs. That representation exists at rank 0, which we don't always want to
+                    // reflect the whole tag union as, because doing so may over-generalize free
+                    // type variables.
+                    // Normally this is not a problem because of the loop below that maximizes the
+                    // rank from nested types in the union. But suppose we have the simple tag
+                    // union
+                    //   [ Z ]{}
+                    // there are no nested types in the tags, and the empty tag union is at rank 0,
+                    // so we promote the tag union to rank 0. Now if we introduce the presence
+                    // constraint
+                    //   [ Z ]{} += [ S a ]
+                    // we'll wind up with [ Z, S a ]{}, but it will be at rank 0, and "a" will get
+                    // over-generalized. Really, the empty tag union should be introduced at
+                    // whatever current group rank we're at, and so that's how we encode it here.
+                    if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_none() {
+                        rank = group_rank;
+                    }
 
                     for (_, index) in tags.iter_all() {
                         let slice = subs[index];
@@ -1500,6 +1603,8 @@ fn adjust_rank_content(
 
             rank
         }
+
+        RangedNumber(typ, _) => adjust_rank(subs, young_mark, visit_mark, group_rank, *typ),
     }
 }
 
@@ -1634,6 +1739,11 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                 stack.extend(var_slice!(args.variables()));
 
                 stack.push(var);
+            }
+            &RangedNumber(typ, vars) => {
+                stack.push(typ);
+
+                stack.extend(var_slice!(vars));
             }
         }
     }
@@ -1891,6 +2001,23 @@ fn deep_copy_var_help(
 
             copy
         }
+
+        RangedNumber(typ, range_vars) => {
+            let new_type_var = deep_copy_var_help(subs, max_rank, pools, visited, typ);
+
+            let new_vars = SubsSlice::reserve_into_subs(subs, range_vars.len());
+            for (target_index, var_index) in (new_vars.indices()).zip(range_vars) {
+                let var = subs[var_index];
+                let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
+                subs.variables[target_index] = copy_var;
+            }
+
+            let new_content = RangedNumber(new_type_var, new_vars);
+
+            subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
     }
 }
 
@@ -1907,4 +2034,23 @@ fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) ->
     pools.get_mut(rank).push(var);
 
     var
+}
+
+fn register_with_known_var(
+    subs: &mut Subs,
+    var: Variable,
+    rank: Rank,
+    pools: &mut Pools,
+    content: Content,
+) {
+    let descriptor = Descriptor {
+        content,
+        rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
+
+    subs.set(var, descriptor);
+
+    pools.get_mut(rank).push(var);
 }

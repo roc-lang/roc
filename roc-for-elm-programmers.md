@@ -319,7 +319,7 @@ table = \{ height, width, title ? "", description ? "" } ->
 This says that `table` takes a record with two *required* fields (`height` and
 `width` and two *optional* fields (`title` and `description`). It also says that
 the `height` and `width` fields have the type `Pixels` (a type alias for some
-numeric type), whereas the `title` and `description` fields have the type `Str.`
+numeric type), whereas the `title` and `description` fields have the type `Str`.
 This means you can choose to omit `title`, `description`, or both, when calling
 the function...but if you provide them, they must have the type `Str`.
 
@@ -708,7 +708,7 @@ because `@` tags are not allowed in the exposing list. Only code written in this
 `Username` module can instantiate a `@Username` value.
 
 > If I were to write `@Username` inside another module (e.g. `Main`), it would compile,
-> but that `@Username` would be type-incompatible with one created inside the `Username` module.
+> but that `@Username` would be type-incompatible with the one created inside the `Username` module.
 > Even trying to use `==` on them would be a type mismatch, because I would be comparing
 > a `[ Username.@Username Str ]*` with a `[ Main.@Username Str ]*`, which are incompatible.
 
@@ -1267,7 +1267,7 @@ So Roc does not use `number`, but rather uses `Num` - which works more like `Lis
 Either way, you get `+` being able to work on both integers and floats!
 
 Separately, there's also `Int a`, which is a type alias for `Num (Integer a)`,
-and `Float a`, which is a type alias for `Num (Float a)`. These allow functions
+and `Float a`, which is a type alias for `Num (FloatingPoint a)`. These allow functions
 that can work on any integer or any float. For example,
 `Num.bitwiseAnd : Int a, Int a -> Int a`.
 

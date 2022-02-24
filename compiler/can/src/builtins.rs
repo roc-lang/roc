@@ -1,13 +1,14 @@
 use crate::def::Def;
-use crate::expr::{ClosureData, Expr::*};
-use crate::expr::{Expr, Field, Recursive, WhenBranch};
+use crate::expr::{self, ClosureData, Expr::*, IntValue};
+use crate::expr::{Expr, Field, Recursive};
+use crate::num::{FloatBound, IntBound, IntWidth, NumericBound};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 
 macro_rules! macro_magic {
@@ -44,6 +45,23 @@ macro_rules! macro_magic {
 /// delegates to the compiler-internal List.getUnsafe function to do the actual
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
+
+/// Does a builtin depend on any other builtins?
+///
+/// NOTE: you are supposed to give all symbols that are relied on,
+/// even those that are relied on transitively!
+pub fn builtin_dependencies(symbol: Symbol) -> &'static [Symbol] {
+    match symbol {
+        Symbol::LIST_SORT_ASC => &[Symbol::LIST_SORT_WITH, Symbol::NUM_COMPARE],
+        Symbol::LIST_SORT_DESC => &[Symbol::LIST_SORT_WITH],
+        Symbol::LIST_PRODUCT => &[Symbol::LIST_WALK, Symbol::NUM_MUL],
+        Symbol::LIST_SUM => &[Symbol::LIST_WALK, Symbol::NUM_ADD],
+        Symbol::LIST_JOIN_MAP => &[Symbol::LIST_WALK, Symbol::LIST_CONCAT],
+        _ => &[],
+    }
+}
+
+/// Implementation for a builtin
 pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
     debug_assert!(symbol.is_builtin());
 
@@ -61,15 +79,27 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_STARTS_WITH_CODE_PT => str_starts_with_code_point,
         STR_ENDS_WITH => str_ends_with,
         STR_COUNT_GRAPHEMES => str_count_graphemes,
-        STR_FROM_INT => str_from_int,
         STR_FROM_UTF8 => str_from_utf8,
         STR_FROM_UTF8_RANGE => str_from_utf8_range,
         STR_TO_UTF8 => str_to_utf8,
-        STR_FROM_FLOAT=> str_from_float,
         STR_REPEAT => str_repeat,
         STR_TRIM => str_trim,
         STR_TRIM_LEFT => str_trim_left,
         STR_TRIM_RIGHT => str_trim_right,
+        STR_TO_DEC => str_to_num,
+        STR_TO_F64 => str_to_num,
+        STR_TO_F32 => str_to_num,
+        STR_TO_NAT => str_to_num,
+        STR_TO_U128 => str_to_num,
+        STR_TO_I128 => str_to_num,
+        STR_TO_U64 => str_to_num,
+        STR_TO_I64 => str_to_num,
+        STR_TO_U32 => str_to_num,
+        STR_TO_I32 => str_to_num,
+        STR_TO_U16 => str_to_num,
+        STR_TO_I16 => str_to_num,
+        STR_TO_U8 => str_to_num,
+        STR_TO_I8 => str_to_num,
         LIST_LEN => list_len,
         LIST_GET => list_get,
         LIST_SET => list_set,
@@ -101,6 +131,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_DROP_FIRST => list_drop_first,
+        LIST_DROP_IF => list_drop_if,
         LIST_DROP_LAST => list_drop_last,
         LIST_SWAP => list_swap,
         LIST_MAP_WITH_INDEX => list_map_with_index,
@@ -112,6 +143,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_WALK_BACKWARDS => list_walk_backwards,
         LIST_WALK_UNTIL => list_walk_until,
         LIST_SORT_WITH => list_sort_with,
+        LIST_SORT_ASC => list_sort_asc,
+        LIST_SORT_DESC => list_sort_desc,
         LIST_ANY => list_any,
         LIST_ALL => list_all,
         LIST_FIND => list_find,
@@ -143,9 +176,11 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
+        NUM_ADD_SATURATED => num_add_saturated,
         NUM_SUB => num_sub,
         NUM_SUB_WRAP => num_sub_wrap,
         NUM_SUB_CHECKED => num_sub_checked,
+        NUM_SUB_SATURATED => num_sub_saturated,
         NUM_MUL => num_mul,
         NUM_MUL_WRAP => num_mul_wrap,
         NUM_MUL_CHECKED => num_mul_checked,
@@ -182,8 +217,6 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ASIN => num_asin,
         NUM_BYTES_TO_U16 => num_bytes_to_u16,
         NUM_BYTES_TO_U32 => num_bytes_to_u32,
-        NUM_MAX_INT => num_max_int,
-        NUM_MIN_INT => num_min_int,
         NUM_BITWISE_AND => num_bitwise_and,
         NUM_BITWISE_XOR => num_bitwise_xor,
         NUM_BITWISE_OR => num_bitwise_or,
@@ -191,7 +224,45 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SHIFT_RIGHT => num_shift_right_by,
         NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
         NUM_INT_CAST=> num_int_cast,
+        NUM_MIN_I8=> num_min_i8,
+        NUM_MAX_I8=> num_max_i8,
+        NUM_MIN_U8=> num_min_u8,
+        NUM_MAX_U8=> num_max_u8,
+        NUM_MIN_I16=> num_min_i16,
+        NUM_MAX_I16=> num_max_i16,
+        NUM_MIN_U16=> num_min_u16,
+        NUM_MAX_U16=> num_max_u16,
+        NUM_MIN_I32=> num_min_i32,
+        NUM_MAX_I32=> num_max_i32,
+        NUM_MIN_U32=> num_min_u32,
+        NUM_MAX_U32=> num_max_u32,
+        NUM_MIN_I64=> num_min_i64,
+        NUM_MAX_I64=> num_max_i64,
+        NUM_MIN_U64=> num_min_u64,
+        NUM_MAX_U64=> num_max_u64,
+        NUM_MIN_I128=> num_min_i128,
         NUM_MAX_I128=> num_max_i128,
+        NUM_TO_I8 => num_to_i8,
+        NUM_TO_I8_CHECKED => num_to_i8_checked,
+        NUM_TO_I16 => num_to_i16,
+        NUM_TO_I16_CHECKED => num_to_i16_checked,
+        NUM_TO_I32 => num_to_i32,
+        NUM_TO_I32_CHECKED => num_to_i32_checked,
+        NUM_TO_I64 => num_to_i64,
+        NUM_TO_I64_CHECKED => num_to_i64_checked,
+        NUM_TO_I128 => num_to_i128,
+        NUM_TO_I128_CHECKED => num_to_i128_checked,
+        NUM_TO_U8 => num_to_u8,
+        NUM_TO_U8_CHECKED => num_to_u8_checked,
+        NUM_TO_U16 => num_to_u16,
+        NUM_TO_U16_CHECKED => num_to_u16_checked,
+        NUM_TO_U32 => num_to_u32,
+        NUM_TO_U32_CHECKED => num_to_u32_checked,
+        NUM_TO_U64 => num_to_u64,
+        NUM_TO_U64_CHECKED => num_to_u64_checked,
+        NUM_TO_U128 => num_to_u128,
+        NUM_TO_U128_CHECKED => num_to_u128_checked,
+        NUM_TO_STR => num_to_str,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
         RESULT_AFTER => result_after,
@@ -339,34 +410,192 @@ fn lowlevel_5(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.maxInt : Int
-fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int(int_var, int_precision_var, i64::MAX.into());
-
-    Def {
-        annotation: None,
-        expr_var: int_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
+// Num.toI8 : Int * -> I8
+fn num_to_i8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
 }
 
-/// Num.minInt : Int
-fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int(int_var, int_precision_var, i64::MIN.into());
+// Num.toI16 : Int * -> I16
+fn num_to_i16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
 
-    Def {
-        annotation: None,
-        expr_var: int_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+// Num.toI32 : Int * -> I32
+fn num_to_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toI64 : Int * -> I64
+fn num_to_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toI128 : Int * -> I128
+fn num_to_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toU8 : Int * -> U8
+fn num_to_u8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toU16 : Int * -> U16
+fn num_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toU32 : Int * -> U32
+fn num_to_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toU64 : Int * -> U64
+fn num_to_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toU128 : Int * -> U128
+fn num_to_u128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) -> Def {
+    let bool_var = var_store.fresh();
+    let num_var_1 = var_store.fresh();
+    let num_var_2 = var_store.fresh();
+    let ret_var = var_store.fresh();
+    let record_var = var_store.fresh();
+
+    // let arg_2 = RunLowLevel NumToXXXChecked arg_1
+    // if arg_2.b then
+    //   Err OutOfBounds
+    // else
+    //   Ok arg_2.a
+    //
+    // "a" and "b" because the lowlevel return value looks like { converted_val: XXX, out_of_bounds: bool },
+    // and codegen will sort by alignment, so "a" will be the first key, etc.
+
+    let cont = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(
+                // arg_2.b
+                Access {
+                    record_var,
+                    ext_var: var_store.fresh(),
+                    field: "b".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                },
+            ),
+            // out of bounds!
+            no_region(tag(
+                "Err",
+                vec![tag("OutOfBounds", Vec::new(), var_store)],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // all is well
+            no_region(
+                // Ok arg_2.a
+                tag(
+                    "Ok",
+                    vec![
+                        // arg_2.a
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "a".into(),
+                            field_var: num_var_2,
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    // arg_2 = RunLowLevel NumToXXXChecked arg_1
+    let def = crate::def::Def {
+        loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_2)),
+        loc_expr: no_region(RunLowLevel {
+            op: lowlevel,
+            args: vec![(num_var_1, Var(Symbol::ARG_1))],
+            ret_var: record_var,
+        }),
+        expr_var: record_var,
         pattern_vars: SendMap::default(),
-    }
+        annotation: None,
+    };
+
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+
+    defn(
+        symbol,
+        vec![(num_var_1, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+macro_rules! num_to_checked {
+    ($($fn:ident)*) => {$(
+        // Num.toXXXChecked : Int * -> Result XXX [ OutOfBounds ]*
+        fn $fn(symbol: Symbol, var_store: &mut VarStore) -> Def {
+            // Use the generic `NumToIntChecked`; we'll figure out exactly what layout(s) we need
+            // during code generation after types are resolved.
+            to_num_checked(symbol, var_store, LowLevel::NumToIntChecked)
+        }
+    )*}
+}
+
+num_to_checked! {
+    num_to_i8_checked
+    num_to_i16_checked
+    num_to_i32_checked
+    num_to_i64_checked
+    num_to_i128_checked
+    num_to_u8_checked
+    num_to_u16_checked
+    num_to_u32_checked
+    num_to_u64_checked
+    num_to_u128_checked
+}
+
+// Num.toStr : Num a -> Str
+fn num_to_str(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let num_var = var_store.fresh();
+    let str_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(num_var, Var(Symbol::ARG_1))],
+        ret_var: str_var,
+    };
+
+    defn(
+        symbol,
+        vec![(num_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        str_var,
+    )
 }
 
 /// Bool.isEq : val, val -> Bool
@@ -607,6 +836,11 @@ fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_overflow_checked(symbol, var_store, LowLevel::NumAddChecked)
 }
 
+/// Num.addSaturated : Int a, Int a -> Int a
+fn num_add_saturated(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumAddSaturated)
+}
+
 /// Num.sub : Num a, Num a -> Num a
 fn num_sub(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumSub)
@@ -620,6 +854,11 @@ fn num_sub_wrap(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 fn num_sub_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_overflow_checked(symbol, var_store, LowLevel::NumSubChecked)
+}
+
+/// Num.subSaturated : Int a, Int a -> Int a
+fn num_sub_saturated(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumSubSaturated)
 }
 
 /// Num.mul : Num a, Num a -> Num a
@@ -743,7 +982,7 @@ fn num_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::Eq,
         args: vec![
             (arg_var, Var(Symbol::ARG_1)),
-            (arg_var, num(unbound_zero_var, 0)),
+            (arg_var, num(unbound_zero_var, 0, num_no_bound())),
         ],
         ret_var: bool_var,
     };
@@ -766,7 +1005,7 @@ fn num_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::NumGt,
         args: vec![
-            (arg_var, num(unbound_zero_var, 0)),
+            (arg_var, num(unbound_zero_var, 0, num_no_bound())),
             (arg_var, Var(Symbol::ARG_1)),
         ],
         ret_var: bool_var,
@@ -791,7 +1030,7 @@ fn num_is_positive(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::NumGt,
         args: vec![
             (arg_var, Var(Symbol::ARG_1)),
-            (arg_var, num(unbound_zero_var, 0)),
+            (arg_var, num(unbound_zero_var, 0, num_no_bound())),
         ],
         ret_var: bool_var,
     };
@@ -814,14 +1053,17 @@ fn num_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (arg_var, int(var_store.fresh(), var_store.fresh(), 1)),
+            (
+                arg_var,
+                int::<i128>(var_store.fresh(), var_store.fresh(), 1, int_no_bound()),
+            ),
             (
                 arg_var,
                 RunLowLevel {
                     op: LowLevel::NumRemUnchecked,
                     args: vec![
                         (arg_var, Var(Symbol::ARG_1)),
-                        (arg_var, num(unbound_two_var, 2)),
+                        (arg_var, num(unbound_two_var, 2, num_no_bound())),
                     ],
                     ret_var: arg_var,
                 },
@@ -848,14 +1090,14 @@ fn num_is_even(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (arg_var, num(arg_num_var, 0)),
+            (arg_var, num(arg_num_var, 0, num_no_bound())),
             (
                 arg_var,
                 RunLowLevel {
                     op: LowLevel::NumRemUnchecked,
                     args: vec![
                         (arg_var, Var(Symbol::ARG_1)),
-                        (arg_var, num(arg_num_var, 2)),
+                        (arg_var, num(arg_num_var, 2, num_no_bound())),
                     ],
                     ret_var: arg_var,
                 },
@@ -909,7 +1151,10 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 op: LowLevel::NumGte,
                 args: vec![
                     (float_var, Var(Symbol::ARG_1)),
-                    (float_var, float(unbound_zero_var, precision_var, 0.0)),
+                    (
+                        float_var,
+                        float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
+                    ),
                 ],
                 ret_var: bool_var,
             }),
@@ -955,7 +1200,10 @@ fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 op: LowLevel::NumGt,
                 args: vec![
                     (float_var, Var(Symbol::ARG_1)),
-                    (float_var, float(unbound_zero_var, precision_var, 0.0)),
+                    (
+                        float_var,
+                        float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
+                    ),
                 ],
                 ret_var: bool_var,
             }),
@@ -1191,31 +1439,104 @@ fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
 }
 
+/// Num.minI8: I8
+fn num_min_i8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<i8>(symbol, var_store, i8::MIN, IntBound::Exact(IntWidth::I8))
+}
+
+/// Num.maxI8: I8
+fn num_max_i8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<i8>(symbol, var_store, i8::MAX, IntBound::Exact(IntWidth::I8))
+}
+
+/// Num.minU8: U8
+fn num_min_u8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<u8>(symbol, var_store, u8::MIN, IntBound::Exact(IntWidth::U8))
+}
+
+/// Num.maxU8: U8
+fn num_max_u8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<u8>(symbol, var_store, u8::MAX, IntBound::Exact(IntWidth::U8))
+}
+
+/// Num.minI16: I16
+fn num_min_i16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<i16>(symbol, var_store, i16::MIN, IntBound::Exact(IntWidth::I16))
+}
+
+/// Num.maxI16: I16
+fn num_max_i16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<i16>(symbol, var_store, i16::MAX, IntBound::Exact(IntWidth::I16))
+}
+
+/// Num.minU16: U16
+fn num_min_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<u16>(symbol, var_store, u16::MIN, IntBound::Exact(IntWidth::U16))
+}
+
+/// Num.maxU16: U16
+fn num_max_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<u16>(symbol, var_store, u16::MAX, IntBound::Exact(IntWidth::U16))
+}
+
+/// Num.minI32: I32
+fn num_min_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<i32>(symbol, var_store, i32::MIN, IntBound::Exact(IntWidth::I32))
+}
+
+/// Num.maxI32: I32
+fn num_max_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<i32>(symbol, var_store, i32::MAX, IntBound::Exact(IntWidth::I32))
+}
+
+/// Num.minU32: U32
+fn num_min_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<u32>(symbol, var_store, u32::MIN, IntBound::Exact(IntWidth::U32))
+}
+
+/// Num.maxU32: U32
+fn num_max_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<u32>(symbol, var_store, u32::MAX, IntBound::Exact(IntWidth::U32))
+}
+
+/// Num.minI64: I64
+fn num_min_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<i64>(symbol, var_store, i64::MIN, IntBound::Exact(IntWidth::I64))
+}
+
+/// Num.maxI64: I64
+fn num_max_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<i64>(symbol, var_store, i64::MAX, IntBound::Exact(IntWidth::I64))
+}
+
+/// Num.minU64: U64
+fn num_min_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<u64>(symbol, var_store, u64::MIN, IntBound::Exact(IntWidth::U64))
+}
+
+/// Num.maxU64: U64
+fn num_max_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<u64>(symbol, var_store, u64::MAX, IntBound::Exact(IntWidth::U64))
+}
+
+/// Num.minI128: I128
+fn num_min_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    int_min_or_max::<i128>(
+        symbol,
+        var_store,
+        i128::MIN,
+        IntBound::Exact(IntWidth::I128),
+    )
+}
+
 /// Num.maxI128: I128
 fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int(int_var, int_precision_var, i128::MAX);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
+    int_min_or_max::<i128>(
+        symbol,
+        var_store,
+        i128::MAX,
+        IntBound::Exact(IntWidth::I128),
+    )
 }
 
 /// List.isEmpty : List * -> Bool
@@ -1228,7 +1549,7 @@ fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (len_var, num(unbound_zero_var, 0)),
+            (len_var, num(unbound_zero_var, 0, num_no_bound())),
             (
                 len_var,
                 RunLowLevel {
@@ -1302,6 +1623,106 @@ fn str_trim_left(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Str.trimRight : Str -> Str
 fn str_trim_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrimRight, var_store)
+}
+
+/// Str.toNum : Str -> Result (Num *) [ InvalidNumStr ]*
+fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bool_var = var_store.fresh();
+    let str_var = var_store.fresh();
+    let num_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+    let record_var = var_store.fresh();
+
+    let errorcode_var = var_store.fresh();
+
+    // let arg_2 = RunLowLevel StrToNum arg_1
+    //
+    // if arg_2.errorcode then
+    //  Err InvalidNumStr
+    // else
+    //  Ok arg_2.value
+
+    let cont = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(RunLowLevel {
+                op: LowLevel::NumGt,
+                args: vec![
+                    (
+                        errorcode_var,
+                        // arg_3.b
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "b_errorcode".into(),
+                            field_var: errorcode_var,
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                    ),
+                    (
+                        errorcode_var,
+                        int::<i128>(
+                            errorcode_var,
+                            Variable::UNSIGNED8,
+                            0,
+                            IntBound::Exact(IntWidth::U8),
+                        ),
+                    ),
+                ],
+                ret_var: bool_var,
+            }),
+            // overflow!
+            no_region(tag(
+                "Err",
+                vec![tag("InvalidNumStr", Vec::new(), var_store)],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // all is well
+            no_region(
+                // Ok arg_2.value
+                tag(
+                    "Ok",
+                    vec![
+                        // arg_3.a
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "a_value".into(),
+                            field_var: num_var,
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    let def = crate::def::Def {
+        loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_2)),
+        loc_expr: no_region(RunLowLevel {
+            op: LowLevel::StrToNum,
+            args: vec![(str_var, Var(Symbol::ARG_1))],
+            ret_var: record_var,
+        }),
+        expr_var: record_var,
+        pattern_vars: SendMap::default(),
+        annotation: None,
+    };
+
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 /// Str.repeat : Str, Nat -> Str
@@ -1433,26 +1854,6 @@ fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         int_var,
-    )
-}
-
-/// Str.fromInt : Int * -> Str
-fn str_from_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let str_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::StrFromInt,
-        args: vec![(int_var, Var(Symbol::ARG_1))],
-        ret_var: str_var,
-    };
-
-    defn(
-        symbol,
-        vec![(int_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        str_var,
     )
 }
 
@@ -1738,26 +2139,6 @@ fn str_to_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrToUtf8, var_store)
 }
 
-/// Str.fromFloat : Float * -> Str
-fn str_from_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
-    let str_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::StrFromFloat,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
-        ret_var: str_var,
-    };
-
-    defn(
-        symbol,
-        vec![(float_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        str_var,
-    )
-}
-
 /// List.concat : List elem, List elem -> List elem
 fn list_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -2030,7 +2411,12 @@ fn list_swap(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn list_take_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
-    let zero = int(len_var, Variable::NATURAL, 0);
+    let zero = int::<i128>(
+        len_var,
+        Variable::NATURAL,
+        0,
+        IntBound::Exact(IntWidth::Nat),
+    );
 
     let body = RunLowLevel {
         op: LowLevel::ListSublist,
@@ -2056,7 +2442,12 @@ fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
 
-    let zero = int(len_var, Variable::NATURAL, 0);
+    let zero = int::<i128>(
+        len_var,
+        Variable::NATURAL,
+        0,
+        IntBound::Exact(IntWidth::Nat),
+    );
     let bool_var = var_store.fresh();
 
     let get_list_len = RunLowLevel {
@@ -2166,7 +2557,12 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let clos_elem_sym = Symbol::ARG_4;
 
     let int_var = var_store.fresh();
-    let zero = int(int_var, Variable::NATURAL, 0);
+    let zero = int::<i128>(
+        int_var,
+        Variable::NATURAL,
+        0,
+        IntBound::Exact(IntWidth::Nat),
+    );
 
     // \acc, elem -> acc |> List.append sep |> List.append elem
     let clos = Closure(ClosureData {
@@ -2246,7 +2642,12 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let clos_ret_var = var_store.fresh();
 
     let ret_var = var_store.fresh();
-    let zero = int(index_var, Variable::NATURAL, 0);
+    let zero = int::<i128>(
+        index_var,
+        Variable::NATURAL,
+        0,
+        IntBound::Exact(IntWidth::Nat),
+    );
 
     let clos = Closure(ClosureData {
         function_type: clos_fun_var,
@@ -2397,6 +2798,7 @@ fn list_drop_at(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// List.dropFirst : List elem -> Result { first: elem, others : List elem } [ ListWasEmpty ]*
 fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let index_var = var_store.fresh();
@@ -2407,7 +2809,10 @@ fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::ListDropAt,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
-            (index_var, int(num_var, num_precision_var, 0)),
+            (
+                index_var,
+                int::<i128>(num_var, num_precision_var, 0, int_no_bound()),
+            ),
         ],
         ret_var: list_var,
     };
@@ -2418,6 +2823,61 @@ fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+/// List.dropIf : List elem, (elem -> Bool) -> List elem
+fn list_drop_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let sym_list = Symbol::ARG_1;
+    let sym_predicate = Symbol::ARG_2;
+    let t_list = var_store.fresh();
+    let t_predicate = var_store.fresh();
+    let t_keep_predicate = var_store.fresh();
+    let t_elem = var_store.fresh();
+
+    // Defer to keepIf for implementation
+    // List.dropIf l p = List.keepIf l (\e -> Bool.not (p e))
+
+    let keep_predicate = Closure(ClosureData {
+        function_type: t_keep_predicate,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: Variable::BOOL,
+        name: Symbol::LIST_DROP_IF_PREDICATE,
+        recursive: Recursive::NotRecursive,
+        captured_symbols: vec![(sym_predicate, t_predicate)],
+        arguments: vec![(t_elem, no_region(Pattern::Identifier(Symbol::ARG_3)))],
+        loc_body: {
+            let should_drop = Call(
+                Box::new((
+                    t_predicate,
+                    no_region(Var(sym_predicate)),
+                    var_store.fresh(),
+                    Variable::BOOL,
+                )),
+                vec![(t_elem, no_region(Var(Symbol::ARG_3)))],
+                CalledVia::Space,
+            );
+            Box::new(no_region(RunLowLevel {
+                op: LowLevel::Not,
+                args: vec![(Variable::BOOL, should_drop)],
+                ret_var: Variable::BOOL,
+            }))
+        },
+    });
+
+    let body = RunLowLevel {
+        op: LowLevel::ListKeepIf,
+        args: vec![(t_list, Var(sym_list)), (t_keep_predicate, keep_predicate)],
+        ret_var: t_list,
+    };
+
+    defn(
+        symbol,
+        vec![(t_list, sym_list), (t_predicate, sym_predicate)],
+        var_store,
+        body,
+        t_list,
     )
 }
 
@@ -2449,7 +2909,10 @@ fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                 ret_var: len_var,
                             },
                         ),
-                        (arg_var, int(num_var, num_precision_var, 1)),
+                        (
+                            arg_var,
+                            int::<i128>(num_var, num_precision_var, 1, int_no_bound()),
+                        ),
                     ],
                     ret_var: len_var,
                 },
@@ -2647,7 +3110,10 @@ fn list_min(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, int(num_var, num_precision_var, 0)),
+                        (
+                            len_var,
+                            int::<i128>(num_var, num_precision_var, 0, int_no_bound()),
+                        ),
                         (
                             len_var,
                             RunLowLevel {
@@ -2678,7 +3144,15 @@ fn list_min(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                         op: LowLevel::ListGetUnsafe,
                                         args: vec![
                                             (list_var, Var(Symbol::ARG_1)),
-                                            (arg_var, int(num_var, num_precision_var, 0)),
+                                            (
+                                                arg_var,
+                                                int::<i128>(
+                                                    num_var,
+                                                    num_precision_var,
+                                                    0,
+                                                    int_no_bound(),
+                                                ),
+                                            ),
                                         ],
                                         ret_var: list_elem_var,
                                     },
@@ -2777,7 +3251,10 @@ fn list_max(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, int(num_var, num_precision_var, 0)),
+                        (
+                            len_var,
+                            int::<i128>(num_var, num_precision_var, 0, int_no_bound()),
+                        ),
                         (
                             len_var,
                             RunLowLevel {
@@ -2808,7 +3285,15 @@ fn list_max(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                         op: LowLevel::ListGetUnsafe,
                                         args: vec![
                                             (list_var, Var(Symbol::ARG_1)),
-                                            (arg_var, int(num_var, num_precision_var, 0)),
+                                            (
+                                                arg_var,
+                                                int::<i128>(
+                                                    num_var,
+                                                    num_precision_var,
+                                                    0,
+                                                    int_no_bound(),
+                                                ),
+                                            ),
                                         ],
                                         ret_var: list_elem_var,
                                     },
@@ -2891,15 +3376,25 @@ fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let closure_var = var_store.fresh();
 
-    let body = RunLowLevel {
-        op: LowLevel::ListWalk,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (num_var, num(var_store.fresh(), 0)),
-            (closure_var, list_sum_add(num_var, var_store)),
-        ],
+    let function = (
+        var_store.fresh(),
+        Loc::at_zero(Expr::Var(Symbol::LIST_WALK)),
+        var_store.fresh(),
         ret_var,
-    };
+    );
+
+    let body = Expr::Call(
+        Box::new(function),
+        vec![
+            (list_var, Loc::at_zero(Var(Symbol::ARG_1))),
+            (
+                num_var,
+                Loc::at_zero(num(var_store.fresh(), 0, num_no_bound())),
+            ),
+            (closure_var, Loc::at_zero(Var(Symbol::NUM_ADD))),
+        ],
+        CalledVia::Space,
+    );
 
     defn(
         symbol,
@@ -2907,61 +3402,38 @@ fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         ret_var,
-    )
-}
-
-fn list_sum_add(num_var: Variable, var_store: &mut VarStore) -> Expr {
-    let body = RunLowLevel {
-        op: LowLevel::NumAdd,
-        args: vec![(num_var, Var(Symbol::ARG_3)), (num_var, Var(Symbol::ARG_4))],
-        ret_var: num_var,
-    };
-
-    defn_help(
-        Symbol::LIST_SUM_ADD,
-        vec![(num_var, Symbol::ARG_3), (num_var, Symbol::ARG_4)],
-        var_store,
-        body,
-        num_var,
     )
 }
 
 /// List.product : List (Num a) -> Num a
 fn list_product(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let num_var = var_store.fresh();
-    let ret_var = num_var;
     let list_var = var_store.fresh();
     let closure_var = var_store.fresh();
 
-    let body = RunLowLevel {
-        op: LowLevel::ListWalk,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (num_var, num(var_store.fresh(), 1)),
-            (closure_var, list_product_mul(num_var, var_store)),
+    let function = (
+        var_store.fresh(),
+        Loc::at_zero(Expr::Var(Symbol::LIST_WALK)),
+        var_store.fresh(),
+        num_var,
+    );
+
+    let body = Expr::Call(
+        Box::new(function),
+        vec![
+            (list_var, Loc::at_zero(Var(Symbol::ARG_1))),
+            (
+                num_var,
+                Loc::at_zero(num(var_store.fresh(), 1, num_no_bound())),
+            ),
+            (closure_var, Loc::at_zero(Var(Symbol::NUM_MUL))),
         ],
-        ret_var,
-    };
+        CalledVia::Space,
+    );
 
     defn(
         symbol,
         vec![(list_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        ret_var,
-    )
-}
-
-fn list_product_mul(num_var: Variable, var_store: &mut VarStore) -> Expr {
-    let body = RunLowLevel {
-        op: LowLevel::NumMul,
-        args: vec![(num_var, Var(Symbol::ARG_3)), (num_var, Var(Symbol::ARG_4))],
-        ret_var: num_var,
-    };
-
-    defn_help(
-        Symbol::LIST_PRODUCT_MUL,
-        vec![(num_var, Symbol::ARG_3), (num_var, Symbol::ARG_4)],
         var_store,
         body,
         num_var,
@@ -3006,7 +3478,7 @@ fn list_keep_errs(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListKeepErrs, var_store)
 }
 
-/// List.keepErrs: List before, (before -> Result * after) -> List after
+/// List.range: Int a, Int a -> List (Int a)
 fn list_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListRange, var_store)
 }
@@ -3016,7 +3488,7 @@ fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListMap, var_store)
 }
 
-/// List.mapWithIndex : List before, (Nat, before -> after) -> List after
+/// List.mapWithIndex : List before, (before, Nat -> after) -> List after
 fn list_map_with_index(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListMapWithIndex, var_store)
 }
@@ -3039,6 +3511,91 @@ fn list_map4(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.sortWith : List a, (a, a -> Ordering) -> List a
 fn list_sort_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListSortWith, var_store)
+}
+
+/// List.sortAsc : List (Num a) -> List (Num a)
+fn list_sort_asc(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let closure_var = var_store.fresh();
+    let ret_var = list_var;
+
+    let function = (
+        var_store.fresh(),
+        Loc::at_zero(Expr::Var(Symbol::LIST_SORT_WITH)),
+        var_store.fresh(),
+        ret_var,
+    );
+
+    let body = Expr::Call(
+        Box::new(function),
+        vec![
+            (list_var, Loc::at_zero(Var(Symbol::ARG_1))),
+            (closure_var, Loc::at_zero(Var(Symbol::NUM_COMPARE))),
+        ],
+        CalledVia::Space,
+    );
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+/// List.sortDesc : List (Num a) -> List (Num a)
+fn list_sort_desc(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let num_var = var_store.fresh();
+    let closure_var = var_store.fresh();
+    let compare_ret_var = var_store.fresh();
+    let ret_var = list_var;
+
+    let closure = Closure(ClosureData {
+        function_type: closure_var,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: compare_ret_var,
+        name: Symbol::LIST_SORT_DESC_COMPARE,
+        recursive: Recursive::NotRecursive,
+        captured_symbols: vec![],
+        arguments: vec![
+            (num_var, no_region(Pattern::Identifier(Symbol::ARG_2))),
+            (num_var, no_region(Pattern::Identifier(Symbol::ARG_3))),
+        ],
+        loc_body: {
+            Box::new(no_region(RunLowLevel {
+                op: LowLevel::NumCompare,
+                args: vec![(num_var, Var(Symbol::ARG_3)), (num_var, Var(Symbol::ARG_2))],
+                ret_var: compare_ret_var,
+            }))
+        },
+    });
+
+    let function = (
+        var_store.fresh(),
+        Loc::at_zero(Expr::Var(Symbol::LIST_SORT_WITH)),
+        var_store.fresh(),
+        ret_var,
+    );
+
+    let body = Expr::Call(
+        Box::new(function),
+        vec![
+            (list_var, Loc::at_zero(Var(Symbol::ARG_1))),
+            (closure_var, Loc::at_zero(closure)),
+        ],
+        CalledVia::Space,
+    );
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 /// List.any: List elem, (elem -> Bool) -> Bool
@@ -3164,8 +3721,8 @@ fn dict_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: None,
         expr_var: dict_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -3246,8 +3803,8 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let def = Def {
         annotation: None,
         expr_var: temp_record_var,
-        loc_expr: Located::at_zero(def_body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(temp_record)),
+        loc_expr: Loc::at_zero(def_body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(temp_record)),
         pattern_vars: Default::default(),
     };
 
@@ -3339,8 +3896,8 @@ fn set_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     Def {
         annotation: None,
         expr_var: set_var,
-        loc_expr: Located::at_zero(body),
-        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
 }
@@ -3522,7 +4079,7 @@ fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (num_var, Var(Symbol::ARG_2)),
-                        (num_var, num(unbound_zero_var, 0)),
+                        (num_var, num(unbound_zero_var, 0, num_no_bound())),
                     ],
                     ret_var: bool_var,
                 },
@@ -3625,7 +4182,10 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (num_var, Var(Symbol::ARG_2)),
-                        (num_var, float(unbound_zero_var, precision_var, 0.0)),
+                        (
+                            num_var,
+                            float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
+                        ),
                     ],
                     ret_var: bool_var,
                 },
@@ -3690,7 +4250,12 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         (num_var, Var(Symbol::ARG_2)),
                         (
                             num_var,
-                            int(unbound_zero_var, unbound_zero_precision_var, 0),
+                            int::<i128>(
+                                unbound_zero_var,
+                                unbound_zero_precision_var,
+                                0,
+                                int_no_bound(),
+                            ),
                         ),
                     ],
                     ret_var: bool_var,
@@ -3756,7 +4321,12 @@ fn num_div_ceil(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         (num_var, Var(Symbol::ARG_2)),
                         (
                             num_var,
-                            int(unbound_zero_var, unbound_zero_precision_var, 0),
+                            int::<i128>(
+                                unbound_zero_var,
+                                unbound_zero_precision_var,
+                                0,
+                                int_no_bound(),
+                            ),
                         ),
                     ],
                     ret_var: bool_var,
@@ -3826,7 +4396,10 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, int(zero_var, zero_precision_var, 0)),
+                        (
+                            len_var,
+                            int::<i128>(zero_var, zero_precision_var, 0, int_no_bound()),
+                        ),
                         (
                             len_var,
                             RunLowLevel {
@@ -3850,7 +4423,10 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                             op: LowLevel::ListGetUnsafe,
                             args: vec![
                                 (list_var, Var(Symbol::ARG_1)),
-                                (len_var, int(zero_var, zero_precision_var, 0)),
+                                (
+                                    len_var,
+                                    int::<i128>(zero_var, zero_precision_var, 0, int_no_bound()),
+                                ),
                             ],
                             ret_var: list_elem_var,
                         },
@@ -3907,7 +4483,10 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, int(num_var, num_precision_var, 0)),
+                        (
+                            len_var,
+                            int::<i128>(num_var, num_precision_var, 0, int_no_bound()),
+                        ),
                         (
                             len_var,
                             RunLowLevel {
@@ -3946,7 +4525,15 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     ret_var: len_var,
                                                 },
                                             ),
-                                            (arg_var, int(num_var, num_precision_var, 1)),
+                                            (
+                                                arg_var,
+                                                int::<i128>(
+                                                    num_var,
+                                                    num_precision_var,
+                                                    1,
+                                                    int_no_bound(),
+                                                ),
+                                            ),
                                         ],
                                         ret_var: len_var,
                                     },
@@ -4022,7 +4609,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
@@ -4052,7 +4639,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
@@ -4119,7 +4706,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
@@ -4149,7 +4736,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
@@ -4192,7 +4779,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![(ret_var, no_region(Pattern::Identifier(Symbol::ARG_3)))],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_3)),
             guard: None,
@@ -4212,7 +4799,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![(var_store.fresh(), no_region(Pattern::Underscore))],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_2)),
             guard: None,
@@ -4262,7 +4849,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
@@ -4289,7 +4876,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
@@ -4339,7 +4926,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
@@ -4366,7 +4953,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
@@ -4428,7 +5015,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
@@ -4458,7 +5045,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
@@ -4485,8 +5072,8 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 #[inline(always)]
-fn no_region<T>(value: T) -> Located<T> {
-    Located {
+fn no_region<T>(value: T) -> Loc<T> {
+    Loc {
         region: Region::zero(),
         value,
     }
@@ -4501,7 +5088,7 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
         arguments: args
             .into_iter()
             .map(|expr| (var_store.fresh(), no_region(expr)))
-            .collect::<Vec<(Variable, Located<Expr>)>>(),
+            .collect::<Vec<(Variable, Loc<Expr>)>>(),
     }
 }
 
@@ -4528,11 +5115,11 @@ fn defn(
     let expr = defn_help(fn_name, args, var_store, body, ret_var);
 
     Def {
-        loc_pattern: Located {
+        loc_pattern: Loc {
             region: Region::zero(),
             value: Pattern::Identifier(fn_name),
         },
-        loc_expr: Located {
+        loc_expr: Loc {
             region: Region::zero(),
             value: expr,
         },
@@ -4574,7 +5161,10 @@ fn num_bytes_to(symbol: Symbol, var_store: &mut VarStore, offset: i64, low_level
                                         add_var,
                                         RunLowLevel {
                                             ret_var: cast_var,
-                                            args: vec![(cast_var, num(var_store.fresh(), offset))],
+                                            args: vec![(
+                                                cast_var,
+                                                num(var_store.fresh(), offset, num_no_bound()),
+                                            )],
                                             op: LowLevel::NumIntCast,
                                         },
                                     ),
@@ -4662,16 +5252,80 @@ fn defn_help(
 }
 
 #[inline(always)]
-fn int(num_var: Variable, precision_var: Variable, i: i128) -> Expr {
-    Int(num_var, precision_var, i.to_string().into_boxed_str(), i)
+fn int_min_or_max<I128>(symbol: Symbol, var_store: &mut VarStore, i: I128, bound: IntBound) -> Def
+where
+    I128: Into<i128>,
+{
+    let int_var = var_store.fresh();
+    let int_precision_var = var_store.fresh();
+    let body = int::<I128>(int_var, int_precision_var, i, bound);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Loc::at_zero(body),
+        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+fn num_no_bound() -> NumericBound {
+    NumericBound::None
+}
+
+fn int_no_bound() -> IntBound {
+    IntBound::None
+}
+
+fn float_no_bound() -> FloatBound {
+    FloatBound::None
 }
 
 #[inline(always)]
-fn float(num_var: Variable, precision_var: Variable, f: f64) -> Expr {
-    Float(num_var, precision_var, f.to_string().into_boxed_str(), f)
+fn int<I128>(num_var: Variable, precision_var: Variable, i: I128, bound: IntBound) -> Expr
+where
+    I128: Into<i128>,
+{
+    let ii = i.into();
+    Int(
+        num_var,
+        precision_var,
+        ii.to_string().into_boxed_str(),
+        IntValue::I128(ii),
+        bound,
+    )
 }
 
 #[inline(always)]
-fn num(num_var: Variable, i: i64) -> Expr {
-    Num(num_var, i.to_string().into_boxed_str(), i)
+fn float(num_var: Variable, precision_var: Variable, f: f64, bound: FloatBound) -> Expr {
+    Float(
+        num_var,
+        precision_var,
+        f.to_string().into_boxed_str(),
+        f,
+        bound,
+    )
+}
+
+#[inline(always)]
+fn num<I: Into<i128>>(num_var: Variable, i: I, bound: NumericBound) -> Expr {
+    let i = i.into();
+    Num(
+        num_var,
+        i.to_string().into_boxed_str(),
+        IntValue::I128(i),
+        bound,
+    )
 }

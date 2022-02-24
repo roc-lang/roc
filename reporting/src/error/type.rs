@@ -3,13 +3,12 @@ use roc_collections::all::{Index, MutSet, SendMap};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve::solve;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
 use std::path::PathBuf;
 
-use crate::internal_error;
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use ven_pretty::DocAllocator;
 
@@ -18,6 +17,7 @@ const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annota
 
 pub fn type_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     problem: solve::TypeError,
 ) -> Option<Report<'b>> {
@@ -34,13 +34,14 @@ pub fn type_problem<'b>(
 
     match problem {
         BadExpr(region, category, found, expected) => Some(to_expr_report(
-            alloc, filename, region, category, found, expected,
+            alloc, lines, filename, region, category, found, expected,
         )),
         BadPattern(region, category, found, expected) => Some(to_pattern_report(
-            alloc, filename, region, category, found, expected,
+            alloc, lines, filename, region, category, found, expected,
         )),
         CircularType(region, symbol, overall_type) => Some(to_circular_report(
             alloc,
+            lines,
             filename,
             region,
             symbol,
@@ -87,7 +88,7 @@ pub fn type_problem<'b>(
                             found_arguments,
                             alloc.reflow(" instead:"),
                         ]),
-                        alloc.region(region),
+                        alloc.region(lines.convert_region(region)),
                         alloc.reflow("Are there missing parentheses?"),
                     ]);
 
@@ -99,16 +100,16 @@ pub fn type_problem<'b>(
 
                     report(title, doc, filename)
                 }
-                CyclicAlias(symbol, region, others) => {
-                    let (doc, title) = cyclic_alias(alloc, symbol, region, others);
-
-                    report(title, doc, filename)
+                CyclicAlias(..) => {
+                    // We'll also report cyclic aliases as a canonicalization problem, no need to
+                    // re-report them.
+                    None
                 }
 
                 SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/rtfeldman/roc/pull/1711
 
                 Shadowed(original_region, shadow) => {
-                    let doc = report_shadowing(alloc, original_region, shadow);
+                    let doc = report_shadowing(alloc, lines, original_region, shadow);
                     let title = DUPLICATE_NAME.to_string();
 
                     report(title, doc, filename)
@@ -122,8 +123,9 @@ pub fn type_problem<'b>(
 
 fn report_shadowing<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     original_region: Region,
-    shadow: Located<Ident>,
+    shadow: Loc<Ident>,
 ) -> RocDocBuilder<'b> {
     let line = r#"Since these types have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
 
@@ -132,27 +134,31 @@ fn report_shadowing<'b>(
             .text("The ")
             .append(alloc.ident(shadow.value))
             .append(alloc.reflow(" name is first defined here:")),
-        alloc.region(original_region),
+        alloc.region(lines.convert_region(original_region)),
         alloc.reflow("But then it's defined a second time here:"),
-        alloc.region(shadow.region),
+        alloc.region(lines.convert_region(shadow.region)),
         alloc.reflow(line),
     ])
 }
 
 pub fn cyclic_alias<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     symbol: Symbol,
     region: roc_region::all::Region,
     others: Vec<Symbol>,
 ) -> (RocDocBuilder<'b>, String) {
+    let when_is_recursion_legal =
+        alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive.");
+
     let doc = if others.is_empty() {
         alloc.stack(vec![
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
                 .append(alloc.reflow(" alias is self-recursive in an invalid way:")),
-            alloc.region(region),
-            alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
+            alloc.region(lines.convert_region(region)),
+            when_is_recursion_legal,
         ])
     } else {
         alloc.stack(vec![
@@ -160,7 +166,7 @@ pub fn cyclic_alias<'b>(
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
                 .append(alloc.reflow(" alias is recursive in an invalid way:")),
-            alloc.region(region),
+            alloc.region(lines.convert_region(region)),
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
@@ -176,7 +182,7 @@ pub fn cyclic_alias<'b>(
                     .map(|other| alloc.symbol_unqualified(other))
                     .collect::<Vec<_>>(),
             ),
-            alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
+            when_is_recursion_legal,
         ])
     };
 
@@ -186,6 +192,7 @@ pub fn cyclic_alias<'b>(
 #[allow(clippy::too_many_arguments)]
 fn report_mismatch<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     category: &Category,
     found: ErrorType,
@@ -198,9 +205,12 @@ fn report_mismatch<'b>(
     further_details: Option<RocDocBuilder<'b>>,
 ) -> Report<'b> {
     let snippet = if let Some(highlight) = opt_highlight {
-        alloc.region_with_subregion(highlight, region)
+        alloc.region_with_subregion(
+            lines.convert_region(highlight),
+            lines.convert_region(region),
+        )
     } else {
-        alloc.region(region)
+        alloc.region(lines.convert_region(region))
     };
     let lines = vec![
         problem,
@@ -227,6 +237,7 @@ fn report_mismatch<'b>(
 #[allow(clippy::too_many_arguments)]
 fn report_bad_type<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     category: &Category,
     found: ErrorType,
@@ -238,9 +249,12 @@ fn report_bad_type<'b>(
     further_details: RocDocBuilder<'b>,
 ) -> Report<'b> {
     let snippet = if let Some(highlight) = opt_highlight {
-        alloc.region_with_subregion(highlight, region)
+        alloc.region_with_subregion(
+            lines.convert_region(highlight),
+            lines.convert_region(region),
+        )
     } else {
-        alloc.region(region)
+        alloc.region(lines.convert_region(region))
     };
     let lines = vec![
         problem,
@@ -285,6 +299,7 @@ fn lowercase_first(s: &str) -> String {
 
 fn to_expr_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     expr_region: roc_region::all::Region,
     category: Category,
@@ -308,7 +323,7 @@ fn to_expr_report<'b>(
                 title: "TYPE MISMATCH".to_string(),
                 doc: alloc.stack(vec![
                     alloc.text("This expression is used in an unexpected way:"),
-                    alloc.region(expr_region),
+                    alloc.region(lines.convert_region(expr_region)),
                     comparison,
                 ]),
                 severity: Severity::RuntimeError,
@@ -421,7 +436,10 @@ fn to_expr_report<'b>(
                         // for typed bodies, include the line(s) with the signature
                         let joined =
                             roc_region::all::Region::span_across(&ann_region, &expr_region);
-                        alloc.region_with_subregion(joined, expr_region)
+                        alloc.region_with_subregion(
+                            lines.convert_region(joined),
+                            lines.convert_region(expr_region),
+                        )
                     },
                     comparison,
                 ]),
@@ -440,6 +458,7 @@ fn to_expr_report<'b>(
 
                 report_bad_type(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -478,6 +497,7 @@ fn to_expr_report<'b>(
 
                 report_bad_type(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -515,6 +535,7 @@ fn to_expr_report<'b>(
                 ]);
                 report_bad_type(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -542,6 +563,7 @@ fn to_expr_report<'b>(
             } => match total_branches {
                 2 => report_mismatch(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -575,6 +597,7 @@ fn to_expr_report<'b>(
                 ),
                 _ => report_mismatch(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -599,6 +622,7 @@ fn to_expr_report<'b>(
             },
             Reason::WhenBranch { index } => report_mismatch(
                 alloc,
+                lines,
                 filename,
                 &category,
                 found,
@@ -637,6 +661,7 @@ fn to_expr_report<'b>(
 
                 report_mismatch(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -651,6 +676,7 @@ fn to_expr_report<'b>(
             }
             Reason::RecordUpdateValue(field) => report_mismatch(
                 alloc,
+                lines,
                 filename,
                 &category,
                 found,
@@ -685,6 +711,7 @@ fn to_expr_report<'b>(
                     match diff.next().and_then(|k| Some((k, expected_fields.get(k)?))) {
                         None => report_mismatch(
                             alloc,
+                            lines,
                             filename,
                             &category,
                             found,
@@ -719,7 +746,7 @@ fn to_expr_report<'b>(
 
                             let doc = alloc.stack(vec![
                                 header,
-                                alloc.region(*field_region),
+                                alloc.region(lines.convert_region(*field_region)),
                                 if suggestions.is_empty() {
                                     alloc.concat(vec![
                                         alloc.reflow("In fact, "),
@@ -764,6 +791,7 @@ fn to_expr_report<'b>(
                 }
                 _ => report_bad_type(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -798,7 +826,7 @@ fn to_expr_report<'b>(
                                 }
                             )),
                         ]),
-                        alloc.region(expr_region),
+                        alloc.region(lines.convert_region(expr_region)),
                         alloc.reflow("Are there any missing commas? Or missing parentheses?"),
                     ];
 
@@ -833,7 +861,7 @@ fn to_expr_report<'b>(
                                     arity
                                 )),
                             ]),
-                            alloc.region(expr_region),
+                            alloc.region(lines.convert_region(expr_region)),
                             alloc.reflow("Are there any missing commas? Or missing parentheses?"),
                         ];
 
@@ -857,7 +885,7 @@ fn to_expr_report<'b>(
                                     arity
                                 )),
                             ]),
-                            alloc.region(expr_region),
+                            alloc.region(lines.convert_region(expr_region)),
                             alloc.reflow(
                                 "Roc does not allow functions to be partially applied. \
                                 Use a closure to make partial application explicit.",
@@ -883,6 +911,7 @@ fn to_expr_report<'b>(
 
                 report_mismatch(
                     alloc,
+                    lines,
                     filename,
                     &category,
                     found,
@@ -903,6 +932,22 @@ fn to_expr_report<'b>(
                     None,
                 )
             }
+
+            Reason::NumericLiteralSuffix => report_mismatch(
+                alloc,
+                lines,
+                filename,
+                &category,
+                found,
+                expected_type,
+                region,
+                Some(expr_region),
+                alloc.text("This numeric literal is being used improperly:"),
+                alloc.text("Here the value is used as a:"),
+                alloc.text("But its suffix says it's a:"),
+                None,
+            ),
+
             Reason::LowLevelOpArg { op, arg_index } => {
                 panic!(
                     "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
@@ -920,6 +965,7 @@ fn to_expr_report<'b>(
                     foreign_symbol
                 );
             }
+
             Reason::FloatLiteral | Reason::IntLiteral | Reason::NumLiteral => {
                 unreachable!("I don't think these can be reached")
             }
@@ -1230,6 +1276,7 @@ fn add_category<'b>(
 
 fn to_pattern_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     expr_region: roc_region::all::Region,
     category: PatternCategory,
@@ -1242,7 +1289,7 @@ fn to_pattern_report<'b>(
         PExpected::NoExpectation(expected_type) => {
             let doc = alloc.stack(vec![
                 alloc.text("This pattern is being used in an unexpected way:"),
-                alloc.region(expr_region),
+                alloc.region(lines.convert_region(expr_region)),
                 pattern_type_comparison(
                     alloc,
                     found,
@@ -1275,7 +1322,7 @@ fn to_pattern_report<'b>(
                         .append(alloc.text(" argument to "))
                         .append(name.clone())
                         .append(alloc.text(" is weird:")),
-                    alloc.region(region),
+                    alloc.region(lines.convert_region(region)),
                     pattern_type_comparison(
                         alloc,
                         found,
@@ -1310,7 +1357,7 @@ fn to_pattern_report<'b>(
                             .text("The 1st pattern in this ")
                             .append(alloc.keyword("when"))
                             .append(alloc.text(" is causing a mismatch:")),
-                        alloc.region(region),
+                        alloc.region(lines.convert_region(region)),
                         pattern_type_comparison(
                             alloc,
                             found,
@@ -1343,7 +1390,7 @@ fn to_pattern_report<'b>(
                             .string(format!("The {} pattern in this ", index.ordinal()))
                             .append(alloc.keyword("when"))
                             .append(alloc.text(" does not match the previous ones:")),
-                        alloc.region(region),
+                        alloc.region(lines.convert_region(region)),
                         pattern_type_comparison(
                             alloc,
                             found,
@@ -1433,6 +1480,7 @@ fn add_pattern_category<'b>(
 
 fn to_circular_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
     filename: PathBuf,
     region: roc_region::all::Region,
     symbol: Symbol,
@@ -1447,7 +1495,7 @@ fn to_circular_report<'b>(
                     .reflow("I'm inferring a weird self-referential type for ")
                     .append(alloc.symbol_unqualified(symbol))
                     .append(alloc.text(":")),
-                alloc.region(region),
+                alloc.region(lines.convert_region(region)),
                 alloc.stack(vec![
                     alloc.reflow(
                         "Here is my best effort at writing down the type. \
@@ -1735,6 +1783,15 @@ pub fn to_doc<'b>(
                     .collect(),
                 ext_to_doc(alloc, ext),
             )
+        }
+
+        Range(typ, range_types) => {
+            let typ = to_doc(alloc, parens, *typ);
+            let range_types = range_types
+                .into_iter()
+                .map(|arg| to_doc(alloc, Parens::Unnecessary, arg))
+                .collect();
+            report_text::range(alloc, typ, range_types)
         }
     }
 }
@@ -2590,6 +2647,29 @@ mod report_text {
                 .append(rec_var)
         }
     }
+
+    pub fn range<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        _encompassing_type: RocDocBuilder<'b>,
+        ranged_types: Vec<RocDocBuilder<'b>>,
+    ) -> RocDocBuilder<'b> {
+        let mut doc = Vec::with_capacity(ranged_types.len() * 2);
+
+        let last = ranged_types.len() - 1;
+        for (i, choice) in ranged_types.into_iter().enumerate() {
+            if i == last && i == 1 {
+                doc.push(alloc.reflow(" or "));
+            } else if i == last && i > 1 {
+                doc.push(alloc.reflow(", or "));
+            } else if i > 0 {
+                doc.push(alloc.reflow(", "));
+            }
+
+            doc.push(choice);
+        }
+
+        alloc.concat(doc)
+    }
 }
 
 fn type_problem_to_pretty<'b>(
@@ -2693,7 +2773,7 @@ fn type_problem_to_pretty<'b>(
             alloc.tip().append(line)
         }
 
-        (BadRigidVar(x, tipe), ExpectationContext::Annotation { on }) => {
+        (BadRigidVar(x, tipe), expectation) => {
             use ErrorType::*;
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
@@ -2707,17 +2787,23 @@ fn type_problem_to_pretty<'b>(
             };
 
             let bad_double_wildcard = || {
-                alloc.tip().append(alloc.concat(vec![
+                let mut hints_lines = vec![
                     alloc.reflow(
                         "Any connection between types must use a named type variable, not a ",
                     ),
                     alloc.type_variable(WILDCARD.into()),
-                    alloc.reflow("! Maybe the annotation "),
-                    on,
-                    alloc.reflow(" should have a named type variable in place of the "),
-                    alloc.type_variable(WILDCARD.into()),
-                    alloc.reflow("?"),
-                ]))
+                    alloc.reflow("!"),
+                ];
+                if let ExpectationContext::Annotation { on } = expectation {
+                    hints_lines.append(&mut vec![
+                        alloc.reflow(" Maybe the annotation "),
+                        on,
+                        alloc.reflow(" should have a named type variable in place of the "),
+                        alloc.type_variable(WILDCARD.into()),
+                        alloc.reflow("?"),
+                    ]);
+                }
+                alloc.tip().append(alloc.concat(hints_lines))
             };
 
             let bad_double_rigid = |a: Lowercase, b: Lowercase| {
@@ -2751,10 +2837,8 @@ fn type_problem_to_pretty<'b>(
                         alloc.reflow(" value"),
                     ]),
                 ),
+                Range(..) => bad_rigid_var(x, alloc.reflow("a range")),
             }
-        }
-        (BadRigidVar(_, _), expectation_context) => {
-            internal_error!("I thought mismatches between rigid vars could only happen in the context of a type annotation, but here they're happening with a {:?}!", expectation_context)
         }
 
         (IntFloat, _) => alloc.tip().append(alloc.concat(vec![

@@ -1,8 +1,7 @@
 app "rbtree-ck"
-    packages { base: "platform" }
-    imports [base.Task]
-    provides [ main ] to base
-
+    packages { pf: "platform" }
+    imports [ pf.Task ]
+    provides [ main ] to pf
 
 Color : [ Red, Black ]
 
@@ -19,67 +18,84 @@ makeMap = \freq, n ->
 makeMapHelp : I64, I64, Map, ConsList Map -> ConsList Map
 makeMapHelp = \freq, n, m, acc ->
     when n is
-        0 -> Cons m acc
+        0 ->
+            Cons m acc
+
         _ ->
             powerOf10 =
                 (n % 10 |> resultWithDefault 0) == 0
-
 
             m1 = insert m n powerOf10
 
             isFrequency =
                 (n % freq |> resultWithDefault 0) == 0
 
-            x = (if isFrequency then (Cons m1 acc) else acc)
-            makeMapHelp freq (n-1) m1 x
+            x = (if isFrequency then Cons m1 acc else acc)
+
+            makeMapHelp freq (n - 1) m1 x
 
 fold : (a, b, omega -> omega), Tree a b, omega -> omega
 fold = \f, tree, b ->
     when tree is
-        Leaf  -> b
-        Node _ l k v r -> fold f r (f k v (fold f l b))
+        Leaf ->
+            b
+
+        Node _ l k v r ->
+            fold f r (f k v (fold f l b))
 
 resultWithDefault : Result a e, a -> a
 resultWithDefault = \res, default ->
     when res is
-        Ok v -> v
-        Err _ -> default
+        Ok v ->
+            v
+
+        Err _ ->
+            default
 
 main : Task.Task {} []
 main =
-    Task.after Task.getInt \n ->
-        ms : ConsList Map
-        ms = makeMap 5 n # original koka n = 4_200_000
+    Task.after
+        Task.getInt
+        \n ->
+            # original koka n = 4_200_000
+            ms : ConsList Map
+            ms = makeMap 5 n
 
-        when ms is
-            Cons head _ ->
-                val = fold (\_, v, r -> if v then r + 1 else r) head 0
-                val
-                    |> Str.fromInt
-                    |> Task.putLine
+            when ms is
+                Cons head _ ->
+                    val = fold (\_, v, r -> if v then r + 1 else r) head 0
 
-            Nil ->
-                Task.putLine "fail"
+                    val
+                        |> Num.toStr
+                        |> Task.putLine
 
-insert : Tree (Num k) v, (Num k), v -> Tree (Num k) v
+                Nil ->
+                    Task.putLine "fail"
+
+insert : Tree (Num k) v, Num k, v -> Tree (Num k) v
 insert = \t, k, v -> if isRed t then setBlack (ins t k v) else ins t k v
-
 
 setBlack : Tree a b -> Tree a b
 setBlack = \tree ->
     when tree is
-        Node _ l k v r -> Node Black l k v r
-        _ -> tree
+        Node _ l k v r ->
+            Node Black l k v r
+
+        _ ->
+            tree
 
 isRed : Tree a b -> Bool
 isRed = \tree ->
     when tree is
-        Node Red _ _ _ _ -> True
-        _ -> False
+        Node Red _ _ _ _ ->
+            True
+
+        _ ->
+            False
 
 lt = \x, y -> x < y
 
-ins : Tree (Num k) v, (Num k), v -> Tree (Num k) v
+ins : Tree (Num k) v, Num k, v -> Tree (Num k) v
 ins = \tree, kx, vx ->
     when tree is
         Leaf ->
@@ -95,30 +111,48 @@ ins = \tree, kx, vx ->
 
         Node Black a ky vy b ->
             if lt kx ky then
-              (if isRed a then balance1 (Node Black Leaf ky vy b) (ins a kx vx) else Node Black (ins a kx vx) ky vy b)
+                (if isRed a then balance1 (Node Black Leaf ky vy b) (ins a kx vx) else Node Black (ins a kx vx) ky vy b)
             else if lt ky kx then
-              (if isRed b then balance2 (Node Black a ky vy Leaf) (ins b kx vx) else Node Black a ky vy (ins b kx vx))
+                (if isRed b then balance2 (Node Black a ky vy Leaf) (ins b kx vx) else Node Black a ky vy (ins b kx vx))
             else
                 Node Black a kx vx b
 
-balance1 : Tree a b, Tree a b -> Tree a b 
+balance1 : Tree a b, Tree a b -> Tree a b
 balance1 = \tree1, tree2 ->
     when tree1 is
-        Leaf -> Leaf
+        Leaf ->
+            Leaf
+
         Node _ _ kv vv t ->
             when tree2 is
-                Node _ (Node Red l kx vx r1) ky vy r2 -> Node Red (Node Black l kx vx r1) ky vy (Node Black r2 kv vv t)
-                Node _ l1 ky vy (Node Red l2 kx vx r) -> Node Red (Node Black l1 ky vy l2) kx vx (Node Black r kv vv t)
-                Node _ l  ky vy r                     -> Node Black (Node Red l ky vy r) kv vv t
-                Leaf -> Leaf
+                Node _ (Node Red l kx vx r1) ky vy r2 ->
+                    Node Red (Node Black l kx vx r1) ky vy (Node Black r2 kv vv t)
 
-balance2 : Tree a b, Tree a b -> Tree a b 
+                Node _ l1 ky vy (Node Red l2 kx vx r) ->
+                    Node Red (Node Black l1 ky vy l2) kx vx (Node Black r kv vv t)
+
+                Node _ l ky vy r ->
+                    Node Black (Node Red l ky vy r) kv vv t
+
+                Leaf ->
+                    Leaf
+
+balance2 : Tree a b, Tree a b -> Tree a b
 balance2 = \tree1, tree2 ->
     when tree1 is
-        Leaf -> Leaf
+        Leaf ->
+            Leaf
+
         Node _ t kv vv _ ->
             when tree2 is
-                Node _ (Node Red l kx1 vx1 r1) ky vy r2  -> Node Red (Node Black t kv vv l) kx1 vx1 (Node Black r1 ky vy r2)
-                Node _ l1 ky vy (Node Red l2 kx2 vx2 r2) -> Node Red (Node Black t kv vv l1) ky vy (Node Black l2 kx2 vx2 r2)
-                Node _ l ky vy r                         -> Node Black t kv vv (Node Red l ky vy r)
-                Leaf -> Leaf
+                Node _ (Node Red l kx1 vx1 r1) ky vy r2 ->
+                    Node Red (Node Black t kv vv l) kx1 vx1 (Node Black r1 ky vy r2)
+
+                Node _ l1 ky vy (Node Red l2 kx2 vx2 r2) ->
+                    Node Red (Node Black t kv vv l1) ky vy (Node Black l2 kx2 vx2 r2)
+
+                Node _ l ky vy r ->
+                    Node Black t kv vv (Node Red l ky vy r)
+
+                Leaf ->
+                    Leaf

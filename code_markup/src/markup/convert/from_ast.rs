@@ -21,6 +21,9 @@ pub fn ast_to_mark_nodes<'a>(
     let mut all_mark_node_ids = vec![header_to_markup(&ast.header, mark_node_pool)];
 
     for &def_id in ast.def_ids.iter() {
+        // for debugging
+        //println!("{}", def2_to_string(def_id, env.pool));
+
         let def2 = env.pool.get(def_id);
 
         let expr2_markup_id = def2_to_markup(env, def2, def_id, mark_node_pool, interns)?;

@@ -10,6 +10,7 @@ pub mod gen_list;
 pub mod gen_num;
 pub mod gen_primitives;
 pub mod gen_records;
+pub mod gen_refcount;
 pub mod gen_result;
 pub mod gen_set;
 pub mod gen_str;
@@ -21,6 +22,11 @@ use core::ffi::c_void;
 #[no_mangle]
 pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
     libc::malloc(size)
+}
+
+#[no_mangle]
+pub unsafe fn roc_memcpy(dest: *mut c_void, src: *const c_void, bytes: usize) -> *mut c_void {
+    libc::memcpy(dest, src, bytes)
 }
 
 #[no_mangle]

@@ -1,12 +1,14 @@
 use bumpalo::Bump;
-use roc_can::expr::Recursive;
-use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use roc_can::expr::{IntValue, Recursive};
+use roc_can::num::{
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult,
+};
 use roc_can::operator::desugar_expr;
 use roc_collections::all::MutSet;
 use roc_module::symbol::Symbol;
 use roc_parse::{ast::Expr, pattern::PatternType};
 use roc_problem::can::{Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 
 use super::{expr2::Expr2, output::Output};
 use crate::canonicalization::canonicalize::{
@@ -29,7 +31,7 @@ use crate::{
 
 pub fn loc_expr_to_expr2<'a>(
     arena: &'a Bump,
-    loc_expr: Located<Expr<'a>>,
+    loc_expr: Loc<Expr<'a>>,
     env: &mut Env<'a>,
     scope: &mut Scope,
     region: Region,
@@ -52,11 +54,11 @@ pub fn expr_to_expr2<'a>(
     match parse_expr {
         Float(string) => {
             match finish_parsing_float(string) {
-                Ok(float) => {
+                Ok((float, _bound)) => {
                     let expr = Expr2::Float {
                         number: FloatVal::F64(float),
                         var: env.var_store.fresh(),
-                        text: PoolStr::new(string, &mut env.pool),
+                        text: PoolStr::new(string, env.pool),
                     };
 
                     (expr, Output::default())
@@ -73,14 +75,26 @@ pub fn expr_to_expr2<'a>(
             }
         }
         Num(string) => {
-            match finish_parsing_int(string) {
-                Ok(int) => {
+            match finish_parsing_num(string) {
+                Ok(ParsedNumResult::UnknownNum(int, _) | ParsedNumResult::Int(int, _)) => {
                     let expr = Expr2::SmallInt {
-                        number: IntVal::I64(int),
+                        number: IntVal::I64(match int {
+                            IntValue::U128(_) => todo!(),
+                            IntValue::I128(n) => n as i64, // FIXME
+                        }),
                         var: env.var_store.fresh(),
                         // TODO non-hardcode
                         style: IntStyle::Decimal,
-                        text: PoolStr::new(string, &mut env.pool),
+                        text: PoolStr::new(string, env.pool),
+                    };
+
+                    (expr, Output::default())
+                }
+                Ok(ParsedNumResult::Float(float, _)) => {
+                    let expr = Expr2::Float {
+                        number: FloatVal::F64(float),
+                        var: env.var_store.fresh(),
+                        text: PoolStr::new(string, env.pool),
                     };
 
                     (expr, Output::default())
@@ -107,13 +121,16 @@ pub fn expr_to_expr2<'a>(
             is_negative,
         } => {
             match finish_parsing_base(string, *base, *is_negative) {
-                Ok(int) => {
+                Ok((int, _bound)) => {
                     let expr = Expr2::SmallInt {
-                        number: IntVal::I64(int),
+                        number: IntVal::I64(match int {
+                            IntValue::U128(_) => todo!(),
+                            IntValue::I128(n) => n as i64, // FIXME
+                        }),
                         var: env.var_store.fresh(),
                         // TODO non-hardcode
                         style: IntStyle::from_base(*base),
-                        text: PoolStr::new(string, &mut env.pool),
+                        text: PoolStr::new(string, env.pool),
                     };
 
                     (expr, Output::default())

@@ -4,7 +4,7 @@ use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CycleEntry {
@@ -25,6 +25,7 @@ pub enum Problem {
     UnusedDef(Symbol, Region),
     UnusedImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
+    UnknownGeneratesWith(Loc<Ident>),
     /// First symbol is the name of the closure with that argument
     /// Second symbol is the name of the argument that is unused
     UnusedArgument(Symbol, Symbol, Region),
@@ -33,12 +34,12 @@ pub enum Problem {
     UnsupportedPattern(BadPattern, Region),
     ShadowingInAnnotation {
         original_region: Region,
-        shadow: Located<Ident>,
+        shadow: Loc<Ident>,
     },
     CyclicAlias(Symbol, Region, Vec<Symbol>),
     BadRecursion(Vec<CycleEntry>),
     PhantomTypeArgument {
-        alias: Symbol,
+        typ: Symbol,
         variable_region: Region,
         variable_name: Lowercase,
     },
@@ -78,11 +79,16 @@ pub enum Problem {
     InvalidInterpolation(Region),
     InvalidHexadecimal(Region),
     InvalidUnicodeCodePt(Region),
+    NestedDatatype {
+        alias: Symbol,
+        def_region: Region,
+        differing_recursion_region: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrecedenceProblem {
-    BothNonAssociative(Region, Located<BinOp>, Located<BinOp>),
+    BothNonAssociative(Region, Loc<BinOp>, Loc<BinOp>),
 }
 
 /// Enum to store the various types of errors that can cause parsing an integer to fail.
@@ -102,6 +108,18 @@ pub enum IntErrorKind {
     Overflow,
     /// Integer is too small to store in target integer type.
     Underflow,
+    /// This is an integer, but it has a float numeric suffix.
+    FloatSuffix,
+    /// The integer literal overflows the width of the suffix associated with it.
+    OverflowsSuffix {
+        suffix_type: &'static str,
+        max_value: u128,
+    },
+    /// The integer literal underflows the width of the suffix associated with it.
+    UnderflowsSuffix {
+        suffix_type: &'static str,
+        min_value: i128,
+    },
 }
 
 /// Enum to store the various types of errors that can cause parsing a float to fail.
@@ -113,13 +131,15 @@ pub enum FloatErrorKind {
     NegativeInfinity,
     /// the literal is too large for f64
     PositiveInfinity,
+    /// This is a float, but it has an integer numeric suffix.
+    IntSuffix,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeError {
     Shadowing {
         original_region: Region,
-        shadow: Located<Ident>,
+        shadow: Loc<Ident>,
     },
     InvalidOptionalValue {
         field_name: Lowercase,
@@ -134,7 +154,17 @@ pub enum RuntimeError {
     UnresolvedTypeVar,
     ErroneousType,
 
-    LookupNotInScope(Located<Ident>, MutSet<Box<str>>),
+    LookupNotInScope(Loc<Ident>, MutSet<Box<str>>),
+    OpaqueNotDefined {
+        usage: Loc<Ident>,
+        opaques_in_scope: MutSet<Box<str>>,
+        opt_defined_alias: Option<Region>,
+    },
+    OpaqueOutsideScope {
+        opaque: Ident,
+        referenced_region: Region,
+        imported_region: Region,
+    },
     ValueNotExposed {
         module_name: ModuleName,
         ident: Ident,

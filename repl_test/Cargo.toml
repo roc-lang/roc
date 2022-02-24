@@ -1,0 +1,23 @@
+[package]
+edition = "2021"
+name = "repl_test"
+version = "0.1.0"
+
+[[test]]
+name = "repl_test"
+path = "src/tests.rs"
+
+[build-dependencies]
+roc_cli = {path = "../cli"}
+
+[dev-dependencies]
+indoc = "1.0.3"
+strip-ansi-escapes = "0.1.1"
+wasmer = {version = "2.0.0", default-features = false, features = ["default-singlepass", "default-universal"]}
+wasmer-wasi = "2.0.0"
+
+roc_repl_cli = {path = "../repl_cli"}
+roc_test_utils = {path = "../test_utils"}
+
+[features]
+wasm = []

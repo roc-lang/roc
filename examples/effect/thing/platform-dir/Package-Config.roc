@@ -1,15 +1,9 @@
-platform folkertdev/foo
+platform "roc-examples/cli"
     requires {} { main : Effect {} }
     exposes []
     packages {}
-    imports [ fx.Effect ]
+    imports [ pf.Effect ]
     provides [ mainForHost ]
-    effects fx.Effect
-        {
-            putLine : Str -> Effect {},
-            getLine : Effect Str
-        }
-
 
 mainForHost : Effect.Effect {} as Fx
 mainForHost = main

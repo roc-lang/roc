@@ -3,6 +3,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
+use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
 use std::collections::hash_map::Entry;
@@ -99,7 +100,7 @@ pub struct Layouts {
     lambda_sets: Vec<LambdaSet>,
     symbols: Vec<Symbol>,
     recursion_variable_to_structure_variable_map: MutMap<Variable, Index<Layout>>,
-    usize_int_width: IntWidth,
+    target_info: TargetInfo,
 }
 
 pub struct FunctionLayout {
@@ -141,6 +142,7 @@ impl FunctionLayout {
             Content::RecursionVar { .. } => Err(TypeError(())),
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(_, _, actual) => Self::from_var_help(layouts, subs, *actual),
+            Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::Error => Err(TypeError(())),
         }
     }
@@ -248,6 +250,7 @@ impl LambdaSet {
             }
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(_, _, actual) => Self::from_var_help(layouts, subs, *actual),
+            Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::Error => Err(TypeError(())),
         }
     }
@@ -402,7 +405,7 @@ impl Layouts {
     const VOID_TUPLE: Index<(Layout, Layout)> = Index::new(0);
     const UNIT_INDEX: Index<Layout> = Index::new(2);
 
-    pub fn new(usize_int_width: IntWidth) -> Self {
+    pub fn new(target_info: TargetInfo) -> Self {
         let mut layouts = Vec::with_capacity(64);
 
         layouts.push(Layout::VOID);
@@ -420,7 +423,7 @@ impl Layouts {
             lambda_sets: Vec::default(),
             symbols: Vec::default(),
             recursion_variable_to_structure_variable_map: MutMap::default(),
-            usize_int_width,
+            target_info,
         }
     }
 
@@ -443,7 +446,12 @@ impl Layouts {
     }
 
     fn usize(&self) -> Layout {
-        Layout::Int(self.usize_int_width)
+        let usize_int_width = match self.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => IntWidth::U32,
+            roc_target::PtrWidth::Bytes8 => IntWidth::U64,
+        };
+
+        Layout::Int(usize_int_width)
     }
 
     fn align_of_layout_index(&self, index: Index<Layout>) -> u16 {
@@ -453,18 +461,23 @@ impl Layouts {
     }
 
     fn align_of_layout(&self, layout: Layout) -> u16 {
-        let ptr_alignment = self.usize_int_width.alignment_bytes() as u16;
+        let usize_int_width = match self.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => IntWidth::U32,
+            roc_target::PtrWidth::Bytes8 => IntWidth::U64,
+        };
+
+        let ptr_alignment = usize_int_width.alignment_bytes(self.target_info) as u16;
 
         match layout {
             Layout::Reserved => unreachable!(),
-            Layout::Int(int_width) => int_width.alignment_bytes() as u16,
-            Layout::Float(float_width) => float_width.alignment_bytes() as u16,
-            Layout::Decimal => IntWidth::U128.alignment_bytes() as u16,
+            Layout::Int(int_width) => int_width.alignment_bytes(self.target_info) as u16,
+            Layout::Float(float_width) => float_width.alignment_bytes(self.target_info) as u16,
+            Layout::Decimal => IntWidth::U128.alignment_bytes(self.target_info) as u16,
             Layout::Str | Layout::Dict(_) | Layout::Set(_) | Layout::List(_) => ptr_alignment,
             Layout::Struct(slice) => self.align_of_layout_slice(slice),
             Layout::Boxed(_) | Layout::UnionRecursive(_) => ptr_alignment,
             Layout::UnionNonRecursive(slices) => {
-                let tag_id_align = IntWidth::I64.alignment_bytes() as u16;
+                let tag_id_align = IntWidth::I64.alignment_bytes(self.target_info) as u16;
 
                 self.align_of_layout_slices(slices).max(tag_id_align)
             }
@@ -518,7 +531,12 @@ impl Layouts {
     }
 
     pub fn size_of_layout(&self, layout: Layout) -> u16 {
-        let ptr_width = self.usize_int_width.stack_size() as u16;
+        let usize_int_width = match self.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => IntWidth::U32,
+            roc_target::PtrWidth::Bytes8 => IntWidth::U64,
+        };
+
+        let ptr_width = usize_int_width.stack_size() as u16;
 
         match layout {
             Layout::Reserved => unreachable!(),
@@ -666,6 +684,7 @@ impl Layout {
                     }
                 }
             }
+            Content::RangedNumber(typ, _) => Self::from_var_help(layouts, subs, *typ),
             Content::Error => Err(TypeError(())),
         }
     }

@@ -8,8 +8,15 @@ use std::collections::HashMap;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output};
+use std::process::{self, Child, Command, Output};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
+
+fn zig_executable() -> String {
+    match std::env::var("ROC_ZIG") {
+        Ok(path) => path,
+        Err(_) => "zig".into(),
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LinkType {
@@ -88,7 +95,7 @@ pub fn build_zig_host_native(
     shared_lib_path: Option<&Path>,
     _target_valgrind: bool,
 ) -> Output {
-    let mut command = Command::new("zig");
+    let mut command = Command::new(&zig_executable());
     command
         .env_clear()
         .env("PATH", env_path)
@@ -151,7 +158,10 @@ pub fn build_zig_host_native(
     use serde_json::Value;
 
     // Run `zig env` to find the location of zig's std/ directory
-    let zig_env_output = Command::new("zig").args(&["env"]).output().unwrap();
+    let zig_env_output = Command::new(&zig_executable())
+        .args(&["env"])
+        .output()
+        .unwrap();
 
     let zig_env_json = if zig_env_output.status.success() {
         std::str::from_utf8(&zig_env_output.stdout).unwrap_or_else(|utf8_err| {
@@ -188,7 +198,7 @@ pub fn build_zig_host_native(
     zig_compiler_rt_path.push("special");
     zig_compiler_rt_path.push("compiler_rt.zig");
 
-    let mut command = Command::new("zig");
+    let mut command = Command::new(&zig_executable());
     command
         .env_clear()
         .env("PATH", &env_path)
@@ -245,7 +255,7 @@ pub fn build_zig_host_wasm32(
     // we'd like to compile with `-target wasm32-wasi` but that is blocked on
     //
     // https://github.com/ziglang/zig/issues/9414
-    let mut command = Command::new("zig");
+    let mut command = Command::new(&zig_executable());
     command
         .env_clear()
         .env("PATH", env_path)
@@ -442,7 +452,7 @@ pub fn rebuild_host(
             _ => panic!("Unsupported architecture {:?}", target.architecture),
         };
 
-        validate_output("host.zig", "zig", output)
+        validate_output("host.zig", &zig_executable(), output)
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
@@ -626,6 +636,33 @@ fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
     }
 }
 
+/// Given a list of library directories and the name of a library, find the 1st match
+///
+/// The provided list of library directories should be in the form of a list of
+/// directories, where each directory is represented by a series of path segments, like
+///
+/// ["/usr", "lib"]
+///
+/// Each directory will be checked for a file with the provided filename, and the first
+/// match will be returned.
+///
+/// If there are no matches, [`None`] will be returned.
+fn look_for_library(lib_dirs: &[&[&str]], lib_filename: &str) -> Option<PathBuf> {
+    lib_dirs
+        .iter()
+        .map(|lib_dir| {
+            lib_dir.iter().fold(PathBuf::new(), |mut path, segment| {
+                path.push(segment);
+                path
+            })
+        })
+        .map(|mut path| {
+            path.push(lib_filename);
+            path
+        })
+        .find(|path| path.exists())
+}
+
 fn link_linux(
     target: &Triple,
     output_path: PathBuf,
@@ -646,7 +683,7 @@ fn link_linux(
 
     if let Architecture::X86_32(_) = target.architecture {
         return Ok((
-            Command::new("zig")
+            Command::new(&zig_executable())
                 .args(&["build-exe"])
                 .args(input_paths)
                 .args(&[
@@ -660,28 +697,75 @@ fn link_linux(
         ));
     }
 
-    let libcrt_path =
+    // Some things we'll need to build a list of dirs to check for libraries
+    let maybe_nix_path = nix_path_opt();
+    let usr_lib_arch = ["/usr", "lib", &architecture];
+    let lib_arch = ["/lib", &architecture];
+    let nix_path_segments;
+    let lib_dirs_if_nix: [&[&str]; 5];
+    let lib_dirs_if_nonix: [&[&str]; 4];
+
+    // Build the aformentioned list
+    let lib_dirs: &[&[&str]] =
         // give preference to nix_path if it's defined, this prevents bugs
-        if let Some(nix_path) = nix_path_opt() {
-            library_path([&nix_path])
-            .unwrap()
+        if let Some(nix_path) = &maybe_nix_path {
+            nix_path_segments = [nix_path.as_str()];
+            lib_dirs_if_nix = [
+                &nix_path_segments,
+                &usr_lib_arch,
+                &lib_arch,
+                &["/usr", "lib"],
+                &["/usr", "lib64"],
+            ];
+            &lib_dirs_if_nix
         } else {
-            library_path(["/usr", "lib", &architecture])
-            .or_else(|| library_path(["/usr", "lib"]))
-            .unwrap()
+            lib_dirs_if_nonix = [
+                &usr_lib_arch,
+                &lib_arch,
+                &["/usr", "lib"],
+                &["/usr", "lib64"],
+            ];
+            &lib_dirs_if_nonix
         };
 
+    // Look for the libraries we'll need
+
     let libgcc_name = "libgcc_s.so.1";
-    let libgcc_path =
-        // give preference to nix_path if it's defined, this prevents bugs
-        if let Some(nix_path) = nix_path_opt() {
-            library_path([&nix_path, libgcc_name])
-            .unwrap()
-        } else {
-            library_path(["/lib", &architecture, libgcc_name])
-            .or_else(|| library_path(["/usr", "lib", &architecture, libgcc_name]))
-            .or_else(|| library_path(["/usr", "lib", libgcc_name]))
-            .unwrap()
+    let libgcc_path = look_for_library(lib_dirs, libgcc_name);
+
+    let crti_name = "crti.o";
+    let crti_path = look_for_library(lib_dirs, crti_name);
+
+    let crtn_name = "crtn.o";
+    let crtn_path = look_for_library(lib_dirs, crtn_name);
+
+    let scrt1_name = "Scrt1.o";
+    let scrt1_path = look_for_library(lib_dirs, scrt1_name);
+
+    // Unwrap all the paths at once so we can inform the user of all missing libs at once
+    let (libgcc_path, crti_path, crtn_path, scrt1_path) =
+        match (libgcc_path, crti_path, crtn_path, scrt1_path) {
+            (Some(libgcc), Some(crti), Some(crtn), Some(scrt1)) => (libgcc, crti, crtn, scrt1),
+            (maybe_gcc, maybe_crti, maybe_crtn, maybe_scrt1) => {
+                if maybe_gcc.is_none() {
+                    eprintln!("Couldn't find libgcc_s.so.1!");
+                    eprintln!("You may need to install libgcc\n");
+                }
+                if maybe_crti.is_none() | maybe_crtn.is_none() | maybe_scrt1.is_none() {
+                    eprintln!("Couldn't find the glibc development files!");
+                    eprintln!("We need the objects crti.o, crtn.o, and Scrt1.o");
+                    eprintln!("You may need to install the glibc development package");
+                    eprintln!("(probably called glibc-dev or glibc-devel)\n");
+                }
+
+                let dirs = lib_dirs
+                    .iter()
+                    .map(|segments| segments.join("/"))
+                    .collect::<Vec<String>>()
+                    .join("\n");
+                eprintln!("We looked in the following directories:\n{}", dirs);
+                process::exit(1);
+            }
         };
 
     let ld_linux = match target.architecture {
@@ -707,7 +791,7 @@ fn link_linux(
         LinkType::Executable => (
             // Presumably this S stands for Static, since if we include Scrt1.o
             // in the linking for dynamic builds, linking fails.
-            vec![libcrt_path.join("Scrt1.o").to_str().unwrap().to_string()],
+            vec![scrt1_path.to_string_lossy().into_owned()],
             output_path,
         ),
         LinkType::Dylib => {
@@ -743,49 +827,52 @@ fn link_linux(
 
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
-    Ok((
-        Command::new("ld")
-            // Don't allow LD_ env vars to affect this
-            .env_clear()
-            .env("PATH", &env_path)
-            // Keep NIX_ env vars
-            .envs(
-                env::vars()
-                    .filter(|&(ref k, _)| k.starts_with("NIX_"))
-                    .collect::<HashMap<String, String>>(),
-            )
-            .args(&[
-                "--gc-sections",
-                "--eh-frame-hdr",
-                "-A",
-                arch_str(target),
-                "-pie",
-                libcrt_path.join("crti.o").to_str().unwrap(),
-                libcrt_path.join("crtn.o").to_str().unwrap(),
-            ])
-            .args(&base_args)
-            .args(&["-dynamic-linker", ld_linux])
-            .args(input_paths)
-            // ld.lld requires this argument, and does not accept --arch
-            // .args(&["-L/usr/lib/x86_64-linux-gnu"])
-            .args(&[
-                // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
-                // for discussion and further references
-                "-lc",
-                "-lm",
-                "-lpthread",
-                "-ldl",
-                "-lrt",
-                "-lutil",
-                "-lc_nonshared",
-                libgcc_path.to_str().unwrap(),
-                // Output
-                "-o",
-                output_path.as_path().to_str().unwrap(), // app (or app.so or app.dylib etc.)
-            ])
-            .spawn()?,
-        output_path,
-    ))
+
+    let mut command = Command::new("ld");
+
+    command
+        // Don't allow LD_ env vars to affect this
+        .env_clear()
+        .env("PATH", &env_path)
+        // Keep NIX_ env vars
+        .envs(
+            env::vars()
+                .filter(|&(ref k, _)| k.starts_with("NIX_"))
+                .collect::<HashMap<String, String>>(),
+        )
+        .args(&[
+            "--gc-sections",
+            "--eh-frame-hdr",
+            "-A",
+            arch_str(target),
+            "-pie",
+            &*crti_path.to_string_lossy(),
+            &*crtn_path.to_string_lossy(),
+        ])
+        .args(&base_args)
+        .args(&["-dynamic-linker", ld_linux])
+        .args(input_paths)
+        // ld.lld requires this argument, and does not accept --arch
+        // .args(&["-L/usr/lib/x86_64-linux-gnu"])
+        .args(&[
+            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
+            // for discussion and further references
+            "-lc",
+            "-lm",
+            "-lpthread",
+            "-ldl",
+            "-lrt",
+            "-lutil",
+            "-lc_nonshared",
+            libgcc_path.to_str().unwrap(),
+            // Output
+            "-o",
+            output_path.as_path().to_str().unwrap(), // app (or app.so or app.dylib etc.)
+        ]);
+
+    let output = command.spawn()?;
+
+    Ok((output, output_path))
 }
 
 fn link_macos(
@@ -837,17 +924,47 @@ fn link_macos(
         ld_command.arg(format!("-L{}/swift", sdk_path));
     };
 
+    let roc_link_flags = match env::var("ROC_LINK_FLAGS") {
+        Ok(flags) => {
+            println!("⚠️ CAUTION: The ROC_LINK_FLAGS environment variable is a temporary workaround, and will no longer do anything once surgical linking lands! If you're concerned about what this means for your use case, please ask about it on Zulip.");
+
+            flags
+        }
+        Err(_) => "".to_string(),
+    };
+    for roc_link_flag in roc_link_flags.split_whitespace() {
+        ld_command.arg(roc_link_flag.to_string());
+    }
+
     ld_command.args(&[
         // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
         // for discussion and further references
         "-lSystem",
         "-lresolv",
         "-lpthread",
+        // This `-F PATH` flag is needed for `-framework` flags to work
+        "-F",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/",
+        // These frameworks are needed for GUI examples to work
+        "-framework",
+        "AudioUnit",
+        "-framework",
+        "Cocoa",
+        "-framework",
+        "CoreAudio",
+        "-framework",
+        "CoreVideo",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "Metal",
+        "-framework",
+        "QuartzCore",
         // "-lrt", // TODO shouldn't we need this?
         // "-lc_nonshared", // TODO shouldn't we need this?
         // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-        // "-framework", // Uncomment this line & the following ro run the `rand` crate in examples/cli
-        // "Security",
+        "-framework",
+        "Security",
         // Output
         "-o",
         output_path.to_str().unwrap(), // app
@@ -895,7 +1012,7 @@ fn link_wasm32(
     let zig_str_path = find_zig_str_path();
     let wasi_libc_path = find_wasi_libc_path();
 
-    let child = Command::new("zig")
+    let child = Command::new(&zig_executable())
         // .env_clear()
         // .env("PATH", &env_path)
         .args(&["build-exe"])

@@ -1,14 +1,19 @@
 use crate::env::Env;
-use crate::expr::{canonicalize_expr, unescape_char, Expr, Output};
-use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
+use crate::num::{
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatBound, IntBound,
+    NumericBound, ParsedNumResult,
+};
 use crate::scope::Scope;
+use roc_error_macros::todo_opaques;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
+
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 #[derive(Clone, Debug, PartialEq)]
@@ -18,22 +23,28 @@ pub enum Pattern {
         whole_var: Variable,
         ext_var: Variable,
         tag_name: TagName,
-        arguments: Vec<(Variable, Located<Pattern>)>,
+        arguments: Vec<(Variable, Loc<Pattern>)>,
+    },
+    UnwrappedOpaque {
+        whole_var: Variable,
+        opaque: Symbol,
+        arguments: Vec<(Variable, Loc<Pattern>)>,
     },
     RecordDestructure {
         whole_var: Variable,
         ext_var: Variable,
-        destructs: Vec<Located<RecordDestruct>>,
+        destructs: Vec<Loc<RecordDestruct>>,
     },
-    IntLiteral(Variable, Box<str>, i64),
-    NumLiteral(Variable, Box<str>, i64),
-    FloatLiteral(Variable, Box<str>, f64),
+    NumLiteral(Variable, Box<str>, IntValue, NumericBound),
+    IntLiteral(Variable, Variable, Box<str>, IntValue, IntBound),
+    FloatLiteral(Variable, Variable, Box<str>, f64, FloatBound),
     StrLiteral(Box<str>),
     SingleQuote(char),
     Underscore,
 
     // Runtime Exceptions
-    Shadowed(Region, Located<Ident>),
+    Shadowed(Region, Loc<Ident>, Symbol),
+    OpaqueNotInScope(Loc<Ident>),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
     // parse error patterns
@@ -51,8 +62,8 @@ pub struct RecordDestruct {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DestructType {
     Required,
-    Optional(Variable, Located<Expr>),
-    Guard(Variable, Located<Pattern>),
+    Optional(Variable, Loc<Expr>),
+    Guard(Variable, Loc<Pattern>),
 }
 
 pub fn symbols_from_pattern(pattern: &Pattern) -> Vec<Symbol> {
@@ -66,11 +77,19 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
     use Pattern::*;
 
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             symbols.push(*symbol);
         }
 
         AppliedTag { arguments, .. } => {
+            for (_, nested) in arguments {
+                symbols_from_pattern_help(&nested.value, symbols);
+            }
+        }
+        UnwrappedOpaque {
+            opaque, arguments, ..
+        } => {
+            symbols.push(*opaque);
             for (_, nested) in arguments {
                 symbols_from_pattern_help(&nested.value, symbols);
             }
@@ -86,16 +105,15 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
             }
         }
 
-        NumLiteral(_, _, _)
-        | IntLiteral(_, _, _)
-        | FloatLiteral(_, _, _)
+        NumLiteral(..)
+        | IntLiteral(..)
+        | FloatLiteral(..)
         | StrLiteral(_)
         | SingleQuote(_)
         | Underscore
         | MalformedPattern(_, _)
-        | UnsupportedPattern(_) => {}
-
-        Shadowed(_, _) => {}
+        | UnsupportedPattern(_)
+        | OpaqueNotInScope(..) => {}
     }
 }
 
@@ -106,7 +124,7 @@ pub fn canonicalize_pattern<'a>(
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
     region: Region,
-) -> (Output, Located<Pattern>) {
+) -> (Output, Loc<Pattern>) {
     use roc_parse::ast::Pattern::*;
     use PatternType::*;
 
@@ -123,13 +141,14 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::Identifier(symbol)
             }
-            Err((original_region, shadow)) => {
+            Err((original_region, shadow, new_symbol)) => {
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                     original_region,
                     shadow: shadow.clone(),
                 }));
+                output.references.bound_symbols.insert(new_symbol);
 
-                Pattern::Shadowed(original_region, shadow)
+                Pattern::Shadowed(original_region, shadow, new_symbol)
             }
         },
         GlobalTag(name) => {
@@ -152,17 +171,8 @@ pub fn canonicalize_pattern<'a>(
                 arguments: vec![],
             }
         }
+        OpaqueRef(..) => todo_opaques!(),
         Apply(tag, patterns) => {
-            let tag_name = match tag.value {
-                GlobalTag(name) => TagName::Global(name.into()),
-                PrivateTag(name) => {
-                    let ident_id = env.ident_ids.get_or_insert(&name.into());
-
-                    TagName::Private(Symbol::new(env.home, ident_id))
-                }
-                _ => unreachable!("Other patterns cannot be applied"),
-            };
-
             let mut can_patterns = Vec::with_capacity(patterns.len());
             for loc_pattern in *patterns {
                 let (new_output, can_pattern) = canonicalize_pattern(
@@ -179,21 +189,57 @@ pub fn canonicalize_pattern<'a>(
                 can_patterns.push((var_store.fresh(), can_pattern));
             }
 
-            Pattern::AppliedTag {
-                whole_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                tag_name,
-                arguments: can_patterns,
+            match tag.value {
+                GlobalTag(name) => {
+                    let tag_name = TagName::Global(name.into());
+                    Pattern::AppliedTag {
+                        whole_var: var_store.fresh(),
+                        ext_var: var_store.fresh(),
+                        tag_name,
+                        arguments: can_patterns,
+                    }
+                }
+                PrivateTag(name) => {
+                    let ident_id = env.ident_ids.get_or_insert(&name.into());
+                    let tag_name = TagName::Private(Symbol::new(env.home, ident_id));
+
+                    Pattern::AppliedTag {
+                        whole_var: var_store.fresh(),
+                        ext_var: var_store.fresh(),
+                        tag_name,
+                        arguments: can_patterns,
+                    }
+                }
+
+                OpaqueRef(name) => match scope.lookup_opaque_ref(name, tag.region) {
+                    Ok(opaque) => Pattern::UnwrappedOpaque {
+                        whole_var: var_store.fresh(),
+                        opaque,
+                        arguments: can_patterns,
+                    },
+                    Err(runtime_error) => {
+                        env.problem(Problem::RuntimeError(runtime_error));
+
+                        Pattern::OpaqueNotInScope(Loc::at(tag.region, name.into()))
+                    }
+                },
+                _ => unreachable!("Other patterns cannot be applied"),
             }
         }
 
-        FloatLiteral(str) => match pattern_type {
+        &FloatLiteral(str) => match pattern_type {
             WhenBranch => match finish_parsing_float(str) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(float) => Pattern::FloatLiteral(var_store.fresh(), (*str).into(), float),
+                Ok((float, bound)) => Pattern::FloatLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    float,
+                    bound,
+                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -203,32 +249,58 @@ pub fn canonicalize_pattern<'a>(
             TopLevelDef | DefExpr => bad_underscore(env, region),
         },
 
-        NumLiteral(str) => match pattern_type {
-            WhenBranch => match finish_parsing_int(str) {
+        &NumLiteral(str) => match pattern_type {
+            WhenBranch => match finish_parsing_num(str) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => Pattern::NumLiteral(var_store.fresh(), (*str).into(), int),
+                Ok(ParsedNumResult::UnknownNum(int, bound)) => {
+                    Pattern::NumLiteral(var_store.fresh(), (str).into(), int, bound)
+                }
+                Ok(ParsedNumResult::Int(int, bound)) => Pattern::IntLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    int,
+                    bound,
+                ),
+                Ok(ParsedNumResult::Float(float, bound)) => Pattern::FloatLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    float,
+                    bound,
+                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        NonBase10Literal {
+        &NonBase10Literal {
             string,
             base,
             is_negative,
         } => match pattern_type {
-            WhenBranch => match finish_parsing_base(string, *base, *is_negative) {
+            WhenBranch => match finish_parsing_base(string, base, is_negative) {
                 Err(_error) => {
-                    let problem = MalformedPatternProblem::MalformedBase(*base);
+                    let problem = MalformedPatternProblem::MalformedBase(base);
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => {
-                    let sign_str = if *is_negative { "-" } else { "" };
-                    let int_str = format!("{}{}", sign_str, int.to_string()).into_boxed_str();
-                    let i = if *is_negative { -int } else { int };
-                    Pattern::IntLiteral(var_store.fresh(), int_str, i)
+                Ok((IntValue::U128(_), _)) if is_negative => {
+                    // Can't negate a u128; that doesn't fit in any integer literal type we support.
+                    let problem = MalformedPatternProblem::MalformedInt;
+                    malformed_pattern(env, problem, region)
+                }
+                Ok((int, bound)) => {
+                    let sign_str = if is_negative { "-" } else { "" };
+                    let int_str = format!("{}{}", sign_str, int).into_boxed_str();
+                    let i = match int {
+                        // Safety: this is fine because I128::MAX = |I128::MIN| - 1
+                        IntValue::I128(n) if is_negative => IntValue::I128(-n),
+                        IntValue::I128(n) => IntValue::I128(n),
+                        IntValue::U128(_) => unreachable!(),
+                    };
+                    Pattern::IntLiteral(var_store.fresh(), var_store.fresh(), int_str, i, bound)
                 }
             },
             ptype => unsupported_pattern(env, ptype, region),
@@ -277,7 +349,7 @@ pub fn canonicalize_pattern<'a>(
                             Ok(symbol) => {
                                 output.references.bound_symbols.insert(symbol);
 
-                                destructs.push(Located {
+                                destructs.push(Loc {
                                     region: loc_pattern.region,
                                     value: RecordDestruct {
                                         var: var_store.fresh(),
@@ -287,7 +359,7 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow)) => {
+                            Err((original_region, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
@@ -297,7 +369,8 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                                opt_erroneous =
+                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
                             }
                         };
                     }
@@ -316,7 +389,7 @@ pub fn canonicalize_pattern<'a>(
 
                         output.union(new_output);
 
-                        destructs.push(Located {
+                        destructs.push(Loc {
                             region: loc_pattern.region,
                             value: RecordDestruct {
                                 var: var_store.fresh(),
@@ -348,7 +421,7 @@ pub fn canonicalize_pattern<'a>(
 
                                 output.union(expr_output);
 
-                                destructs.push(Located {
+                                destructs.push(Loc {
                                     region: loc_pattern.region,
                                     value: RecordDestruct {
                                         var: var_store.fresh(),
@@ -358,7 +431,7 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow)) => {
+                            Err((original_region, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
@@ -368,7 +441,8 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                                opt_erroneous =
+                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
                             }
                         };
                     }
@@ -410,7 +484,7 @@ pub fn canonicalize_pattern<'a>(
 
     (
         output,
-        Located {
+        Loc {
             region,
             value: can_pattern,
         },
@@ -451,7 +525,7 @@ fn malformed_pattern(env: &mut Env, problem: MalformedPatternProblem, region: Re
 
 pub fn bindings_from_patterns<'a, I>(loc_patterns: I) -> Vec<(Symbol, Region)>
 where
-    I: Iterator<Item = &'a Located<Pattern>>,
+    I: Iterator<Item = &'a Loc<Pattern>>,
 {
     let mut answer = Vec::new();
 
@@ -471,7 +545,7 @@ fn add_bindings_from_patterns(
     use Pattern::*;
 
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             answer.push((*symbol, *region));
         }
         AppliedTag {
@@ -482,8 +556,18 @@ fn add_bindings_from_patterns(
                 add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
             }
         }
+        UnwrappedOpaque {
+            arguments: loc_args,
+            opaque,
+            ..
+        } => {
+            for (_, loc_arg) in loc_args {
+                add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
+            }
+            answer.push((*opaque, *region));
+        }
         RecordDestructure { destructs, .. } => {
-            for Located {
+            for Loc {
                 region,
                 value: RecordDestruct { symbol, .. },
             } in destructs
@@ -491,15 +575,15 @@ fn add_bindings_from_patterns(
                 answer.push((*symbol, *region));
             }
         }
-        NumLiteral(_, _, _)
-        | IntLiteral(_, _, _)
-        | FloatLiteral(_, _, _)
+        NumLiteral(..)
+        | IntLiteral(..)
+        | FloatLiteral(..)
         | StrLiteral(_)
         | SingleQuote(_)
         | Underscore
-        | Shadowed(_, _)
         | MalformedPattern(_, _)
-        | UnsupportedPattern(_) => (),
+        | UnsupportedPattern(_)
+        | OpaqueNotInScope(..) => (),
     }
 }
 

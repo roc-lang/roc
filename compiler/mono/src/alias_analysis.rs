@@ -308,7 +308,7 @@ fn build_entry_point(
 
         let block = builder.add_block();
 
-        let type_id = layout_spec(&mut builder, &Layout::Struct(layouts))?;
+        let type_id = layout_spec(&mut builder, &Layout::struct_no_name_order(layouts))?;
 
         let argument = builder.add_unknown_with(block, &[], type_id)?;
 
@@ -349,7 +349,10 @@ fn proc_spec<'a>(proc: &Proc<'a>) -> Result<(FuncDef, MutSet<UnionLayout<'a>>)> 
     let value_id = stmt_spec(&mut builder, &mut env, block, &proc.ret_layout, &proc.body)?;
 
     let root = BlockExpr(block, value_id);
-    let arg_type_id = layout_spec(&mut builder, &Layout::Struct(&argument_layouts))?;
+    let arg_type_id = layout_spec(
+        &mut builder,
+        &Layout::struct_no_name_order(&argument_layouts),
+    )?;
     let ret_type_id = layout_spec(&mut builder, &proc.ret_layout)?;
 
     let spec = builder.build(arg_type_id, ret_type_id, root)?;
@@ -702,30 +705,30 @@ fn call_spec(
             call.arguments,
         ),
         HigherOrder(HigherOrderLowLevel {
-            specialization_id,
             closure_env_layout,
             update_mode,
             op,
-            arg_layouts,
-            ret_layout,
-            function_name,
-            function_env,
+            passed_function,
             ..
         }) => {
             use crate::low_level::HigherOrder::*;
 
-            let array = specialization_id.to_bytes();
+            let array = passed_function.specialization_id.to_bytes();
             let spec_var = CalleeSpecVar(&array);
 
             let mode = update_mode.to_bytes();
             let update_mode_var = UpdateModeVar(&mode);
 
-            let it = arg_layouts.iter().copied();
-            let bytes = func_name_bytes_help(*function_name, it, ret_layout);
+            let it = passed_function.argument_layouts.iter().copied();
+            let bytes =
+                func_name_bytes_help(passed_function.name, it, &passed_function.return_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
 
-            let closure_env = env.symbols[function_env];
+            let closure_env = env.symbols[&passed_function.captured_environment];
+
+            let return_layout = &passed_function.return_layout;
+            let argument_layouts = passed_function.argument_layouts;
 
             macro_rules! call_function {
                 ($builder: expr, $block:expr, [$($arg:expr),+ $(,)?]) => {{
@@ -757,7 +760,7 @@ fn call_spec(
                         Ok(new_state)
                     };
 
-                    let state_layout = arg_layouts[0];
+                    let state_layout = argument_layouts[0];
                     let state_type = layout_spec(builder, &state_layout)?;
                     let init_state = state;
 
@@ -778,7 +781,7 @@ fn call_spec(
                         Ok(new_state)
                     };
 
-                    let state_layout = arg_layouts[0];
+                    let state_layout = argument_layouts[0];
                     let state_type = layout_spec(builder, &state_layout)?;
                     let init_state = state;
 
@@ -802,13 +805,14 @@ fn call_spec(
                         Ok(new_state)
                     };
 
-                    let state_layout = arg_layouts[0];
+                    let state_layout = argument_layouts[0];
                     let state_type = layout_spec(builder, &state_layout)?;
                     let init_state = state;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
 
+                // List.mapWithIndex : List before, (before, Nat -> after) -> List after
                 ListMapWithIndex { xs } => {
                     let list = env.symbols[xs];
 
@@ -818,14 +822,15 @@ fn call_spec(
                         let element = builder.add_bag_get(block, input_bag)?;
                         let index = builder.add_make_tuple(block, &[])?;
 
-                        let new_element = call_function!(builder, block, [index, element]);
+                        // before, Nat -> after
+                        let new_element = call_function!(builder, block, [element, index]);
 
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, ret_layout)?;
+                    let output_element_type = layout_spec(builder, return_layout)?;
 
-                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -846,9 +851,9 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, ret_layout)?;
+                    let output_element_type = layout_spec(builder, return_layout)?;
 
-                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -873,7 +878,7 @@ fn call_spec(
                         with_new_heap_cell(builder, block, bag)
                     };
 
-                    let state_layout = Layout::Builtin(Builtin::List(&arg_layouts[0]));
+                    let state_layout = Layout::Builtin(Builtin::List(&argument_layouts[0]));
                     let state_type = layout_spec(builder, &state_layout)?;
                     let init_state = list;
 
@@ -898,9 +903,9 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, ret_layout)?;
+                    let output_element_type = layout_spec(builder, return_layout)?;
 
-                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -931,9 +936,9 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, ret_layout)?;
+                    let output_element_type = layout_spec(builder, return_layout)?;
 
-                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -970,9 +975,9 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, ret_layout)?;
+                    let output_element_type = layout_spec(builder, return_layout)?;
 
-                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -1004,7 +1009,7 @@ fn call_spec(
                         with_new_heap_cell(builder, block, new_bag)
                     };
 
-                    let state_layout = Layout::Builtin(Builtin::List(&arg_layouts[0]));
+                    let state_layout = Layout::Builtin(Builtin::List(&argument_layouts[0]));
                     let state_type = layout_spec(builder, &state_layout)?;
                     let init_state = list;
 
@@ -1019,7 +1024,7 @@ fn call_spec(
                         _ => unreachable!(),
                     };
 
-                    let result_repr = ResultRepr::from_layout(ret_layout);
+                    let result_repr = ResultRepr::from_layout(return_layout);
 
                     let output_element_layout = match (keep_result, result_repr) {
                         (KeepResult::Errs, ResultRepr::ResultConcrete { err, .. }) => err,
@@ -1132,8 +1137,8 @@ fn call_spec(
                     let list = env.symbols[xs];
 
                     // ListFindUnsafe returns { value: v, found: Bool=Int1 }
-                    let output_layouts = vec![arg_layouts[0], Layout::Builtin(Builtin::Bool)];
-                    let output_layout = Layout::Struct(&output_layouts);
+                    let output_layouts = vec![argument_layouts[0], Layout::Builtin(Builtin::Bool)];
+                    let output_layout = Layout::struct_no_name_order(&output_layouts);
                     let output_type = layout_spec(builder, &output_layout)?;
 
                     let loop_body = |builder: &mut FuncDefBuilder, block, output| {
@@ -1638,7 +1643,9 @@ fn literal_spec(
 
     match literal {
         Str(_) => new_static_string(builder, block),
-        Int(_) | Float(_) | Decimal(_) | Bool(_) | Byte(_) => builder.add_make_tuple(block, &[]),
+        Int(_) | U128(_) | Float(_) | Decimal(_) | Bool(_) | Byte(_) => {
+            builder.add_make_tuple(block, &[])
+        }
     }
 }
 
@@ -1668,7 +1675,9 @@ fn layout_spec_help(
 
     match layout {
         Builtin(builtin) => builtin_spec(builder, builtin, when_recursive),
-        Struct(fields) => build_recursive_tuple_type(builder, fields, when_recursive),
+        Struct { field_layouts, .. } => {
+            build_recursive_tuple_type(builder, field_layouts, when_recursive)
+        }
         LambdaSet(lambda_set) => layout_spec_help(
             builder,
             &lambda_set.runtime_representation(),

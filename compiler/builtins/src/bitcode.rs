@@ -1,4 +1,5 @@
 use roc_module::symbol::Symbol;
+use roc_target::TargetInfo;
 use std::ops::Index;
 
 pub const BUILTINS_HOST_OBJ_PATH: &str = env!(
@@ -11,7 +12,7 @@ pub const BUILTINS_WASM32_OBJ_PATH: &str = env!(
     "Env var BUILTINS_WASM32_O not found. Is there a problem with the build script?"
 );
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct IntrinsicName {
     pub options: [&'static str; 14],
 }
@@ -46,14 +47,21 @@ impl FloatWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self) -> u32 {
+    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+        use roc_target::Architecture;
         use std::mem::align_of;
         use FloatWidth::*;
 
         // TODO actually alignment is architecture-specific
         match self {
             F32 => align_of::<f32>() as u32,
-            F64 => align_of::<f64>() as u32,
+            F64 => match target_info.architecture {
+                Architecture::X86_64
+                | Architecture::Aarch64
+                | Architecture::Arm
+                | Architecture::Wasm32 => 8,
+                Architecture::X86_32 => 4,
+            },
             F128 => align_of::<i128>() as u32,
         }
     }
@@ -106,16 +114,22 @@ impl IntWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self) -> u32 {
+    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+        use roc_target::Architecture;
         use std::mem::align_of;
         use IntWidth::*;
 
-        // TODO actually alignment is architecture-specific
         match self {
             U8 | I8 => align_of::<i8>() as u32,
             U16 | I16 => align_of::<i16>() as u32,
             U32 | I32 => align_of::<i32>() as u32,
-            U64 | I64 => align_of::<i64>() as u32,
+            U64 | I64 => match target_info.architecture {
+                Architecture::X86_64
+                | Architecture::Aarch64
+                | Architecture::Arm
+                | Architecture::Wasm32 => 8,
+                Architecture::X86_32 => 4,
+            },
             U128 | I128 => align_of::<i128>() as u32,
         }
     }
@@ -143,6 +157,21 @@ impl IntWidth {
             }
             Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 | Symbol::NUM_AT_UNSIGNED8 => Some(IntWidth::U8),
             _ => None,
+        }
+    }
+
+    pub const fn type_name(&self) -> &'static str {
+        match self {
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::I128 => "i128",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::U128 => "u128",
         }
     }
 }
@@ -200,15 +229,44 @@ macro_rules! float_intrinsic {
 }
 
 #[macro_export]
-macro_rules! int_intrinsic {
-    ($name:literal) => {{
+macro_rules! llvm_int_intrinsic {
+    ($signed_name:literal, $unsigned_name:literal) => {{
         let mut output = IntrinsicName::default();
 
-        output.options[4] = concat!($name, ".i8");
-        output.options[5] = concat!($name, ".i16");
-        output.options[6] = concat!($name, ".i32");
-        output.options[7] = concat!($name, ".i64");
-        output.options[8] = concat!($name, ".i128");
+        // The indeces align with the `Index` impl for `IntrinsicName`.
+        // LLVM uses the same types for both signed and unsigned integers.
+        output.options[4] = concat!($unsigned_name, ".i8");
+        output.options[5] = concat!($unsigned_name, ".i16");
+        output.options[6] = concat!($unsigned_name, ".i32");
+        output.options[7] = concat!($unsigned_name, ".i64");
+        output.options[8] = concat!($unsigned_name, ".i128");
+
+        output.options[9] = concat!($signed_name, ".i8");
+        output.options[10] = concat!($signed_name, ".i16");
+        output.options[11] = concat!($signed_name, ".i32");
+        output.options[12] = concat!($signed_name, ".i64");
+        output.options[13] = concat!($signed_name, ".i128");
+
+        output
+    }};
+
+    ($name:literal) => {
+        int_intrinsic!($name, $name)
+    };
+}
+
+#[macro_export]
+macro_rules! int_intrinsic {
+    ($name:expr) => {{
+        let mut output = IntrinsicName::default();
+
+        // The indices align with the `Index` impl for `IntrinsicName`.
+        output.options[4] = concat!($name, ".u8");
+        output.options[5] = concat!($name, ".u16");
+        output.options[6] = concat!($name, ".u32");
+        output.options[7] = concat!($name, ".u64");
+        output.options[8] = concat!($name, ".u128");
+
         output.options[9] = concat!($name, ".i8");
         output.options[10] = concat!($name, ".i16");
         output.options[11] = concat!($name, ".i32");
@@ -242,6 +300,9 @@ pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";
 pub const STR_NUMBER_OF_BYTES: &str = "roc_builtins.str.number_of_bytes";
 pub const STR_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.str.from_int");
 pub const STR_FROM_FLOAT: &str = "roc_builtins.str.from_float";
+pub const STR_TO_INT: IntrinsicName = int_intrinsic!("roc_builtins.str.to_int");
+pub const STR_TO_FLOAT: IntrinsicName = float_intrinsic!("roc_builtins.str.to_float");
+pub const STR_TO_DECIMAL: &str = "roc_builtins.str.to_decimal";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
 pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
 pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
@@ -299,6 +360,7 @@ pub const LIST_ANY: &str = "roc_builtins.list.any";
 pub const LIST_ALL: &str = "roc_builtins.list.all";
 pub const LIST_FIND_UNSAFE: &str = "roc_builtins.list.find_unsafe";
 
+pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";
 pub const DEC_NEQ: &str = "roc_builtins.dec.neq";
@@ -309,5 +371,56 @@ pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
 pub const DEC_DIV: &str = "roc_builtins.dec.div";
 
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
+pub const UTILS_INCREF: &str = "roc_builtins.utils.incref";
 pub const UTILS_DECREF: &str = "roc_builtins.utils.decref";
 pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null";
+pub const UTILS_EXPECT_FAILED: &str = "roc_builtins.expect.expect_failed";
+pub const UTILS_GET_EXPECT_FAILURES: &str = "roc_builtins.expect.get_expect_failures";
+pub const UTILS_DEINIT_FAILURES: &str = "roc_builtins.expect.deinit_failures";
+
+#[derive(Debug, Default)]
+pub struct IntToIntrinsicName {
+    pub options: [IntrinsicName; 10],
+}
+
+impl IntToIntrinsicName {
+    pub const fn default() -> Self {
+        Self {
+            options: [IntrinsicName::default(); 10],
+        }
+    }
+}
+
+impl Index<IntWidth> for IntToIntrinsicName {
+    type Output = IntrinsicName;
+
+    fn index(&self, index: IntWidth) -> &Self::Output {
+        &self.options[index as usize]
+    }
+}
+
+#[macro_export]
+macro_rules! int_to_int_intrinsic {
+    ($name_prefix:literal, $name_suffix:literal) => {{
+        let mut output = IntToIntrinsicName::default();
+
+        output.options[0] = int_intrinsic!(concat!($name_prefix, "u8", $name_suffix));
+        output.options[1] = int_intrinsic!(concat!($name_prefix, "u16", $name_suffix));
+        output.options[2] = int_intrinsic!(concat!($name_prefix, "u32", $name_suffix));
+        output.options[3] = int_intrinsic!(concat!($name_prefix, "u64", $name_suffix));
+        output.options[4] = int_intrinsic!(concat!($name_prefix, "u128", $name_suffix));
+
+        output.options[5] = int_intrinsic!(concat!($name_prefix, "i8", $name_suffix));
+        output.options[6] = int_intrinsic!(concat!($name_prefix, "i16", $name_suffix));
+        output.options[7] = int_intrinsic!(concat!($name_prefix, "i32", $name_suffix));
+        output.options[8] = int_intrinsic!(concat!($name_prefix, "i64", $name_suffix));
+        output.options[9] = int_intrinsic!(concat!($name_prefix, "i128", $name_suffix));
+
+        output
+    }};
+}
+
+pub const NUM_INT_TO_INT_CHECKING_MAX: IntToIntrinsicName =
+    int_to_int_intrinsic!("roc_builtins.num.int_to_", "_checking_max");
+pub const NUM_INT_TO_INT_CHECKING_MAX_AND_MIN: IntToIntrinsicName =
+    int_to_int_intrinsic!("roc_builtins.num.int_to_", "_checking_max_and_min");

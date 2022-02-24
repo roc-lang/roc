@@ -1,27 +1,31 @@
 use std::path::PathBuf;
 
-use bumpalo::collections::{String, Vec};
+use crate::FormatMode;
+use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_def;
 use roc_fmt::module::fmt_module;
+use roc_fmt::Buf;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::ast::{
-    AssignedField, Collection, Expr, Pattern, StrLiteral, StrSegment, Tag, TypeAnnotation,
-    WhenBranch,
+    AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation,
+    TypeHeader, WhenBranch,
 };
 use roc_parse::header::{
-    AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
+    PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
 use roc_parse::{
     ast::{Def, Module},
+    ident::UppercaseIdent,
     module::{self, module_defs},
-    parser::{Parser, State, SyntaxError},
+    parser::{Parser, SyntaxError},
+    state::State,
 };
-use roc_region::all::Located;
-use roc_reporting::{internal_error, user_error};
+use roc_region::all::{Loc, Region};
 
-pub fn format(files: std::vec::Vec<PathBuf>) {
+pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
     for file in files {
         let arena = Bump::new();
 
@@ -30,13 +34,13 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
         let ast = arena.alloc(parse_all(&arena, &src).unwrap_or_else(|e| {
             user_error!("Unexpected parse failure when parsing this formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, e)
         }));
-        let mut buf = String::new_in(&arena);
+        let mut buf = Buf::new_in(&arena);
         fmt_all(&arena, &mut buf, ast);
 
-        let reparsed_ast = arena.alloc(parse_all(&arena, &buf).unwrap_or_else(|e| {
+        let reparsed_ast = arena.alloc(parse_all(&arena, buf.as_str()).unwrap_or_else(|e| {
             let mut fail_file = file.clone();
             fail_file.set_extension("roc-format-failed");
-            std::fs::write(&fail_file, &buf).unwrap();
+            std::fs::write(&fail_file, buf.as_str()).unwrap();
             internal_error!(
                 "Formatting bug; formatted code isn't valid\n\n\
                 I wrote the incorrect result to this file for debugging purposes:\n{}\n\n\
@@ -46,18 +50,18 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
             );
         }));
 
-        let ast = ast.remove_spaces(&arena);
-        let reparsed_ast = reparsed_ast.remove_spaces(&arena);
+        let ast_normalized = ast.remove_spaces(&arena);
+        let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
 
         // HACK!
         // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
         // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
         // I don't have the patience to debug this right now, so let's leave it for another day...
         // TODO: fix PartialEq impl on ast types
-        if format!("{:?}", ast) != format!("{:?}", reparsed_ast) {
+        if format!("{:?}", ast_normalized) != format!("{:?}", reparsed_ast_normalized) {
             let mut fail_file = file.clone();
             fail_file.set_extension("roc-format-failed");
-            std::fs::write(&fail_file, &buf).unwrap();
+            std::fs::write(&fail_file, buf.as_str()).unwrap();
 
             let mut before_file = file.clone();
             before_file.set_extension("roc-format-failed-ast-before");
@@ -76,26 +80,60 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
                 after_file.display());
         }
 
-        std::fs::write(&file, &buf).unwrap();
+        // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
+        let mut reformatted_buf = Buf::new_in(&arena);
+        fmt_all(&arena, &mut reformatted_buf, reparsed_ast);
+        if buf.as_str() != reformatted_buf.as_str() {
+            let mut unstable_1_file = file.clone();
+            unstable_1_file.set_extension("roc-format-unstable-1");
+            std::fs::write(&unstable_1_file, buf.as_str()).unwrap();
+
+            let mut unstable_2_file = file.clone();
+            unstable_2_file.set_extension("roc-format-unstable-2");
+            std::fs::write(&unstable_2_file, reformatted_buf.as_str()).unwrap();
+
+            internal_error!(
+                "Formatting bug; formatting is not stable. Reformatting the formatted file changed it again.\n\n\
+                I wrote the result of formatting to this file for debugging purposes:\n{}\n\n\
+                I wrote the result of double-formatting here:\n{}\n\n",
+                unstable_1_file.display(),
+                unstable_2_file.display());
+        }
+
+        match mode {
+            FormatMode::CheckOnly => {
+                // If we notice that this file needs to be formatted, return early
+                if buf.as_str() != src {
+                    return Err("One or more files need to be reformatted.".to_string());
+                }
+            }
+
+            FormatMode::Format => {
+                // If all the checks above passed, actually write out the new file.
+                std::fs::write(&file, buf.as_str()).unwrap();
+            }
+        }
     }
+
+    Ok(())
 }
 
 #[derive(Debug, PartialEq)]
 struct Ast<'a> {
     module: Module<'a>,
-    defs: Vec<'a, Located<Def<'a>>>,
+    defs: Vec<'a, Loc<Def<'a>>>,
 }
 
 fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
-    let (module, state) =
-        module::parse_header(arena, State::new(src.as_bytes())).map_err(SyntaxError::Header)?;
+    let (module, state) = module::parse_header(arena, State::new(src.as_bytes()))
+        .map_err(|e| SyntaxError::Header(e.problem))?;
 
     let (_, defs, _) = module_defs().parse(arena, state).map_err(|(_, e, _)| e)?;
 
     Ok(Ast { module, defs })
 }
 
-fn fmt_all<'a>(arena: &'a Bump, buf: &mut String<'a>, ast: &'a Ast) {
+fn fmt_all<'a>(arena: &'a Bump, buf: &mut Buf<'a>, ast: &'a Ast) {
     fmt_module(buf, &ast.module);
     for def in &ast.defs {
         fmt_def(buf, arena.alloc(def.value), 0);
@@ -153,6 +191,7 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     packages: header.packages.remove_spaces(arena),
                     imports: header.imports.remove_spaces(arena),
                     provides: header.provides.remove_spaces(arena),
+                    provides_types: header.provides_types.map(|ts| ts.remove_spaces(arena)),
                     to: header.to.remove_spaces(arena),
                     before_header: &[],
                     after_app_keyword: &[],
@@ -174,14 +213,6 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     packages: header.packages.remove_spaces(arena),
                     imports: header.imports.remove_spaces(arena),
                     provides: header.provides.remove_spaces(arena),
-                    effects: Effects {
-                        spaces_before_effects_keyword: &[],
-                        spaces_after_effects_keyword: &[],
-                        spaces_after_type_name: &[],
-                        effect_shortname: header.effects.effect_shortname.remove_spaces(arena),
-                        effect_type_name: header.effects.effect_type_name.remove_spaces(arena),
-                        entries: header.effects.entries.remove_spaces(arena),
-                    },
                     before_header: &[],
                     after_platform_keyword: &[],
                     before_requires: &[],
@@ -196,6 +227,25 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     after_provides: &[],
                 },
             },
+            Module::Hosted { header } => Module::Hosted {
+                header: HostedHeader {
+                    name: header.name.remove_spaces(arena),
+                    exposes: header.exposes.remove_spaces(arena),
+                    imports: header.imports.remove_spaces(arena),
+                    generates: header.generates.remove_spaces(arena),
+                    generates_with: header.generates_with.remove_spaces(arena),
+                    before_header: &[],
+                    after_hosted_keyword: &[],
+                    before_exposes: &[],
+                    after_exposes: &[],
+                    before_imports: &[],
+                    after_imports: &[],
+                    before_generates: &[],
+                    after_generates: &[],
+                    before_with: &[],
+                    after_with: &[],
+                },
+            },
         }
     }
 }
@@ -206,13 +256,19 @@ impl<'a> RemoveSpaces<'a> for &'a str {
     }
 }
 
-impl<'a, T: RemoveSpaces<'a> + Copy> RemoveSpaces<'a> for ExposesEntry<'a, T> {
+impl<'a, T: RemoveSpaces<'a> + Copy> RemoveSpaces<'a> for Spaced<'a, T> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            ExposesEntry::Exposed(a) => ExposesEntry::Exposed(a.remove_spaces(arena)),
-            ExposesEntry::SpaceBefore(a, _) => a.remove_spaces(arena),
-            ExposesEntry::SpaceAfter(a, _) => a.remove_spaces(arena),
+            Spaced::Item(a) => Spaced::Item(a.remove_spaces(arena)),
+            Spaced::SpaceBefore(a, _) => a.remove_spaces(arena),
+            Spaced::SpaceAfter(a, _) => a.remove_spaces(arena),
         }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ExposedName<'a> {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
     }
 }
 
@@ -239,18 +295,10 @@ impl<'a> RemoveSpaces<'a> for To<'a> {
 
 impl<'a> RemoveSpaces<'a> for TypedIdent<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match *self {
-            TypedIdent::Entry {
-                ident,
-                spaces_before_colon: _,
-                ann,
-            } => TypedIdent::Entry {
-                ident: ident.remove_spaces(arena),
-                spaces_before_colon: &[],
-                ann: ann.remove_spaces(arena),
-            },
-            TypedIdent::SpaceBefore(a, _) => a.remove_spaces(arena),
-            TypedIdent::SpaceAfter(a, _) => a.remove_spaces(arena),
+        TypedIdent {
+            ident: self.ident.remove_spaces(arena),
+            spaces_before_colon: &[],
+            ann: self.ann.remove_spaces(arena),
         }
     }
 }
@@ -264,39 +312,18 @@ impl<'a> RemoveSpaces<'a> for PlatformRequires<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for PlatformRigid<'a> {
-    fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match *self {
-            PlatformRigid::Entry { rigid, alias } => PlatformRigid::Entry { rigid, alias },
-            PlatformRigid::SpaceBefore(a, _) => a.remove_spaces(arena),
-            PlatformRigid::SpaceAfter(a, _) => a.remove_spaces(arena),
-        }
+impl<'a> RemoveSpaces<'a> for UppercaseIdent<'a> {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
     }
 }
 
 impl<'a> RemoveSpaces<'a> for PackageEntry<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match *self {
-            PackageEntry::Entry {
-                shorthand,
-                spaces_after_shorthand: _,
-                package_or_path,
-            } => PackageEntry::Entry {
-                shorthand,
-                spaces_after_shorthand: &[],
-                package_or_path: package_or_path.remove_spaces(arena),
-            },
-            PackageEntry::SpaceBefore(a, _) => a.remove_spaces(arena),
-            PackageEntry::SpaceAfter(a, _) => a.remove_spaces(arena),
-        }
-    }
-}
-
-impl<'a> RemoveSpaces<'a> for PackageOrPath<'a> {
-    fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match *self {
-            PackageOrPath::Package(a, b) => PackageOrPath::Package(a, b),
-            PackageOrPath::Path(p) => PackageOrPath::Path(p.remove_spaces(arena)),
+        PackageEntry {
+            shorthand: self.shorthand,
+            spaces_after_shorthand: &[],
+            package_name: self.package_name.remove_spaces(arena),
         }
     }
 }
@@ -306,8 +333,6 @@ impl<'a> RemoveSpaces<'a> for ImportsEntry<'a> {
         match *self {
             ImportsEntry::Module(a, b) => ImportsEntry::Module(a, b.remove_spaces(arena)),
             ImportsEntry::Package(a, b, c) => ImportsEntry::Package(a, b, c.remove_spaces(arena)),
-            ImportsEntry::SpaceBefore(a, _) => a.remove_spaces(arena),
-            ImportsEntry::SpaceAfter(a, _) => a.remove_spaces(arena),
         }
     }
 }
@@ -318,10 +343,10 @@ impl<'a, T: RemoveSpaces<'a>> RemoveSpaces<'a> for Option<T> {
     }
 }
 
-impl<'a, T: RemoveSpaces<'a> + std::fmt::Debug> RemoveSpaces<'a> for Located<T> {
+impl<'a, T: RemoveSpaces<'a> + std::fmt::Debug> RemoveSpaces<'a> for Loc<T> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         let res = self.value.remove_spaces(arena);
-        Located::new(0, 0, 0, 0, res)
+        Loc::at(Region::zero(), res)
     }
 }
 
@@ -376,10 +401,25 @@ impl<'a> RemoveSpaces<'a> for Def<'a> {
             Def::Annotation(a, b) => {
                 Def::Annotation(a.remove_spaces(arena), b.remove_spaces(arena))
             }
-            Def::Alias { name, vars, ann } => Def::Alias {
-                name: name.remove_spaces(arena),
-                vars: vars.remove_spaces(arena),
+            Def::Alias {
+                header: TypeHeader { name, vars },
+                ann,
+            } => Def::Alias {
+                header: TypeHeader {
+                    name: name.remove_spaces(arena),
+                    vars: vars.remove_spaces(arena),
+                },
                 ann: ann.remove_spaces(arena),
+            },
+            Def::Opaque {
+                header: TypeHeader { name, vars },
+                typ,
+            } => Def::Opaque {
+                header: TypeHeader {
+                    name: name.remove_spaces(arena),
+                    vars: vars.remove_spaces(arena),
+                },
+                typ: typ.remove_spaces(arena),
             },
             Def::Body(a, b) => Def::Body(
                 arena.alloc(a.remove_spaces(arena)),
@@ -484,6 +524,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::GlobalTag(a) => Expr::GlobalTag(a),
             Expr::PrivateTag(a) => Expr::PrivateTag(a),
+            Expr::OpaqueRef(a) => Expr::OpaqueRef(a),
             Expr::Closure(a, b) => Expr::Closure(
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),
@@ -535,6 +576,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::Identifier(a) => Pattern::Identifier(a),
             Pattern::GlobalTag(a) => Pattern::GlobalTag(a),
             Pattern::PrivateTag(a) => Pattern::PrivateTag(a),
+            Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
             Pattern::Apply(a, b) => Pattern::Apply(
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),
@@ -580,11 +622,9 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
             ),
             TypeAnnotation::Apply(a, b, c) => TypeAnnotation::Apply(a, b, c.remove_spaces(arena)),
             TypeAnnotation::BoundVariable(a) => TypeAnnotation::BoundVariable(a),
-            TypeAnnotation::As(a, _, c) => TypeAnnotation::As(
-                arena.alloc(a.remove_spaces(arena)),
-                &[],
-                arena.alloc(c.remove_spaces(arena)),
-            ),
+            TypeAnnotation::As(a, _, c) => {
+                TypeAnnotation::As(arena.alloc(a.remove_spaces(arena)), &[], c)
+            }
             TypeAnnotation::Record { fields, ext } => TypeAnnotation::Record {
                 fields: fields.remove_spaces(arena),
                 ext: ext.remove_spaces(arena),

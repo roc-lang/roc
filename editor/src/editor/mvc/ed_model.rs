@@ -21,26 +21,25 @@ use roc_load::file::LoadedModule;
 use roc_module::symbol::Interns;
 use std::path::Path;
 
+/// Contains nearly all state related to a single roc file in the editor.
 #[derive(Debug)]
 pub struct EdModel<'a> {
-    pub module: EdModule<'a>,
+    pub module: EdModule<'a>, // contains Abstract Syntax Tree of code
     pub file_path: &'a Path,
-    pub code_lines: CodeLines,
-    // allows us to map window coordinates to MarkNodeId's
-    pub grid_node_map: GridNodeMap,
-    pub markup_ids: Vec<MarkNodeId>, // one root node for every expression
-    pub mark_node_pool: SlowPool,
-    // contains single char dimensions, used to calculate line height, column width...
-    pub glyph_dim_rect_opt: Option<Rect>,
+    pub code_lines: CodeLines, // Vec<String> of all code, this Vec is written to disk when saving a file.
+    pub grid_node_map: GridNodeMap, // allows us to map window coordinates to MarkNodeId's
+    pub markup_ids: Vec<MarkNodeId>, // one root node for every top level definition
+    pub mark_node_pool: SlowPool, // all MarkupNodes for this file are saved into this pool and can be retrieved using their MarkNodeId
+    pub glyph_dim_rect_opt: Option<Rect>, // represents the width and height of single monospace glyph(char)
     pub has_focus: bool,
-    pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>,
-    pub selected_block_opt: Option<SelectedBlock>,
-    pub loaded_module: LoadedModule,
-    pub show_debug_view: bool,
-    // EdModel is dirty if it has changed since the previous render.
-    pub dirty: bool,
+    pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>, // the editor supports multiple carets/cursors and multiple selections
+    pub selected_block_opt: Option<SelectedBlock>, // a selected AST node, the roc type of this node is shown in the editor on ctrl+shift+"up arrow"
+    pub loaded_module: LoadedModule, // contains all roc symbols, exposed values, exposed aliases, solved types... in the file(=module)
+    pub show_debug_view: bool,       // see render_debug.rs for the debug view
+    pub dirty: bool, // EdModel is dirty if it has changed since the previous render.
 }
 
+// a selected AST node, the roc type of this node is shown in the editor on ctrl+shift+"up arrow"
 #[derive(Debug, Copy, Clone)]
 pub struct SelectedBlock {
     pub ast_node_id: ASTNodeId,
@@ -49,14 +48,17 @@ pub struct SelectedBlock {
 }
 
 pub fn init_model<'a>(
-    code_str: &'a str,
+    code_str: &'a str, // entire roc file as one str
     file_path: &'a Path,
-    env: Env<'a>,
-    loaded_module: LoadedModule,
-    code_arena: &'a Bump,
-    caret_pos: CaretPos, // to set caret position
+    env: Env<'a>, // contains all variables, identifiers, closures, top level symbols...
+    loaded_module: LoadedModule, // contains all roc symbols, exposed values, exposed aliases, solved types... in the file(=module)
+    code_arena: &'a Bump,        // bump allocation arena, used for fast memory allocation
+    caret_pos: CaretPos,         // to set caret position when the file is displayed
 ) -> EdResult<EdModel<'a>> {
+    // for debugging
+    //println!("{}", code_str);
     let mut owned_loaded_module = loaded_module;
+
     let mut module = EdModule::new(code_str, env, &mut owned_loaded_module.interns, code_arena)?;
 
     let mut mark_node_pool = SlowPool::default();
@@ -79,6 +81,8 @@ pub fn init_model<'a>(
     let mut col_nr = 0;
 
     for mark_node_id in &markup_ids {
+        // for debugging:
+        //println!("{}", tree_as_string(*mark_node_id, &mark_node_pool));
         EdModel::insert_mark_node_between_line(
             &mut line_nr,
             &mut col_nr,
@@ -125,6 +129,7 @@ impl<'a> EdModel<'a> {
         self.grid_node_map.get_id_at_row_col(caret_pos)
     }
 
+    // get id of MarkNode that is located before the caret
     pub fn get_prev_mark_node_id(&self) -> UIResult<Option<MarkNodeId>> {
         let caret_pos = self.get_caret();
 
@@ -183,7 +188,7 @@ impl<'a> EdModule<'a> {
     pub fn new(
         code_str: &'a str,
         mut env: Env<'a>,
-        interns: &mut Interns,
+        interns: &mut Interns, // contains ids of all identifiers in this roc file
         ast_arena: &'a Bump,
     ) -> EdResult<EdModule<'a>> {
         if !code_str.is_empty() {
@@ -206,7 +211,7 @@ impl<'a> EdModule<'a> {
 pub mod test_ed_model {
     use crate::editor::ed_error::EdResult;
     use crate::editor::mvc::ed_model;
-    use crate::editor::resources::strings::HELLO_WORLD;
+    use crate::editor::resources::strings::{HELLO_WORLD, PLATFORM_STR};
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::caret_w_select::CaretPos;
@@ -222,6 +227,7 @@ pub mod test_ed_model {
     use roc_module::symbol::IdentIds;
     use roc_module::symbol::ModuleIds;
     use roc_types::subs::VarStore;
+    use std::fs;
     use std::fs::File;
     use std::io::Write;
     use std::path::Path;
@@ -275,6 +281,9 @@ pub mod test_ed_model {
         }
     }
 
+    // We use a Domain Specific Language to clearly represent some of the editor's state.
+    // Here we convert that DSL to an EdModel.
+    // Example of dsl: "val = ┃❮5❯", 5 is selected and the caret is located before the 5.
     pub fn ed_model_from_dsl<'a>(
         clean_code_str: &'a mut String,
         code_lines: Vec<String>,
@@ -282,10 +291,21 @@ pub mod test_ed_model {
         module_ids: &'a ModuleIds,
         code_arena: &'a Bump,
     ) -> Result<EdModel<'a>, String> {
-        let full_code = vec![HELLO_WORLD, clean_code_str.as_str()];
-        *clean_code_str = full_code.join("\n");
+        // to be able to load the code as a LoadedModule we add a roc app header and a main function
+        *clean_code_str = vec![HELLO_WORLD, clean_code_str.as_str()].join("");
+        // for debugging
+        //println!("{}", clean_code_str);
 
         let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
+
+        let platform_dir = temp_dir.path().join("platform");
+        fs::create_dir(platform_dir.clone()).expect("Failed to create platform directory");
+        let package_config_path = platform_dir.join("Package-Config.roc");
+        let mut package_config_file =
+            File::create(package_config_path).expect("Failed to create Package-Config.roc");
+        writeln!(package_config_file, "{}", PLATFORM_STR)
+            .expect("Failed to write to Package-Config.roc");
+
         let temp_file_path_buf =
             PathBuf::from([Uuid::new_v4().to_string(), ".roc".to_string()].join(""));
         let temp_file_full_path = temp_dir.path().join(temp_file_path_buf);
@@ -309,8 +329,8 @@ pub mod test_ed_model {
             code_arena,
         )?;
 
-        // adjust for header and main function
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 2;
+        // adjust caret for header and main function
+        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
         let caret_w_select = convert_dsl_to_selection(&code_lines)?;
         let adjusted_caret_pos = TextPos {
             line: caret_w_select.caret_pos.line + nr_hello_world_lines,

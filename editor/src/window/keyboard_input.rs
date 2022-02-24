@@ -1,20 +1,10 @@
-#[derive(Debug)]
+// note: the Default is that these are all False
+#[derive(Debug, Default)]
 pub struct Modifiers {
     pub shift: bool,
     pub ctrl: bool,
     pub alt: bool,
     pub logo: bool,
-}
-
-impl Default for Modifiers {
-    fn default() -> Self {
-        Self {
-            shift: false,
-            ctrl: false,
-            alt: false,
-            logo: false,
-        }
-    }
 }
 
 impl Modifiers {
@@ -31,7 +21,7 @@ impl Modifiers {
     // returns true if modifiers are active that can be active when the user wants to insert a new char; e.g.: shift+a to make A
     pub fn new_char_modifiers(&self) -> bool {
         self.no_modifiers()
-        || (self.shift && !self.ctrl && !self.alt && !self.logo) // e.g.: shift+a to make A 
+        || (self.shift && !self.ctrl && !self.alt && !self.logo) // e.g.: shift+a to make A
         || (self.cmd_or_ctrl() && self.alt) // e.g.: ctrl+alt+2 to make @ on azerty keyboard
     }
 

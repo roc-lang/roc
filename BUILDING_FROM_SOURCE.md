@@ -15,7 +15,7 @@ To run the test suite (via `cargo test`), you additionally need to install:
 * [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
 Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specific_tests` to skip over the valgrind failures & tests.
 
-For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal developtment you should be fine without it. 
+For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal developtment you should be fine without it.
 
 ### libcxb libraries
 
@@ -49,7 +49,7 @@ If you want to install it manually, you can also download Zig directly [here](ht
 **version: 12.0.x**
 
 For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
-`/usr/local/opt/llvm@12/bin` to your `PATH`. You can confirm this worked by
+`$(brew --prefix llvm@12)/bin` to your `PATH`. You can confirm this worked by
 running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
 You may also need to manually specify a prefix env var like so:
 ```
@@ -79,6 +79,12 @@ There are also alternative installation options at http://releases.llvm.org/down
 
 [Troubleshooting](#troubleshooting)
 
+### Building
+
+Use `cargo build` to build the whole project.
+Use `cargo run help` to see all subcommands.
+To use the `repl` subcommand, execute `cargo run repl`.
+
 ## Using Nix
 
 ### Install
@@ -105,11 +111,10 @@ Now with nix installed, you just need to run one command:
 
 > Also, if you're on NixOS you'll need to enable opengl at the system-wide level. You can do this in configuration.nix with `hardware.opengl.enable = true;`. If you don't do this, nix-shell will fail!
 
-You should be in a shell with everything needed to build already installed. Next run:
-
-`cargo run repl`
-
-You should be in a repl now. Have fun!
+You should be in a shell with everything needed to build already installed.
+Use `cargo run help` to see all subcommands.
+To use the `repl` subcommand, execute `cargo run repl`.
+Use `cargo build` to build the whole project.
 
 ### Extra tips
 

@@ -14,6 +14,7 @@ pub mod module;
 pub mod number_literal;
 pub mod pattern;
 pub mod problems;
+pub mod state;
 pub mod string_literal;
 pub mod test_helpers;
 pub mod type_annotation;

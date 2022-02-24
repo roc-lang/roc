@@ -44,6 +44,8 @@ pub fn mark_node_to_html<'a>(
                 Import => "import",
                 Provides => "provides",
                 Blank => "blank",
+                Comment => "comment",
+                DocsComment => "docs-comment",
             };
 
             write_html_to_buf(content, css_class, buf);

@@ -2,7 +2,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Layout, UnionLayout};
 
 use crate::wasm_module::ValueType;
-use crate::{PTR_SIZE, PTR_TYPE};
+use crate::{PTR_SIZE, PTR_TYPE, TARGET_INFO};
 
 /// Manually keep up to date with the Zig version we are using for builtins
 pub const BUILTINS_ZIG_VERSION: ZigVersion = ZigVersion::Zig8;
@@ -39,9 +39,6 @@ pub enum WasmLayout {
         alignment_bytes: u32,
         format: StackMemoryFormat,
     },
-
-    // Local pointer to heap memory
-    HeapMemory,
 }
 
 impl WasmLayout {
@@ -50,8 +47,8 @@ impl WasmLayout {
         use UnionLayout::*;
         use ValueType::*;
 
-        let size = layout.stack_size(PTR_SIZE);
-        let alignment_bytes = layout.alignment_bytes(PTR_SIZE);
+        let size = layout.stack_size(TARGET_INFO);
+        let alignment_bytes = layout.alignment_bytes(TARGET_INFO);
 
         match layout {
             Layout::Builtin(Int(int_width)) => {
@@ -91,7 +88,7 @@ impl WasmLayout {
             },
 
             Layout::Builtin(Str | Dict(_, _) | Set(_) | List(_))
-            | Layout::Struct(_)
+            | Layout::Struct { .. }
             | Layout::LambdaSet(_)
             | Layout::Union(NonRecursive(_)) => Self::StackMemory {
                 size,
@@ -105,7 +102,7 @@ impl WasmLayout {
                 | NullableWrapped { .. }
                 | NullableUnwrapped { .. },
             )
-            | Layout::RecursivePointer => Self::HeapMemory,
+            | Layout::RecursivePointer => Self::Primitive(PTR_TYPE, PTR_SIZE),
         }
     }
 
@@ -120,7 +117,6 @@ impl WasmLayout {
             Self::Primitive(I64, _) => &[I64],
             Self::Primitive(F32, _) => &[F32],
             Self::Primitive(F64, _) => &[F64],
-            Self::HeapMemory => &[I32],
 
             // 1 Roc argument => 0-2 Wasm arguments (depending on size and calling convention)
             Self::StackMemory { size, format, .. } => conv.stack_memory_arg_types(*size, *format),
@@ -130,7 +126,6 @@ impl WasmLayout {
     pub fn return_method(&self) -> ReturnMethod {
         match self {
             Self::Primitive(ty, _) => ReturnMethod::Primitive(*ty),
-            Self::HeapMemory => ReturnMethod::Primitive(PTR_TYPE),
             Self::StackMemory { size, .. } => {
                 if *size == 0 {
                     ReturnMethod::NoReturnValue
@@ -138,14 +133,6 @@ impl WasmLayout {
                     ReturnMethod::WriteToPointerArg
                 }
             }
-        }
-    }
-
-    pub fn size(&self) -> u32 {
-        match self {
-            Self::Primitive(_, size) => *size,
-            Self::StackMemory { size, .. } => *size,
-            Self::HeapMemory => PTR_SIZE,
         }
     }
 }

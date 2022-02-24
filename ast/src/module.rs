@@ -3,6 +3,7 @@ use std::path::Path;
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_load::file::LoadedModule;
+use roc_target::TargetInfo;
 
 pub fn load_module(src_file: &Path) -> LoadedModule {
     let subs_by_module = MutMap::default();
@@ -19,8 +20,7 @@ pub fn load_module(src_file: &Path) -> LoadedModule {
             )
         }),
         subs_by_module,
-        8,
-        roc_can::builtins::builtin_defs_map,
+        TargetInfo::default_x86_64(),
     );
 
     match loaded {

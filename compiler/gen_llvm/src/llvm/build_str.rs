@@ -1,8 +1,8 @@
-use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
-use crate::llvm::build::{complex_bitcast, Env, Scope};
-use crate::llvm::build_list::{
-    allocate_list, call_bitcode_fn_returns_list, pass_update_mode, store_list,
+use crate::llvm::bitcode::{
+    call_bitcode_fn, call_list_bitcode_fn, call_str_bitcode_fn, call_void_bitcode_fn,
 };
+use crate::llvm::build::{complex_bitcast, Env, Scope};
+use crate::llvm::build_list::{allocate_list, pass_update_mode, store_list};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
@@ -10,6 +10,7 @@ use morphic_lib::UpdateMode;
 use roc_builtins::bitcode::{self, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
+use roc_target::PtrWidth;
 
 use super::build::load_symbol;
 
@@ -24,7 +25,7 @@ pub fn str_repeat<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let str_c_abi = str_symbol_to_c_abi(env, scope, str_symbol);
     let count = load_symbol(scope, &count_symbol);
-    call_bitcode_fn(env, &[str_c_abi.into(), count], bitcode::STR_REPEAT)
+    call_str_bitcode_fn(env, &[str_c_abi.into(), count], bitcode::STR_REPEAT)
 }
 
 /// Str.split : Str, Str -> List Str
@@ -39,7 +40,7 @@ pub fn str_split<'a, 'ctx, 'env>(
     let str_c_abi = str_symbol_to_c_abi(env, scope, str_symbol);
     let delim_c_abi = str_symbol_to_c_abi(env, scope, delimiter_symbol);
 
-    let segment_count = call_bitcode_fn(
+    let segment_count = call_list_bitcode_fn(
         env,
         &[str_c_abi.into(), delim_c_abi.into()],
         bitcode::STR_COUNT_SEGMENTS,
@@ -79,10 +80,9 @@ fn str_symbol_to_c_abi<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     let string = load_symbol(scope, &symbol);
 
-    let target_type = match env.ptr_bytes {
-        8 => env.context.i128_type().into(),
-        4 => env.context.i64_type().into(),
-        _ => unreachable!(),
+    let target_type = match env.target_info.ptr_width() {
+        PtrWidth::Bytes8 => env.context.i128_type().into(),
+        PtrWidth::Bytes4 => env.context.i64_type().into(),
     };
 
     complex_bitcast(env.builder, string, target_type, "str_to_c_abi").into_int_value()
@@ -96,10 +96,9 @@ pub fn str_to_c_abi<'a, 'ctx, 'env>(
 
     env.builder.build_store(cell, value);
 
-    let target_type = match env.ptr_bytes {
-        8 => env.context.i128_type(),
-        4 => env.context.i64_type(),
-        _ => unreachable!(),
+    let target_type = match env.target_info.ptr_width() {
+        PtrWidth::Bytes8 => env.context.i128_type(),
+        PtrWidth::Bytes4 => env.context.i64_type(),
     };
 
     let target_type_ptr = env
@@ -141,7 +140,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
     let str1_c_abi = str_symbol_to_c_abi(env, scope, str1_symbol);
     let str2_c_abi = str_symbol_to_c_abi(env, scope, str2_symbol);
 
-    call_bitcode_fn(
+    call_str_bitcode_fn(
         env,
         &[str1_c_abi.into(), str2_c_abi.into()],
         bitcode::STR_CONCAT,
@@ -160,7 +159,7 @@ pub fn str_join_with<'a, 'ctx, 'env>(
     let list_i128 = str_symbol_to_c_abi(env, scope, list_symbol);
     let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
 
-    call_bitcode_fn(
+    call_str_bitcode_fn(
         env,
         &[list_i128.into(), str_i128.into()],
         bitcode::STR_JOIN_WITH,
@@ -256,7 +255,7 @@ pub fn str_trim<'a, 'ctx, 'env>(
     str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM)
+    call_str_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM)
 }
 
 /// Str.trimLeft : Str -> Str
@@ -266,7 +265,7 @@ pub fn str_trim_left<'a, 'ctx, 'env>(
     str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_LEFT)
+    call_str_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_LEFT)
 }
 
 /// Str.trimRight : Str -> Str
@@ -276,7 +275,7 @@ pub fn str_trim_right<'a, 'ctx, 'env>(
     str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_RIGHT)
+    call_str_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_RIGHT)
 }
 
 /// Str.fromInt : Int -> Str
@@ -285,7 +284,7 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     value: IntValue<'ctx>,
     int_width: IntWidth,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn(env, &[value.into()], &bitcode::STR_FROM_INT[int_width])
+    call_str_bitcode_fn(env, &[value.into()], &bitcode::STR_FROM_INT[int_width])
 }
 
 /// Str.toUtf8 : Str -> List U8
@@ -300,7 +299,7 @@ pub fn str_to_utf8<'a, 'ctx, 'env>(
         "to_utf8",
     );
 
-    call_bitcode_fn_returns_list(env, &[string], bitcode::STR_TO_UTF8)
+    call_list_bitcode_fn(env, &[string], bitcode::STR_TO_UTF8)
 }
 
 fn decode_from_utf8_result<'a, 'ctx, 'env>(
@@ -310,20 +309,19 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let fields = match env.ptr_bytes {
-        8 | 4 => [
+    let fields = match env.target_info.ptr_width() {
+        PtrWidth::Bytes4 | PtrWidth::Bytes8 => [
             env.ptr_int().into(),
             super::convert::zig_str_type(env).into(),
             env.context.bool_type().into(),
             ctx.i8_type().into(),
         ],
-        _ => unreachable!(),
     };
 
     let record_type = env.context.struct_type(&fields, false);
 
-    match env.ptr_bytes {
-        8 | 4 => {
+    match env.target_info.ptr_width() {
+        PtrWidth::Bytes4 | PtrWidth::Bytes8 => {
             let result_ptr_cast = env
                 .builder
                 .build_bitcast(
@@ -337,7 +335,6 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
                 .build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
                 .into_struct_value()
         }
-        _ => unreachable!(),
     }
 }
 
@@ -406,7 +403,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
     decode_from_utf8_result(env, result_ptr).into()
 }
 
-/// Str.fromInt : Int -> Str
+/// Str.fromFloat : Int -> Str
 pub fn str_from_float<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
@@ -414,7 +411,7 @@ pub fn str_from_float<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let float = load_symbol(scope, &int_symbol);
 
-    call_bitcode_fn(env, &[float], bitcode::STR_FROM_FLOAT)
+    call_str_bitcode_fn(env, &[float], bitcode::STR_FROM_FLOAT)
 }
 
 /// Str.equal : Str, Str -> Bool
@@ -431,13 +428,4 @@ pub fn str_equal<'a, 'ctx, 'env>(
         &[str1_i128.into(), str2_i128.into()],
         bitcode::STR_EQUAL,
     )
-}
-
-// TODO investigate: does this cause problems when the layout is known? this value is now not refcounted!
-pub fn empty_str<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
-    let struct_type = super::convert::zig_str_type(env);
-
-    // The pointer should be null (aka zero) and the length should be zero,
-    // so the whole struct should be a const_zero
-    BasicValueEnum::StructValue(struct_type.const_zero())
 }

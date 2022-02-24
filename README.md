@@ -6,7 +6,7 @@ The [tutorial](TUTORIAL.md) is the best place to learn about how to use the lang
 
 There's also a folder of [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) - the [CLI example](https://github.com/rtfeldman/roc/tree/trunk/examples/cli) in particular is a reasonable starting point to build on.
 
-[Roc Zulip chat](https://roc.zulipchat.com) is the best place to ask questions and get help! It's also where we discuss [ideas](https://roc.zulipchat.com/#narrow/stream/304641-ideas) for the language. If you want to get involved in contributing to the language, Zulip is also a great place to ask about good first projects.
+If you have a specific question, the [FAQ](FAQ.md) might have an answer, although [Roc Zulip chat](https://roc.zulipchat.com) is overall the best place to ask questions and get help! It's also where we discuss [ideas](https://roc.zulipchat.com/#narrow/stream/304641-ideas) for the language. If you want to get involved in contributing to the language, Zulip is also a great place to ask about good first projects.
 
 ## State of Roc
 
@@ -29,6 +29,14 @@ Some examples like `examples/benchmarks/NQueens.roc` require input after running
 For NQueens, input 10 in the terminal and press enter.
 
 [examples/benchmarks](examples/benchmarks) contains larger examples.
+
+**Tip:** when programming in roc, we recommend to execute `./roc check myproject/Foo.roc` before `./roc myproject/Foo.roc` or `./roc build myproject/Foo.roc`. `./roc check` can produce clear error messages in cases where building/running may panic.
+
+## Sponsor
+
+We are very grateful for our sponsor [NoRedInk](https://www.noredink.com/).
+
+<img src="https://www.noredink.com/assets/logo-red-black-f6989d7567cf90b349409137595e99c52d036d755b4403d25528e0fd83a3b084.svg" height="60" alt="NoRedInk logo"/>
 
 ## Applications and Platforms
 
@@ -68,8 +76,6 @@ The core Roc language and standard library include no I/O operations, which give
 * A high-performance build tool (or text editor) written in Rust can be a Roc platform with a strong plugin security model. For example, it could expose only operations allowing plugin authors to modify the contents of certain files, rather than allowing plugins arbitrary read/write access to the entire filesystem.
 * A VR or [Arduino](https://www.arduino.cc/) platform can expose uncommon I/O operations supported by that hardware, while omitting common I/O operations that are unsupported (such as reading keyboard input from a terminal that doesn't exist).
 * A high-performance Web server written in Rust can be a Roc platform where all I/O operations are implemented in terms of Streams or Observables rather than a more traditional asynchronous abstraction like Futures or Promises. This would mean all code in that platform's ecosystem would be necessarily built on a common streaming abstraction.
-
-Each Roc platform gets its own separate package repository, with packages built on top of the API that platform exposes. This means each platform has its own ecosystem where everything is built on top of the same shared set of platform-specific primitives.
 
 ## Project Goals
 

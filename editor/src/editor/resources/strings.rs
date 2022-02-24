@@ -17,11 +17,23 @@ For convenience and consistency, there is only one way to format roc.
 
 pub const HELLO_WORLD: &str = r#"
 app "test-app"
-    packages { base: "platform" }
+    packages { pf: "platform" }
     imports []
-    provides [ main ] to base
+    provides [ main ] to pf
 
 main = "Hello, world!"
 
 
+"#;
+
+pub const PLATFORM_STR: &str = r#"
+platform "test-platform"
+    requires {} { main : Str }
+    exposes []
+    packages {}
+    imports []
+    provides [ mainForHost ]
+
+mainForHost : Str
+mainForHost = main
 "#;

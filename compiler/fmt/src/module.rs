@@ -1,16 +1,17 @@
-use crate::annotation::Formattable;
-use crate::collection::{fmt_collection, CollectionConfig};
+use crate::annotation::{Formattable, Newlines};
+use crate::collection::fmt_collection;
 use crate::expr::fmt_str_literal;
 use crate::spaces::{fmt_default_spaces, fmt_spaces, INDENT};
-use bumpalo::collections::String;
-use roc_parse::ast::{Collection, Module};
+use crate::Buf;
+use roc_parse::ast::{Collection, Module, Spaced};
 use roc_parse::header::{
-    AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
+    PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
-use roc_region::all::Located;
+use roc_parse::ident::UppercaseIdent;
+use roc_region::all::Loc;
 
-pub fn fmt_module<'a>(buf: &mut String<'a>, module: &'a Module<'a>) {
+pub fn fmt_module<'a, 'buf>(buf: &mut Buf<'buf>, module: &'a Module<'a>) {
     match module {
         Module::Interface { header } => {
             fmt_interface_header(buf, header);
@@ -21,392 +22,340 @@ pub fn fmt_module<'a>(buf: &mut String<'a>, module: &'a Module<'a>) {
         Module::Platform { header } => {
             fmt_platform_header(buf, header);
         }
+        Module::Hosted { header } => {
+            fmt_hosted_header(buf, header);
+        }
     }
 }
 
-pub fn fmt_interface_header<'a>(buf: &mut String<'a>, header: &'a InterfaceHeader<'a>) {
+pub fn fmt_interface_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a InterfaceHeader<'a>) {
     let indent = INDENT;
 
+    buf.indent(0);
     buf.push_str("interface");
 
     // module name
-    fmt_default_spaces(buf, header.after_interface_keyword, " ", indent);
+    fmt_default_spaces(buf, header.after_interface_keyword, indent);
     buf.push_str(header.name.value.as_str());
 
     // exposes
-    fmt_default_spaces(buf, header.before_exposes, " ", indent);
+    fmt_default_spaces(buf, header.before_exposes, indent);
+    buf.indent(indent);
     buf.push_str("exposes");
-    fmt_default_spaces(buf, header.after_exposes, " ", indent);
+    fmt_default_spaces(buf, header.after_exposes, indent);
     fmt_exposes(buf, header.exposes, indent);
 
     // imports
-    fmt_default_spaces(buf, header.before_imports, " ", indent);
+    fmt_default_spaces(buf, header.before_imports, indent);
+    buf.indent(indent);
     buf.push_str("imports");
-    fmt_default_spaces(buf, header.after_imports, " ", indent);
+    fmt_default_spaces(buf, header.after_imports, indent);
     fmt_imports(buf, header.imports, indent);
 }
 
-pub fn fmt_app_header<'a>(buf: &mut String<'a>, header: &'a AppHeader<'a>) {
+pub fn fmt_hosted_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a HostedHeader<'a>) {
     let indent = INDENT;
 
+    buf.indent(0);
+    buf.push_str("hosted");
+
+    // module name
+    fmt_default_spaces(buf, header.after_hosted_keyword, indent);
+    buf.push_str(header.name.value.as_str());
+
+    // exposes
+    fmt_default_spaces(buf, header.before_exposes, indent);
+    buf.indent(indent);
+    buf.push_str("exposes");
+    fmt_default_spaces(buf, header.after_exposes, indent);
+    fmt_exposes(buf, header.exposes, indent);
+
+    // imports
+    fmt_default_spaces(buf, header.before_imports, indent);
+    buf.indent(indent);
+    buf.push_str("imports");
+    fmt_default_spaces(buf, header.after_imports, indent);
+    fmt_imports(buf, header.imports, indent);
+
+    // generates
+    fmt_default_spaces(buf, header.before_generates, indent);
+    buf.indent(indent);
+    buf.push_str("generates");
+    fmt_default_spaces(buf, header.after_generates, indent);
+    buf.push_str(header.generates.into());
+
+    // with
+    fmt_default_spaces(buf, header.before_with, indent);
+    buf.indent(indent);
+    buf.push_str("with");
+    fmt_default_spaces(buf, header.after_with, indent);
+    fmt_exposes(buf, header.generates_with, indent);
+}
+
+pub fn fmt_app_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a AppHeader<'a>) {
+    let indent = INDENT;
+    buf.indent(0);
     buf.push_str("app");
 
-    fmt_default_spaces(buf, header.after_app_keyword, " ", indent);
+    fmt_default_spaces(buf, header.after_app_keyword, indent);
     fmt_str_literal(buf, header.name.value, indent);
 
     // packages
-    fmt_default_spaces(buf, header.before_packages, " ", indent);
+    fmt_default_spaces(buf, header.before_packages, indent);
+    buf.indent(indent);
     buf.push_str("packages");
-    fmt_default_spaces(buf, header.after_packages, " ", indent);
+    fmt_default_spaces(buf, header.after_packages, indent);
     fmt_packages(buf, header.packages, indent);
 
     // imports
-    fmt_default_spaces(buf, header.before_imports, " ", indent);
+    fmt_default_spaces(buf, header.before_imports, indent);
+    buf.indent(indent);
     buf.push_str("imports");
-    fmt_default_spaces(buf, header.after_imports, " ", indent);
+    fmt_default_spaces(buf, header.after_imports, indent);
     fmt_imports(buf, header.imports, indent);
 
     // provides
-    fmt_default_spaces(buf, header.before_provides, " ", indent);
+    fmt_default_spaces(buf, header.before_provides, indent);
+    buf.indent(indent);
     buf.push_str("provides");
-    fmt_default_spaces(buf, header.after_provides, " ", indent);
-    fmt_provides(buf, header.provides, indent);
-    fmt_default_spaces(buf, header.before_to, " ", indent);
+    fmt_default_spaces(buf, header.after_provides, indent);
+    fmt_provides(buf, header.provides, header.provides_types, indent);
+    fmt_default_spaces(buf, header.before_to, indent);
+    buf.indent(indent);
     buf.push_str("to");
-    fmt_default_spaces(buf, header.after_to, " ", indent);
+    fmt_default_spaces(buf, header.after_to, indent);
     fmt_to(buf, header.to.value, indent);
 }
 
-pub fn fmt_platform_header<'a>(buf: &mut String<'a>, header: &'a PlatformHeader<'a>) {
+pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHeader<'a>) {
     let indent = INDENT;
 
+    buf.indent(0);
     buf.push_str("platform");
 
-    fmt_default_spaces(buf, header.after_platform_keyword, " ", indent);
-    fmt_package_name(buf, header.name.value);
+    fmt_default_spaces(buf, header.after_platform_keyword, indent);
+    fmt_package_name(buf, header.name.value, indent);
 
     // requires
-    fmt_default_spaces(buf, header.before_requires, " ", indent);
+    fmt_default_spaces(buf, header.before_requires, indent);
+    buf.indent(indent);
     buf.push_str("requires");
-    fmt_default_spaces(buf, header.after_requires, " ", indent);
+    fmt_default_spaces(buf, header.after_requires, indent);
     fmt_requires(buf, &header.requires, indent);
 
     // exposes
-    fmt_default_spaces(buf, header.before_exposes, " ", indent);
+    fmt_default_spaces(buf, header.before_exposes, indent);
+    buf.indent(indent);
     buf.push_str("exposes");
-    fmt_default_spaces(buf, header.after_exposes, " ", indent);
+    fmt_default_spaces(buf, header.after_exposes, indent);
     fmt_exposes(buf, header.exposes, indent);
 
     // packages
-    fmt_default_spaces(buf, header.before_packages, " ", indent);
+    fmt_default_spaces(buf, header.before_packages, indent);
+    buf.indent(indent);
     buf.push_str("packages");
-    fmt_default_spaces(buf, header.after_packages, " ", indent);
+    fmt_default_spaces(buf, header.after_packages, indent);
     fmt_packages(buf, header.packages, indent);
 
     // imports
-    fmt_default_spaces(buf, header.before_imports, " ", indent);
+    fmt_default_spaces(buf, header.before_imports, indent);
+    buf.indent(indent);
     buf.push_str("imports");
-    fmt_default_spaces(buf, header.after_imports, " ", indent);
+    fmt_default_spaces(buf, header.after_imports, indent);
     fmt_imports(buf, header.imports, indent);
 
     // provides
-    fmt_default_spaces(buf, header.before_provides, " ", indent);
+    fmt_default_spaces(buf, header.before_provides, indent);
+    buf.indent(indent);
     buf.push_str("provides");
-    fmt_default_spaces(buf, header.after_provides, " ", indent);
-    fmt_provides(buf, header.provides, indent);
-
-    fmt_effects(buf, &header.effects, indent);
+    fmt_default_spaces(buf, header.after_provides, indent);
+    fmt_provides(buf, header.provides, None, indent);
 }
 
-fn fmt_requires<'a>(buf: &mut String<'a>, requires: &PlatformRequires<'a>, indent: u16) {
-    fmt_collection(
-        buf,
-        requires.rigids,
-        indent,
-        CollectionConfig {
-            begin: '{',
-            end: '}',
-            delimiter: ',',
-        },
-    );
+fn fmt_requires<'a, 'buf>(buf: &mut Buf<'buf>, requires: &PlatformRequires<'a>, indent: u16) {
+    fmt_collection(buf, indent, '{', '}', requires.rigids, Newlines::No);
 
-    buf.push_str(" { ");
-    fmt_typed_ident(buf, &requires.signature.value, indent);
+    buf.push_str(" {");
+    buf.spaces(1);
+    requires.signature.value.format(buf, indent);
     buf.push_str(" }");
 }
 
-fn fmt_effects<'a>(buf: &mut String<'a>, effects: &Effects<'a>, indent: u16) {
-    fmt_default_spaces(buf, effects.spaces_before_effects_keyword, " ", indent);
-    buf.push_str("effects");
-    fmt_default_spaces(buf, effects.spaces_after_effects_keyword, " ", indent);
-
-    buf.push_str(effects.effect_shortname);
-    buf.push('.');
-    buf.push_str(effects.effect_type_name);
-
-    fmt_default_spaces(buf, effects.spaces_after_type_name, " ", indent);
-
-    fmt_collection(
-        buf,
-        effects.entries,
-        indent,
-        CollectionConfig {
-            begin: '{',
-            end: '}',
-            delimiter: ',',
-        },
-    );
-}
-
-fn fmt_typed_ident<'a>(buf: &mut String<'a>, entry: &TypedIdent<'a>, indent: u16) {
-    use TypedIdent::*;
-    match entry {
-        Entry {
-            ident,
-            spaces_before_colon,
-            ann,
-        } => {
-            buf.push_str(ident.value);
-            fmt_default_spaces(buf, spaces_before_colon, " ", indent);
-            buf.push(':');
-            ann.value.format(buf, indent);
-        }
-        SpaceBefore(sub_entry, spaces) => {
-            fmt_spaces(buf, spaces.iter(), indent);
-            fmt_typed_ident(buf, sub_entry, indent);
-        }
-        SpaceAfter(sub_entry, spaces) => {
-            fmt_typed_ident(buf, sub_entry, indent);
-            fmt_spaces(buf, spaces.iter(), indent);
-        }
-    }
-}
-
-impl<'a> Formattable<'a> for TypedIdent<'a> {
+impl<'a> Formattable for TypedIdent<'a> {
     fn is_multiline(&self) -> bool {
         false
     }
 
-    fn format(&self, buf: &mut String<'a>, indent: u16) {
-        fmt_typed_ident(buf, self, indent);
+    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+        buf.indent(indent);
+        buf.push_str(self.ident.value);
+        fmt_default_spaces(buf, self.spaces_before_colon, indent);
+        buf.push_str(":");
+        buf.spaces(1);
+        self.ann.value.format(buf, indent);
     }
 }
 
-impl<'a> Formattable<'a> for PlatformRigid<'a> {
+fn fmt_package_name<'buf>(buf: &mut Buf<'buf>, name: PackageName, _indent: u16) {
+    buf.push('"');
+    buf.push_str_allow_spaces(name.0);
+    buf.push('"');
+}
+
+impl<'a, T: Formattable> Formattable for Spaced<'a, T> {
     fn is_multiline(&self) -> bool {
-        false
+        use Spaced::*;
+
+        match self {
+            Item(formattable) => formattable.is_multiline(),
+            SpaceBefore(formattable, spaces) | SpaceAfter(formattable, spaces) => {
+                !spaces.is_empty() || formattable.is_multiline()
+            }
+        }
     }
 
-    fn format(&self, buf: &mut String<'a>, indent: u16) {
-        fmt_platform_rigid(buf, self, indent);
-    }
-}
-
-fn fmt_package_name<'a>(buf: &mut String<'a>, name: PackageName) {
-    buf.push_str(name.account);
-    buf.push('/');
-    buf.push_str(name.pkg);
-}
-
-fn fmt_platform_rigid<'a>(buf: &mut String<'a>, entry: &PlatformRigid<'a>, indent: u16) {
-    use roc_parse::header::PlatformRigid::*;
-
-    match entry {
-        Entry { rigid, alias } => {
-            buf.push_str(rigid);
-            buf.push_str("=>");
-            buf.push_str(alias);
-        }
-
-        SpaceBefore(sub_entry, spaces) => {
-            fmt_spaces(buf, spaces.iter(), indent);
-            fmt_platform_rigid(buf, sub_entry, indent);
-        }
-        SpaceAfter(sub_entry, spaces) => {
-            fmt_platform_rigid(buf, sub_entry, indent);
-            fmt_spaces(buf, spaces.iter(), indent);
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        parens: crate::annotation::Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
+        match self {
+            Spaced::Item(item) => {
+                item.format_with_options(buf, parens, newlines, indent);
+            }
+            Spaced::SpaceBefore(item, spaces) => {
+                fmt_spaces(buf, spaces.iter(), indent);
+                item.format_with_options(buf, parens, newlines, indent);
+            }
+            Spaced::SpaceAfter(item, spaces) => {
+                item.format_with_options(buf, parens, newlines, indent);
+                fmt_spaces(buf, spaces.iter(), indent);
+            }
         }
     }
 }
 
-fn fmt_imports<'a>(
-    buf: &mut String<'a>,
-    loc_entries: Collection<'a, Located<ImportsEntry<'a>>>,
+fn fmt_imports<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    loc_entries: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     indent: u16,
 ) {
-    fmt_collection(
-        buf,
-        loc_entries,
-        indent,
-        CollectionConfig {
-            begin: '[',
-            end: ']',
-            delimiter: ',',
-        },
-    );
+    fmt_collection(buf, indent + INDENT, '[', ']', loc_entries, Newlines::No)
 }
 
-fn fmt_provides<'a>(
-    buf: &mut String<'a>,
-    loc_entries: Collection<'a, Located<ExposesEntry<'a, &'a str>>>,
+fn fmt_provides<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    loc_exposed_names: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    loc_provided_types: Option<Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>>,
     indent: u16,
 ) {
-    fmt_collection(
-        buf,
-        loc_entries,
-        indent,
-        CollectionConfig {
-            begin: '[',
-            end: ']',
-            delimiter: ',',
-        },
-    );
+    fmt_collection(buf, indent, '[', ']', loc_exposed_names, Newlines::No);
+    if let Some(loc_provided) = loc_provided_types {
+        fmt_default_spaces(buf, &[], indent);
+        fmt_collection(buf, indent + INDENT, '{', '}', loc_provided, Newlines::No);
+    }
 }
 
-fn fmt_to<'a>(buf: &mut String<'a>, to: To<'a>, indent: u16) {
+fn fmt_to<'buf>(buf: &mut Buf<'buf>, to: To, indent: u16) {
     match to {
         To::ExistingPackage(name) => {
             buf.push_str(name);
         }
-        To::NewPackage(package_or_path) => fmt_package_or_path(buf, &package_or_path, indent),
+        To::NewPackage(package_name) => fmt_package_name(buf, package_name, indent),
     }
 }
 
-fn fmt_exposes<'a, N: FormatName + 'a>(
-    buf: &mut String<'a>,
-    loc_entries: Collection<'_, Located<ExposesEntry<'_, N>>>,
+fn fmt_exposes<'buf, N: Formattable + Copy>(
+    buf: &mut Buf<'buf>,
+    loc_entries: Collection<'_, Loc<Spaced<'_, N>>>,
     indent: u16,
 ) {
-    fmt_collection(
-        buf,
-        loc_entries,
-        indent,
-        CollectionConfig {
-            begin: '[',
-            end: ']',
-            delimiter: ',',
-        },
-    );
-}
-
-impl<'a, 'b, N: FormatName> Formattable<'a> for ExposesEntry<'b, N> {
-    fn is_multiline(&self) -> bool {
-        false
-    }
-
-    fn format(&self, buf: &mut String<'a>, indent: u16) {
-        fmt_exposes_entry(buf, self, indent);
-    }
+    fmt_collection(buf, indent + INDENT, '[', ']', loc_entries, Newlines::No)
 }
 
 pub trait FormatName {
-    fn format<'a>(&self, buf: &mut String<'a>);
+    fn format<'buf>(&self, buf: &mut Buf<'buf>);
 }
 
 impl<'a> FormatName for &'a str {
-    fn format<'b>(&self, buf: &mut String<'b>) {
+    fn format<'buf>(&self, buf: &mut Buf<'buf>) {
         buf.push_str(self)
     }
 }
 
 impl<'a> FormatName for ModuleName<'a> {
-    fn format<'b>(&self, buf: &mut String<'b>) {
+    fn format<'buf>(&self, buf: &mut Buf<'buf>) {
         buf.push_str(self.as_str());
     }
 }
 
-fn fmt_exposes_entry<'a, 'b, N: FormatName>(
-    buf: &mut String<'a>,
-    entry: &ExposesEntry<'b, N>,
-    indent: u16,
-) {
-    use roc_parse::header::ExposesEntry::*;
-
-    match entry {
-        Exposed(ident) => ident.format(buf),
-
-        SpaceBefore(sub_entry, spaces) => {
-            fmt_spaces(buf, spaces.iter(), indent);
-            fmt_exposes_entry(buf, sub_entry, indent);
-        }
-        SpaceAfter(sub_entry, spaces) => {
-            fmt_exposes_entry(buf, sub_entry, indent);
-            fmt_spaces(buf, spaces.iter(), indent);
-        }
-    }
-}
-
-fn fmt_packages<'a>(
-    buf: &mut String<'a>,
-    loc_entries: Collection<'a, Located<PackageEntry<'a>>>,
-    indent: u16,
-) {
-    fmt_collection(
-        buf,
-        loc_entries,
-        indent,
-        CollectionConfig {
-            begin: '{',
-            end: '}',
-            delimiter: ',',
-        },
-    );
-}
-
-impl<'a> Formattable<'a> for PackageEntry<'a> {
+impl<'a> Formattable for ModuleName<'a> {
     fn is_multiline(&self) -> bool {
         false
     }
 
-    fn format(&self, buf: &mut String<'a>, indent: u16) {
+    fn format<'buf>(&self, buf: &mut Buf<'buf>, _indent: u16) {
+        buf.push_str(self.as_str());
+    }
+}
+
+impl<'a> Formattable for ExposedName<'a> {
+    fn is_multiline(&self) -> bool {
+        false
+    }
+
+    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+        buf.indent(indent);
+        buf.push_str(self.as_str());
+    }
+}
+
+impl<'a> FormatName for ExposedName<'a> {
+    fn format<'buf>(&self, buf: &mut Buf<'buf>) {
+        buf.push_str(self.as_str());
+    }
+}
+
+fn fmt_packages<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    loc_entries: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
+    indent: u16,
+) {
+    fmt_collection(buf, indent, '{', '}', loc_entries, Newlines::No)
+}
+
+impl<'a> Formattable for PackageEntry<'a> {
+    fn is_multiline(&self) -> bool {
+        false
+    }
+
+    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
         fmt_packages_entry(buf, self, indent);
     }
 }
 
-impl<'a> Formattable<'a> for ImportsEntry<'a> {
+impl<'a> Formattable for ImportsEntry<'a> {
     fn is_multiline(&self) -> bool {
         false
     }
 
-    fn format(&self, buf: &mut String<'a>, indent: u16) {
+    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
         fmt_imports_entry(buf, self, indent);
     }
 }
-fn fmt_packages_entry<'a>(buf: &mut String<'a>, entry: &PackageEntry<'a>, indent: u16) {
-    use PackageEntry::*;
-    match entry {
-        Entry {
-            shorthand,
-            spaces_after_shorthand,
-            package_or_path,
-        } => {
-            buf.push_str(shorthand);
-            buf.push(':');
-            fmt_default_spaces(buf, spaces_after_shorthand, " ", indent);
-            fmt_package_or_path(buf, &package_or_path.value, indent);
-        }
-        SpaceBefore(sub_entry, spaces) => {
-            fmt_spaces(buf, spaces.iter(), indent);
-            fmt_packages_entry(buf, sub_entry, indent);
-        }
-        SpaceAfter(sub_entry, spaces) => {
-            fmt_packages_entry(buf, sub_entry, indent);
-            fmt_spaces(buf, spaces.iter(), indent);
-        }
-    }
+fn fmt_packages_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &PackageEntry<'a>, indent: u16) {
+    buf.push_str(entry.shorthand);
+    buf.push(':');
+    fmt_default_spaces(buf, entry.spaces_after_shorthand, indent);
+    fmt_package_name(buf, entry.package_name.value, indent);
 }
 
-fn fmt_package_or_path<'a>(buf: &mut String<'a>, package_or_path: &PackageOrPath<'a>, indent: u16) {
-    match package_or_path {
-        PackageOrPath::Package(_name, _version) => {
-            todo!("format package");
-        }
-        PackageOrPath::Path(str_literal) => fmt_str_literal(buf, *str_literal, indent),
-    }
-}
-
-fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &ImportsEntry<'a>, indent: u16) {
+fn fmt_imports_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &ImportsEntry<'a>, indent: u16) {
     use roc_parse::header::ImportsEntry::*;
+
+    buf.indent(indent);
 
     match entry {
         Module(module, loc_exposes_entries) => {
@@ -415,16 +364,7 @@ fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &ImportsEntry<'a>, indent:
             if !loc_exposes_entries.is_empty() {
                 buf.push('.');
 
-                fmt_collection(
-                    buf,
-                    *loc_exposes_entries,
-                    indent,
-                    CollectionConfig {
-                        begin: '{',
-                        end: '}',
-                        delimiter: ',',
-                    },
-                );
+                fmt_collection(buf, indent, '{', '}', *loc_exposes_entries, Newlines::No)
             }
         }
 
@@ -436,26 +376,8 @@ fn fmt_imports_entry<'a>(buf: &mut String<'a>, entry: &ImportsEntry<'a>, indent:
             if !entries.is_empty() {
                 buf.push('.');
 
-                fmt_collection(
-                    buf,
-                    *entries,
-                    indent,
-                    CollectionConfig {
-                        begin: '{',
-                        end: '}',
-                        delimiter: ',',
-                    },
-                );
+                fmt_collection(buf, indent, '{', '}', *entries, Newlines::No)
             }
-        }
-
-        SpaceBefore(sub_entry, spaces) => {
-            fmt_spaces(buf, spaces.iter(), indent);
-            fmt_imports_entry(buf, sub_entry, indent);
-        }
-        SpaceAfter(sub_entry, spaces) => {
-            fmt_imports_entry(buf, sub_entry, indent);
-            fmt_spaces(buf, spaces.iter(), indent);
         }
     }
 }

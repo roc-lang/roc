@@ -4,7 +4,7 @@ use roc_can::constraint::{Constraint, LetConstraint};
 use roc_can::def::Declaration;
 use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::solved_types::{FreeVars, SolvedType};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, Problem};
@@ -28,7 +28,7 @@ pub fn constrain_module(declarations: &[Declaration], home: ModuleId) -> Constra
 
 #[derive(Debug, Clone)]
 pub struct Import {
-    pub loc_symbol: Located<Symbol>,
+    pub loc_symbol: Loc<Symbol>,
     pub solved_type: SolvedType,
 }
 
@@ -59,7 +59,7 @@ pub fn constrain_imported_values(
 
                 def_types.insert(
                     loc_symbol.value,
-                    Located {
+                    Loc {
                         region: loc_symbol.region,
                         value: typ,
                     },
@@ -149,7 +149,7 @@ pub fn pre_constrain_imports(
             // hardcoded builtin map.
             match stdlib.types.get(&symbol) {
                 Some((solved_type, region)) => {
-                    let loc_symbol = Located {
+                    let loc_symbol = Loc {
                         value: symbol,
                         region: *region,
                     };
@@ -175,7 +175,7 @@ pub fn pre_constrain_imports(
         } else if module_id != home {
             // We already have constraints for our own symbols.
             let region = Region::zero(); // TODO this should be the region where this symbol was declared in its home module. Look that up!
-            let loc_symbol = Located {
+            let loc_symbol = Loc {
                 value: symbol,
                 region,
             };

@@ -36,14 +36,12 @@ pub fn update_small_string(
         .get_offset_to_node_id(old_caret_pos, curr_mark_node_id)?;
 
     if node_caret_offset != 0 && node_caret_offset < content_str_mut.len() {
-        if old_array_str.len() < ArrString::capacity() {
+        if old_array_str.len() < old_array_str.capacity() {
             if let Expr2::SmallStr(ref mut mut_array_str) =
                 ed_model.module.env.pool.get_mut(ast_node_id.to_expr_id()?)
             {
                 // safe because we checked the length
-                unsafe {
-                    mut_array_str.push_unchecked(*new_char);
-                }
+                mut_array_str.push(*new_char);
             } else {
                 unreachable!()
             }
@@ -115,7 +113,7 @@ pub fn update_string(new_char: char, ed_model: &mut EdModel) -> EdResult<InputOu
             ast_node_id.to_expr_id()?,
             new_char,
             node_caret_offset - 1, // -1 because offset was calculated with quotes
-            &mut ed_model.module.env.pool,
+            ed_model.module.env.pool,
         )?;
 
         // update caret
@@ -137,7 +135,7 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     } = get_node_context(ed_model)?;
 
     if curr_mark_node.is_blank() {
-        let new_expr2_node = Expr2::SmallStr(arraystring::ArrayString::new());
+        let new_expr2_node = Expr2::SmallStr(arrayvec::ArrayString::new());
         let curr_mark_node_nls = curr_mark_node.get_newlines_at_end();
 
         ed_model

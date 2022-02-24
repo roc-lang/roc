@@ -10,7 +10,7 @@ x = 5.0
 
 divisionTest = Num.maxFloat / x
 
-intTest = Num.maxInt
+intTest = Num.maxI64
 
 constantNum = 5
 

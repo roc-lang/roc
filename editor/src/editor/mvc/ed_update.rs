@@ -70,6 +70,9 @@ use super::break_line::break_line;
 use super::break_line::insert_new_blank;
 use super::let_update::start_new_let_value;
 
+/// ed_update.rs contains all functions that change the ed_model.
+/// Additions and deletions of new characters to the editor are handled here.
+/// A large percentage of the editor's tests are at the end of this file.
 impl<'a> EdModel<'a> {
     pub fn move_caret(
         &mut self,
@@ -439,6 +442,14 @@ impl<'a> EdModel<'a> {
                 expr_id,
             } => Some(*expr_id),
             Def2::Blank => None,
+            Def2::CommentsBefore {
+                comments: _,
+                def_id,
+            } => self.extract_expr_from_def(*def_id),
+            Def2::CommentsAfter {
+                comments: _,
+                def_id,
+            } => self.extract_expr_from_def(*def_id),
         }
     }
 
@@ -837,7 +848,7 @@ fn if_modifiers(modifiers: &Modifiers, shortcut_result: UIResult<()>) -> EdResul
     }
 }
 
-// current(=caret is here) MarkupNode corresponds to a Def2 in the AST
+// handle new char when current(=caret is here) MarkupNode corresponds to a Def2 in the AST
 pub fn handle_new_char_def(
     received_char: &char,
     def_id: DefId,
@@ -890,12 +901,18 @@ pub fn handle_new_char_def(
                 )?
             }
         }
+        Def2::CommentsBefore { .. } => {
+            todo!()
+        }
+        Def2::CommentsAfter { .. } => {
+            todo!()
+        }
     };
 
     Ok(outcome)
 }
 
-// current(=caret is here) MarkupNode corresponds to an Expr2 in the AST
+// handle new char when the current(caret is here) MarkupNode corresponds to an Expr2 in the AST
 pub fn handle_new_char_expr(
     received_char: &char,
     expr_id: ExprId,
@@ -1163,6 +1180,7 @@ pub fn handle_new_char_diff_mark_nodes_prev_is_expr(
     Ok(outcome)
 }
 
+// updates the ed_model based on the char the user just typed if the result would be syntactically correct.
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let input_outcome = match received_char {
             '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
@@ -1250,6 +1268,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
 #[cfg(test)]
 pub mod test_ed_update {
+    use crate::editor::ed_error::print_err;
     use crate::editor::mvc::ed_model::test_ed_model::ed_model_from_dsl;
     use crate::editor::mvc::ed_model::test_ed_model::ed_model_to_dsl;
     use crate::editor::mvc::ed_model::test_ed_model::init_model_refs;
@@ -1267,10 +1286,13 @@ pub mod test_ed_update {
     use threadpool::ThreadPool;
     use winit::event::VirtualKeyCode::*;
 
-    fn ed_res_to_res<T>(ed_res: EdResult<T>) -> Result<T, String> {
+    fn ed_res_to_res<T: std::fmt::Debug>(ed_res: EdResult<T>) -> Result<T, String> {
         match ed_res {
             Ok(t) => Ok(t),
-            Err(e) => Err(e.to_string()),
+            Err(e) => {
+                print_err(&e);
+                Err(e.to_string())
+            }
         }
     }
 
@@ -1394,7 +1416,7 @@ pub mod test_ed_update {
     }
 
     fn strip_header(lines: &mut Vec<String>) {
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 2;
+        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
         lines.drain(0..nr_hello_world_lines);
     }
 
@@ -1454,8 +1476,8 @@ pub mod test_ed_update {
     // add newlines like the editor's formatting would add them
     fn add_nls(lines: Vec<String>) -> Vec<String> {
         let mut new_lines = lines;
-
-        new_lines.append(&mut vec!["".to_owned(), "".to_owned()]);
+        //Two lines between TLD's, extra newline so the user can go to third line add new def there
+        new_lines.append(&mut vec!["".to_owned(), "".to_owned(), "".to_owned()]);
 
         new_lines
     }
@@ -2625,14 +2647,8 @@ pub mod test_ed_update {
     fn test_enter() -> Result<(), String> {
         assert_insert_seq(
             ovec!["┃"],
-            ovec!["ab = 5", "", "cd = \"good┃\"", "", ""],
+            ovec!["ab = 5", "", "", "cd = \"good┃\"", "", "", ""],
             "ab🡲🡲🡲5\rcd🡲🡲🡲\"good",
-        )?;
-
-        assert_insert_seq(
-            ovec!["┃"],
-            ovec!["ab = 1", "", "cD = 2┃", "", "eF = 3", "", ""],
-            "ab🡲🡲🡲1\reF🡲🡲🡲3🡰🡰🡰🡰🡰🡰🡱🡱🡲🡲🡲🡲🡲🡲\rcD🡲🡲🡲2",
         )?;
 
         Ok(())

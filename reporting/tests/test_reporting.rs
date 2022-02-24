@@ -15,6 +15,7 @@ mod test_reporting {
     use roc_module::symbol::{Interns, ModuleId};
     use roc_mono::ir::{Procs, Stmt, UpdateModeIds};
     use roc_mono::layout::LayoutCache;
+    use roc_region::all::LineInfo;
     use roc_reporting::report::{
         can_problem, mono_problem, parse_problem, type_problem, Report, Severity, BLUE_CODE,
         BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE,
@@ -22,6 +23,7 @@ mod test_reporting {
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
+    use roc_test_utils::assert_multiline_str_eq;
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
@@ -94,8 +96,8 @@ mod test_reporting {
             let mut update_mode_ids = UpdateModeIds::new();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let ptr_bytes = 8;
-            let mut layout_cache = LayoutCache::new(ptr_bytes);
+            let target_info = roc_target::TargetInfo::default_x86_64();
+            let mut layout_cache = LayoutCache::new(target_info);
             let mut mono_env = roc_mono::ir::Env {
                 arena: &arena,
                 subs: &mut subs,
@@ -103,7 +105,7 @@ mod test_reporting {
                 home,
                 ident_ids: &mut ident_ids,
                 update_mode_ids: &mut update_mode_ids,
-                ptr_bytes,
+                target_info,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,
             };
@@ -126,6 +128,7 @@ mod test_reporting {
         use ven_pretty::DocAllocator;
 
         let src_lines: Vec<&str> = src.split('\n').collect();
+        let lines = LineInfo::new(src);
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
 
@@ -139,8 +142,8 @@ mod test_reporting {
 
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-                let problem = fail.into_parse_problem(filename.clone(), "", src.as_bytes());
-                let doc = parse_problem(&alloc, filename, 0, problem);
+                let problem = fail.into_file_error(filename.clone());
+                let doc = parse_problem(&alloc, &lines, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
             }
@@ -150,18 +153,20 @@ mod test_reporting {
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
                 for problem in can_problems {
-                    let report = can_problem(&alloc, filename.clone(), problem.clone());
+                    let report = can_problem(&alloc, &lines, filename.clone(), problem.clone());
                     reports.push(report);
                 }
 
                 for problem in type_problems {
-                    if let Some(report) = type_problem(&alloc, filename.clone(), problem.clone()) {
+                    if let Some(report) =
+                        type_problem(&alloc, &lines, filename.clone(), problem.clone())
+                    {
                         reports.push(report);
                     }
                 }
 
                 for problem in mono_problems {
-                    let report = mono_problem(&alloc, filename.clone(), problem.clone());
+                    let report = mono_problem(&alloc, &lines, filename.clone(), problem.clone());
                     reports.push(report);
                 }
 
@@ -186,12 +191,13 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
-        use roc_parse::parser::State;
+        use roc_parse::state::State;
 
         let state = State::new(src.as_bytes());
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
         let src_lines: Vec<&str> = src.split('\n').collect();
+        let lines = LineInfo::new(src);
 
         match roc_parse::module::parse_header(arena, state) {
             Err(fail) => {
@@ -201,12 +207,10 @@ mod test_reporting {
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
                 use roc_parse::parser::SyntaxError;
-                let problem = SyntaxError::Header(fail).into_parse_problem(
-                    filename.clone(),
-                    "",
-                    src.as_bytes(),
-                );
-                let doc = parse_problem(&alloc, filename, 0, problem);
+                let problem = fail
+                    .map_problem(SyntaxError::Header)
+                    .into_file_error(filename.clone());
+                let doc = parse_problem(&alloc, &lines, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
             }
@@ -233,7 +237,7 @@ mod test_reporting {
             }
         }
 
-        assert_eq!(buf, expected_rendering);
+        assert_multiline_str_eq!(expected_rendering, buf.as_str());
     }
 
     fn report_header_problem_as(src: &str, expected_rendering: &str) {
@@ -420,6 +424,16 @@ mod test_reporting {
 
                 `Booly` is not used anywhere in your code.
 
+                3│  Booly : [ Yes, No, Maybe ]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                If you didn't intend on using `Booly` then remove it so future readers
+                of your code don't wonder why it is there.
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Booly` is not used anywhere in your code.
+
                 1│  Booly : [ Yes, No ]
                     ^^^^^^^^^^^^^^^^^^^
 
@@ -572,14 +586,14 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
-                
+
                 I cannot find a `true` value
-                
+
                 1│  if true then 1 else 2
                        ^^^^
-                
+
                 Did you mean one of these?
-                
+
                     True
                     Str
                     Num
@@ -626,12 +640,12 @@ mod test_reporting {
             indoc!(
                 r#"
                  y = 9
-    
+
                  box = \class, htmlChildren ->
                      div [ class ] []
-    
+
                  div = \_, _ -> 4
-    
+
                  box "wizard" []
              "#
             ),
@@ -640,7 +654,7 @@ mod test_reporting {
                  ── UNUSED ARGUMENT ─────────────────────────────────────────────────────────────
 
                  `box` doesn't use `htmlChildren`.
-    
+
                  3│  box = \class, htmlChildren ->
                                    ^^^^^^^^^^^^
 
@@ -663,39 +677,6 @@ mod test_reporting {
             ),
         );
     }
-
-    // #[test]
-    // fn report_unused_import() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //              interface Report
-    //                  exposes [
-    //                      plainText,
-    //                      emText
-    //                  ]
-    //                  imports [
-    //                      Symbol.{ Interns }
-    //                  ]
-
-    //              plainText = \str -> PlainText str
-
-    //              emText = \str -> EmText str
-    //          "#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //              Nothing from Symbol is used in this module.
-
-    //              6│ imports [
-    //              7│     Symbol.{ Interns }
-    //                      ^^^^^^
-    //              8│ ]
-
-    //              Since Symbol isn't used, you don't need to import it."#
-    //         ),
-    //     );
-    // }
 
     #[test]
     fn report_value_color() {
@@ -1481,7 +1462,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn pattern_guard_mismatch() {
+    fn pattern_guard_mismatch_alias() {
         report_problem_as(
             indoc!(
                 r#"
@@ -1500,11 +1481,41 @@ mod test_reporting {
 
                 The first pattern is trying to match record values of type:
 
-                    { foo : [ True ]a }
+                    { foo : [ True ] }
 
                 But the expression between `when` and `is` has the type:
 
                     { foo : Num a }
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_guard_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 when { foo: "" } is
+                     { foo: True } -> 42
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st pattern in this `when` is causing a mismatch:
+
+                2│      { foo: True } -> 42
+                        ^^^^^^^^^^^^^
+
+                The first pattern is trying to match record values of type:
+
+                    { foo : [ True ] }
+
+                But the expression between `when` and `is` has the type:
+
+                    { foo : Str }
                 "#
             ),
         )
@@ -1632,7 +1643,7 @@ mod test_reporting {
 
                 But you are trying to use it as:
 
-                    [ Foo a ]b
+                    [ Foo a ]
                 "#
             ),
         )
@@ -2451,20 +2462,26 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This pattern does not cover all the possibilities:
+                This expression is used in an unexpected way:
 
                 5│  (Left y) = x
-                     ^^^^^^
+                               ^
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Right _
+                    [ Left I64, Right Bool ]
 
-                I would have to crash if I saw one of those! You can use a binding to
-                deconstruct a value if there is only ONE possibility. Use a `when` to
-                account for all possibilities.
+                But you are trying to use it as:
+
+                    [ Left a ]
+
+                Tip: Seems like a tag typo. Maybe `Right` should be `Left`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -2835,7 +2852,7 @@ mod test_reporting {
                     ^^^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -3118,6 +3135,32 @@ mod test_reporting {
     }
 
     #[test]
+    fn invalid_opaque_rigid_var_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age 1 := I64
+
+                a : Age
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This pattern in the definition of `Age` is not what I expect:
+
+                1│  Age 1 := I64
+                        ^
+
+                Only type variables like `a` or `value` can occur in this position.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn invalid_num() {
         report_problem_as(
             indoc!(
@@ -3331,6 +3374,8 @@ mod test_reporting {
                 { x, y }
                 "#
             ),
+            // TODO render tag unions across multiple lines
+            // TODO do not show recursion var if the recursion var does not render on the surface of a type
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
@@ -3343,12 +3388,13 @@ mod test_reporting {
 
                 This `ACons` global tag application has the type:
 
-                    [ ACons Num (Integer Signed64) [ BCons (Num a) [ ACons Str [ BNil
-                    ]b ]c ]d, ANil ]
+                    [ ACons (Num (Integer Signed64)) [
+                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 a, BNil ],
+                    ANil ], BNil ], ANil ]
 
                 But the type annotation on `x` says it should be:
 
-                    [ ACons I64 BList I64 I64, ANil ]
+                    [ ACons I64 (BList I64 I64), ANil ] as a
                 "#
             ),
         )
@@ -3359,15 +3405,15 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x = 9_223_372_036_854_775_807_000
+                x = 170_141_183_460_469_231_731_687_303_715_884_105_728_000
 
-                y = -9_223_372_036_854_775_807_000
+                y = -170_141_183_460_469_231_731_687_303_715_884_105_728_000
 
-                h = 0x8FFF_FFFF_FFFF_FFFF
-                l = -0x8FFF_FFFF_FFFF_FFFF
+                h = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                l = -0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
 
-                minlit = -9_223_372_036_854_775_808
-                maxlit =  9_223_372_036_854_775_807
+                minlit = -170_141_183_460_469_231_731_687_303_715_884_105_728
+                maxlit =  340_282_366_920_938_463_463_374_607_431_768_211_455
 
                 x + y + h + l + minlit + maxlit
                 "#
@@ -3378,11 +3424,11 @@ mod test_reporting {
 
                 This integer literal is too big:
 
-                1│  x = 9_223_372_036_854_775_807_000
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                1│  x = 170_141_183_460_469_231_731_687_303_715_884_105_728_000
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The largest number representable in Roc is the maximum U128 value,
+                340_282_366_920_938_463_463_374_607_431_768_211_455.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3390,11 +3436,11 @@ mod test_reporting {
 
                 This integer literal is too small:
 
-                3│  y = -9_223_372_036_854_775_807_000
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                3│  y = -170_141_183_460_469_231_731_687_303_715_884_105_728_000
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The smallest number representable in Roc is the minimum I128 value,
+                -170_141_183_460_469_231_731_687_303_715_884_105_728.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3402,11 +3448,11 @@ mod test_reporting {
 
                 This integer literal is too big:
 
-                5│  h = 0x8FFF_FFFF_FFFF_FFFF
-                        ^^^^^^^^^^^^^^^^^^^^^
+                5│  h = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The largest number representable in Roc is the maximum U128 value,
+                340_282_366_920_938_463_463_374_607_431_768_211_455.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3414,11 +3460,11 @@ mod test_reporting {
 
                 This integer literal is too small:
 
-                6│  l = -0x8FFF_FFFF_FFFF_FFFF
-                        ^^^^^^^^^^^^^^^^^^^^^^
+                6│  l = -0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                The smallest number representable in Roc is the minimum I128 value,
+                -170_141_183_460_469_231_731_687_303_715_884_105_728.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -3496,7 +3542,8 @@ mod test_reporting {
                 1│  dec = 100A
                           ^^^^
 
-                Integer literals can only contain the digits 0-9.
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3508,7 +3555,7 @@ mod test_reporting {
                           ^^^^^
 
                 Hexadecimal (base-16) integer literals can only contain the digits
-                0-9, a-f and A-F.
+                0-9, a-f and A-F, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3519,7 +3566,8 @@ mod test_reporting {
                 5│  oct = 0o9
                           ^^^
 
-                Octal (base-8) integer literals can only contain the digits 0-7.
+                Octal (base-8) integer literals can only contain the digits
+                0-7, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3530,7 +3578,8 @@ mod test_reporting {
                 7│  bin = 0b2
                           ^^^
 
-                Binary (base-2) integer literals can only contain the digits 0 and 1.
+                Binary (base-2) integer literals can only contain the digits
+                0 and 1, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -3564,7 +3613,7 @@ mod test_reporting {
                           ^^
 
                 Hexadecimal (base-16) integer literals must contain at least one of
-                the digits 0-9, a-f and A-F.
+                the digits 0-9, a-f and A-F, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3576,7 +3625,7 @@ mod test_reporting {
                           ^^
 
                 Octal (base-8) integer literals must contain at least one of the
-                digits 0-7.
+                digits 0-7, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
 
@@ -3588,7 +3637,7 @@ mod test_reporting {
                           ^^
 
                 Binary (base-2) integer literals must contain at least one of the
-                digits 0 and 1.
+                digits 0 and 1, or have an integer suffix.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -3616,7 +3665,7 @@ mod test_reporting {
                         ^^^^
 
                 Floating point literals can only contain the digits 0-9, or use
-                scientific notation 10e4
+                scientific notation 10e4, or have a float suffix.
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -5450,7 +5499,7 @@ mod test_reporting {
                     ^^^^^
 
                 Floating point literals can only contain the digits 0-9, or use
-                scientific notation 10e4
+                scientific notation 10e4, or have a float suffix.
 
                 Tip: Learn more about number literals at TODO
             "#
@@ -5798,6 +5847,29 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
+    fn opaque_ref_field_access() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $UUID.bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am very confused by this field access:
+
+                1│  $UUID.bar
+                         ^^^^
+
+                It looks like a record field access on an opaque reference.
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn weird_accessor() {
         report_problem_as(
             indoc!(
@@ -6048,9 +6120,9 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 app "test-base64"
-                    packages { base: "platform" }
-                    imports [base.Task, Base64 ]
-                    provides [ main, @Foo ] to base
+                    packages { pf: "platform" }
+                    imports [pf.Task, Base64 ]
+                    provides [ main, @Foo ] to pf
                 "#
             ),
             indoc!(
@@ -6059,8 +6131,8 @@ I need all branches in an `if` to have the same type!
 
                 I am partway through parsing a provides list, but I got stuck here:
 
-                3│      imports [base.Task, Base64 ]
-                4│      provides [ main, @Foo ] to base
+                3│      imports [pf.Task, Base64 ]
+                4│      provides [ main, @Foo ] to pf
                                          ^
 
                 I was expecting a type name, value name or function name next, like
@@ -6076,34 +6148,34 @@ I need all branches in an `if` to have the same type!
         report_header_problem_as(
             indoc!(
                 r#"
-                platform folkertdev/foo
+                platform "folkertdev/foo"
                     requires { main : Effect {} }
                     exposes []
                     packages {}
                     imports [Task]
                     provides [ mainForHost ]
                     effects fx.Effect
-                        {
-                            putChar : I64 -> Effect {},
-                            putLine : Str -> Effect {},
-                            getLine : Effect Str
-                        }
+                         {
+                             putChar : I64 -> Effect {},
+                             putLine : Str -> Effect {},
+                             getLine : Effect Str
+                         }
                 "#
             ),
             indoc!(
                 r#"
-                ── BAD REQUIRES RIGIDS ─────────────────────────────────────────────────────────
+                ── BAD REQUIRES ────────────────────────────────────────────────────────────────
 
                 I am partway through parsing a header, but I got stuck here:
 
-                1│  platform folkertdev/foo
+                1│  platform "folkertdev/foo"
                 2│      requires { main : Effect {} }
                                    ^
 
-                I am expecting a list of rigids like `{}` or `{model=>Model}` next. A full
+                I am expecting a list of type names like `{}` or `{ Model }` next. A full
                 `requires` definition looks like
 
-                    requires {model=>Model, msg=>Msg} {main : Effect {}}
+                    requires { Model, Msg } {main : Effect {}}
             "#
             ),
         )
@@ -6116,14 +6188,14 @@ I need all branches in an `if` to have the same type!
                 r#"
                 interface Foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
                 r#"
                 ── WEIRD EXPOSES ───────────────────────────────────────────────────────────────
 
-                I am partway through parsing a exposes list, but I got stuck here:
+                I am partway through parsing an `exposes` list, but I got stuck here:
 
                 1│  interface Foobar
                 2│      exposes [ main, @Foo ]
@@ -6144,7 +6216,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 interface foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6170,7 +6242,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 app foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6879,6 +6951,1325 @@ I need all branches in an `if` to have the same type!
                 Tip: Any connection between types must use a named type variable, not
                 a `*`! Maybe the annotation  on `f` should have a named type variable in
                 place of the `*`?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_not_an_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NOT AN INLINE ALIAS ─────────────────────────────────────────────────────────
+
+                The inline type after this `as` is not a type alias:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as a
+                                                             ^
+
+                Inline alias types must start with an uppercase identifier and be
+                followed by zero or more type arguments, like Point or List a.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_qualified() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── QUALIFIED ALIAS NAME ────────────────────────────────────────────────────────
+
+                This type alias has a qualified name:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
+                                                             ^
+
+                An alias introduces a new name to the current scope, so it must be
+                unqualified.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_inline_alias_argument_uppercase() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : List elem -> [ Nil, Cons elem a ] as LinkedList U
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE ARGUMENT NOT LOWERCASE ─────────────────────────────────────────────────
+
+                This alias type argument is not lowercase:
+
+                1│  f : List elem -> [ Nil, Cons elem a ] as LinkedList U
+                                                                        ^
+
+                All type arguments must be lowercase.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn mismatched_single_tag_arg() {
+        report_problem_as(
+            indoc!(
+                r#"
+                isEmpty =
+                    \email ->
+                        Email str = email
+                        Str.isEmpty str
+
+                isEmpty (Name "boo")
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `isEmpty` is not what I expect:
+
+                6│  isEmpty (Name "boo")
+                             ^^^^^^^^^^
+
+                This `Name` global tag application has the type:
+
+                    [ Name Str ]a
+
+                But `isEmpty` needs the 1st argument to be:
+
+                    [ Email Str ]
+
+                Tip: Seems like a tag typo. Maybe `Name` should be `Email`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2326() {
+        report_problem_as(
+            indoc!(
+                r#"
+                C a b : a -> D a b
+                D a b : { a, b }
+
+                f : C a Nat -> D a Nat
+                f = \c -> c 6
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `c` is not what I expect:
+
+                5│  f = \c -> c 6
+                                ^
+
+                This argument is a number of type:
+
+                    Num a
+
+                But `c` needs the 1st argument to be:
+
+                    a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `Num` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2380_annotations_only() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F : F
+                a : F
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `F` alias is self-recursive in an invalid way:
+
+                1│  F : F
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2380_typed_body() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F : F
+                a : F
+                a = 1
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `F` alias is self-recursive in an invalid way:
+
+                1│  F : F
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2380_alias_with_vars() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F a b : F a b
+                a : F Str Str
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `F` alias is self-recursive in an invalid way:
+
+                1│  F a b : F a b
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2167_record_field_optional_and_required_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Job : [ @Job { inputs : List Str } ]
+                job : { inputs ? List Str } -> Job
+                job = \{ inputs } ->
+                    @Job { inputs }
+
+                job { inputs: [ "build", "test" ] }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `job` is weird:
+
+                3│  job = \{ inputs } ->
+                           ^^^^^^^^^^
+
+                The argument is a pattern that matches record values of type:
+
+                    { inputs : List Str }
+
+                But the annotation on `job` says the 1st argument should be:
+
+                    { inputs ? List Str }
+
+                Tip: To extract the `.inputs` field it must be non-optional, but the
+                type says this field is optional. Learn more about optional fields at
+                TODO.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unify_recursive_with_nonrecursive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Job : [ @Job { inputs : List Job } ]
+
+                job : { inputs : List Str } -> Job
+                job = \{ inputs } ->
+                    @Job { inputs }
+
+                job { inputs: [ "build", "test" ] }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `job` definition:
+
+                3│  job : { inputs : List Str } -> Job
+                4│  job = \{ inputs } ->
+                5│      @Job { inputs }
+                        ^^^^^^^^^^^^^^^
+
+                This `@Job` private tag application has the type:
+
+                    [ @Job { inputs : List Str } ]
+
+                But the type annotation on `job` says it should be:
+
+                    [ @Job { inputs : List a } ] as a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn nested_datatype() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Nested a : [ Chain a (Nested (List a)), Term ]
+
+                s : Nested Str
+
+                s
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NESTED DATATYPE ─────────────────────────────────────────────────────────────
+
+                `Nested` is a nested datatype. Here is one recursive usage of it:
+
+                1│  Nested a : [ Chain a (Nested (List a)), Term ]
+                                          ^^^^^^^^^^^^^^^
+
+                But recursive usages of `Nested` must match its definition:
+
+                1│  Nested a : [ Chain a (Nested (List a)), Term ]
+                    ^^^^^^^^
+
+                Nested datatypes are not supported in Roc.
+
+                Hint: Consider rewriting the definition of `Nested` to use the recursive type with the same arguments.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn nested_datatype_inline() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : {} -> [ Chain a (Nested (List a)), Term ] as Nested a
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NESTED DATATYPE ─────────────────────────────────────────────────────────────
+
+                `Nested` is a nested datatype. Here is one recursive usage of it:
+
+                1│  f : {} -> [ Chain a (Nested (List a)), Term ] as Nested a
+                                         ^^^^^^^^^^^^^^^
+
+                But recursive usages of `Nested` must match its definition:
+
+                1│  f : {} -> [ Chain a (Nested (List a)), Term ] as Nested a
+                                                                     ^^^^^^^^
+
+                Nested datatypes are not supported in Roc.
+
+                Hint: Consider rewriting the definition of `Nested` to use the recursive type with the same arguments.
+                "#
+            ),
+        )
+    }
+
+    macro_rules! mismatched_suffix_tests {
+        ($($number:expr, $suffix:expr, $name:ident)*) => {$(
+            #[test]
+            fn $name() {
+                let number = $number.to_string();
+                let mut typ = $suffix.to_string();
+                typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
+                let carets = "^".repeat(number.len() + $suffix.len());
+                let kind = match $suffix {
+                    "dec"|"f32"|"f64" => "a float",
+                    _ => "an integer",
+                };
+
+                report_problem_as(
+                    &format!(indoc!(
+                        r#"
+                        use : {} -> U8
+                        use {}{}
+                        "#
+                    ), bad_type, number, $suffix),
+                    &format!(indoc!(
+                        r#"
+                        ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                        The 1st argument to `use` is not what I expect:
+
+                        2│  use {}{}
+                                {}
+
+                        This argument is {} of type:
+
+                            {}
+
+                        But `use` needs the 1st argument to be:
+
+                            {}
+                        "#
+                    ), number, $suffix, carets, kind, typ, bad_type),
+                )
+            }
+        )*}
+    }
+
+    mismatched_suffix_tests! {
+        1, "u8",   mismatched_suffix_u8
+        1, "u16",  mismatched_suffix_u16
+        1, "u32",  mismatched_suffix_u32
+        1, "u64",  mismatched_suffix_u64
+        1, "u128", mismatched_suffix_u128
+        1, "i8",   mismatched_suffix_i8
+        1, "i16",  mismatched_suffix_i16
+        1, "i32",  mismatched_suffix_i32
+        1, "i64",  mismatched_suffix_i64
+        1, "i128", mismatched_suffix_i128
+        1, "nat",  mismatched_suffix_nat
+        1, "dec",  mismatched_suffix_dec
+        1, "f32",  mismatched_suffix_f32
+        1, "f64",  mismatched_suffix_f64
+    }
+
+    macro_rules! mismatched_suffix_tests_in_pattern {
+        ($($number:expr, $suffix:expr, $name:ident)*) => {$(
+            #[test]
+            fn $name() {
+                let number = $number.to_string();
+                let mut typ = $suffix.to_string();
+                typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                let bad_suffix = if $suffix == "u8" { "i8" } else { "u8" };
+                let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
+                let carets = "^".repeat(number.len() + $suffix.len());
+                let kind = match $suffix {
+                    "dec"|"f32"|"f64" => "floats",
+                    _ => "integers",
+                };
+
+                report_problem_as(
+                    &format!(indoc!(
+                        r#"
+                        when {}{} is
+                            {}{} -> 1
+                            _ -> 1
+                        "#
+                    ), number, bad_suffix, number, $suffix),
+                    &format!(indoc!(
+                        r#"
+                        ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                        The 1st pattern in this `when` is causing a mismatch:
+
+                        2│      {}{} -> 1
+                                {}
+
+                        The first pattern is trying to match {}:
+        
+                            {}
+        
+                        But the expression between `when` and `is` has the type:
+        
+                            {}
+                        "#
+                    ), number, $suffix, carets, kind, typ, bad_type),
+                )
+            }
+        )*}
+    }
+
+    mismatched_suffix_tests_in_pattern! {
+        1, "u8",   mismatched_suffix_u8_pattern
+        1, "u16",  mismatched_suffix_u16_pattern
+        1, "u32",  mismatched_suffix_u32_pattern
+        1, "u64",  mismatched_suffix_u64_pattern
+        1, "u128", mismatched_suffix_u128_pattern
+        1, "i8",   mismatched_suffix_i8_pattern
+        1, "i16",  mismatched_suffix_i16_pattern
+        1, "i32",  mismatched_suffix_i32_pattern
+        1, "i64",  mismatched_suffix_i64_pattern
+        1, "i128", mismatched_suffix_i128_pattern
+        1, "nat",  mismatched_suffix_nat_pattern
+        1, "dec",  mismatched_suffix_dec_pattern
+        1, "f32",  mismatched_suffix_f32_pattern
+        1, "f64",  mismatched_suffix_f64_pattern
+    }
+
+    #[test]
+    fn bad_numeric_literal_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1u256
+                "#
+            ),
+            // TODO: link to number suffixes
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This integer literal contains an invalid digit:
+
+                1│  1u256
+                    ^^^^^
+
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn numer_literal_multi_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1u8u8
+                "#
+            ),
+            // TODO: link to number suffixes
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This integer literal contains an invalid digit:
+
+                1│  1u8u8
+                    ^^^^^
+
+                Integer literals can only contain the digits
+                0-9, or have an integer suffix.
+
+                Tip: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn int_literal_has_float_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                0b1f32
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CONFLICTING NUMBER SUFFIX ───────────────────────────────────────────────────
+
+                This number literal is an integer, but it has a float suffix:
+
+                1│  0b1f32
+                    ^^^^^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn float_literal_has_int_suffix() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1.0u8
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CONFLICTING NUMBER SUFFIX ───────────────────────────────────────────────────
+
+                This number literal is a float, but it has an integer suffix:
+
+                1│  1.0u8
+                    ^^^^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u8_overflow() {
+        report_problem_as(
+            "256u8",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  256u8
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U8, whose maximum value is
+                255.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u8() {
+        report_problem_as(
+            "-1u8",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u8
+                    ^^^^
+
+                Tip: The suffix indicates this integer is a U8, whose minimum value is
+                0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u16_overflow() {
+        report_problem_as(
+            "65536u16",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  65536u16
+                    ^^^^^^^^
+
+                Tip: The suffix indicates this integer is a U16, whose maximum value
+                is 65535.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u16() {
+        report_problem_as(
+            "-1u16",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u16
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U16, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u32_overflow() {
+        report_problem_as(
+            "4_294_967_296u32",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  4_294_967_296u32
+                    ^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a U32, whose maximum value
+                is 4_294_967_295.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u32() {
+        report_problem_as(
+            "-1u32",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u32
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U32, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn u64_overflow() {
+        report_problem_as(
+            "18_446_744_073_709_551_616u64",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  18_446_744_073_709_551_616u64
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a U64, whose maximum value
+                is 18_446_744_073_709_551_615.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u64() {
+        report_problem_as(
+            "-1u64",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u64
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a U64, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn negative_u128() {
+        report_problem_as(
+            "-1u128",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -1u128
+                    ^^^^^^
+
+                Tip: The suffix indicates this integer is a U128, whose minimum value
+                is 0.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i8_overflow() {
+        report_problem_as(
+            "128i8",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  128i8
+                    ^^^^^
+
+                Tip: The suffix indicates this integer is a I8, whose maximum value is
+                127.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i8_underflow() {
+        report_problem_as(
+            "-129i8",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -129i8
+                    ^^^^^^
+
+                Tip: The suffix indicates this integer is a I8, whose minimum value is
+                -128.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i16_overflow() {
+        report_problem_as(
+            "32768i16",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  32768i16
+                    ^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I16, whose maximum value
+                is 32767.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i16_underflow() {
+        report_problem_as(
+            "-32769i16",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -32769i16
+                    ^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I16, whose minimum value
+                is -32768.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i32_overflow() {
+        report_problem_as(
+            "2_147_483_648i32",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  2_147_483_648i32
+                    ^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I32, whose maximum value
+                is 2_147_483_647.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i32_underflow() {
+        report_problem_as(
+            "-2_147_483_649i32",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -2_147_483_649i32
+                    ^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I32, whose minimum value
+                is -2_147_483_648.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i64_overflow() {
+        report_problem_as(
+            "9_223_372_036_854_775_808i64",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  9_223_372_036_854_775_808i64
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I64, whose maximum value
+                is 9_223_372_036_854_775_807.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i64_underflow() {
+        report_problem_as(
+            "-9_223_372_036_854_775_809i64",
+            indoc!(
+                r#"
+                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────────────────────────────
+
+                This integer literal underflows the type indicated by its suffix:
+
+                1│  -9_223_372_036_854_775_809i64
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I64, whose minimum value
+                is -9_223_372_036_854_775_808.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn i128_overflow() {
+        report_problem_as(
+            "170_141_183_460_469_231_731_687_303_715_884_105_728i128",
+            indoc!(
+                r#"
+                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────────────────────────────
+
+                This integer literal overflows the type indicated by its suffix:
+
+                1│  170_141_183_460_469_231_731_687_303_715_884_105_728i128
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Tip: The suffix indicates this integer is a I128, whose maximum value
+                is 170_141_183_460_469_231_731_687_303_715_884_105_727.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_get_negative_number() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 List.get [1,2,3] -1
+                 "#
+            ),
+            // TODO: this error message could be improved, e.g. something like "This argument can
+            // be used as ... because of its literal value"
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `get` is not what I expect:
+
+                1│  List.get [1,2,3] -1
+                                     ^^
+
+                This argument is a number of type:
+
+                    I8, I16, I32, I64, I128, F32, F64, or Dec
+
+                But `get` needs the 2nd argument to be:
+
+                    Nat
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_get_negative_number_indirect() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 a = -9_223_372_036_854
+                 List.get [1,2,3] a
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `get` is not what I expect:
+
+                2│  List.get [1,2,3] a
+                                     ^
+
+                This `a` value is a:
+
+                    I64, I128, F32, F64, or Dec
+
+                But `get` needs the 2nd argument to be:
+
+                    Nat
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_get_negative_number_double_indirect() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 a = -9_223_372_036_854
+                 b = a
+                 List.get [1,2,3] b
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `get` is not what I expect:
+
+                3│  List.get [1,2,3] b
+                                     ^
+
+                This `b` value is a:
+
+                    I64, I128, F32, F64, or Dec
+
+                But `get` needs the 2nd argument to be:
+
+                    Nat
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn compare_unsigned_to_signed() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when -1 is
+                   1u8 -> 1
+                   _ -> 1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st pattern in this `when` is causing a mismatch:
+
+                2│     1u8 -> 1
+                       ^^^
+
+                The first pattern is trying to match integers:
+
+                    U8
+
+                But the expression between `when` and `is` has the type:
+
+                    I8, I16, I32, I64, I128, F32, F64, or Dec
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype() {
+        report_problem_as(
+            indoc!(
+                r#"
+                R a : [ Only (R a) ]
+
+                v : R U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `R` alias is self-recursive in an invalid way:
+
+                1│  R a : [ Only (R a) ]
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype_deep() {
+        report_problem_as(
+            indoc!(
+                r#"
+                R a : [ Only { very: [ Deep (R a) ] } ]
+
+                v : R U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `R` alias is self-recursive in an invalid way:
+
+                1│  R a : [ Only { very: [ Deep (R a) ] } ]
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype_mutual() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo a : [ Thing (Bar a) ]
+                Bar a : [ Stuff (Foo a) ]
+
+                v : Bar U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `Bar` alias is recursive in an invalid way:
+
+                2│  Bar a : [ Stuff (Foo a) ]
+                    ^^^^^
+
+                The `Bar` alias depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     Bar
+                    │     ↓
+                    │     Foo
+                    └─────┘
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2458() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo a : [ Blah (Result (Bar a) []) ]
+                Bar a : Foo a
+
+                v : Bar U8
+                v
+                "#
+            ),
+            "",
+        )
+    }
+
+    #[test]
+    fn opaque_type_not_in_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                1│  $Age 21
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_reference_not_opaque_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age : U8
+
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                3│  $Age 21
+                    ^^^^
+
+                Note: There is an alias of the same name:
+
+                1│  Age : U8
+                    ^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                1│  Age : U8
+                    ^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn qualified_opaque_reference() {
+        report_problem_as(
+            indoc!(
+                r#"
+                OtherModule.$Age 21
+                "#
+            ),
+            // TODO: get rid of the second error. Consider parsing OtherModule.$Age to completion
+            // and checking it during can.
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am trying to parse a qualified name here:
+
+                1│  OtherModule.$Age 21
+                                ^
+
+                I was expecting to see an identifier next, like height. A complete
+                qualified name looks something like Json.Decode.string.
+
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                1│  OtherModule.$Age 21
+                                ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_used_outside_declaration_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                age =
+                    Age := U8
+                    21u8
+
+                $Age age
+                "#
+            ),
+            // TODO: there is a potential for a better error message here, if the usage of `$Age` can
+            // be linked to the declaration of `Age` inside `age`, and a suggestion to raise that
+            // declaration to the outer scope.
+            indoc!(
+                r#"
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                2│      Age := U8
+                        ^^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                5│  $Age age
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
                 "#
             ),
         )

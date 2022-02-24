@@ -4,11 +4,12 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::VarStore;
 
 use super::core::def::def::References;
 
+/// TODO document
 #[derive(Debug)]
 pub struct Env<'a> {
     pub home: ModuleId,
@@ -123,7 +124,7 @@ impl<'a> Env<'a> {
                             Ok(symbol)
                         }
                         None => Err(RuntimeError::LookupNotInScope(
-                            Located {
+                            Loc {
                                 value: ident,
                                 region,
                             },

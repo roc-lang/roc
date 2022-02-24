@@ -3,8 +3,9 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
-    bool_type, dict_type, float_type, i128_type, int_type, list_type, nat_type, num_type,
-    ordering_type, result_type, set_type, str_type, str_utf8_byte_problem_type, u16_type, u32_type,
+    bool_type, dec_type, dict_type, f32_type, f64_type, float_type, i128_type, i16_type, i32_type,
+    i64_type, i8_type, int_type, list_type, nat_type, num_type, ordering_type, result_type,
+    set_type, str_type, str_utf8_byte_problem_type, u128_type, u16_type, u32_type, u64_type,
     u8_type,
 };
 use roc_types::solved_types::SolvedType;
@@ -140,6 +141,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(int_type(flex(TVAR1))),
     );
 
+    // addSaturated : Num a, Num a -> Num a
+    add_top_level_function_type!(
+        Symbol::NUM_ADD_SATURATED,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(int_type(flex(TVAR1))),
+    );
+
     // sub or (-) : Num a, Num a -> Num a
     add_top_level_function_type!(
         Symbol::NUM_SUB,
@@ -159,6 +167,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::NUM_SUB_CHECKED,
         vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
         Box::new(result_type(num_type(flex(TVAR1)), overflow())),
+    );
+
+    // subSaturated : Num a, Num a -> Num a
+    add_top_level_function_type!(
+        Symbol::NUM_SUB_SATURATED,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(int_type(flex(TVAR1))),
     );
 
     // mul or (*) : Num a, Num a -> Num a
@@ -287,12 +302,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(bool_type())
     );
 
-    // maxInt : Int range
-    add_type!(Symbol::NUM_MAX_INT, int_type(flex(TVAR1)));
-
-    // minInt : Int range
-    add_type!(Symbol::NUM_MIN_INT, int_type(flex(TVAR1)));
-
     let div_by_zero = SolvedType::TagUnion(
         vec![(TagName::Global("DivByZero".into()), vec![])],
         Box::new(SolvedType::Wildcard),
@@ -382,8 +391,216 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(bool_type()),
     );
 
+    // minI8 : I8
+    add_type!(Symbol::NUM_MIN_I8, i8_type());
+
+    // maxI8 : I8
+    add_type!(Symbol::NUM_MAX_I8, i8_type());
+
+    // minU8 : U8
+    add_type!(Symbol::NUM_MIN_U8, u8_type());
+
+    // maxU8 : U8
+    add_type!(Symbol::NUM_MAX_U8, u8_type());
+
+    // minI16 : I16
+    add_type!(Symbol::NUM_MIN_I16, i16_type());
+
+    // maxI16 : I16
+    add_type!(Symbol::NUM_MAX_I16, i16_type());
+
+    // minU16 : U16
+    add_type!(Symbol::NUM_MIN_U16, u16_type());
+
+    // maxU16 : U16
+    add_type!(Symbol::NUM_MAX_U16, u16_type());
+
+    // minI32 : I32
+    add_type!(Symbol::NUM_MIN_I32, i32_type());
+
+    // maxI32 : I32
+    add_type!(Symbol::NUM_MAX_I32, i32_type());
+
+    // minU32 : U32
+    add_type!(Symbol::NUM_MIN_U32, u32_type());
+
+    // maxU32 : U32
+    add_type!(Symbol::NUM_MAX_U32, u32_type());
+
+    // minI64 : I64
+    add_type!(Symbol::NUM_MIN_I64, i64_type());
+
+    // maxI64 : I64
+    add_type!(Symbol::NUM_MAX_I64, i64_type());
+
+    // minU64 : U64
+    add_type!(Symbol::NUM_MIN_U64, u64_type());
+
+    // maxU64 : U64
+    add_type!(Symbol::NUM_MAX_U64, u64_type());
+
+    // minI128 : I128
+    add_type!(Symbol::NUM_MIN_I128, i128_type());
+
     // maxI128 : I128
     add_type!(Symbol::NUM_MAX_I128, i128_type());
+
+    // toI8 : Int * -> I8
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I8,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i8_type()),
+    );
+
+    let out_of_bounds = SolvedType::TagUnion(
+        vec![(TagName::Global("OutOfBounds".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    // toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I8_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i8_type(), out_of_bounds.clone())),
+    );
+
+    // toI16 : Int * -> I16
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I16,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i16_type()),
+    );
+
+    // toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I16_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i16_type(), out_of_bounds.clone())),
+    );
+
+    // toI32 : Int * -> I32
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I32,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i32_type()),
+    );
+
+    // toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I32_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i32_type(), out_of_bounds.clone())),
+    );
+
+    // toI64 : Int * -> I64
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I64,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i64_type()),
+    );
+
+    // toI64Checked : Int * -> Result I64 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I64_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i64_type(), out_of_bounds.clone())),
+    );
+
+    // toI128 : Int * -> I128
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I128,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i128_type()),
+    );
+
+    // toI128Checked : Int * -> Result I128 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I128_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i128_type(), out_of_bounds)),
+    );
+
+    // toU8 : Int * -> U8
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U8,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u8_type()),
+    );
+
+    let out_of_bounds = SolvedType::TagUnion(
+        vec![(TagName::Global("OutOfBounds".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    // toU8Checked : Int * -> Result U8 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U8_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u8_type(), out_of_bounds.clone())),
+    );
+
+    // toU16 : Int * -> U16
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U16,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u16_type()),
+    );
+
+    // toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U16_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u16_type(), out_of_bounds.clone())),
+    );
+
+    // toU32 : Int * -> U32
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U32,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u32_type()),
+    );
+
+    // toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U32_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u32_type(), out_of_bounds.clone())),
+    );
+
+    // toU64 : Int * -> U64
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U64,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u64_type()),
+    );
+
+    // toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U64_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u64_type(), out_of_bounds.clone())),
+    );
+
+    // toU128 : Int * -> U128
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U128,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u128_type()),
+    );
+
+    // toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U128_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u128_type(), out_of_bounds)),
+    );
+
+    // toStr : Num a -> Str
+    add_top_level_function_type!(
+        Symbol::NUM_TO_STR,
+        vec![num_type(flex(TVAR1))],
+        Box::new(str_type())
+    );
 
     // Float module
 
@@ -618,13 +835,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(nat_type())
     );
 
-    // fromInt : Int a -> Str
-    add_top_level_function_type!(
-        Symbol::STR_FROM_INT,
-        vec![int_type(flex(TVAR1))],
-        Box::new(str_type())
-    );
-
     // repeat : Str, Nat -> Str
     add_top_level_function_type!(
         Symbol::STR_REPEAT,
@@ -702,11 +912,115 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(u8_type()))
     );
 
-    // fromFloat : Float a -> Str
+    // toNum : Str -> Result (Num a) [ InvalidNumStr ]
+    // Because toNum doesn't work with floats & decimals by default without
+    // a point of usage to be able to infer the proper layout
+    // we decided that separate functions for each sub num type
+    // is the best approach. These below all end up mapping to
+    // `str_to_num` in can `builtins.rs`
+    let invalid_str = || {
+        SolvedType::TagUnion(
+            vec![(TagName::Global("InvalidNumStr".into()), vec![])],
+            Box::new(SolvedType::Wildcard),
+        )
+    };
+
+    // toDec : Str -> Result Dec [ InvalidNumStr ]
     add_top_level_function_type!(
-        Symbol::STR_FROM_FLOAT,
-        vec![float_type(flex(TVAR1))],
-        Box::new(str_type())
+        Symbol::STR_TO_DEC,
+        vec![str_type()],
+        Box::new(result_type(dec_type(), invalid_str()))
+    );
+
+    // toF64 : Str -> Result F64 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_F64,
+        vec![str_type()],
+        Box::new(result_type(f64_type(), invalid_str()))
+    );
+
+    // toF32 : Str -> Result F32 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_F32,
+        vec![str_type()],
+        Box::new(result_type(f32_type(), invalid_str()))
+    );
+
+    // toNat : Str -> Result Nat [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_NAT,
+        vec![str_type()],
+        Box::new(result_type(nat_type(), invalid_str()))
+    );
+
+    // toU128 : Str -> Result U128 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_U128,
+        vec![str_type()],
+        Box::new(result_type(u128_type(), invalid_str()))
+    );
+
+    // toI128 : Str -> Result I128 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_I128,
+        vec![str_type()],
+        Box::new(result_type(i128_type(), invalid_str()))
+    );
+
+    // toU64 : Str -> Result U64 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_U64,
+        vec![str_type()],
+        Box::new(result_type(u64_type(), invalid_str()))
+    );
+
+    // toI64 : Str -> Result I64 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_I64,
+        vec![str_type()],
+        Box::new(result_type(i64_type(), invalid_str()))
+    );
+
+    // toU32 : Str -> Result U32 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_U32,
+        vec![str_type()],
+        Box::new(result_type(u32_type(), invalid_str()))
+    );
+
+    // toI32 : Str -> Result I32 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_I32,
+        vec![str_type()],
+        Box::new(result_type(i32_type(), invalid_str()))
+    );
+
+    // toU16 : Str -> Result U16 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_U16,
+        vec![str_type()],
+        Box::new(result_type(u16_type(), invalid_str()))
+    );
+
+    // toI16 : Str -> Result I16 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_I16,
+        vec![str_type()],
+        Box::new(result_type(i16_type(), invalid_str()))
+    );
+
+    // toU8 : Str -> Result U8 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_U8,
+        vec![str_type()],
+        Box::new(result_type(u8_type(), invalid_str()))
+    );
+
+    // toI8 : Str -> Result I8 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_I8,
+        vec![str_type()],
+        Box::new(result_type(i8_type(), invalid_str()))
     );
 
     // List module
@@ -914,14 +1228,14 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR2))),
     );
 
-    // mapWithIndex : List before, (Nat, before -> after) -> List after
+    // mapWithIndex : List before, (before, Nat -> after) -> List after
     {
         let_tvars! { cvar, before, after};
         add_top_level_function_type!(
             Symbol::LIST_MAP_WITH_INDEX,
             vec![
                 list_type(flex(before)),
-                closure(vec![nat_type(), flex(before)], cvar, Box::new(flex(after))),
+                closure(vec![flex(before), nat_type()], cvar, Box::new(flex(after))),
             ],
             Box::new(list_type(flex(after))),
         )
@@ -1062,6 +1376,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1))),
     );
 
+    // dropIf : List elem, (elem -> Bool) -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_DROP_IF,
+        vec![
+            list_type(flex(TVAR1)),
+            closure(vec![flex(TVAR1)], TVAR2, Box::new(bool_type())),
+        ],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
     // swap : List elem, Nat, Nat -> List elem
     add_top_level_function_type!(
         Symbol::LIST_SWAP,
@@ -1090,10 +1414,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1)))
     );
 
-    // repeat : Nat, elem -> List elem
+    // repeat : elem, Nat -> List elem
     add_top_level_function_type!(
         Symbol::LIST_REPEAT,
-        vec![nat_type(), flex(TVAR1)],
+        vec![flex(TVAR1), nat_type()],
         Box::new(list_type(flex(TVAR1))),
     );
 
@@ -1150,6 +1474,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             ),
         ],
         Box::new(list_type(flex(TVAR1))),
+    );
+
+    // sortAsc : List (Num a) -> List (Num a)
+    add_top_level_function_type!(
+        Symbol::LIST_SORT_ASC,
+        vec![list_type(num_type(flex(TVAR1)))],
+        Box::new(list_type(num_type(flex(TVAR1))))
+    );
+
+    // sortDesc : List (Num a) -> List (Num a)
+    add_top_level_function_type!(
+        Symbol::LIST_SORT_DESC,
+        vec![list_type(num_type(flex(TVAR1)))],
+        Box::new(list_type(num_type(flex(TVAR1))))
     );
 
     // find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*

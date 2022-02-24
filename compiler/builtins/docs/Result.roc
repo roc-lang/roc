@@ -2,16 +2,28 @@ interface Result
     exposes
         [
             Result,
+            after,
+            isOk,
+            isErr,
             map,
             mapErr,
-            withDefault,
-            after
+            withDefault
         ]
     imports []
 
 ## The result of an operation that could fail: either the operation went
 ## okay, or else there was an error of some sort.
 Result ok err : [ @Result ok err ]
+
+## Return True if the result indicates a success, else return False
+##
+## >>> Result.isOk (Ok 5)
+isOk : Result * * -> bool
+
+## Return True if the result indicates a failure, else return False
+##
+## >>> Result.isErr (Err "uh oh")
+isErr : Result * * -> bool
 
 ## If the result is `Ok`, return the value it holds. Otherwise, return
 ## the given default value.

@@ -11,4 +11,6 @@ roc_builtins = { path = "../builtins" }
 roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
 roc_mono = { path = "../mono" }
+roc_target = { path = "../roc_target" }
 roc_std = { path = "../../roc_std" }
+roc_error_macros = { path = "../../error_macros" }

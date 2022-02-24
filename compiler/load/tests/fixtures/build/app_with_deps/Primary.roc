@@ -1,15 +1,13 @@
-app "primary"
-    packages { blah: "./blah" }
+interface Primary
+    exposes [ blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay ]
     imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Res ]
-    provides [ blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay ] to blah
 
 blah2 = Dep2.two
 blah3 = bar
 
 str = Dep1.str
 
-# alwaysThree = \_ -> Dep1.three # TODO FIXME for some reason this infers as a circular type
-alwaysThree = \_ -> "foo"
+alwaysThree = \_ -> Dep1.three
 
 identity = \a -> a
 

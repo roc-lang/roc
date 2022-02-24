@@ -1,7 +1,7 @@
 use roc_cli::build::check_file;
 use roc_cli::{
-    build_app, docs, format, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
-    CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
+    build_app, docs, format, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
+    CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_TIME, ROC_FILE,
 };
 use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
@@ -21,7 +21,7 @@ use roc_cli::build;
 fn main() -> io::Result<()> {
     let matches = build_app().get_matches();
 
-    let exit_code = match matches.subcommand_name() {
+    let exit_code = match matches.subcommand() {
         None => {
             match matches.index_of(ROC_FILE) {
                 Some(arg_index) => {
@@ -37,14 +37,10 @@ fn main() -> io::Result<()> {
                 }
             }
         }
-        Some(CMD_BUILD) => Ok(build(
-            matches.subcommand_matches(CMD_BUILD).unwrap(),
-            BuildConfig::BuildOnly,
-        )?),
-        Some(CMD_CHECK) => {
+        Some((CMD_BUILD, matches)) => Ok(build(matches, BuildConfig::BuildOnly)?),
+        Some((CMD_CHECK, matches)) => {
             let arena = bumpalo::Bump::new();
 
-            let matches = matches.subcommand_matches(CMD_CHECK).unwrap();
             let emit_timings = matches.is_present(FLAG_TIME);
             let filename = matches.value_of(ROC_FILE).unwrap();
             let roc_file_path = PathBuf::from(filename);
@@ -66,16 +62,14 @@ fn main() -> io::Result<()> {
                 }
             }
         }
-        Some(CMD_REPL) => {
-            repl::main()?;
+        Some((CMD_REPL, _)) => {
+            roc_repl_cli::main()?;
 
             // Exit 0 if the repl exited normally
             Ok(0)
         }
-        Some(CMD_EDIT) => {
+        Some((CMD_EDIT, matches)) => {
             match matches
-                .subcommand_matches(CMD_EDIT)
-                .unwrap()
                 .values_of_os(DIRECTORY_OR_FILES)
                 .map(|mut values| values.next())
             {
@@ -90,11 +84,8 @@ fn main() -> io::Result<()> {
             // Exit 0 if the editor exited normally
             Ok(0)
         }
-        Some(CMD_DOCS) => {
-            let maybe_values = matches
-                .subcommand_matches(CMD_DOCS)
-                .unwrap()
-                .values_of_os(DIRECTORY_OR_FILES);
+        Some((CMD_DOCS, matches)) => {
+            let maybe_values = matches.values_of_os(DIRECTORY_OR_FILES);
 
             let mut values: Vec<OsString> = Vec::new();
 
@@ -128,11 +119,8 @@ fn main() -> io::Result<()> {
 
             Ok(0)
         }
-        Some(CMD_FORMAT) => {
-            let maybe_values = matches
-                .subcommand_matches(CMD_FORMAT)
-                .unwrap()
-                .values_of_os(DIRECTORY_OR_FILES);
+        Some((CMD_FORMAT, matches)) => {
+            let maybe_values = matches.values_of_os(DIRECTORY_OR_FILES);
 
             let mut values: Vec<OsString> = Vec::new();
 
@@ -162,11 +150,22 @@ fn main() -> io::Result<()> {
                 roc_files_recursive(os_str.as_os_str(), metadata.file_type(), &mut roc_files)?;
             }
 
-            format(roc_files);
+            let format_mode = match matches.is_present(FLAG_CHECK) {
+                true => FormatMode::CheckOnly,
+                false => FormatMode::Format,
+            };
 
-            Ok(0)
+            let format_exit_code = match format(roc_files, format_mode) {
+                Ok(_) => 0,
+                Err(message) => {
+                    eprintln!("{}", message);
+                    1
+                }
+            };
+
+            Ok(format_exit_code)
         }
-        Some(CMD_VERSION) => {
+        Some((CMD_VERSION, _)) => {
             println!("roc {}", concatcp!(include_str!("../../version.txt"), "\n"));
 
             Ok(0)
@@ -179,7 +178,7 @@ fn main() -> io::Result<()> {
 
 fn read_all_roc_files(
     dir: &OsString,
-    mut roc_file_paths: &mut Vec<OsString>,
+    roc_file_paths: &mut Vec<OsString>,
 ) -> Result<(), std::io::Error> {
     let entries = fs::read_dir(dir)?;
 
@@ -187,7 +186,7 @@ fn read_all_roc_files(
         let path = entry?.path();
 
         if path.is_dir() {
-            read_all_roc_files(&path.into_os_string(), &mut roc_file_paths)?;
+            read_all_roc_files(&path.into_os_string(), roc_file_paths)?;
         } else if path.extension().and_then(OsStr::to_str) == Some("roc") {
             let file_path = path.into_os_string();
             roc_file_paths.push(file_path);
