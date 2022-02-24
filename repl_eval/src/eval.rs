@@ -162,7 +162,7 @@ fn apply_newtypes<'a>(
 }
 
 fn unroll_aliases<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
-    while let Content::Alias(_, _, real) = content {
+    while let Content::Alias(_, _, real, _) = content {
         content = env.subs.get_content_without_compacting(*real);
     }
     content
@@ -1057,7 +1057,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
                 }
             }
         }
-        Alias(_, _, var) => {
+        Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
             bool_to_ast(env, mem, value, content)
@@ -1154,7 +1154,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                 }
             }
         }
-        Alias(_, _, var) => {
+        Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
             byte_to_ast(env, mem, value, content)
@@ -1223,7 +1223,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                 }
             }
         }
-        Alias(_, _, var) => {
+        Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
             num_to_ast(env, num_expr, content)

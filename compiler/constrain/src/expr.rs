@@ -956,9 +956,9 @@ pub fn constrain_expr(
             // variables of the opaque type
             // TODO: better expectation here
             let link_type_variables_con = Eq(
-                (**specialized_def_type).clone(),
-                Expected::NoExpectation(arg_type),
-                Category::OpaqueWrap(*name),
+                arg_type,
+                Expected::NoExpectation((**specialized_def_type).clone()),
+                Category::OpaqueArg,
                 arg_loc_expr.region,
             );
 

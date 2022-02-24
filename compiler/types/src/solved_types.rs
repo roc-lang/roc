@@ -60,6 +60,7 @@ pub enum SolvedType {
         Vec<(Lowercase, SolvedType)>,
         Vec<SolvedLambdaSet>,
         Box<SolvedType>,
+        AliasKind,
     ),
 
     HostExposedAlias {
@@ -181,7 +182,7 @@ impl SolvedType {
                 type_arguments,
                 lambda_set_variables,
                 actual: box_type,
-                ..
+                kind,
             } => {
                 let solved_type = Self::from_type(solved_subs, box_type);
                 let mut solved_args = Vec::with_capacity(type_arguments.len());
@@ -201,6 +202,7 @@ impl SolvedType {
                     solved_args,
                     solved_lambda_sets,
                     Box::new(solved_type),
+                    *kind,
                 )
             }
             HostExposedAlias {
@@ -257,7 +259,7 @@ impl SolvedType {
             }
             RigidVar(name) => SolvedType::Rigid(name.clone()),
             Structure(flat_type) => Self::from_flat_type(subs, recursion_vars, flat_type),
-            Alias(symbol, args, actual_var) => {
+            Alias(symbol, args, actual_var, kind) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
                 for var_index in args.named_type_arguments() {
@@ -283,7 +285,13 @@ impl SolvedType {
 
                 let aliased_to = Self::from_var_help(subs, recursion_vars, *actual_var);
 
-                SolvedType::Alias(*symbol, new_args, solved_lambda_sets, Box::new(aliased_to))
+                SolvedType::Alias(
+                    *symbol,
+                    new_args,
+                    solved_lambda_sets,
+                    Box::new(aliased_to),
+                    *kind,
+                )
             }
             RangedNumber(typ, _range_vars) => Self::from_var_help(subs, recursion_vars, *typ),
             Error => SolvedType::Error,
@@ -536,7 +544,7 @@ pub fn to_type(
                 Box::new(to_type(ext, free_vars, var_store)),
             )
         }
-        Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual) => {
+        Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual, kind) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
 
             for (lowercase, solved_arg) in solved_type_variables {
@@ -559,8 +567,7 @@ pub fn to_type(
                 type_arguments: type_variables,
                 lambda_set_variables,
                 actual: Box::new(actual),
-                // TODO(opaques): revisit when opaques are in the solver
-                kind: AliasKind::Structural,
+                kind: *kind,
             }
         }
         HostExposedAlias {

@@ -8389,7 +8389,7 @@ pub fn num_argument_to_int_or_float(
         }
         Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::Int(IntWidth::I64), // We default (Num *) to I64
 
-        Content::Alias(Symbol::NUM_INTEGER, args, _) => {
+        Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
@@ -8397,7 +8397,7 @@ pub fn num_argument_to_int_or_float(
             num_argument_to_int_or_float(subs, target_info, var, false)
         }
 
-        other @ Content::Alias(symbol, args, _) => {
+        other @ Content::Alias(symbol, args, _, _) => {
             if let Some(int_width) = IntWidth::try_from_symbol(*symbol) {
                 return IntOrFloat::Int(int_width);
             }

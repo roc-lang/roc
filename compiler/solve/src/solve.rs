@@ -11,7 +11,9 @@ use roc_types::subs::{
     SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
-use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory};
+use roc_types::types::{
+    gather_fields_unsorted_iter, Alias, AliasKind, Category, ErrorType, PatternCategory,
+};
 use roc_unify::unify::{unify, Mode, Unified::*};
 use std::collections::hash_map::Entry;
 
@@ -914,8 +916,7 @@ fn type_to_variable<'a>(
             type_arguments,
             actual,
             lambda_set_variables,
-            // TODO(opaques): revisit kind
-            kind: _,
+            kind,
         } => {
             if let Some(reserved) = Variable::get_reserved(*symbol) {
                 if rank.is_none() {
@@ -941,7 +942,7 @@ fn type_to_variable<'a>(
             } else {
                 type_to_variable(subs, rank, pools, arena, actual)
             };
-            let content = Content::Alias(*symbol, alias_variables, alias_variable);
+            let content = Content::Alias(*symbol, alias_variables, alias_variable, *kind);
 
             register(subs, rank, pools, content)
         }
@@ -963,7 +964,14 @@ fn type_to_variable<'a>(
             );
 
             let alias_variable = type_to_variable(subs, rank, pools, arena, alias_type);
-            let content = Content::Alias(*symbol, alias_variables, alias_variable);
+            // TODO(opaques): I think host-exposed aliases should always be structural
+            // (when does it make sense to give a host an opaque type?)
+            let content = Content::Alias(
+                *symbol,
+                alias_variables,
+                alias_variable,
+                AliasKind::Structural,
+            );
             let result = register(subs, rank, pools, content);
 
             // We only want to unify the actual_var with the alias once
@@ -1587,7 +1595,7 @@ fn adjust_rank_content(
             }
         }
 
-        Alias(_, args, real_var) => {
+        Alias(_, args, real_var, _) => {
             let mut rank = Rank::toplevel();
 
             for var_index in args.variables() {
@@ -1732,7 +1740,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 
                 Erroneous(_) => (),
             },
-            Alias(_, args, var) => {
+            Alias(_, args, var, _) => {
                 let var = *var;
                 let args = *args;
 
@@ -1979,7 +1987,7 @@ fn deep_copy_var_help(
             copy
         }
 
-        Alias(symbol, arguments, real_type_var) => {
+        Alias(symbol, arguments, real_type_var, kind) => {
             let new_variables =
                 SubsSlice::reserve_into_subs(subs, arguments.all_variables_len as _);
             for (target_index, var_index) in (new_variables.indices()).zip(arguments.variables()) {
@@ -1995,7 +2003,7 @@ fn deep_copy_var_help(
 
             let new_real_type_var =
                 deep_copy_var_help(subs, max_rank, pools, visited, real_type_var);
-            let new_content = Alias(symbol, new_arguments, new_real_type_var);
+            let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
 
             subs.set(copy, make_descriptor(new_content));
 

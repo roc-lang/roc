@@ -439,6 +439,7 @@ pub fn canonicalize_expr<'a>(
                         Ok((name, opaque_def)) => {
                             let argument = Box::new(args.pop().unwrap());
                             output.references.referenced_type_defs.insert(name);
+                            output.references.lookups.insert(name);
 
                             let (type_arguments, lambda_set_variables, specialized_def_type) =
                                 freshen_opaque_def(var_store, opaque_def);

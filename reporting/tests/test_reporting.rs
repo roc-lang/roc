@@ -8248,9 +8248,9 @@ I need all branches in an `if` to have the same type!
                 $Age age
                 "#
             ),
-            // TODO: there is a potential for a better error message here, if the usage of `$Age` can
-            // be linked to the declaration of `Age` inside `age`, and a suggestion to raise that
-            // declaration to the outer scope.
+            // TODO(opaques): there is a potential for a better error message here, if the usage of
+            // `$Age` can be linked to the declaration of `Age` inside `age`, and a suggestion to
+            // raise that declaration to the outer scope.
             indoc!(
                 r#"
                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
@@ -8302,6 +8302,189 @@ I need all branches in an `if` to have the same type!
                     List
                     Num
                     Set
+                "#
+            ),
+        )
+    }
+
+    fn opaque_mismatch_check() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age := U8
+
+                n : Age
+                n = $Age ""
+
+                n
+                "#
+            ),
+            // TODO(opaques): error could be improved by saying that the opaque definition demands
+            // that the argument be a U8, and linking to the definitin!
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This expression is used in an unexpected way:
+
+                4│  n = $Age ""
+                             ^^
+
+                This argument to an opaque type has type:
+
+                    Str
+
+                But you are trying to use it as:
+
+                    U8
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_infer() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                if True
+                then $F ""
+                else $F {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This expression is used in an unexpected way:
+
+                5│  else $F {}
+                            ^^
+
+                This argument to an opaque type has type:
+
+                    {}
+
+                But you are trying to use it as:
+
+                    Str
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_creation_is_not_wrapped() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F Str
+                v = ""
+
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `v` definition:
+
+                3│  v : F Str
+                4│  v = ""
+                        ^^
+
+                The body is a string of type:
+
+                    Str
+
+                But the type annotation on `v` says it should be:
+
+                    F Str
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_pattern_check() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age := U8
+
+                f : Age -> U8
+                f = \Age n -> n
+
+                f
+                "#
+            ),
+            // TODO(opaques): error could be improved by saying that the user-provided pattern
+            // probably wants to change "Age" to "@Age"!
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `f` is weird:
+
+                4│  f = \Age n -> n
+                         ^^^^^
+
+                The argument is a pattern that matches`Age` values of type:
+
+                    [ Age a ]b
+
+                But the annotation on `f` says the 1st argument should be:
+
+                    Age
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_pattern_infer() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                \x ->
+                    when x is
+                        $F A -> ""
+                        $F {} -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd pattern in this `when` does not match the previous ones:
+
+                6│          $F {} -> ""
+                            ^^^^^
+
+                The 2nd pattern is trying to matchF unwrappings of type:
+
+                    F {}a
+
+                But all the previous branches match:
+
+                    F [ A ]
                 "#
             ),
         )

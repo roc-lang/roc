@@ -1294,6 +1294,7 @@ pub enum Category {
         args_count: usize,
     },
     OpaqueWrap(Symbol),
+    OpaqueArg,
     Lambda,
     Uniqueness,
     ClosureSize,
@@ -1338,7 +1339,7 @@ pub enum PatternCategory {
     Character,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum AliasKind {
     /// A structural alias is something like
     ///   List a : [ Nil, Cons a (List a) ]
@@ -1414,7 +1415,7 @@ pub enum ErrorType {
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
-    Alias(Symbol, Vec<ErrorType>, Box<ErrorType>),
+    Alias(Symbol, Vec<ErrorType>, Box<ErrorType>, AliasKind),
     Range(Box<ErrorType>, Vec<ErrorType>),
     Error,
 }
@@ -1427,9 +1428,9 @@ impl std::fmt::Debug for ErrorType {
 }
 
 impl ErrorType {
-    pub fn unwrap_alias(self) -> ErrorType {
+    pub fn unwrap_structural_alias(self) -> ErrorType {
         match self {
-            ErrorType::Alias(_, _, real) => real.unwrap_alias(),
+            ErrorType::Alias(_, _, real, AliasKind::Structural) => real.unwrap_structural_alias(),
             real => real,
         }
     }
@@ -1468,7 +1469,7 @@ impl ErrorType {
                 capt.add_names(taken);
                 ret.add_names(taken);
             }
-            Alias(_, ts, t) => {
+            Alias(_, ts, t, _) => {
                 ts.iter().for_each(|t| {
                     t.add_names(taken);
                 });
@@ -1524,7 +1525,7 @@ fn write_error_type_help(
                 buf.push(')');
             }
         }
-        Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
+        Alias(Symbol::NUM_NUM, mut arguments, _actual, _) => {
             debug_assert!(arguments.len() == 1);
 
             let argument = arguments.remove(0);
@@ -1642,7 +1643,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push(')');
             }
         }
-        Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
+        Alias(Symbol::NUM_NUM, mut arguments, _actual, _) => {
             debug_assert!(arguments.len() == 1);
 
             let argument = arguments.remove(0);
@@ -1669,7 +1670,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 }
             }
         }
-        Alias(symbol, arguments, _actual) => {
+        Alias(symbol, arguments, _actual, _) => {
             let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
 
             if write_parens {
@@ -1890,7 +1891,7 @@ pub fn gather_fields_unsorted_iter(
                 var = *sub_ext;
             }
 
-            Alias(_, _, actual_var) => {
+            Alias(_, _, actual_var, _) => {
                 // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
                 var = *actual_var;
             }
@@ -1975,7 +1976,7 @@ pub fn gather_tags_unsorted_iter(
                 //                var = *sub_ext;
             }
 
-            Alias(_, _, actual_var) => {
+            Alias(_, _, actual_var, _) => {
                 // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
                 var = *actual_var;
             }
