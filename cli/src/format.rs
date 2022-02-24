@@ -25,19 +25,19 @@ use roc_parse::{
 };
 use roc_region::all::{Loc, Region};
 
-fn flatten_folders(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> {
+fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> {
     files
         .into_iter()
         .flat_map(|file| {
             if file.is_dir() {
                 match file.read_dir() {
-                    Ok(folder) => folder
+                    Ok(directory) => directory
                         .flat_map(|result| match result {
                             Ok(file) => {
                                 let path = file.path();
 
                                 if path.is_dir() {
-                                    flatten_folders(vec![path])
+                                    flatten_directories(vec![path])
                                 } else if path.ends_with(".roc") {
                                     vec![path]
                                 } else {
@@ -45,14 +45,14 @@ fn flatten_folders(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> {
                                 }
                             }
                             Err(error) => internal_error!(
-                            "There was an error while trying to read a file from a folder: {:?}",
+                            "There was an error while trying to read a file from a directory: {:?}",
                             error
                         ),
                         })
                         .collect(),
                     Err(error) => {
                         internal_error!(
-                        "There was an error while trying to read the contents of a folder: {:?}",
+                        "There was an error while trying to read the contents of a directory: {:?}",
                         error
                     );
                     }
@@ -65,7 +65,7 @@ fn flatten_folders(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> {
 }
 
 pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
-    let files = flatten_folders(files);
+    let files = flatten_directories(files);
 
     for file in files {
         let arena = Bump::new();

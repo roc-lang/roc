@@ -888,7 +888,7 @@ mod cli_run {
     #[test]
     fn format_check_folders() {
         check_format_check_as_expected(&fixtures_dir("format"), false);
-        check_format_check_as_expected(&fixtures_dir("format/formatted_folder"), true);
+        check_format_check_as_expected(&fixtures_dir("format/formatted_directory"), true);
     }
 }
 
