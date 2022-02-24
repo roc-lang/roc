@@ -88,7 +88,6 @@ pub struct RocButton {
 #[repr(C)]
 pub struct RocRowOrCol {
     pub children: RocList<RocElem>,
-    pub styles: ButtonStyles,
 }
 
 #[repr(C)]
