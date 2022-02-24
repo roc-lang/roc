@@ -12,8 +12,8 @@ extern crate indoc;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        example_file, examples_dir, extract_valgrind_errors, fixture_file, known_bad_file, run_cmd,
-        run_roc, run_with_valgrind, ValgrindError, ValgrindErrorXWhat, fixtures_dir,
+        example_file, examples_dir, extract_valgrind_errors, fixture_file, fixtures_dir,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
     };
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
