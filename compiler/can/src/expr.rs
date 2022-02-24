@@ -429,12 +429,12 @@ pub fn canonicalize_expr<'a>(
                     let problem =
                         roc_problem::can::RuntimeError::OpaqueAppliedToMultipleArgs(region);
                     env.problem(Problem::RuntimeError(problem.clone()));
-                    (RuntimeError(problem), Output::default())
+                    (RuntimeError(problem), output)
                 } else {
                     match scope.lookup_opaque_ref(name, loc_fn.region) {
                         Err(runtime_error) => {
                             env.problem(Problem::RuntimeError(runtime_error.clone()));
-                            (RuntimeError(runtime_error), Output::default())
+                            (RuntimeError(runtime_error), output)
                         }
                         Ok((name, opaque_def)) => {
                             let argument = Box::new(args.pop().unwrap());

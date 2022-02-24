@@ -8208,10 +8208,20 @@ I need all branches in an `if` to have the same type!
                 OtherModule.$Age 21
                 "#
             ),
-            // TODO: get rid of the second error. Consider parsing OtherModule.$Age to completion
-            // and checking it during can.
+            // TODO: get rid of the first error. Consider parsing OtherModule.$Age to completion
+            // and checking it during can. The reason the error appears is because it is parsed as
+            // Apply(Error(OtherModule), [ $Age, 21 ])
             indoc!(
                 r#"
+                ── OPAQUE NOT APPLIED ──────────────────────────────────────────────────────────
+
+                This opaque is not applied to an argument:
+
+                1│  OtherModule.$Age 21
+                                ^^^^
+
+                Note: Opaque types always wrap exactly one argument!
+
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 I am trying to parse a qualified name here:
@@ -8221,15 +8231,6 @@ I need all branches in an `if` to have the same type!
 
                 I was expecting to see an identifier next, like height. A complete
                 qualified name looks something like Json.Decode.string.
-
-                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
-
-                The opaque type Age referenced here is not defined:
-
-                1│  OtherModule.$Age 21
-                                ^^^^
-
-                Note: It looks like there are no opaque types declared in this scope yet!
                 "#
             ),
         )

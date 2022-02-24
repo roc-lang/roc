@@ -31,6 +31,8 @@ const NUMBER_OVERFLOWS_SUFFIX: &str = "NUMBER OVERFLOWS SUFFIX";
 const NUMBER_UNDERFLOWS_SUFFIX: &str = "NUMBER UNDERFLOWS SUFFIX";
 const OPAQUE_NOT_DEFINED: &str = "OPAQUE NOT DEFINED";
 const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE DECLARED OUTSIDE SCOPE";
+const OPAQUE_NOT_APPLIED: &str = "OPAQUE NOT APPLIED";
+const OPAQUE_OVER_APPLIED: &str = "OPAQUE APPLIED TO TOO MANY ARGS";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -1454,7 +1456,7 @@ fn pretty_runtime_error<'b>(
                 alloc.note("Opaque types always wrap exactly one argument!"),
             ]);
 
-            title = OPAQUE_DECLARED_OUTSIDE_SCOPE;
+            title = OPAQUE_NOT_APPLIED;
         }
         RuntimeError::OpaqueAppliedToMultipleArgs(region) => {
             doc = alloc.stack(vec![
@@ -1463,7 +1465,7 @@ fn pretty_runtime_error<'b>(
                 alloc.note("Opaque types always wrap exactly one argument!"),
             ]);
 
-            title = OPAQUE_DECLARED_OUTSIDE_SCOPE;
+            title = OPAQUE_OVER_APPLIED;
         }
     }
 
