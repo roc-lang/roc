@@ -1710,7 +1710,7 @@ fn replace_unique_int_list() {
             r#"
                 result = List.replace [ 12, 9, 7, 1, 5 ] 2 33
                 when result is
-                    Ok {list, value} -> list
+                    Ok {list} -> list
                     Err _ -> []
             "#
         ),
@@ -1727,7 +1727,7 @@ fn replace_unique_int_list_get_old_value() {
             r#"
                 result = List.replace [ 12, 9, 7, 1, 5 ] 2 33
                 when result is
-                    Ok {list, value} -> value
+                    Ok {value} -> value
                     Err _ -> -1
             "#
         ),

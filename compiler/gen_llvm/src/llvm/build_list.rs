@@ -312,7 +312,7 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
         UpdateMode::InPlace => call_bitcode_fn(
             env,
             &[
-                list.into(),
+                pass_list_cc(env, list),
                 index.into(),
                 pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
@@ -323,7 +323,7 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
         UpdateMode::Immutable => call_bitcode_fn(
             env,
             &[
-                list.into(),
+                pass_list_cc(env, list),
                 env.alignment_intvalue(element_layout),
                 index.into(),
                 pass_element_as_opaque(env, element, *element_layout),
