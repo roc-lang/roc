@@ -309,7 +309,7 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
     // Assume the bounds have already been checked earlier
     // (e.g. by List.replace or List.set, which wrap List.#replaceUnsafe)
     let new_list = match update_mode {
-        UpdateMode::InPlace => call_bitcode_fn(
+        UpdateMode::InPlace => call_list_bitcode_fn(
             env,
             &[
                 pass_list_cc(env, list),
@@ -320,7 +320,7 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
             ],
             bitcode::LIST_REPLACE_IN_PLACE,
         ),
-        UpdateMode::Immutable => call_bitcode_fn(
+        UpdateMode::Immutable => call_list_bitcode_fn(
             env,
             &[
                 pass_list_cc(env, list),
@@ -351,11 +351,11 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
 
     let result = env
         .builder
-        .build_insert_value(result, old_element, 0, "insert_value")
+        .build_insert_value(result, new_list, 0, "insert_list")
         .unwrap();
 
     env.builder
-        .build_insert_value(result, new_list, 1, "insert_list")
+        .build_insert_value(result, old_element, 1, "insert_value")
         .unwrap()
         .into_struct_value()
         .into()
