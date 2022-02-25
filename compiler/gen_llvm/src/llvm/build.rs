@@ -657,33 +657,41 @@ pub fn construct_optimization_passes<'a>(
         OptLevel::Development | OptLevel::Normal => {
             pmb.set_optimization_level(OptimizationLevel::None);
         }
+        OptLevel::Size => {
+            pmb.set_optimization_level(OptimizationLevel::Default);
+            // TODO: For some usecase, like embedded, it is useful to expose this and tune it.
+            pmb.set_inliner_with_threshold(50);
+        }
         OptLevel::Optimize => {
             pmb.set_optimization_level(OptimizationLevel::Aggressive);
             // this threshold seems to do what we want
             pmb.set_inliner_with_threshold(275);
-
-            // TODO figure out which of these actually help
-
-            // function passes
-
-            fpm.add_cfg_simplification_pass();
-            mpm.add_cfg_simplification_pass();
-
-            fpm.add_jump_threading_pass();
-            mpm.add_jump_threading_pass();
-
-            fpm.add_memcpy_optimize_pass(); // this one is very important
-
-            fpm.add_licm_pass();
-
-            // turn invoke into call
-            mpm.add_prune_eh_pass();
-
-            // remove unused global values (often the `_wrapper` can be removed)
-            mpm.add_global_dce_pass();
-
-            mpm.add_function_inlining_pass();
         }
+    }
+
+    // Add optimization passes for Size and Optimize.
+    if matches!(opt_level, OptLevel::Size | OptLevel::Optimize) {
+        // TODO figure out which of these actually help
+
+        // function passes
+
+        fpm.add_cfg_simplification_pass();
+        mpm.add_cfg_simplification_pass();
+
+        fpm.add_jump_threading_pass();
+        mpm.add_jump_threading_pass();
+
+        fpm.add_memcpy_optimize_pass(); // this one is very important
+
+        fpm.add_licm_pass();
+
+        // turn invoke into call
+        mpm.add_prune_eh_pass();
+
+        // remove unused global values (often the `_wrapper` can be removed)
+        mpm.add_global_dce_pass();
+
+        mpm.add_function_inlining_pass();
     }
 
     pmb.populate_module_pass_manager(&mpm);
