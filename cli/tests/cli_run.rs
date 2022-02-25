@@ -107,7 +107,7 @@ mod cli_run {
             all_flags.extend_from_slice(&["--valgrind"]);
         }
 
-        let compile_out = build_example(file, &all_flags[..]);
+        build_example(file, &all_flags[..]);
 
         let out = if use_valgrind && ALLOW_VALGRIND {
             let (valgrind_out, raw_xml) = if let Some(input_file) = input_file {
