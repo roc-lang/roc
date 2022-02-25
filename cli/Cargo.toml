@@ -20,7 +20,8 @@ default = ["target-aarch64", "target-x86_64", "target-wasm32", "editor", "llvm"]
 wasm32-cli-run = ["target-wasm32", "run-wasm32"]
 i386-cli-run = ["target-x86"]
 
-llvm = ["roc_build/llvm"]
+# TODO: change to roc_repl_cli/llvm once roc_repl can run without llvm.
+llvm = ["roc_build/llvm", "roc_repl_cli"]
 
 editor = ["roc_editor"]
 
@@ -59,7 +60,7 @@ roc_reporting = { path = "../reporting" }
 roc_error_macros = { path = "../error_macros" }
 roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
-roc_repl_cli = { path = "../repl_cli" }
+roc_repl_cli = { path = "../repl_cli", optional = true }
 clap = { version = "= 3.0.0-beta.5", default-features = false, features = ["std", "color", "suggestions"] }
 const_format = "0.2.22"
 bumpalo = { version = "3.8.0", features = ["collections"] }

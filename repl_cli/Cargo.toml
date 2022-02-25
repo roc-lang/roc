@@ -14,7 +14,7 @@ rustyline = {git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1"}
 rustyline-derive = {git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1"}
 target-lexicon = "0.12.2"
 
-roc_build = {path = "../compiler/build"}
+roc_build = {path = "../compiler/build", features = ["llvm"]}
 roc_collections = {path = "../compiler/collections"}
 roc_gen_llvm = {path = "../compiler/gen_llvm"}
 roc_load = {path = "../compiler/load"}
