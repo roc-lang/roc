@@ -188,7 +188,7 @@ pub enum RuntimeError {
         module_name: ModuleName,
         /// A list of modules which *have* been imported
         imported_modules: MutSet<Box<str>>,
-        /// Where the problem occured
+        /// Where the problem occurred
         region: Region,
         /// Whether or not the module exists at all
         ///
