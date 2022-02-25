@@ -81,7 +81,8 @@ impl IdentStr {
         (self as *const IdentStr).cast()
     }
 
-    fn from_slice(slice: &[u8]) -> Self {
+    fn from_str(str: &str) -> Self {
+        let slice = str.as_bytes();
         let len = slice.len();
 
         match len.cmp(&mem::size_of::<Self>()) {
@@ -205,13 +206,13 @@ impl std::ops::Deref for IdentStr {
 
 impl From<&str> for IdentStr {
     fn from(str: &str) -> Self {
-        Self::from_slice(str.as_bytes())
+        Self::from_str(str)
     }
 }
 
 impl From<String> for IdentStr {
     fn from(str: String) -> Self {
-        Self::from_slice(str.as_bytes())
+        Self::from_str(&str)
     }
 }
 
@@ -267,7 +268,7 @@ impl std::hash::Hash for IdentStr {
 
 impl Clone for IdentStr {
     fn clone(&self) -> Self {
-        Self::from_slice(self.as_bytes())
+        Self::from_str(self.as_str())
     }
 }
 
