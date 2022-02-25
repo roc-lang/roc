@@ -59,8 +59,8 @@ struct ReplState {
     output: Option<String>,
 }
 
-fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) {
-    let app = {
+fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) -> u32 {
+    let app: Instance = {
         let memory = COMPILER.exports.get_memory("memory").unwrap();
         let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
 
@@ -71,7 +71,18 @@ fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) {
 
         // Parse the bytes into a Wasmer module
         let store = Store::default();
-        let wasmer_module = Module::new(&store, app_module_bytes).unwrap();
+        let wasmer_module = match Module::new(&store, app_module_bytes) {
+            Ok(m) => m,
+            Err(e) => {
+                let path = "/tmp/roc_repl_test_invalid_app.wasm";
+                fs::write(path, app_module_bytes).unwrap();
+                println!(
+                    "Failed to create Wasm module\nWrote invalid wasm to {}\n{:?}",
+                    path, e
+                );
+                return false.into();
+            }
+        };
 
         // Get the WASI imports for the app
         let mut wasi_env = WasiState::new("hello").finalize().unwrap();
@@ -79,8 +90,14 @@ fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) {
             .import_object(&wasmer_module)
             .unwrap_or_else(|_| imports!());
 
-        // Create an executable instance. (Give it a stack & heap, etc. If this was ELF, it would be the OS's job.)
-        Instance::new(&wasmer_module, &import_object).unwrap()
+        // Create an executable instance
+        match Instance::new(&wasmer_module, &import_object) {
+            Ok(instance) => instance,
+            Err(e) => {
+                println!("Failed to create Wasm instance {:?}", e);
+                return false.into();
+            }
+        }
     };
 
     REPL_STATE.with(|f| {
@@ -90,6 +107,8 @@ fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) {
             unreachable!()
         }
     });
+
+    return true.into();
 }
 
 fn wasmer_run_app() -> u32 {
@@ -224,7 +243,9 @@ fn run(src: &'static str) -> (bool, String) {
         let wasm_ok: i32 = entrypoint.call(&[src_len]).unwrap().deref()[0].unwrap_i32();
         wasm_ok != 0
     } else {
-        panic!("Failed to acquire test mutex")
+        panic!(
+            "Failed to acquire test mutex! A previous test must have panicked while holding it, running Wasm"
+        )
     };
 
     let final_state: ReplState = REPL_STATE.with(|rs| rs.take()).unwrap();
