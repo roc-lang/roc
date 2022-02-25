@@ -1,7 +1,7 @@
 use crate::graphics::colors::Rgba;
 use core::ffi::c_void;
 use core::mem::{self, ManuallyDrop};
-use roc_std::{RocList, RocStr};
+use roc_std::{ReferenceCount, RocList, RocStr};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
@@ -88,6 +88,49 @@ pub struct RocButton {
 #[repr(C)]
 pub struct RocRowOrCol {
     pub children: RocList<RocElem>,
+}
+
+unsafe impl ReferenceCount for RocElem {
+    /// Increment the reference count.
+    fn increment(&self) {
+        use RocElemTag::*;
+
+        match self.tag() {
+            Button => unsafe { &*self.entry().button.child }.increment(),
+            Text => unsafe { &*self.entry().text }.increment(),
+            Row | Col => {
+                let children = unsafe { &self.entry().row_or_col.children };
+
+                for child in children.as_slice().iter() {
+                    child.increment();
+                }
+            }
+        }
+    }
+
+    /// Decrement the reference count.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` points to a value with a non-zero
+    /// reference count.
+    unsafe fn decrement(ptr: *const Self) {
+        use RocElemTag::*;
+
+        let elem = &*ptr;
+
+        match elem.tag() {
+            Button => ReferenceCount::decrement(&*elem.entry().button.child),
+            Text => ReferenceCount::decrement(&*elem.entry().text),
+            Row | Col => {
+                let children = &elem.entry().row_or_col.children;
+
+                for child in children.as_slice().iter() {
+                    ReferenceCount::decrement(child);
+                }
+            }
+        }
+    }
 }
 
 #[repr(C)]
