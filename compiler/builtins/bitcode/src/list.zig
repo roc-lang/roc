@@ -1257,98 +1257,55 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
 }
 
 pub fn listReplaceInPlace(
-    bytes: ?[*]u8,
+    list: RocList 
     index: usize,
     element: Opaque,
     element_width: usize,
-) callconv(.C) ?[*]u8 {
+    out_element: ?[*]u8,
+) callconv(.C) extern RocList {
     // INVARIANT: bounds checking happens on the roc side
     //
     // at the time of writing, the function is implemented roughly as
     // `if inBounds then LowLevelListReplace input index item else input`
     // so we don't do a bounds check here. Hence, the list is also non-empty,
     // because inserting into an empty list is always out of bounds
-
-    return listReplaceInPlaceHelp(bytes, index, element, element_width);
+    return listReplaceInPlaceHelp(list, index, element, element_width, out_element);
 }
 
 pub fn listReplace(
-    bytes: ?[*]u8,
-    length: usize,
+    list: RocList 
     alignment: u32,
     index: usize,
     element: Opaque,
     element_width: usize,
-) callconv(.C) ?[*]u8 {
+    out_element: ?[*]u8,
+) callconv(.C) RocList {
     // INVARIANT: bounds checking happens on the roc side
     //
     // at the time of writing, the function is implemented roughly as
     // `if inBounds then LowLevelListReplace input index item else input`
     // so we don't do a bounds check here. Hence, the list is also non-empty,
     // because inserting into an empty list is always out of bounds
-    const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), bytes));
-
-    if ((ptr - 1)[0] == utils.REFCOUNT_ONE) {
-        return listReplaceInPlaceHelp(bytes, index, element, element_width);
-    } else {
-        return listReplaceImmutable(bytes, length, alignment, index, element, element_width);
-    }
+    listReplaceInPlaceHelp(list.makeUnique(alignment, element_width), index, element, element_width, out_element);
 }
 
 inline fn listReplaceInPlaceHelp(
-    bytes: ?[*]u8,
+    list: RocList 
     index: usize,
     element: Opaque,
     element_width: usize,
-) ?[*]u8 {
-    // TODO: figure out how to return an element and a List.
-    // We only know the elment size at runtime.
-    // This code is currently the same as listSet.
-
+    out_element: ?[*]u8,
+) extern struct RocList {
     // the element we will replace
-    var element_at_index = (bytes orelse undefined) + (index * element_width);
+    var element_at_index = (list.bytes orelse undefined) + (index * element_width);
 
-    // decrement its refcount
-    // dec(element_at_index);
+    // copy out the old element
+    @memcpy(out_element orelse undefined, element_at_index, element_width);
 
     // copy in the new element
     @memcpy(element_at_index, element orelse undefined, element_width);
 
-    return bytes;
-}
-
-inline fn listReplaceImmutable(
-    old_bytes: ?[*]u8,
-    length: usize,
-    alignment: u32,
-    index: usize,
-    element: Opaque,
-    element_width: usize,
-) ?[*]u8 {
-    // TODO: figure out how to return an element and a List.
-    // We only know the elment size at runtime.
-    // This code is currently the same as listSet.
-
-    const data_bytes = length * element_width;
-
-    var new_bytes = utils.allocateWithRefcount(data_bytes, alignment);
-
-    @memcpy(new_bytes, old_bytes orelse undefined, data_bytes);
-
-    // the element we will replace
-    var element_at_index = new_bytes + (index * element_width);
-
-    // decrement its refcount
-    // dec(element_at_index);
-
-    // copy in the new element
-    @memcpy(element_at_index, element orelse undefined, element_width);
-
-    // consume RC token of original
-    utils.decref(old_bytes, data_bytes, alignment);
-
-    //return list;
-    return new_bytes;
+    return list;
 }
 
 pub fn listSetInPlace(
