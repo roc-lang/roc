@@ -340,7 +340,6 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
     let result = env
         .context
         .struct_type(
-            // TODO: does the order need to be decided by the size of the element type.
             &[
                 super::convert::zig_list_type(env).into(),
                 element_type.into(),

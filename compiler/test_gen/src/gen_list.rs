@@ -1738,6 +1738,57 @@ fn replace_unique_int_list_get_old_value() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn replace_unique_get_large_value() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                list : List { a : U64, b: U64, c: U64, d: U64 }
+                list = [ { a: 1, b: 2, c: 3, d: 4 }, { a: 5, b: 6, c: 7, d: 8 }, { a: 9, b: 10, c: 11, d: 12 } ]
+                result = List.replace list 1 { a: 13, b: 14, c: 15, d: 16 }
+                when result is
+                    Ok {value} -> value
+                    Err _ -> { a: 0, b: 0, c: 0, d: 0 }
+            "#
+        ),
+        (5, 6, 7, 8),
+        (u64, u64, u64, u64)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn replace_shared_int_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            wrapper = \shared ->
+                # This should not mutate the original
+                replaced =
+                    when List.replace shared 1 7.7 is
+                        Ok {list} -> list
+                        Err _ -> []
+                x =
+                    when List.get replaced 1 is
+                        Ok num -> num
+                        Err _ -> 0
+
+                y =
+                    when List.get shared 1 is
+                        Ok num -> num
+                        Err _ -> 0
+
+                { x, y }
+
+            wrapper [ 2.1, 4.3 ]
+            "#
+        ),
+        (7.7, 4.3),
+        (f64, f64)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn get_set_unique_int_list() {
     assert_evals_to!(
         indoc!(
