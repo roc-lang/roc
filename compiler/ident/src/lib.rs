@@ -285,8 +285,7 @@ impl Clone for IdentStr {
                 length: self.length,
             }
         } else {
-            let capacity_size = core::mem::size_of::<usize>();
-            let copy_length = self.length + capacity_size;
+            let copy_length = self.length;
             let elements = unsafe {
                 let align = mem::align_of::<u8>();
                 let layout = Layout::from_size_align_unchecked(copy_length, align);
