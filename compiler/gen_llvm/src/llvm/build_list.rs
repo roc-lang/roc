@@ -291,6 +291,50 @@ pub fn list_drop_at<'a, 'ctx, 'env>(
     )
 }
 
+/// List.replace : List elem, Nat, elem -> List elem
+pub fn list_replace<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    list: BasicValueEnum<'ctx>,
+    index: IntValue<'ctx>,
+    element: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+    update_mode: UpdateMode,
+) -> BasicValueEnum<'ctx> {
+    let (length, bytes) = load_list(
+        env.builder,
+        list.into_struct_value(),
+        env.context.i8_type().ptr_type(AddressSpace::Generic),
+    );
+
+    let new_bytes = match update_mode {
+        UpdateMode::InPlace => call_bitcode_fn(
+            env,
+            &[
+                bytes.into(),
+                index.into(),
+                pass_element_as_opaque(env, element, *element_layout),
+                layout_width(env, element_layout),
+            ],
+            bitcode::LIST_REPLACE_IN_PLACE,
+        ),
+        UpdateMode::Immutable => call_bitcode_fn(
+            env,
+            &[
+                bytes.into(),
+                length.into(),
+                env.alignment_intvalue(element_layout),
+                index.into(),
+                pass_element_as_opaque(env, element, *element_layout),
+                layout_width(env, element_layout),
+            ],
+            bitcode::LIST_REPLACE,
+        ),
+    };
+
+    store_list(env, new_bytes.into_pointer_value(), length)
+}
+
 /// List.set : List elem, Nat, elem -> List elem
 pub fn list_set<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

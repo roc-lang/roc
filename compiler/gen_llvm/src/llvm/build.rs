@@ -13,8 +13,8 @@ use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_all, list_any, list_append, list_concat,
     list_contains, list_drop_at, list_find_unsafe, list_get_unsafe, list_join, list_keep_errs,
     list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4,
-    list_map_with_index, list_prepend, list_range, list_repeat, list_reverse, list_set,
-    list_single, list_sort_with, list_sublist, list_swap,
+    list_map_with_index, list_prepend, list_range, list_repeat, list_replace, list_reverse,
+    list_set, list_single, list_sort_with, list_sublist, list_swap,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
@@ -5651,6 +5651,21 @@ fn run_low_level<'a, 'ctx, 'env>(
                 element_layout,
                 elem_index,
                 wrapper_struct,
+            )
+        }
+        ListReplace => {
+            let list = load_symbol(scope, &args[0]);
+            let index = load_symbol(scope, &args[1]);
+            let (element, element_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            list_replace(
+                env,
+                layout_ids,
+                list,
+                index.into_int_value(),
+                element,
+                element_layout,
+                update_mode,
             )
         }
         ListSet => {

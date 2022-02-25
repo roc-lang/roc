@@ -1704,6 +1704,40 @@ fn get_int_list_oob() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn replace_unique_int_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                result = List.replace [ 12, 9, 7, 1, 5 ] 2 33
+                when result is
+                    Ok (Pair newList _) -> newList
+                    Err _ -> []
+            "#
+        ),
+        RocList::from_slice(&[12, 9, 33, 1, 5]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn replace_unique_int_list_get_old_value() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                result = List.replace [ 12, 9, 7, 1, 5 ] 2 33
+                when result is
+                    Ok (Pair _ oldValue) -> oldValue
+                    Err _ -> -1
+            "#
+        ),
+        7,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn get_set_unique_int_list() {
     assert_evals_to!(
         indoc!(

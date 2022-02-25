@@ -1256,6 +1256,93 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
     return output;
 }
 
+pub fn listReplaceInPlace(
+    bytes: ?[*]u8,
+    index: usize,
+    element: Opaque,
+    element_width: usize,
+) callconv(.C) ?[*]u8 {
+    // INVARIANT: bounds checking happens on the roc side
+    //
+    // at the time of writing, the function is implemented roughly as
+    // `if inBounds then LowLevelListReplace input index item else input`
+    // so we don't do a bounds check here. Hence, the list is also non-empty,
+    // because inserting into an empty list is always out of bounds
+
+    return listReplaceInPlaceHelp(bytes, index, element, element_width);
+}
+
+pub fn listReplace(
+    bytes: ?[*]u8,
+    length: usize,
+    alignment: u32,
+    index: usize,
+    element: Opaque,
+    element_width: usize,
+) callconv(.C) ?[*]u8 {
+    // INVARIANT: bounds checking happens on the roc side
+    //
+    // at the time of writing, the function is implemented roughly as
+    // `if inBounds then LowLevelListReplace input index item else input`
+    // so we don't do a bounds check here. Hence, the list is also non-empty,
+    // because inserting into an empty list is always out of bounds
+    const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), bytes));
+
+    if ((ptr - 1)[0] == utils.REFCOUNT_ONE) {
+        return listReplaceInPlaceHelp(bytes, index, element, element_width);
+    } else {
+        return listReplaceImmutable(bytes, length, alignment, index, element, element_width);
+    }
+}
+
+inline fn listReplaceInPlaceHelp(
+    bytes: ?[*]u8,
+    index: usize,
+    element: Opaque,
+    element_width: usize,
+) ?[*]u8 {
+    // the element we will replace
+    var element_at_index = (bytes orelse undefined) + (index * element_width);
+
+    // decrement its refcount
+    // dec(element_at_index);
+
+    // copy in the new element
+    @memcpy(element_at_index, element orelse undefined, element_width);
+
+    return bytes;
+}
+
+inline fn listReplaceImmutable(
+    old_bytes: ?[*]u8,
+    length: usize,
+    alignment: u32,
+    index: usize,
+    element: Opaque,
+    element_width: usize,
+) ?[*]u8 {
+    const data_bytes = length * element_width;
+
+    var new_bytes = utils.allocateWithRefcount(data_bytes, alignment);
+
+    @memcpy(new_bytes, old_bytes orelse undefined, data_bytes);
+
+    // the element we will replace
+    var element_at_index = new_bytes + (index * element_width);
+
+    // decrement its refcount
+    // dec(element_at_index);
+
+    // copy in the new element
+    @memcpy(element_at_index, element orelse undefined, element_width);
+
+    // consume RC token of original
+    utils.decref(old_bytes, data_bytes, alignment);
+
+    //return list;
+    return new_bytes;
+}
+
 pub fn listSetInPlace(
     bytes: ?[*]u8,
     index: usize,

@@ -260,14 +260,14 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
-            ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
-            | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap
-            | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
-            | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
-            | ListSublist | ListDropAt | ListSwap | ListAny | ListAll | ListFindUnsafe
-            | DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
-            | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference | DictWalk
-            | SetFromList => {
+            ListGetUnsafe | ListReplace | ListSet | ListSingle | ListRepeat | ListReverse
+            | ListConcat | ListContains | ListAppend | ListPrepend | ListJoin | ListRange
+            | ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf
+            | ListWalk | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs
+            | ListSortWith | ListSublist | ListDropAt | ListSwap | ListAny | ListAll
+            | ListFindUnsafe | DictSize | DictEmpty | DictInsert | DictRemove | DictContains
+            | DictGetUnsafe | DictKeys | DictValues | DictUnion | DictIntersection
+            | DictDifference | DictWalk | SetFromList => {
                 todo!("{:?}", self.lowlevel);
             }
 
