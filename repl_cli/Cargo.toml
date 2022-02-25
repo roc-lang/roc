@@ -14,10 +14,10 @@ target-x86_64 = ["roc_build/target-x86_64"]
 target-wasm32 = ["roc_build/target-wasm32"]
 
 [dependencies]
-bumpalo = {version = "3.8.0", features = ["collections"]}
+bumpalo = { version = "3.8.0", features = ["collections"] }
 const_format = "0.2.22"
 inkwell = {path = "../vendor/inkwell"}
-libloading = {version = "0.7.1"}
+libloading = "0.7.1"
 rustyline = {git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1"}
 rustyline-derive = {git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1"}
 target-lexicon = "0.12.2"
