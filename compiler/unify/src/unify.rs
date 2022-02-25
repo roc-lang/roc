@@ -357,7 +357,7 @@ fn unify_alias(
         Error => merge(subs, ctx, Error),
         other => {
             // The type on the left is an alias, but the one on the right is not!
-            debug_assert!(kind != AliasKind::Opaque);
+            debug_assert!(either_is_opaque);
             mismatch!("Cannot unify opaque {:?} with {:?}", symbol, other)
         }
     }

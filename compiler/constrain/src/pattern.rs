@@ -420,18 +420,21 @@ pub fn constrain_pattern(
                 constrain_pattern(env, &loc_pattern.value, loc_pattern.region, expected, state);
             }
 
+            let pat_category = PatternCategory::Ctor(tag_name.clone());
+
             let whole_con = Constraint::Present(
                 expected.clone().get_type(),
-                PresenceConstraint::IncludesTag(tag_name.clone(), argument_types.clone()),
+                PresenceConstraint::IncludesTag(
+                    tag_name.clone(),
+                    argument_types.clone(),
+                    region,
+                    pat_category.clone(),
+                ),
             );
 
             let tag_con = Constraint::Present(
                 Type::Variable(*whole_var),
-                PresenceConstraint::Pattern(
-                    region,
-                    PatternCategory::Ctor(tag_name.clone()),
-                    expected,
-                ),
+                PresenceConstraint::Pattern(region, pat_category, expected),
             );
 
             state.vars.push(*whole_var);

@@ -653,7 +653,7 @@ fn solve(
                 }
             }
         }
-        Present(typ, PresenceConstraint::IncludesTag(tag_name, tys)) => {
+        Present(typ, PresenceConstraint::IncludesTag(tag_name, tys, region, pattern_category)) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
             let tag_ty = Type::TagUnion(
                 vec![(tag_name.clone(), tys.clone())],
@@ -667,15 +667,14 @@ fn solve(
 
                     state
                 }
-                Failure(vars, actual_type, expected_type) => {
+                Failure(vars, actual_type, expected_to_include_type) => {
                     introduce(subs, rank, pools, &vars);
 
-                    // TODO: do we need a better error type here?
-                    let problem = TypeError::BadExpr(
-                        Region::zero(),
-                        Category::When,
-                        actual_type,
-                        Expected::NoExpectation(expected_type),
+                    let problem = TypeError::BadPattern(
+                        *region,
+                        pattern_category.clone(),
+                        expected_to_include_type,
+                        PExpected::NoExpectation(actual_type),
                     );
 
                     problems.push(problem);

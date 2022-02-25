@@ -1486,8 +1486,9 @@ fn add_pattern_category<'b>(
         Set => alloc.reflow(" sets of type:"),
         Map => alloc.reflow(" maps of type:"),
         Ctor(tag_name) => alloc.concat(vec![
+            alloc.reflow(" a "),
             alloc.tag_name(tag_name.clone()),
-            alloc.reflow(" values of type:"),
+            alloc.reflow(" tag of type:"),
         ]),
         Opaque(opaque) => alloc.concat(vec![
             alloc.opaque_name(*opaque),
