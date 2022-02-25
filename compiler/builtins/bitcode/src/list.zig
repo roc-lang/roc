@@ -1301,6 +1301,10 @@ inline fn listReplaceInPlaceHelp(
     element: Opaque,
     element_width: usize,
 ) ?[*]u8 {
+    // TODO: figure out how to return an element and a List.
+    // We only know the elment size at runtime.
+    // This code is currently the same as listSet.
+
     // the element we will replace
     var element_at_index = (bytes orelse undefined) + (index * element_width);
 
@@ -1321,6 +1325,10 @@ inline fn listReplaceImmutable(
     element: Opaque,
     element_width: usize,
 ) ?[*]u8 {
+    // TODO: figure out how to return an element and a List.
+    // We only know the elment size at runtime.
+    // This code is currently the same as listSet.
+
     const data_bytes = length * element_width;
 
     var new_bytes = utils.allocateWithRefcount(data_bytes, alignment);

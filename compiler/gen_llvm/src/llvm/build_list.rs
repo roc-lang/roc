@@ -294,19 +294,22 @@ pub fn list_drop_at<'a, 'ctx, 'env>(
 /// List.replace : List elem, Nat, elem -> List elem
 pub fn list_replace<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
+    _layout_ids: &mut LayoutIds<'a>,
     list: BasicValueEnum<'ctx>,
     index: IntValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
+    // TODO: This or elsewhere needs to deal with building the record that gets returned.
     let (length, bytes) = load_list(
         env.builder,
         list.into_struct_value(),
         env.context.i8_type().ptr_type(AddressSpace::Generic),
     );
 
+    // Assume the bounds have already been checked earlier
+    // (e.g. by List.replace or List.set, which wrap List.#replaceUnsafe)
     let new_bytes = match update_mode {
         UpdateMode::InPlace => call_bitcode_fn(
             env,
