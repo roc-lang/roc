@@ -245,7 +245,7 @@ where
 
     match opt_level {
         OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
-        OptLevel::Optimize => morphic_lib::solve(program),
+        OptLevel::Optimize | OptLevel::Size => morphic_lib::solve(program),
     }
 }
 
@@ -308,7 +308,7 @@ fn build_entry_point(
 
         let block = builder.add_block();
 
-        let type_id = layout_spec(&mut builder, &Layout::Struct(layouts))?;
+        let type_id = layout_spec(&mut builder, &Layout::struct_no_name_order(layouts))?;
 
         let argument = builder.add_unknown_with(block, &[], type_id)?;
 
@@ -349,7 +349,10 @@ fn proc_spec<'a>(proc: &Proc<'a>) -> Result<(FuncDef, MutSet<UnionLayout<'a>>)> 
     let value_id = stmt_spec(&mut builder, &mut env, block, &proc.ret_layout, &proc.body)?;
 
     let root = BlockExpr(block, value_id);
-    let arg_type_id = layout_spec(&mut builder, &Layout::Struct(&argument_layouts))?;
+    let arg_type_id = layout_spec(
+        &mut builder,
+        &Layout::struct_no_name_order(&argument_layouts),
+    )?;
     let ret_type_id = layout_spec(&mut builder, &proc.ret_layout)?;
 
     let spec = builder.build(arg_type_id, ret_type_id, root)?;
@@ -1135,7 +1138,7 @@ fn call_spec(
 
                     // ListFindUnsafe returns { value: v, found: Bool=Int1 }
                     let output_layouts = vec![argument_layouts[0], Layout::Builtin(Builtin::Bool)];
-                    let output_layout = Layout::Struct(&output_layouts);
+                    let output_layout = Layout::struct_no_name_order(&output_layouts);
                     let output_type = layout_spec(builder, &output_layout)?;
 
                     let loop_body = |builder: &mut FuncDefBuilder, block, output| {
@@ -1672,7 +1675,9 @@ fn layout_spec_help(
 
     match layout {
         Builtin(builtin) => builtin_spec(builder, builtin, when_recursive),
-        Struct(fields) => build_recursive_tuple_type(builder, fields, when_recursive),
+        Struct { field_layouts, .. } => {
+            build_recursive_tuple_type(builder, field_layouts, when_recursive)
+        }
         LambdaSet(lambda_set) => layout_spec_help(
             builder,
             &lambda_set.runtime_representation(),

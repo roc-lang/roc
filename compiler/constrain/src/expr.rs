@@ -12,6 +12,7 @@ use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{ImMap, Index, MutSet, SendMap};
+use roc_error_macros::todo_opaques;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -79,7 +80,6 @@ fn constrain_untyped_args(
             loc_pattern.region,
             pattern_expected,
             &mut pattern_state,
-            true,
         );
 
         vars.push(*pattern_var);
@@ -916,6 +916,8 @@ pub fn constrain_expr(
             exists(vars, And(arg_cons))
         }
 
+        OpaqueRef { .. } => todo_opaques!(),
+
         RunLowLevel { args, ret_var, op } => {
             // This is a modified version of what we do for function calls.
 
@@ -1036,7 +1038,6 @@ fn constrain_when_branch(
             loc_pattern.region,
             pattern_expected.clone(),
             &mut state,
-            true,
         );
     }
 
@@ -1140,7 +1141,6 @@ fn constrain_def_pattern(env: &Env, loc_pattern: &Loc<Pattern>, expr_type: Type)
         loc_pattern.region,
         pattern_expected,
         &mut state,
-        true,
     );
 
     state
@@ -1261,7 +1261,6 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 loc_pattern.region,
                                 pattern_expected,
                                 &mut state,
-                                false,
                             );
                         }
 
@@ -1629,7 +1628,6 @@ pub fn rec_defs_help(
                                     loc_pattern.region,
                                     pattern_expected,
                                     &mut state,
-                                    false,
                                 );
                             }
 

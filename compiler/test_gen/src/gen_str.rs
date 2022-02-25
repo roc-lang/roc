@@ -94,7 +94,7 @@ fn str_split_str_concat_repeated() {
 
                 "#
         ),
-        RocStr::from_slice(b"JJJJJJJJJJJJJJJJJJJJJJJJJ"),
+        RocStr::from("JJJJJJJJJJJJJJJJJJJJJJJJJ"),
         RocStr
     );
 }
@@ -113,7 +113,7 @@ fn str_split_small_str_bigger_delimiter() {
                         _ -> ""
                 "#
         ),
-        RocStr::from_slice(b"JJJ"),
+        RocStr::from("JJJ"),
         RocStr
     );
 }
@@ -128,8 +128,8 @@ fn str_split_big_str_small_delimiter() {
                 "#
         ),
         RocList::from_slice(&[
-            RocStr::from_slice(b"01234567789abcdefghi"),
-            RocStr::from_slice(b"01234567789abcdefghi")
+            RocStr::from("01234567789abcdefghi"),
+            RocStr::from("01234567789abcdefghi")
         ]),
         RocList<RocStr>
     );
@@ -141,8 +141,8 @@ fn str_split_big_str_small_delimiter() {
                 "#
         ),
         RocList::from_slice(&[
-            RocStr::from_slice(b"01234567789abcdefghi "),
-            RocStr::from_slice(b" 01234567789abcdefghi")
+            RocStr::from("01234567789abcdefghi "),
+            RocStr::from(" 01234567789abcdefghi")
         ]),
         RocList<RocStr>
     );
@@ -157,11 +157,7 @@ fn str_split_small_str_small_delimiter() {
                     Str.split "J!J!J" "!"
                 "#
         ),
-        RocList::from_slice(&[
-            RocStr::from_slice(b"J"),
-            RocStr::from_slice(b"J"),
-            RocStr::from_slice(b"J")
-        ]),
+        RocList::from_slice(&[RocStr::from("J"), RocStr::from("J"), RocStr::from("J")]),
         RocList<RocStr>
     );
 }
@@ -177,7 +173,7 @@ fn str_split_bigger_delimiter_big_strs() {
                         "than the delimiter which happens to be very very long"
                 "#
         ),
-        RocList::from_slice(&[RocStr::from_slice(b"string to split is shorter")]),
+        RocList::from_slice(&[RocStr::from("string to split is shorter")]),
         RocList<RocStr>
     );
 }
@@ -191,7 +187,7 @@ fn str_split_empty_strs() {
                     Str.split "" ""
                 "#
         ),
-        RocList::from_slice(&[RocStr::from_slice(b"")]),
+        RocList::from_slice(&[RocStr::from("")]),
         RocList<RocStr>
     );
 }
@@ -205,7 +201,7 @@ fn str_split_minimal_example() {
                     Str.split "a," ","
                 "#
         ),
-        RocList::from_slice(&[RocStr::from_slice(b"a"), RocStr::from_slice(b"")]),
+        RocList::from_slice(&[RocStr::from("a"), RocStr::from("")]),
         RocList<RocStr>
     )
 }
@@ -234,11 +230,7 @@ fn str_split_small_str_big_delimiter() {
                         "---- ---- ---- ---- ----"
                 "#
         ),
-        RocList::from_slice(&[
-            RocStr::from_slice(b"1"),
-            RocStr::from_slice(b"2"),
-            RocStr::from_slice(b"")
-        ]),
+        RocList::from_slice(&[RocStr::from("1"), RocStr::from("2"), RocStr::from("")]),
         RocList<RocStr>
     );
 }
@@ -254,11 +246,7 @@ fn str_split_small_str_20_char_delimiter() {
                         "|-- -- -- -- -- -- |"
                 "#
         ),
-        RocList::from_slice(&[
-            RocStr::from_slice(b"3"),
-            RocStr::from_slice(b"4"),
-            RocStr::from_slice(b"")
-        ]),
+        RocList::from_slice(&[RocStr::from("3"), RocStr::from("4"), RocStr::from("")]),
         RocList<RocStr>
     );
 }
@@ -274,7 +262,7 @@ fn str_concat_big_to_big() {
                         "Second string that is also fairly long. Two long strings test things that might not appear with short strings."
                 "#
             ),
-            RocStr::from_slice(b"First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings."),
+            RocStr::from("First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings."),
             RocStr
         );
 }
@@ -395,7 +383,7 @@ fn small_str_concat_empty_second_arg() {
 fn small_str_concat_small_to_big() {
     assert_evals_to!(
         r#"Str.concat "abc" " this is longer than 15 chars""#,
-        RocStr::from_slice(b"abc this is longer than 15 chars"),
+        RocStr::from("abc this is longer than 15 chars"),
         RocStr
     );
 }
@@ -432,7 +420,7 @@ fn small_str_concat_small_to_small_staying_small() {
 fn small_str_concat_small_to_small_overflow_to_big() {
     assert_evals_to!(
         r#"Str.concat "abcdefghijklm" "nopqrstuvwxyz""#,
-        RocStr::from_slice(b"abcdefghijklmnopqrstuvwxyz"),
+        RocStr::from("abcdefghijklmnopqrstuvwxyz"),
         RocStr
     );
 }
@@ -568,7 +556,7 @@ fn str_from_utf8_pass_single_ascii() {
                         Err _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("a".as_bytes()),
+        roc_std::RocStr::from("a"),
         roc_std::RocStr
     );
 }
@@ -584,7 +572,7 @@ fn str_from_utf8_pass_many_ascii() {
                         Err _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("abc~".as_bytes()),
+        roc_std::RocStr::from("abc~"),
         roc_std::RocStr
     );
 }
@@ -600,7 +588,7 @@ fn str_from_utf8_pass_single_unicode() {
                         Err _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("∆".as_bytes()),
+        roc_std::RocStr::from("∆"),
         roc_std::RocStr
     );
 }
@@ -616,7 +604,7 @@ fn str_from_utf8_pass_many_unicode() {
                         Err _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("∆œ¬".as_bytes()),
+        roc_std::RocStr::from("∆œ¬"),
         roc_std::RocStr
     );
 }
@@ -632,7 +620,7 @@ fn str_from_utf8_pass_single_grapheme() {
                         Err _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("💖".as_bytes()),
+        roc_std::RocStr::from("💖"),
         roc_std::RocStr
     );
 }
@@ -648,7 +636,7 @@ fn str_from_utf8_pass_many_grapheme() {
                         Err _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("💖🤠🚀".as_bytes()),
+        roc_std::RocStr::from("💖🤠🚀"),
         roc_std::RocStr
     );
 }
@@ -664,7 +652,7 @@ fn str_from_utf8_pass_all() {
                         Err _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("💖b∆".as_bytes()),
+        roc_std::RocStr::from("💖b∆"),
         roc_std::RocStr
     );
 }
@@ -684,7 +672,7 @@ fn str_from_utf8_fail_invalid_start_byte() {
                         _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("a".as_bytes()),
+        roc_std::RocStr::from("a"),
         roc_std::RocStr
     );
 }
@@ -704,7 +692,7 @@ fn str_from_utf8_fail_unexpected_end_of_sequence() {
                         _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("a".as_bytes()),
+        roc_std::RocStr::from("a"),
         roc_std::RocStr
     );
 }
@@ -724,7 +712,7 @@ fn str_from_utf8_fail_expected_continuation() {
                         _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("a".as_bytes()),
+        roc_std::RocStr::from("a"),
         roc_std::RocStr
     );
 }
@@ -744,7 +732,7 @@ fn str_from_utf8_fail_overlong_encoding() {
                         _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("a".as_bytes()),
+        roc_std::RocStr::from("a"),
         roc_std::RocStr
     );
 }
@@ -764,7 +752,7 @@ fn str_from_utf8_fail_codepoint_too_large() {
                         _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("a".as_bytes()),
+        roc_std::RocStr::from("a"),
         roc_std::RocStr
     );
 }
@@ -784,7 +772,7 @@ fn str_from_utf8_fail_surrogate_half() {
                         _ -> ""
                 "#
         ),
-        roc_std::RocStr::from_slice("a".as_bytes()),
+        roc_std::RocStr::from("a"),
         roc_std::RocStr
     );
 }
@@ -805,9 +793,9 @@ fn str_equality() {
 #[test]
 fn str_clone() {
     use roc_std::RocStr;
-    let long = RocStr::from_slice("loremipsumdolarsitamet".as_bytes());
-    let short = RocStr::from_slice("x".as_bytes());
-    let empty = RocStr::from_slice("".as_bytes());
+    let long = RocStr::from("loremipsumdolarsitamet");
+    let short = RocStr::from("x");
+    let empty = RocStr::from("");
 
     debug_assert_eq!(long.clone(), long);
     debug_assert_eq!(short.clone(), short);
@@ -840,7 +828,7 @@ fn nested_recursive_literal() {
                 printExpr expr
                 "#
         ),
-        RocStr::from_slice(b"Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))"),
+        RocStr::from("Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))"),
         RocStr
     );
 }

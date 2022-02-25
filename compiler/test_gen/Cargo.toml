@@ -39,10 +39,16 @@ libc = "0.2.106"
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.2"
 libloading = "0.7.1"
-wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
 wasmer-wasi = "2.0.0"
 tempfile = "3.2.0"
 indoc = "1.0.3"
+
+# Wasmer singlepass compiler only works on x86_64.
+[target.'cfg(target_arch = "x86_64")'.dev-dependencies]
+wasmer = { version = "2.0.0", default-features = false, features = ["default-singlepass", "default-universal"] }
+
+[target.'cfg(not(target_arch = "x86_64"))'.dev-dependencies]
+wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
 
 [features]
 default = ["gen-llvm"]

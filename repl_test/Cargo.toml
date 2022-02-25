@@ -12,13 +12,18 @@ roc_cli = {path = "../cli"}
 
 [dev-dependencies]
 indoc = "1.0.3"
-roc_test_utils = {path = "../test_utils"}
 strip-ansi-escapes = "0.1.1"
+wasmer-wasi = "2.0.0"
 
 roc_repl_cli = {path = "../repl_cli"}
-# roc_repl_wasm = {path = "../repl_wasm"}
+roc_test_utils = {path = "../test_utils"}
+
+# Wasmer singlepass compiler only works on x86_64.
+[target.'cfg(target_arch = "x86_64")'.dev-dependencies]
+wasmer = { version = "2.0.0", default-features = false, features = ["default-singlepass", "default-universal"] }
+
+[target.'cfg(not(target_arch = "x86_64"))'.dev-dependencies]
+wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
 
 [features]
-default = ["cli"]
-cli = []
 wasm = []

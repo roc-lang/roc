@@ -212,7 +212,7 @@ impl<'a> LowLevelCall<'a> {
             }
             StrToNum => {
                 let number_layout = match self.ret_layout {
-                    Layout::Struct(fields) => fields[0],
+                    Layout::Struct { field_layouts, .. } => field_layouts[0],
                     _ => {
                         internal_error!("Unexpected mono layout {:?} for StrToNum", self.ret_layout)
                     }
@@ -655,6 +655,9 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
             }
+            NumToIntChecked => {
+                todo!()
+            }
             And => {
                 self.load_args(backend);
                 backend.code_builder.i32_and();
@@ -708,7 +711,7 @@ impl<'a> LowLevelCall<'a> {
 
             // Empty record is always equal to empty record.
             // There are no runtime arguments to check, so just emit true or false.
-            Layout::Struct(fields) if fields.is_empty() => {
+            Layout::Struct { field_layouts, .. } if field_layouts.is_empty() => {
                 backend.code_builder.i32_const(!invert_result as i32);
             }
 
@@ -719,7 +722,7 @@ impl<'a> LowLevelCall<'a> {
             }
 
             Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
-            | Layout::Struct(_)
+            | Layout::Struct { .. }
             | Layout::Union(_)
             | Layout::LambdaSet(_) => {
                 // Don't want Zig calling convention here, we're calling internal Roc functions

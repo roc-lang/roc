@@ -137,6 +137,8 @@ pub fn build_zig_host_native(
 
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.args(&["-O", "ReleaseSmall"]);
     }
     command.output().unwrap()
 }
@@ -231,6 +233,8 @@ pub fn build_zig_host_native(
     ]);
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.args(&["-O", "ReleaseSmall"]);
     }
     command.output().unwrap()
 }
@@ -282,6 +286,8 @@ pub fn build_zig_host_wasm32(
         ]);
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.args(&["-O", "ReleaseSmall"]);
     }
     command.output().unwrap()
 }
@@ -317,7 +323,9 @@ pub fn build_c_host_native(
         command.args(&["-fPIC", "-c"]);
     }
     if matches!(opt_level, OptLevel::Optimize) {
-        command.arg("-O2");
+        command.arg("-O3");
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.arg("-Os");
     }
     command.output().unwrap()
 }
@@ -351,6 +359,8 @@ pub fn build_swift_host_native(
 
     if matches!(opt_level, OptLevel::Optimize) {
         command.arg("-O");
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.arg("-Osize");
     }
 
     command.output().unwrap()
@@ -456,18 +466,18 @@ pub fn rebuild_host(
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
-        let cargo_out_dir =
-            cargo_dir
-                .join("target")
-                .join(if matches!(opt_level, OptLevel::Optimize) {
-                    "release"
-                } else {
-                    "debug"
-                });
+        let cargo_out_dir = cargo_dir.join("target").join(
+            if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
+                "release"
+            } else {
+                "debug"
+            },
+        );
 
         let mut command = Command::new("cargo");
         command.arg("build").current_dir(cargo_dir);
-        if matches!(opt_level, OptLevel::Optimize) {
+        // Rust doesn't expose size without editing the cargo.toml. Instead just use release.
+        if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
             command.arg("--release");
         }
         let source_file = if shared_lib_path.is_some() {
@@ -533,6 +543,8 @@ pub fn rebuild_host(
         ]);
         if matches!(opt_level, OptLevel::Optimize) {
             command.arg("-O");
+        } else if matches!(opt_level, OptLevel::Size) {
+            command.arg("-C opt-level=s");
         }
         let output = command.output().unwrap();
 
@@ -923,6 +935,18 @@ fn link_macos(
         ld_command.arg(format!("-L{}", sdk_path));
         ld_command.arg(format!("-L{}/swift", sdk_path));
     };
+
+    let roc_link_flags = match env::var("ROC_LINK_FLAGS") {
+        Ok(flags) => {
+            println!("⚠️ CAUTION: The ROC_LINK_FLAGS environment variable is a temporary workaround, and will no longer do anything once surgical linking lands! If you're concerned about what this means for your use case, please ask about it on Zulip.");
+
+            flags
+        }
+        Err(_) => "".to_string(),
+    };
+    for roc_link_flag in roc_link_flags.split_whitespace() {
+        ld_command.arg(roc_link_flag.to_string());
+    }
 
     ld_command.args(&[
         // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274

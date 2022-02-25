@@ -88,7 +88,7 @@ impl WasmLayout {
             },
 
             Layout::Builtin(Str | Dict(_, _) | Set(_) | List(_))
-            | Layout::Struct(_)
+            | Layout::Struct { .. }
             | Layout::LambdaSet(_)
             | Layout::Union(NonRecursive(_)) => Self::StackMemory {
                 size,

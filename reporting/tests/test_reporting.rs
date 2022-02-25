@@ -3135,6 +3135,32 @@ mod test_reporting {
     }
 
     #[test]
+    fn invalid_opaque_rigid_var_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age 1 := I64
+
+                a : Age
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This pattern in the definition of `Age` is not what I expect:
+
+                1│  Age 1 := I64
+                        ^
+
+                Only type variables like `a` or `value` can occur in this position.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn invalid_num() {
         report_problem_as(
             indoc!(
@@ -5821,6 +5847,29 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
+    fn opaque_ref_field_access() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $UUID.bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am very confused by this field access:
+
+                1│  $UUID.bar
+                         ^^^^
+
+                It looks like a record field access on an opaque reference.
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn weird_accessor() {
         report_problem_as(
             indoc!(
@@ -8085,6 +8134,144 @@ I need all branches in an `if` to have the same type!
                 "#
             ),
             "",
+        )
+    }
+
+    #[test]
+    fn opaque_type_not_in_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                1│  $Age 21
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_reference_not_opaque_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age : U8
+
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                3│  $Age 21
+                    ^^^^
+
+                Note: There is an alias of the same name:
+
+                1│  Age : U8
+                    ^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                1│  Age : U8
+                    ^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn qualified_opaque_reference() {
+        report_problem_as(
+            indoc!(
+                r#"
+                OtherModule.$Age 21
+                "#
+            ),
+            // TODO: get rid of the second error. Consider parsing OtherModule.$Age to completion
+            // and checking it during can.
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am trying to parse a qualified name here:
+
+                1│  OtherModule.$Age 21
+                                ^
+
+                I was expecting to see an identifier next, like height. A complete
+                qualified name looks something like Json.Decode.string.
+
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                1│  OtherModule.$Age 21
+                                ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_used_outside_declaration_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                age =
+                    Age := U8
+                    21u8
+
+                $Age age
+                "#
+            ),
+            // TODO: there is a potential for a better error message here, if the usage of `$Age` can
+            // be linked to the declaration of `Age` inside `age`, and a suggestion to raise that
+            // declaration to the outer scope.
+            indoc!(
+                r#"
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                2│      Age := U8
+                        ^^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+
+                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                5│  $Age age
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
         )
     }
 }

@@ -30,6 +30,7 @@ impl<'a> Formattable for Pattern<'a> {
             Pattern::Identifier(_)
             | Pattern::GlobalTag(_)
             | Pattern::PrivateTag(_)
+            | Pattern::OpaqueRef(_)
             | Pattern::Apply(_, _)
             | Pattern::NumLiteral(..)
             | Pattern::NonBase10Literal { .. }
@@ -56,7 +57,7 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.indent(indent);
                 buf.push_str(string)
             }
-            GlobalTag(name) | PrivateTag(name) => {
+            GlobalTag(name) | PrivateTag(name) | OpaqueRef(name) => {
                 buf.indent(indent);
                 buf.push_str(name);
             }

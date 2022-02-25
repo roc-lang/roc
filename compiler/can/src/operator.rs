@@ -95,6 +95,7 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         Body(loc_pattern, loc_expr) => Body(loc_pattern, desugar_expr(arena, loc_expr)),
         SpaceBefore(def, _) | SpaceAfter(def, _) => desugar_def(arena, def),
         alias @ Alias { .. } => *alias,
+        opaque @ Opaque { .. } => *opaque,
         ann @ Annotation(_, _) => *ann,
         AnnotatedBody {
             ann_pattern,
@@ -132,7 +133,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | MalformedClosure
         | PrecedenceConflict { .. }
         | GlobalTag(_)
-        | PrivateTag(_) => loc_expr,
+        | PrivateTag(_)
+        | OpaqueRef(_) => loc_expr,
 
         Access(sub_expr, paths) => {
             let region = loc_expr.region;
@@ -170,7 +172,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         }),
 
         RecordUpdate { fields, update } => {
-            // NOTE the `update` field is always a `Var { .. }` and does not need to be desugared
+            // NOTE the `update` field is always a `Var { .. }`, we only desugar it to get rid of
+            // any spaces before/after
+            let new_update = desugar_expr(arena, update);
+
             let new_fields = fields.map_items(arena, |field| {
                 let value = desugar_field(arena, &field.value);
                 Loc {
@@ -182,7 +187,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             arena.alloc(Loc {
                 region: loc_expr.region,
                 value: RecordUpdate {
-                    update: *update,
+                    update: new_update,
                     fields: new_fields,
                 },
             })
@@ -415,7 +420,8 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         Or => (ModuleName::BOOL, "or"),
         Pizza => unreachable!("Cannot desugar the |> operator"),
         Assignment => unreachable!("Cannot desugar the = operator"),
-        HasType => unreachable!("Cannot desugar the : operator"),
+        IsAliasType => unreachable!("Cannot desugar the : operator"),
+        IsOpaqueType => unreachable!("Cannot desugar the := operator"),
         Backpassing => unreachable!("Cannot desugar the <- operator"),
     }
 }

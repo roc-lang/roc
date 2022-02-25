@@ -27,7 +27,8 @@ fn main() {
     }
 
     // "." is relative to where "build.rs" is
-    let build_script_dir_path = fs::canonicalize(Path::new(".")).unwrap();
+    // dunce can be removed once ziglang/zig#5109 is fixed
+    let build_script_dir_path = dunce::canonicalize(Path::new(".")).unwrap();
     let bitcode_path = build_script_dir_path.join("bitcode");
 
     // LLVM .bc FILES

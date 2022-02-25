@@ -65,12 +65,16 @@ mimalloc = { version = "0.1.26", default-features = false }
 
 target-lexicon = "0.12.2"
 tempfile = "3.2.0"
-
-wasmer = { version = "2.0.0", optional = true, default-features = false, features = ["default-cranelift", "default-universal"] }
 wasmer-wasi = { version = "2.0.0", optional = true }
 
+# Wasmer singlepass compiler only works on x86_64.
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+wasmer = { version = "2.0.0", optional = true, default-features = false, features = ["default-singlepass", "default-universal"] }
+
+[target.'cfg(not(target_arch = "x86_64"))'.dependencies]
+wasmer = { version = "2.0.0", optional = true, default-features = false, features = ["default-cranelift", "default-universal"] }
+
 [dev-dependencies]
-wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
 wasmer-wasi = "2.0.0"
 pretty_assertions = "1.0.0"
 roc_test_utils = { path = "../test_utils" }
@@ -78,6 +82,13 @@ indoc = "1.0.3"
 serial_test = "0.5.1"
 criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 cli_utils = { path = "../cli_utils" }
+
+# Wasmer singlepass compiler only works on x86_64.
+[target.'cfg(target_arch = "x86_64")'.dev-dependencies]
+wasmer = { version = "2.0.0", default-features = false, features = ["default-singlepass", "default-universal"] }
+
+[target.'cfg(not(target_arch = "x86_64"))'.dev-dependencies]
+wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
 
 [[bench]]
 name = "time_bench"

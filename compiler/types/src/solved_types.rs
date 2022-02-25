@@ -1,5 +1,5 @@
 use crate::subs::{FlatType, GetSubsSlice, Subs, VarId, VarStore, Variable};
-use crate::types::{Problem, RecordField, Type};
+use crate::types::{AliasKind, Problem, RecordField, Type};
 use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -559,6 +559,8 @@ pub fn to_type(
                 type_arguments: type_variables,
                 lambda_set_variables,
                 actual: Box::new(actual),
+                // TODO(opaques): revisit when opaques are in the solver
+                kind: AliasKind::Structural,
             }
         }
         HostExposedAlias {

@@ -7,6 +7,7 @@ edition = "2018"
 
 [dependencies]
 roc_collections = { path = "../collections" }
+roc_error_macros = { path = "../../error_macros" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
@@ -32,3 +33,4 @@ tempfile = "3.2.0"
 pretty_assertions = "1.0.0"
 maplit = "1.0.2"
 indoc = "1.0.3"
+strip-ansi-escapes = "0.1.1"

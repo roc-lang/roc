@@ -242,6 +242,26 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_MAX_U64=> num_max_u64,
         NUM_MIN_I128=> num_min_i128,
         NUM_MAX_I128=> num_max_i128,
+        NUM_TO_I8 => num_to_i8,
+        NUM_TO_I8_CHECKED => num_to_i8_checked,
+        NUM_TO_I16 => num_to_i16,
+        NUM_TO_I16_CHECKED => num_to_i16_checked,
+        NUM_TO_I32 => num_to_i32,
+        NUM_TO_I32_CHECKED => num_to_i32_checked,
+        NUM_TO_I64 => num_to_i64,
+        NUM_TO_I64_CHECKED => num_to_i64_checked,
+        NUM_TO_I128 => num_to_i128,
+        NUM_TO_I128_CHECKED => num_to_i128_checked,
+        NUM_TO_U8 => num_to_u8,
+        NUM_TO_U8_CHECKED => num_to_u8_checked,
+        NUM_TO_U16 => num_to_u16,
+        NUM_TO_U16_CHECKED => num_to_u16_checked,
+        NUM_TO_U32 => num_to_u32,
+        NUM_TO_U32_CHECKED => num_to_u32_checked,
+        NUM_TO_U64 => num_to_u64,
+        NUM_TO_U64_CHECKED => num_to_u64_checked,
+        NUM_TO_U128 => num_to_u128,
+        NUM_TO_U128_CHECKED => num_to_u128_checked,
         NUM_TO_STR => num_to_str,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
@@ -388,6 +408,174 @@ fn lowlevel_5(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
         body,
         ret_var,
     )
+}
+
+// Num.toI8 : Int * -> I8
+fn num_to_i8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toI16 : Int * -> I16
+fn num_to_i16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toI32 : Int * -> I32
+fn num_to_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toI64 : Int * -> I64
+fn num_to_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toI128 : Int * -> I128
+fn num_to_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toU8 : Int * -> U8
+fn num_to_u8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toU16 : Int * -> U16
+fn num_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toU32 : Int * -> U32
+fn num_to_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toU64 : Int * -> U64
+fn num_to_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+// Num.toU128 : Int * -> U128
+fn num_to_u128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) -> Def {
+    let bool_var = var_store.fresh();
+    let num_var_1 = var_store.fresh();
+    let num_var_2 = var_store.fresh();
+    let ret_var = var_store.fresh();
+    let record_var = var_store.fresh();
+
+    // let arg_2 = RunLowLevel NumToXXXChecked arg_1
+    // if arg_2.b then
+    //   Err OutOfBounds
+    // else
+    //   Ok arg_2.a
+    //
+    // "a" and "b" because the lowlevel return value looks like { converted_val: XXX, out_of_bounds: bool },
+    // and codegen will sort by alignment, so "a" will be the first key, etc.
+
+    let cont = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(
+                // arg_2.b
+                Access {
+                    record_var,
+                    ext_var: var_store.fresh(),
+                    field: "b".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                },
+            ),
+            // out of bounds!
+            no_region(tag(
+                "Err",
+                vec![tag("OutOfBounds", Vec::new(), var_store)],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // all is well
+            no_region(
+                // Ok arg_2.a
+                tag(
+                    "Ok",
+                    vec![
+                        // arg_2.a
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "a".into(),
+                            field_var: num_var_2,
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    // arg_2 = RunLowLevel NumToXXXChecked arg_1
+    let def = crate::def::Def {
+        loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_2)),
+        loc_expr: no_region(RunLowLevel {
+            op: lowlevel,
+            args: vec![(num_var_1, Var(Symbol::ARG_1))],
+            ret_var: record_var,
+        }),
+        expr_var: record_var,
+        pattern_vars: SendMap::default(),
+        annotation: None,
+    };
+
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+
+    defn(
+        symbol,
+        vec![(num_var_1, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+macro_rules! num_to_checked {
+    ($($fn:ident)*) => {$(
+        // Num.toXXXChecked : Int * -> Result XXX [ OutOfBounds ]*
+        fn $fn(symbol: Symbol, var_store: &mut VarStore) -> Def {
+            // Use the generic `NumToIntChecked`; we'll figure out exactly what layout(s) we need
+            // during code generation after types are resolved.
+            to_num_checked(symbol, var_store, LowLevel::NumToIntChecked)
+        }
+    )*}
+}
+
+num_to_checked! {
+    num_to_i8_checked
+    num_to_i16_checked
+    num_to_i32_checked
+    num_to_i64_checked
+    num_to_i128_checked
+    num_to_u8_checked
+    num_to_u16_checked
+    num_to_u32_checked
+    num_to_u64_checked
+    num_to_u128_checked
 }
 
 // Num.toStr : Num a -> Str

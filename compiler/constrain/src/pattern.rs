@@ -5,6 +5,7 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, RecordDestruct};
 use roc_collections::all::{Index, SendMap};
+use roc_error_macros::todo_opaques;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -55,6 +56,7 @@ fn headers_from_annotation_help(
         Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
+        | OpaqueNotInScope(..)
         | NumLiteral(..)
         | IntLiteral(..)
         | FloatLiteral(..)
@@ -114,23 +116,8 @@ fn headers_from_annotation_help(
             }
             _ => false,
         },
-    }
-}
 
-fn make_pattern_constraint(
-    region: Region,
-    category: PatternCategory,
-    actual: Type,
-    expected: PExpected<Type>,
-    presence_con: bool,
-) -> Constraint {
-    if presence_con {
-        Constraint::Present(
-            actual,
-            PresenceConstraint::Pattern(region, category, expected),
-        )
-    } else {
-        Constraint::Pattern(region, category, actual, expected)
+        UnwrappedOpaque { .. } => todo_opaques!(),
     }
 }
 
@@ -143,10 +130,9 @@ pub fn constrain_pattern(
     region: Region,
     expected: PExpected<Type>,
     state: &mut PatternState,
-    destruct_position: bool,
 ) {
     match pattern {
-        Underscore if destruct_position => {
+        Underscore => {
             // This is an underscore in a position where we destruct a variable,
             // like a when expression:
             //   when x is
@@ -158,17 +144,15 @@ pub fn constrain_pattern(
                 PresenceConstraint::IsOpen,
             ));
         }
-        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) => {
-            // Neither the _ pattern nor erroneous ones add any constraints.
+        UnsupportedPattern(_) | MalformedPattern(_, _) | OpaqueNotInScope(..) => {
+            // Erroneous patterns don't add any constraints.
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            if destruct_position {
-                state.constraints.push(Constraint::Present(
-                    expected.get_type_ref().clone(),
-                    PresenceConstraint::IsOpen,
-                ));
-            }
+            state.constraints.push(Constraint::Present(
+                expected.get_type_ref().clone(),
+                PresenceConstraint::IsOpen,
+            ));
             state.headers.insert(
                 *symbol,
                 Loc {
@@ -301,41 +285,36 @@ pub fn constrain_pattern(
 
                 let field_type = match typ {
                     DestructType::Guard(guard_var, loc_guard) => {
-                        state.constraints.push(make_pattern_constraint(
-                            region,
-                            PatternCategory::PatternGuard,
+                        state.constraints.push(Constraint::Present(
                             Type::Variable(*guard_var),
-                            PExpected::ForReason(
-                                PReason::PatternGuard,
-                                pat_type.clone(),
-                                loc_guard.region,
+                            PresenceConstraint::Pattern(
+                                region,
+                                PatternCategory::PatternGuard,
+                                PExpected::ForReason(
+                                    PReason::PatternGuard,
+                                    pat_type.clone(),
+                                    loc_guard.region,
+                                ),
                             ),
-                            destruct_position,
                         ));
                         state.vars.push(*guard_var);
 
-                        constrain_pattern(
-                            env,
-                            &loc_guard.value,
-                            loc_guard.region,
-                            expected,
-                            state,
-                            destruct_position,
-                        );
+                        constrain_pattern(env, &loc_guard.value, loc_guard.region, expected, state);
 
                         RecordField::Demanded(pat_type)
                     }
                     DestructType::Optional(expr_var, loc_expr) => {
-                        state.constraints.push(make_pattern_constraint(
-                            region,
-                            PatternCategory::PatternDefault,
+                        state.constraints.push(Constraint::Present(
                             Type::Variable(*expr_var),
-                            PExpected::ForReason(
-                                PReason::OptionalField,
-                                pat_type.clone(),
-                                loc_expr.region,
+                            PresenceConstraint::Pattern(
+                                region,
+                                PatternCategory::PatternDefault,
+                                PExpected::ForReason(
+                                    PReason::OptionalField,
+                                    pat_type.clone(),
+                                    loc_expr.region,
+                                ),
                             ),
-                            destruct_position,
                         ));
 
                         state.vars.push(*expr_var);
@@ -372,12 +351,9 @@ pub fn constrain_pattern(
                 region,
             );
 
-            let record_con = make_pattern_constraint(
-                region,
-                PatternCategory::Record,
+            let record_con = Constraint::Present(
                 Type::Variable(*whole_var),
-                expected,
-                destruct_position,
+                PresenceConstraint::Pattern(region, PatternCategory::Record, expected),
             );
 
             state.constraints.push(whole_con);
@@ -404,39 +380,21 @@ pub fn constrain_pattern(
                     pattern_type,
                     region,
                 );
-                constrain_pattern(
-                    env,
-                    &loc_pattern.value,
-                    loc_pattern.region,
-                    expected,
-                    state,
-                    destruct_position,
-                );
+                constrain_pattern(env, &loc_pattern.value, loc_pattern.region, expected, state);
             }
 
-            let whole_con = if destruct_position {
-                Constraint::Present(
-                    expected.clone().get_type(),
-                    PresenceConstraint::IncludesTag(tag_name.clone(), argument_types.clone()),
-                )
-            } else {
-                Constraint::Eq(
-                    Type::Variable(*whole_var),
-                    Expected::NoExpectation(Type::TagUnion(
-                        vec![(tag_name.clone(), argument_types)],
-                        Box::new(Type::Variable(*ext_var)),
-                    )),
-                    Category::Storage(std::file!(), std::line!()),
-                    region,
-                )
-            };
+            let whole_con = Constraint::Present(
+                expected.clone().get_type(),
+                PresenceConstraint::IncludesTag(tag_name.clone(), argument_types.clone()),
+            );
 
-            let tag_con = make_pattern_constraint(
-                region,
-                PatternCategory::Ctor(tag_name.clone()),
+            let tag_con = Constraint::Present(
                 Type::Variable(*whole_var),
-                expected,
-                destruct_position,
+                PresenceConstraint::Pattern(
+                    region,
+                    PatternCategory::Ctor(tag_name.clone()),
+                    expected,
+                ),
             );
 
             state.vars.push(*whole_var);
@@ -444,5 +402,7 @@ pub fn constrain_pattern(
             state.constraints.push(whole_con);
             state.constraints.push(tag_con);
         }
+
+        UnwrappedOpaque { .. } => todo_opaques!(),
     }
 }

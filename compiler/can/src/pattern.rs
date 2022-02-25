@@ -5,6 +5,7 @@ use crate::num::{
     NumericBound, ParsedNumResult,
 };
 use crate::scope::Scope;
+use roc_error_macros::todo_opaques;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
@@ -24,6 +25,11 @@ pub enum Pattern {
         tag_name: TagName,
         arguments: Vec<(Variable, Loc<Pattern>)>,
     },
+    UnwrappedOpaque {
+        whole_var: Variable,
+        opaque: Symbol,
+        arguments: Vec<(Variable, Loc<Pattern>)>,
+    },
     RecordDestructure {
         whole_var: Variable,
         ext_var: Variable,
@@ -37,6 +43,7 @@ pub enum Pattern {
 
     // Runtime Exceptions
     Shadowed(Region, Loc<Ident>, Symbol),
+    OpaqueNotInScope(Loc<Ident>),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
     // parse error patterns
@@ -78,6 +85,14 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
                 symbols_from_pattern_help(&nested.value, symbols);
             }
         }
+        UnwrappedOpaque {
+            opaque, arguments, ..
+        } => {
+            symbols.push(*opaque);
+            for (_, nested) in arguments {
+                symbols_from_pattern_help(&nested.value, symbols);
+            }
+        }
         RecordDestructure { destructs, .. } => {
             for destruct in destructs {
                 // when a record field has a pattern guard, only symbols in the guard are introduced
@@ -95,7 +110,8 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
         | StrLiteral(_)
         | Underscore
         | MalformedPattern(_, _)
-        | UnsupportedPattern(_) => {}
+        | UnsupportedPattern(_)
+        | OpaqueNotInScope(..) => {}
     }
 }
 
@@ -153,17 +169,8 @@ pub fn canonicalize_pattern<'a>(
                 arguments: vec![],
             }
         }
+        OpaqueRef(..) => todo_opaques!(),
         Apply(tag, patterns) => {
-            let tag_name = match tag.value {
-                GlobalTag(name) => TagName::Global(name.into()),
-                PrivateTag(name) => {
-                    let ident_id = env.ident_ids.get_or_insert(&name.into());
-
-                    TagName::Private(Symbol::new(env.home, ident_id))
-                }
-                _ => unreachable!("Other patterns cannot be applied"),
-            };
-
             let mut can_patterns = Vec::with_capacity(patterns.len());
             for loc_pattern in *patterns {
                 let (new_output, can_pattern) = canonicalize_pattern(
@@ -180,11 +187,41 @@ pub fn canonicalize_pattern<'a>(
                 can_patterns.push((var_store.fresh(), can_pattern));
             }
 
-            Pattern::AppliedTag {
-                whole_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                tag_name,
-                arguments: can_patterns,
+            match tag.value {
+                GlobalTag(name) => {
+                    let tag_name = TagName::Global(name.into());
+                    Pattern::AppliedTag {
+                        whole_var: var_store.fresh(),
+                        ext_var: var_store.fresh(),
+                        tag_name,
+                        arguments: can_patterns,
+                    }
+                }
+                PrivateTag(name) => {
+                    let ident_id = env.ident_ids.get_or_insert(&name.into());
+                    let tag_name = TagName::Private(Symbol::new(env.home, ident_id));
+
+                    Pattern::AppliedTag {
+                        whole_var: var_store.fresh(),
+                        ext_var: var_store.fresh(),
+                        tag_name,
+                        arguments: can_patterns,
+                    }
+                }
+
+                OpaqueRef(name) => match scope.lookup_opaque_ref(name, tag.region) {
+                    Ok(opaque) => Pattern::UnwrappedOpaque {
+                        whole_var: var_store.fresh(),
+                        opaque,
+                        arguments: can_patterns,
+                    },
+                    Err(runtime_error) => {
+                        env.problem(Problem::RuntimeError(runtime_error));
+
+                        Pattern::OpaqueNotInScope(Loc::at(tag.region, name.into()))
+                    }
+                },
+                _ => unreachable!("Other patterns cannot be applied"),
             }
         }
 
@@ -254,7 +291,7 @@ pub fn canonicalize_pattern<'a>(
                 }
                 Ok((int, bound)) => {
                     let sign_str = if is_negative { "-" } else { "" };
-                    let int_str = format!("{}{}", sign_str, int.to_string()).into_boxed_str();
+                    let int_str = format!("{}{}", sign_str, int).into_boxed_str();
                     let i = match int {
                         // Safety: this is fine because I128::MAX = |I128::MIN| - 1
                         IntValue::I128(n) if is_negative => IntValue::I128(-n),
@@ -500,6 +537,16 @@ fn add_bindings_from_patterns(
                 add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
             }
         }
+        UnwrappedOpaque {
+            arguments: loc_args,
+            opaque,
+            ..
+        } => {
+            for (_, loc_arg) in loc_args {
+                add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
+            }
+            answer.push((*opaque, *region));
+        }
         RecordDestructure { destructs, .. } => {
             for Loc {
                 region,
@@ -515,7 +562,8 @@ fn add_bindings_from_patterns(
         | StrLiteral(_)
         | Underscore
         | MalformedPattern(_, _)
-        | UnsupportedPattern(_) => (),
+        | UnsupportedPattern(_)
+        | OpaqueNotInScope(..) => (),
     }
 }
 

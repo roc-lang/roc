@@ -12,6 +12,12 @@ impl TargetInfo {
         self.architecture.ptr_width()
     }
 
+    pub const fn default_aarch64() -> Self {
+        TargetInfo {
+            architecture: Architecture::Aarch64,
+        }
+    }
+
     pub const fn default_x86_64() -> Self {
         TargetInfo {
             architecture: Architecture::X86_64,
