@@ -2320,12 +2320,13 @@ fn list_replace(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let elem_var = var_store.fresh();
     let list_arg_var = var_store.fresh();
     let ret_record_var = var_store.fresh();
+    let ret_result_var = var_store.fresh();
 
     // Perform a bounds check. If it passes, run LowLevel::ListReplaceUnsafe.
     // Otherwise, return the list unmodified.
     let body = If {
         cond_var: bool_var,
-        branch_var: ret_record_var,
+        branch_var: var_store.fresh(),
         branches: vec![(
             // if-condition
             no_region(
@@ -2389,7 +2390,7 @@ fn list_replace(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ],
         var_store,
         body,
-        ret_record_var,
+        ret_result_var,
     )
 }
 
