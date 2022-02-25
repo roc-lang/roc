@@ -9,7 +9,7 @@ use crate::graphics::style::DEFAULT_FONT_SIZE;
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
 use glyph_brush::OwnedSection;
-use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
+use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, Section};
 
 use super::rect::Rect;
 
@@ -35,30 +35,6 @@ impl<'a> Default for Text<'a> {
             visible: true,
             centered: false,
         }
-    }
-}
-
-// necessary to get dimensions for caret
-pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>, font_size: f32) -> Rect {
-    let code_text = Text {
-        position: (0.0, 0.0).into(),
-        area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
-        color: Rgba::WHITE,
-        text: "a",
-        size: font_size,
-        ..Default::default()
-    };
-
-    let layout = layout_from_text(&code_text);
-
-    let section = section_from_text(&code_text, layout);
-
-    let mut glyph_section_iter = glyph_brush.glyphs_custom_layout(section, &layout);
-
-    if let Some(glyph) = glyph_section_iter.next() {
-        glyph_to_rect(glyph)
-    } else {
-        unreachable!();
     }
 }
 
