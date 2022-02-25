@@ -205,7 +205,11 @@ fn list_take_last() {
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
-    assert_evals_to!("List.takeLast [] 1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.takeLast [] 1",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
     assert_evals_to!(
         "List.takeLast [1,2] 5",
         RocList::from_slice(&[1, 2]),
@@ -1309,7 +1313,7 @@ fn list_repeat() {
                 List.repeat noStrs 2
             "#
         ),
-        RocList::from_slice(&[RocList::default(), RocList::default()]),
+        RocList::from_slice(&[RocList::<i64>::default(), RocList::default()]),
         RocList<RocList<i64>>
     );
 
