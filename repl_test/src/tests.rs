@@ -977,6 +977,7 @@ fn issue_2343_complete_mono_with_shadowed_vars() {
 }
 
 #[test]
+<<<<<<< HEAD
 fn record_with_type_behind_alias() {
     expect_success(
         indoc!(
@@ -1018,5 +1019,32 @@ fn issue_2588_record_with_function_and_nonfunction() {
             "#
         ),
         r#"{ f: <function>, y: 2 } : { f : Num a -> Num a, y : Num * }"#,
+    )
+}
+
+fn opaque_apply() {
+    expect_success(
+        indoc!(
+            r#"
+            Age := U32
+
+            $Age 23
+            "#
+        ),
+        "23 : Age",
+    )
+}
+
+#[test]
+fn opaque_apply_polymorphic() {
+    expect_success(
+        indoc!(
+            r#"
+            F t u := [ Package t u ]
+
+            $F (Package "" { a: "" })
+            "#
+        ),
+        r#"Package "" { a: "" } : F Str { a : Str }"#,
     )
 }

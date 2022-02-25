@@ -3433,7 +3433,18 @@ pub fn with_hole<'a>(
             }
         }
 
-        OpaqueRef { .. } => todo_opaques!(),
+        OpaqueRef { argument, .. } => {
+            let (arg_var, loc_arg_expr) = *argument;
+            with_hole(
+                env,
+                loc_arg_expr.value,
+                arg_var,
+                procs,
+                layout_cache,
+                assigned,
+                hole,
+            )
+        }
 
         Record {
             record_var,
