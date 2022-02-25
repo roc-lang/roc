@@ -1257,12 +1257,12 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
 }
 
 pub fn listReplaceInPlace(
-    list: RocList 
+    list: RocList,
     index: usize,
     element: Opaque,
     element_width: usize,
     out_element: ?[*]u8,
-) callconv(.C) extern RocList {
+) callconv(.C) RocList {
     // INVARIANT: bounds checking happens on the roc side
     //
     // at the time of writing, the function is implemented roughly as
@@ -1273,7 +1273,7 @@ pub fn listReplaceInPlace(
 }
 
 pub fn listReplace(
-    list: RocList 
+    list: RocList,
     alignment: u32,
     index: usize,
     element: Opaque,
@@ -1286,16 +1286,16 @@ pub fn listReplace(
     // `if inBounds then LowLevelListReplace input index item else input`
     // so we don't do a bounds check here. Hence, the list is also non-empty,
     // because inserting into an empty list is always out of bounds
-    listReplaceInPlaceHelp(list.makeUnique(alignment, element_width), index, element, element_width, out_element);
+    return listReplaceInPlaceHelp(list.makeUnique(alignment, element_width), index, element, element_width, out_element);
 }
 
 inline fn listReplaceInPlaceHelp(
-    list: RocList 
+    list: RocList,
     index: usize,
     element: Opaque,
     element_width: usize,
     out_element: ?[*]u8,
-) extern struct RocList {
+) RocList {
     // the element we will replace
     var element_at_index = (list.bytes orelse undefined) + (index * element_width);
 

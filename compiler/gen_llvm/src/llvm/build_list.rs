@@ -301,41 +301,64 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
-    // TODO: This or elsewhere needs to deal with building the record that gets returned.
-    let (length, bytes) = load_list(
-        env.builder,
-        list.into_struct_value(),
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
-    );
+    let element_type = basic_type_from_layout(env, &element_layout);
+    let element_ptr = env
+        .builder
+        .build_alloca(element_type, "output_element_as_opaque");
 
     // Assume the bounds have already been checked earlier
     // (e.g. by List.replace or List.set, which wrap List.#replaceUnsafe)
-    let new_bytes = match update_mode {
+    let new_list = match update_mode {
         UpdateMode::InPlace => call_bitcode_fn(
             env,
             &[
-                bytes.into(),
+                list.into(),
                 index.into(),
                 pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
+                pass_as_opaque(env, element_ptr),
             ],
             bitcode::LIST_REPLACE_IN_PLACE,
         ),
         UpdateMode::Immutable => call_bitcode_fn(
             env,
             &[
-                bytes.into(),
-                length.into(),
+                list.into(),
                 env.alignment_intvalue(element_layout),
                 index.into(),
                 pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
+                pass_as_opaque(env, element_ptr),
             ],
             bitcode::LIST_REPLACE,
         ),
     };
 
-    store_list(env, new_bytes.into_pointer_value(), length)
+    // Load the element and returned list into a struct.
+    let old_element = env.builder.build_load(element_ptr, "load_element");
+
+    let result = env
+        .context
+        .struct_type(
+            // TODO: does the order need to be decided by the size of the element type.
+            &[
+                super::convert::zig_list_type(env).into(),
+                element_type.into(),
+            ],
+            false,
+        )
+        .const_zero();
+
+    let result = env
+        .builder
+        .build_insert_value(result, old_element, 0, "insert_value")
+        .unwrap();
+
+    env.builder
+        .build_insert_value(result, new_list, 1, "insert_list")
+        .unwrap()
+        .into_struct_value()
+        .into()
 }
 
 /// List.set : List elem, Nat, elem -> List elem
