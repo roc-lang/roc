@@ -8629,6 +8629,11 @@ fn match_on_lambda_set<'a>(
                 env.arena.alloc(result),
             )
         }
+        Layout::Struct([]) => {
+            // This is a lambda set with no associated lambdas, often produced as a result
+            // of a runtime error at another point in the code.
+            Stmt::RuntimeError("Cannot have a lambda set with zero variants")
+        }
         Layout::Struct(fields) => {
             let function_symbol = lambda_set.set[0].0;
 
