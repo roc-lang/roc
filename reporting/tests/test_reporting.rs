@@ -64,7 +64,7 @@ mod test_reporting {
             var,
             constraint,
             home,
-            mut interns,
+            interns,
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
@@ -92,7 +92,7 @@ mod test_reporting {
 
             // Compile and add all the Procs before adding main
             let mut procs = Procs::new_in(&arena);
-            let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
+            let mut ident_ids = interns.all_ident_ids.get(&home).unwrap().clone();
             let mut update_mode_ids = UpdateModeIds::new();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
@@ -8485,6 +8485,74 @@ I need all branches in an `if` to have the same type!
                 But all the previous branches match:
 
                     F [ A ]
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_pattern_match_not_exhaustive_tag() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F [ A, B, C ]
+
+                when v is
+                    $F A -> ""
+                    $F B -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                5│>  when v is
+                6│>      $F A -> ""
+                7│>      $F B -> ""
+
+                Other possibilities include:
+
+                    $F C
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_pattern_match_not_exhaustive_int() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F U8
+
+                when v is
+                    $F 1 -> ""
+                    $F 2 -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                5│>  when v is
+                6│>      $F 1 -> ""
+                7│>      $F 2 -> ""
+
+                Other possibilities include:
+
+                    $F _
+
+                I would have to crash if I saw one of those! Add branches for them!
                 "#
             ),
         )

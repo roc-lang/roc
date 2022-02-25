@@ -343,6 +343,14 @@ impl<'a> RocDocAllocator<'a> {
         self.text(fmt).annotate(Annotation::Opaque)
     }
 
+    pub fn wrapped_opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
+        debug_assert_eq!(opaque.module_id(), self.home, "Opaque wrappings can only be defined in the same module they're defined in, but this one is defined elsewhere: {:?}", opaque);
+
+        // TODO(opaques): $->@
+        self.text(format!("${}", opaque.ident_str(self.interns)))
+            .annotate(Annotation::Opaque)
+    }
+
     pub fn record_field(&'a self, lowercase: Lowercase) -> DocBuilder<'a, Self, Annotation> {
         self.text(format!(".{}", lowercase))
             .annotate(Annotation::RecordField)

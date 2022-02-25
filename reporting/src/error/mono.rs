@@ -1,4 +1,5 @@
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
+use roc_module::ident::TagName;
 use roc_region::all::LineInfo;
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
@@ -184,19 +185,26 @@ fn pattern_to_doc_help<'b>(
                         .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
                         .append(" }")
                 }
-                RenderAs::Tag => {
+                RenderAs::Tag | RenderAs::Opaque => {
                     let has_args = !args.is_empty();
                     let arg_docs = args
                         .into_iter()
                         .map(|v| pattern_to_doc_help(alloc, v, true));
 
                     let tag = &union.alternatives[tag_id.0 as usize];
-                    let tag_name = tag.name.clone();
+                    let tag_name = match union.render_as {
+                        RenderAs::Tag => alloc.tag_name(tag.name.clone()),
+                        RenderAs::Opaque => match tag.name {
+                            TagName::Private(opaque) => alloc.wrapped_opaque_name(opaque),
+                            _ => unreachable!(),
+                        },
+                        _ => unreachable!(),
+                    };
 
                     // We assume the alternatives are sorted. If not, this assert will trigger
                     debug_assert!(tag_id == tag.tag_id);
 
-                    let docs = std::iter::once(alloc.tag_name(tag_name)).chain(arg_docs);
+                    let docs = std::iter::once(tag_name).chain(arg_docs);
 
                     if in_type_param && has_args {
                         alloc

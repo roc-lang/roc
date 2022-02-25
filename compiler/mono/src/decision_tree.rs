@@ -565,6 +565,25 @@ fn test_at_path<'a>(
                     union: union.clone(),
                     arguments: arguments.to_vec(),
                 },
+
+                OpaqueUnwrap { opaque, argument } => {
+                    let union = Union {
+                        render_as: RenderAs::Tag,
+                        alternatives: vec![Ctor {
+                            tag_id: TagId(0),
+                            name: TagName::Private(*opaque),
+                            arity: 1,
+                        }],
+                    };
+
+                    IsCtor {
+                        tag_id: 0,
+                        tag_name: TagName::Private(*opaque),
+                        union,
+                        arguments: vec![(**argument).clone()],
+                    }
+                }
+
                 BitLiteral { value, .. } => IsBit(*value),
                 EnumLiteral { tag_id, union, .. } => IsByte {
                     tag_id: *tag_id as _,
@@ -691,6 +710,11 @@ fn to_relevant_branch_help<'a>(
             }
             _ => None,
         },
+
+        OpaqueUnwrap {
+            opaque: _,
+            argument,
+        } => to_relevant_branch_help(test, path, start, end, branch, (*argument).0),
 
         NewtypeDestructure {
             tag_name,
@@ -954,6 +978,7 @@ fn needs_tests(pattern: &Pattern) -> bool {
         RecordDestructure(_, _)
         | NewtypeDestructure { .. }
         | AppliedTag { .. }
+        | OpaqueUnwrap { .. }
         | BitLiteral { .. }
         | EnumLiteral { .. }
         | IntLiteral(_, _)
@@ -1319,6 +1344,7 @@ fn test_to_equality<'a>(
                 _ => unreachable!("{:?}", (cond_layout, union)),
             }
         }
+
         Test::IsInt(test_int, precision) => {
             // TODO don't downcast i128 here
             debug_assert!(test_int <= i64::MAX as i128);

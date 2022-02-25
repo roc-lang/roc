@@ -6320,6 +6320,10 @@ fn store_pattern_help<'a>(
                 stmt,
             );
         }
+        OpaqueUnwrap { argument, .. } => {
+            return store_pattern_help(env, procs, layout_cache, &argument.0, outer_symbol, stmt);
+        }
+
         RecordDestructure(destructs, [_single_field]) => {
             for destruct in destructs {
                 match &destruct.typ {
@@ -7676,6 +7680,10 @@ pub enum Pattern<'a> {
         layout: UnionLayout<'a>,
         union: crate::exhaustive::Union,
     },
+    OpaqueUnwrap {
+        opaque: Symbol,
+        argument: Box<(Pattern<'a>, Layout<'a>)>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -8229,7 +8237,20 @@ fn from_can_pattern_help<'a>(
             Ok(result)
         }
 
-        UnwrappedOpaque { .. } => todo_opaques!(),
+        UnwrappedOpaque {
+            opaque, argument, ..
+        } => {
+            let (arg_var, loc_arg_pattern) = &(**argument);
+            let arg_layout = layout_cache
+                .from_var(env.arena, *arg_var, env.subs)
+                .unwrap();
+            let mono_arg_pattern =
+                from_can_pattern_help(env, layout_cache, &loc_arg_pattern.value, assignments)?;
+            Ok(Pattern::OpaqueUnwrap {
+                opaque: *opaque,
+                argument: Box::new((mono_arg_pattern, arg_layout)),
+            })
+        }
 
         RecordDestructure {
             whole_var,
