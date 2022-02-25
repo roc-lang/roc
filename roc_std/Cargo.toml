@@ -14,3 +14,6 @@ pretty_assertions = "1.0.0"
 quickcheck = "1.0.3"
 quickcheck_macros = "1.0.0"
 libc = "0.2"
+
+[features]
+platform = []
