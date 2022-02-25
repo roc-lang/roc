@@ -87,7 +87,6 @@ fn num_ceil_division_success() {
     expect_success("Num.divCeil 4 3", "Ok 2 : Result (Int *) [ DivByZero ]*")
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn bool_in_record() {
     expect_success("{ x: 1 == 1 }", "{ x: True } : { x : Bool }");
@@ -102,21 +101,18 @@ fn bool_in_record() {
     );
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn bool_basic_equality() {
     expect_success("1 == 1", "True : Bool");
     expect_success("1 != 1", "False : Bool");
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn arbitrary_tag_unions() {
     expect_success("if 1 == 1 then Red else Green", "Red : [ Green, Red ]*");
     expect_success("if 1 != 1 then Red else Green", "Green : [ Green, Red ]*");
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn tag_without_arguments() {
     expect_success("True", "True : [ True ]*");
@@ -136,7 +132,6 @@ fn byte_tag_union() {
     );
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn tag_in_record() {
     expect_success(
@@ -156,13 +151,11 @@ fn single_element_tag_union() {
     expect_success("Foo 1 3.14", "Foo 1 3.14 : [ Foo (Num *) (Float *) ]*");
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn newtype_of_unit() {
     expect_success("Foo Bar", "Foo Bar : [ Foo [ Bar ]* ]*");
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn newtype_of_big_data() {
     expect_success(
@@ -178,7 +171,6 @@ fn newtype_of_big_data() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn newtype_nested() {
     expect_success(
@@ -194,7 +186,6 @@ fn newtype_nested() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn newtype_of_big_of_newtype() {
     expect_success(
@@ -274,13 +265,11 @@ fn literal_float_list() {
     expect_success("[ 1.1, 2.2, 3.3 ]", "[ 1.1, 2.2, 3.3 ] : List (Float *)");
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn literal_string_list() {
     expect_success(r#"[ "a", "b", "cd" ]"#, r#"[ "a", "b", "cd" ] : List Str"#);
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn nested_string_list() {
     expect_success(
@@ -433,7 +422,6 @@ fn list_last() {
     );
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn empty_record() {
     expect_success("{}", "{} : {}");
@@ -569,7 +557,7 @@ fn stdlib_function() {
     expect_success("Num.abs", "<function> : Num a -> Num a");
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
 fn too_few_args() {
     expect_failure(
@@ -590,7 +578,7 @@ fn too_few_args() {
     );
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
 fn type_problem() {
     expect_failure(
@@ -647,7 +635,6 @@ fn multiline_input() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn recursive_tag_union_flat_variant() {
     expect_success(
@@ -663,7 +650,6 @@ fn recursive_tag_union_flat_variant() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn large_recursive_tag_union_flat_variant() {
     expect_success(
@@ -680,7 +666,6 @@ fn large_recursive_tag_union_flat_variant() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn recursive_tag_union_recursive_variant() {
     expect_success(
@@ -696,7 +681,6 @@ fn recursive_tag_union_recursive_variant() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn large_recursive_tag_union_recursive_variant() {
     expect_success(
@@ -713,7 +697,6 @@ fn large_recursive_tag_union_recursive_variant() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn recursive_tag_union_into_flat_tag_union() {
     expect_success(
@@ -729,7 +712,6 @@ fn recursive_tag_union_into_flat_tag_union() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn non_nullable_unwrapped_tag_union() {
     expect_success(
@@ -749,7 +731,6 @@ fn non_nullable_unwrapped_tag_union() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn nullable_unwrapped_tag_union() {
     expect_success(
@@ -769,7 +750,6 @@ fn nullable_unwrapped_tag_union() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn nullable_wrapped_tag_union() {
     expect_success(
@@ -793,7 +773,6 @@ fn nullable_wrapped_tag_union() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
 #[test]
 fn large_nullable_wrapped_tag_union() {
     // > 7 non-empty variants so that to force tag storage alongside the data
@@ -885,7 +864,7 @@ fn print_u8s() {
     )
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
 fn parse_problem() {
     expect_failure(
@@ -909,7 +888,7 @@ fn parse_problem() {
     );
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
 fn mono_problem() {
     expect_failure(
