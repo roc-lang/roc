@@ -267,32 +267,7 @@ impl std::hash::Hash for IdentStr {
 
 impl Clone for IdentStr {
     fn clone(&self) -> Self {
-        if self.is_small_str() || self.is_empty() {
-            Self {
-                elements: self.elements,
-                length: self.length,
-            }
-        } else {
-            let copy_length = self.length;
-            let elements = unsafe {
-                let align = mem::align_of::<u8>();
-                let layout = Layout::from_size_align_unchecked(copy_length, align);
-                let raw_ptr = alloc(layout);
-
-                let dest_slice = slice::from_raw_parts_mut(raw_ptr, copy_length);
-                let src_ptr = self.elements as *mut u8;
-                let src_slice = slice::from_raw_parts(src_ptr, copy_length);
-
-                dest_slice.copy_from_slice(src_slice);
-
-                raw_ptr as *mut u8
-            };
-
-            Self {
-                elements,
-                length: self.length,
-            }
-        }
+        Self::from_slice(self.as_bytes())
     }
 }
 
