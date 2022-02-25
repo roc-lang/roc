@@ -291,8 +291,8 @@ pub fn list_drop_at<'a, 'ctx, 'env>(
     )
 }
 
-/// List.replace : List elem, Nat, elem -> List elem
-pub fn list_replace<'a, 'ctx, 'env>(
+/// List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
+pub fn list_replace_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     _layout_ids: &mut LayoutIds<'a>,
     list: BasicValueEnum<'ctx>,

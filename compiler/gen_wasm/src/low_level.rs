@@ -260,7 +260,7 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
-            ListGetUnsafe | ListReplace | ListSet | ListSingle | ListRepeat | ListReverse
+            ListGetUnsafe | ListReplaceUnsafe | ListSet | ListSingle | ListRepeat | ListReverse
             | ListConcat | ListContains | ListAppend | ListPrepend | ListJoin | ListRange
             | ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf
             | ListWalk | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs

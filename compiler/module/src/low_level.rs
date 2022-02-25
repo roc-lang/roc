@@ -28,7 +28,7 @@ pub enum LowLevel {
     ListSet,
     ListSingle,
     ListRepeat,
-    ListReplace,
+    ListReplaceUnsafe,
     ListReverse,
     ListConcat,
     ListContains,

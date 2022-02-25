@@ -2304,14 +2304,13 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.replace : List elem, Nat, elem -> Result (Pair (List elem) elem) [ OutOfBounds ]*
+/// List.replace : List elem, Nat, elem -> Result { list: List elem, value: elem } [ OutOfBounds ]*
 ///
 /// List.replace :
 ///     Attr (w | u | v) (List (Attr u a)),
 ///     Attr * Int,
 ///     Attr (u | v) a
-///     -> Attr * (List (Attr u  a))
-///     -> Attr * (Result (Pair (List (Attr u a)) Attr u a)) (Attr * [ OutOfBounds ]*))
+///     -> Attr * (Result { list: List (Attr u a), value: Attr u a } (Attr * [ OutOfBounds ]*))
 fn list_replace(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
@@ -2320,13 +2319,13 @@ fn list_replace(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let len_var = var_store.fresh();
     let elem_var = var_store.fresh();
     let list_arg_var = var_store.fresh();
-    let ret_pair_var = var_store.fresh();
+    let ret_record_var = var_store.fresh();
 
-    // Perform a bounds check. If it passes, run LowLevel::ListReplace.
+    // Perform a bounds check. If it passes, run LowLevel::ListReplaceUnsafe.
     // Otherwise, return the list unmodified.
     let body = If {
         cond_var: bool_var,
-        branch_var: ret_pair_var,
+        branch_var: ret_record_var,
         branches: vec![(
             // if-condition
             no_region(
@@ -2353,16 +2352,15 @@ fn list_replace(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 tag(
                     "Ok",
                     vec![
-                        // TODO: This should probably call get and then build the pair
                         // List.replaceUnsafe list index elem
                         RunLowLevel {
-                            op: LowLevel::ListReplace,
+                            op: LowLevel::ListReplaceUnsafe,
                             args: vec![
                                 (list_arg_var, Var(arg_list)),
                                 (len_var, Var(arg_index)),
                                 (elem_var, Var(arg_elem)),
                             ],
-                            ret_var: ret_pair_var,
+                            ret_var: ret_record_var,
                         },
                     ],
                     var_store,
@@ -2391,7 +2389,7 @@ fn list_replace(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ],
         var_store,
         body,
-        ret_pair_var,
+        ret_record_var,
     )
 }
 

@@ -4,9 +4,9 @@ use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
     bool_type, dec_type, dict_type, f32_type, f64_type, float_type, i128_type, i16_type, i32_type,
-    i64_type, i8_type, int_type, list_type, nat_type, num_type, ordering_type, pair_type,
-    result_type, set_type, str_type, str_utf8_byte_problem_type, u128_type, u16_type, u32_type,
-    u64_type, u8_type,
+    i64_type, i8_type, int_type, list_type, nat_type, num_type, ordering_type, result_type,
+    set_type, str_type, str_utf8_byte_problem_type, u128_type, u16_type, u32_type, u64_type,
+    u8_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
@@ -1056,12 +1056,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(result_type(flex(TVAR1), list_was_empty.clone())),
     );
 
-    // replace : List elem, Nat, elem -> Result (Pair (List elem) elem) [ OutOfBounds ]*
+    // replace : List elem, Nat, elem -> Result { list: List elem, value: elem } [ OutOfBounds ]*
     add_top_level_function_type!(
         Symbol::LIST_REPLACE,
         vec![list_type(flex(TVAR1)), nat_type(), flex(TVAR1)],
         Box::new(result_type(
-            pair_type(list_type(flex(TVAR1)), flex(TVAR1)),
+            SolvedType::Record {
+                fields: vec![
+                    ("list".into(), RecordField::Required(list_type(flex(TVAR1)))),
+                    ("value".into(), RecordField::Required(flex(TVAR1))),
+                ],
+                ext: Box::new(SolvedType::EmptyRecord),
+            },
             index_out_of_bounds
         )),
     );
