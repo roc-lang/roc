@@ -3,7 +3,7 @@
 use core::cmp::Ordering;
 use core::convert::From;
 use core::{fmt, mem, ptr, slice};
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{alloc, dealloc, Layout};
 
 /// A string which can store identifiers using the small string optimization.
 /// It relies on the invariant that it cannot store null characters to store
@@ -145,7 +145,7 @@ impl IdentStr {
                     let align = mem::align_of::<u8>();
                     let layout = Layout::from_size_align_unchecked(len, align);
 
-                    System.alloc(layout)
+                    alloc(layout)
                 };
 
                 // Turn the new elements into a slice, and copy the existing
@@ -289,7 +289,7 @@ impl Clone for IdentStr {
             let elements = unsafe {
                 let align = mem::align_of::<u8>();
                 let layout = Layout::from_size_align_unchecked(copy_length, align);
-                let raw_ptr = System.alloc(layout);
+                let raw_ptr = alloc(layout);
 
                 let dest_slice = slice::from_raw_parts_mut(raw_ptr, copy_length);
                 let src_ptr = self.elements as *mut u8;
@@ -315,7 +315,7 @@ impl Drop for IdentStr {
                 let align = mem::align_of::<u8>();
                 let layout = Layout::from_size_align_unchecked(self.length, align);
 
-                System.dealloc(self.elements as *mut _, layout);
+                dealloc(self.elements as *mut _, layout);
             }
         }
     }
