@@ -12,8 +12,8 @@ extern crate indoc;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        example_file, examples_dir, extract_valgrind_errors, fixture_file, known_bad_file, run_cmd,
-        run_roc, run_with_valgrind, Out, ValgrindError, ValgrindErrorXWhat,
+        example_file, examples_dir, extract_valgrind_errors, fixture_file, fixtures_dir,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError, ValgrindErrorXWhat,
     };
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
@@ -903,6 +903,15 @@ mod cli_run {
     #[test]
     fn format_check_reformatting_needed() {
         check_format_check_as_expected(&fixture_file("format", "NotFormatted.roc"), false);
+    }
+
+    #[test]
+    fn format_check_folders() {
+        // This fails, because "NotFormatted.roc" is present in this folder
+        check_format_check_as_expected(&fixtures_dir("format"), false);
+
+        // This doesn't fail, since only "Formatted.roc" is present in this folder
+        check_format_check_as_expected(&fixtures_dir("format/formatted_directory"), true);
     }
 }
 
