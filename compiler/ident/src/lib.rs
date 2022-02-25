@@ -66,19 +66,7 @@ impl IdentStr {
     }
 
     pub fn get(&self, index: usize) -> Option<&u8> {
-        if index < self.len() {
-            Some(unsafe {
-                let raw = if self.is_small_str() {
-                    self.get_small_str_ptr().add(index)
-                } else {
-                    self.elements.add(index)
-                };
-
-                &*raw
-            })
-        } else {
-            None
-        }
+        self.as_bytes().get(index)
     }
 
     pub fn get_bytes(&self) -> *const u8 {
