@@ -4,6 +4,7 @@ use core::cmp::Ordering;
 use core::convert::From;
 use core::{fmt, mem, ptr, slice};
 use std::alloc::{alloc, dealloc, Layout};
+use std::os::raw::c_char;
 
 /// A string which can store identifiers using the small string optimization.
 /// It relies on the invariant that it cannot store null characters to store
@@ -154,15 +155,12 @@ impl IdentStr {
     /// # Safety
     /// This assumes the given buffer has enough space, so make sure you only
     /// pass in a pointer to an allocation that's at least as long as this Str!
-    pub unsafe fn write_c_str(&self, buf: *mut char) {
-        if self.is_small_str() {
-            ptr::copy_nonoverlapping(self.get_small_str_ptr(), buf as *mut u8, self.len());
-        } else {
-            ptr::copy_nonoverlapping(self.elements, buf as *mut u8, self.len());
-        }
+    pub unsafe fn write_c_str(&self, buf: *mut c_char) {
+        let bytes = self.as_bytes();
+        ptr::copy_nonoverlapping(bytes.as_ptr().cast(), buf, bytes.len());
 
         // null-terminate
-        *(buf.add(self.len())) = '\0';
+        *buf.add(self.len()) = 0;
     }
 }
 
