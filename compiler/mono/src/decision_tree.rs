@@ -711,10 +711,32 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        OpaqueUnwrap {
-            opaque: _,
-            argument,
-        } => to_relevant_branch_help(test, path, start, end, branch, (*argument).0),
+        OpaqueUnwrap { opaque, argument } => match test {
+            IsCtor {
+                tag_name: test_opaque_tag_name,
+                tag_id,
+                ..
+            } => {
+                debug_assert_eq!(test_opaque_tag_name, &TagName::Private(opaque));
+
+                let (argument, _) = *argument;
+
+                let mut new_path = path.to_vec();
+                new_path.push(PathInstruction {
+                    index: 0,
+                    tag_id: *tag_id,
+                });
+
+                start.push((new_path, argument));
+                start.extend(end);
+                Some(Branch {
+                    goal: branch.goal,
+                    guard: branch.guard.clone(),
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
 
         NewtypeDestructure {
             tag_name,

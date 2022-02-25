@@ -1048,3 +1048,19 @@ fn opaque_apply_polymorphic() {
         r#"Package "" { a: "" } : F Str { a : Str }"#,
     )
 }
+
+#[test]
+fn opaque_pattern_and_call() {
+    expect_success(
+        indoc!(
+            r#"
+            F t u := [ Package t u ]
+
+            f = \$F (Package A {}) -> $F (Package {} A)
+
+            f ($F (Package A {}))
+            "#
+        ),
+        r#"Package {} A : F {} [ A ]*"#,
+    )
+}

@@ -10,7 +10,6 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
-use roc_error_macros::todo_opaques;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -2021,7 +2020,7 @@ fn pattern_to_when<'a>(
             (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
         }
 
-        AppliedTag { .. } | RecordDestructure { .. } => {
+        AppliedTag { .. } | RecordDestructure { .. } | UnwrappedOpaque { .. } => {
             let symbol = env.unique_symbol();
 
             let wrapped_body = When {
@@ -2040,6 +2039,7 @@ fn pattern_to_when<'a>(
         }
 
         UnwrappedOpaque { .. } => todo_opaques!(),
+
         IntLiteral(..)
         | NumLiteral(..)
         | FloatLiteral(..)
