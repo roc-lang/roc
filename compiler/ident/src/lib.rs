@@ -87,46 +87,25 @@ impl IdentStr {
 
         match len.cmp(&mem::size_of::<Self>()) {
             Ordering::Less => {
-                // This fits in a small string, but needs its length recorded
-                let mut answer_bytes: [u8; mem::size_of::<Self>()] = unsafe {
-                    mem::transmute::<Self, [u8; mem::size_of::<Self>()]>(Self::default())
-                };
+                let mut bytes = [0; mem::size_of::<Self>()];
 
-                // Copy the bytes from the slice into the answer
-                let dest_slice =
-                    unsafe { slice::from_raw_parts_mut(&mut answer_bytes as *mut u8, len) };
-
-                dest_slice.copy_from_slice(slice);
-
-                let mut answer: Self =
-                    unsafe { mem::transmute::<[u8; mem::size_of::<Self>()], Self>(answer_bytes) };
+                // Copy the bytes from the slice into bytes.
+                bytes[..len].copy_from_slice(slice);
 
                 // Write length and small string bit to last byte of length.
-                {
-                    let mut bytes = answer.length.to_ne_bytes();
+                bytes[mem::size_of::<usize>() * 2 - 1] = u8::MAX - len as u8;
 
-                    bytes[mem::size_of::<usize>() - 1] = u8::MAX - len as u8;
-
-                    answer.length = usize::from_ne_bytes(bytes);
-                }
-
-                answer
+                unsafe { mem::transmute::<[u8; mem::size_of::<Self>()], Self>(bytes) }
             }
             Ordering::Equal => {
                 // This fits in a small string, and is exactly long enough to
                 // take up the entire available struct
-                let mut answer_bytes: [u8; mem::size_of::<Self>()] = unsafe {
-                    mem::transmute::<Self, [u8; mem::size_of::<Self>()]>(Self::default())
-                };
+                let mut bytes = [0; mem::size_of::<Self>()];
 
                 // Copy the bytes from the slice into the answer
-                let dest_slice = unsafe {
-                    slice::from_raw_parts_mut(&mut answer_bytes as *mut u8, mem::size_of::<Self>())
-                };
+                bytes.copy_from_slice(slice);
 
-                dest_slice.copy_from_slice(slice);
-
-                unsafe { mem::transmute::<[u8; mem::size_of::<Self>()], Self>(answer_bytes) }
+                unsafe { mem::transmute::<[u8; mem::size_of::<Self>()], Self>(bytes) }
             }
             Ordering::Greater => {
                 // This needs a big string
