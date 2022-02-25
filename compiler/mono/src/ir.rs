@@ -90,6 +90,7 @@ macro_rules! return_on_layout_error_help {
 pub enum OptLevel {
     Development,
     Normal,
+    Size,
     Optimize,
 }
 

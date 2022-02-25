@@ -199,7 +199,7 @@ pub fn gen_from_mono_module(
     emit_debug_info: bool,
 ) -> CodeGenTiming {
     match opt_level {
-        OptLevel::Normal | OptLevel::Optimize => gen_from_mono_module_llvm(
+        OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => gen_from_mono_module_llvm(
             arena,
             loaded,
             roc_file_path,
