@@ -110,10 +110,9 @@ impl IdentStr {
             }
             Ordering::Greater => {
                 // This needs a big string
+                let align = mem::align_of::<u8>();
                 let elements = unsafe {
-                    let align = mem::align_of::<u8>();
                     let layout = Layout::from_size_align_unchecked(len, align);
-
                     alloc(layout)
                 };
 
@@ -252,10 +251,9 @@ impl Clone for IdentStr {
 impl Drop for IdentStr {
     fn drop(&mut self) {
         if !self.is_empty() && !self.is_small_str() {
+            let align = mem::align_of::<u8>();
             unsafe {
-                let align = mem::align_of::<u8>();
                 let layout = Layout::from_size_align_unchecked(self.length, align);
-
                 dealloc(self.elements as *mut _, layout);
             }
         }
