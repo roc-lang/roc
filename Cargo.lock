@@ -3222,6 +3222,7 @@ name = "repl_test"
 version = "0.1.0"
 dependencies = [
  "indoc",
+ "lazy_static",
  "roc_cli",
  "roc_repl_cli",
  "roc_test_utils",

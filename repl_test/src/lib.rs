@@ -1,3 +1,7 @@
+#[macro_use]
+extern crate lazy_static;
+
+#[allow(unused_imports)]
 use indoc::indoc;
 
 #[cfg(not(feature = "wasm"))]
