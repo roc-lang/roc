@@ -47,16 +47,28 @@ pub struct UnderlineEnd {
 #[derive(Debug)]
 pub enum Attribute {
     // Rust does not yet support types for enum variants so we have to do it like this
-    Caret { caret: Caret },
+    Caret {
+        caret: Caret,
+    },
 
-    SelectionStart { selection_start: SelectionStart },
-    SelectionEnd { selection_end: SelectionEnd },
+    SelectionStart {
+        selection_start: SelectionStart,
+    },
+    SelectionEnd {
+        selection_end: SelectionEnd,
+    },
 
-    HighlightStart { highlight_start: HighlightStart },
-    HighlightEnd { highlight_end: HighlightEnd },
+    HighlightStart {
+        highlight_start: HighlightStart,
+    },
+    HighlightEnd {
+        highlight_end: HighlightEnd,
+    },
 
-    UnderlineStart { underline_start: UnderlineStart },
-    UnderlineEnd { underline_end: UnderlineEnd },
+    Underline {
+        underline_start: UnderlineStart,
+        underline_end: UnderlineEnd,
+    },
 }
 
 #[derive(Debug, Default)]
