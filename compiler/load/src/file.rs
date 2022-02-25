@@ -3227,8 +3227,6 @@ fn canonicalize_and_constrain<'a>(
 
     module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();
 
-    use roc_can::module::ModuleOutput;
-    use std::process;
     match canonicalized {
         Ok(module_output) => {
             // Generate documentation information
