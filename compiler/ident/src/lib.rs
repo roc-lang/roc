@@ -135,7 +135,9 @@ impl IdentStr {
     pub fn as_slice(&self) -> &[u8] {
         use core::slice::from_raw_parts;
 
-        if self.is_small_str() {
+        if self.is_empty() {
+            &[]
+        } else if self.is_small_str() {
             unsafe { from_raw_parts(self.get_small_str_ptr(), self.len()) }
         } else {
             unsafe { from_raw_parts(self.elements, self.length) }
