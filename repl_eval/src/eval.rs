@@ -70,6 +70,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     }
 }
 
+#[derive(Debug)]
 enum NewtypeKind<'a> {
     Tag(&'a TagName),
     RecordField(&'a str),
@@ -89,10 +90,11 @@ fn unroll_newtypes<'a>(
     mut content: &'a Content,
 ) -> (Vec<'a, NewtypeKind<'a>>, &'a Content) {
     let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
+    let mut force_alias_content = None;
     loop {
         match content {
             Content::Structure(FlatType::TagUnion(tags, _))
-                if tags.is_newtype_wrapper(env.subs) =>
+                if tags.is_newtype_wrapper_of_global_tag(env.subs) =>
             {
                 let (tag_name, vars): (&TagName, &[Variable]) = tags
                     .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
@@ -113,7 +115,20 @@ fn unroll_newtypes<'a>(
                 let field_var = *field.as_inner();
                 content = env.subs.get_content_without_compacting(field_var);
             }
-            _ => return (newtype_containers, content),
+            Content::Alias(_, _, real_var) => {
+                // We need to pass through aliases too, because their underlying types may have
+                // unrolled newtypes. In such cases return the list of unrolled newtypes, but keep
+                // the content as the alias for readability. For example,
+                //   T : { a : Str }
+                //   v : T
+                //   v = { a : "value" }
+                //   v
+                // Here we need the newtype container to be `[RecordField(a)]`, but the content to
+                // remain as the alias `T`.
+                force_alias_content = Some(content);
+                content = env.subs.get_content_without_compacting(*real_var);
+            }
+            _ => return (newtype_containers, force_alias_content.unwrap_or(content)),
         }
     }
 }

@@ -1862,6 +1862,14 @@ impl UnionTags {
         slice.length == 1
     }
 
+    pub fn is_newtype_wrapper_of_global_tag(&self, subs: &Subs) -> bool {
+        self.is_newtype_wrapper(subs) && {
+            let tags = &subs.tag_names[self.tag_names().indices()];
+            debug_assert_eq!(tags.len(), 1);
+            matches!(tags[0], TagName::Global(_))
+        }
+    }
+
     pub fn from_tag_name_index(index: SubsIndex<TagName>) -> Self {
         Self::from_slices(
             SubsSlice::new(index.index, 1),

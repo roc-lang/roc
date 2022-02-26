@@ -975,3 +975,33 @@ fn issue_2343_complete_mono_with_shadowed_vars() {
         ),
     );
 }
+
+#[test]
+fn record_with_type_behind_alias() {
+    expect_success(
+        indoc!(
+            r#"
+            T : { a: Str }
+            v : T
+            v = { a: "value" }
+            v
+            "#
+        ),
+        r#"{ a: "value" } : T"#,
+    );
+}
+
+#[test]
+fn tag_with_type_behind_alias() {
+    expect_success(
+        indoc!(
+            r#"
+            T : [ A Str ]
+            v : T
+            v = A "value"
+            v
+            "#
+        ),
+        r#"A "value" : T"#,
+    );
+}
