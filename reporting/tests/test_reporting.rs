@@ -8274,4 +8274,35 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn unimported_modules_reported() {
+        report_problem_as(
+            indoc!(
+                r#"
+                main : Task.Task {} []
+                main = "whatever man you don't even know my type"
+                main
+                "#
+            ),
+            indoc!(
+                r#"
+                ── MODULE NOT IMPORTED ─────────────────────────────────────────────────────────
+
+                The `Task` module is not imported:
+
+                1│  main : Task.Task {} []
+                           ^^^^^^^^^^^^^^^
+
+                Is there an import missing? Perhaps there is a typo. Did you mean one
+                of these?
+
+                    Test
+                    List
+                    Num
+                    Set
+                "#
+            ),
+        )
+    }
 }
