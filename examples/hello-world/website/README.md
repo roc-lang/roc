@@ -9,7 +9,8 @@ cargo run -- build --target=wasm32 examples/hello-world/hello_world.roc
 mv examples/hello-world/hello_world.wasm examples/hello-world/website/
 ```
 
-Then `cd` into the website directory and run any web server that can handle WebAssembly.
+Then `cd` into the website directory, position the new `.wasm` file,
+and run any web server that can handle WebAssembly.
 For example with `http-server`:
 
 ```bash
@@ -19,6 +20,8 @@ http-server
 ```
 
 Now open your browser at http://localhost:8080
+
+Some of the above steps can be automated by running `./compile.sh`.
 
 ## Design Notes
 
