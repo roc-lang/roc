@@ -33,6 +33,9 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add clippy
     # rustfmt
     RUN rustup component add rustfmt
+    # wasm repl
+    RUN rustup target add wasm32-unknown-unknown
+    RUN cargo install wasm-pack
     # criterion
     RUN cargo install cargo-criterion
     # editor
