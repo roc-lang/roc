@@ -7,8 +7,10 @@ version = "0.1.0"
 roc_cli = {path = "../cli"}
 
 [dependencies]
-indoc = "1.0.3"
 lazy_static = "1.4.0"
+
+[dev-dependencies]
+indoc = "1.0.3"
 strip-ansi-escapes = "0.1.1"
 wasmer-wasi = "2.0.0"
 
