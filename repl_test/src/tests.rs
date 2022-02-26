@@ -840,7 +840,7 @@ fn function_in_list() {
 fn function_in_record() {
     expect_success(
         r#"{ n: 1, adder: \x -> x + 1 }"#,
-        r#"{ adder: <function>, n: <function> } : { adder : Num a -> Num a, n : Num * }"#,
+        r#"{ adder: <function>, n: 1 } : { adder : Num a -> Num a, n : Num * }"#,
     )
 }
 
@@ -974,4 +974,49 @@ fn issue_2343_complete_mono_with_shadowed_vars() {
                 "#
         ),
     );
+}
+
+#[test]
+fn record_with_type_behind_alias() {
+    expect_success(
+        indoc!(
+            r#"
+            T : { a: Str }
+            v : T
+            v = { a: "value" }
+            v
+            "#
+        ),
+        r#"{ a: "value" } : T"#,
+    );
+}
+
+#[test]
+fn tag_with_type_behind_alias() {
+    expect_success(
+        indoc!(
+            r#"
+            T : [ A Str ]
+            v : T
+            v = A "value"
+            v
+            "#
+        ),
+        r#"A "value" : T"#,
+    );
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn issue_2588_record_with_function_and_nonfunction() {
+    expect_success(
+        indoc!(
+            r#"
+            x = 1
+            f = \n -> n * 2
+            { y: f x, f }
+            "#
+        ),
+        r#"{ f: <function>, y: 2 } : { f : Num a -> Num a, y : Num * }"#,
+    )
 }
