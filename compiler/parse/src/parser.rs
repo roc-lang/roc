@@ -1405,21 +1405,6 @@ where
     }
 }
 
-pub fn check_indent<'a, TE, E>(min_indent: u32, to_problem: TE) -> impl Parser<'a, (), E>
-where
-    TE: Fn(Position) -> E,
-    E: 'a,
-{
-    move |_arena, state: State<'a>| {
-        dbg!(state.indent_column, min_indent);
-        if state.indent_column < min_indent {
-            Err((NoProgress, to_problem(state.pos()), state))
-        } else {
-            Ok((NoProgress, (), state))
-        }
-    }
-}
-
 #[macro_export]
 macro_rules! word1_check_indent {
     ($word:expr, $word_problem:expr, $min_indent:expr, $indent_problem:expr) => {
