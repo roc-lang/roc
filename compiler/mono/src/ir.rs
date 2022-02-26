@@ -7226,7 +7226,8 @@ fn call_by_name_help<'a>(
         } else {
             debug_assert!(
                 !field_symbols.is_empty(),
-                "should be in the list of imported_module_thunks"
+                "{} should be in the list of imported_module_thunks",
+                proc_name
             );
 
             debug_assert_eq!(
