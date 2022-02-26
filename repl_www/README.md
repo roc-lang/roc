@@ -2,7 +2,7 @@
 
 ## Running locally
 
-1. Run the build script
+### 1. Run the build script
 
 This builds the compiler as a `.wasm` file, and generates JS glue code.
 It will `cargo install` the `wasm-pack` command line tool if you don't already have it.
@@ -14,7 +14,7 @@ You should run it from the project root directory.
 
 All the final assets for the web REPL will end up in `./repl_www/build/`
 
-2. Run a local HTTP server
+### 2. Run a local HTTP server
 
 Browsers won't load .wasm files over the `file://` protocol, so you need to serve the files in `./repl_www/build/` from a local web server.
 Any server will do, but this example should work on any system that has Python 3 installed:
@@ -24,8 +24,10 @@ cd repl_www/build
 python3 -m http.server
 ```
 
-Then you should be able to find the Roc REPL at `http://127.0.0.1:8000`
-Warning: Not all language features are working perfectly yet!
+### 3. Open your browser
+You should be able to find the Roc REPL at http://127.0.0.1:8000 (or wherever your web server said when it started up.)
+
+**Warning:** This is work in progress! Not all language features are implemented yet, error messages don't look nice yet, up/down arrows don't work for history, etc.
 
 ![Screenshot](./screenshot.png)
 

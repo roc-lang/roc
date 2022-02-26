@@ -18,8 +18,7 @@ thread_local! {
 // The compiler Wasm instance.
 // This takes several *seconds* to initialise, so we only want to do it once for all tests.
 // Every test mutates compiler memory in `unsafe` ways, so we run them sequentially using a Mutex.
-// Even if Cargo uses many threads, these tests won't go any faster, and that's OK.
-// Note: I tried cloning this to thread_locals but it contains an Arc so we can't make a deep clone.
+// Even if Cargo uses many threads, these tests won't go any faster. But that's fine, they're quick.
 lazy_static! {
     static ref COMPILER: Instance = init_compiler();
     static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -48,7 +47,7 @@ fn init_compiler() -> Instance {
         }
     };
 
-    // This takes 5 seconds on my machine
+    // This is the slow line
     Instance::new(&wasmer_module, &import_object).unwrap()
 }
 
@@ -74,12 +73,12 @@ fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) -> u32 {
         let wasmer_module = match Module::new(&store, app_module_bytes) {
             Ok(m) => m,
             Err(e) => {
-                let path = "/tmp/roc_repl_test_invalid_app.wasm";
-                fs::write(path, app_module_bytes).unwrap();
-                println!(
-                    "Failed to create Wasm module\nWrote invalid wasm to {}\n{:?}",
-                    path, e
-                );
+                println!("Failed to create Wasm module\n{:?}", e);
+                if false {
+                    let path = "/tmp/roc_repl_test_invalid_app.wasm";
+                    fs::write(path, app_module_bytes).unwrap();
+                    println!("Wrote invalid wasm to {}", path);
+                }
                 return false.into();
             }
         };
