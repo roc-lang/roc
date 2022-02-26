@@ -710,9 +710,8 @@ where
         let cur_indent = INDENT.with(|i| *i.borrow());
 
         println!(
-            "@{:>5}:{:<5}: {}{:<50}",
-            state.line,
-            state.column,
+            "{:>5?}: {}{:<50}",
+            state.pos(),
             &indent_text[..cur_indent * 2],
             self.message
         );
@@ -727,9 +726,8 @@ where
         };
 
         println!(
-            "@{:>5}:{:<5}: {}{:<50} {:<15} {:?}",
-            state.line,
-            state.column,
+            "{:<5?}: {}{:<50} {:<15} {:?}",
+            state.pos(),
             &indent_text[..cur_indent * 2],
             self.message,
             format!("{:?}", progress),
