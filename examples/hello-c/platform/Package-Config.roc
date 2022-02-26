@@ -1,4 +1,4 @@
-platform "hello-world"
+platform "hello-c"
     requires {} { main : Str }
     exposes []
     packages {}

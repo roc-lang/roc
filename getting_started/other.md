@@ -8,7 +8,7 @@
     # Zig
     cargo run examples/hello-zig/Hello.roc
     # C
-    cargo run examples/hello-world/Hello.roc
+    cargo run examples/hello-c/Hello.roc
     ```
 4. See [here](../README.md#examples) for the other examples.
 

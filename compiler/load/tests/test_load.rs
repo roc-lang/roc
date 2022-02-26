@@ -647,7 +647,7 @@ mod test_load {
                 "platform/Package-Config.roc",
                 indoc!(
                     r#"
-                        platform "hello-world"
+                        platform "hello-c"
                             requires {} { main : Str }
                             exposes []
                             packages {}

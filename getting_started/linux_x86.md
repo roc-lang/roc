@@ -26,7 +26,7 @@
     # Zig
     ./roc examples/hello-zig/Hello.roc
     # C
-    ./roc examples/hello-world/Hello.roc
+    ./roc examples/hello-c/Hello.roc
     ```
 0. See [here](../README.md#examples) for the other examples.
 

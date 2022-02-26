@@ -517,7 +517,7 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String) 
 
 // returns path and content of app file
 fn init_new_roc_project(project_dir_path_str: &str) -> (PathStr, String) {
-    let orig_platform_path = Path::new("./examples/hello-world/platform");
+    let orig_platform_path = Path::new("./examples/hello-c/platform");
 
     let project_dir_path = Path::new(project_dir_path_str);
 
