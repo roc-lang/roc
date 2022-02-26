@@ -115,13 +115,9 @@ translate = \child, toChild, toParent ->
 ## children =
 ## Elem.list Photo.render state .photos &photos
 ##
-##     col {} children
-list :
-    (child -> Elem child),
-    parent,
-    (parent -> List child),
-    (parent, List child -> parent)
-    -> List (Elem parent)
+## col {} children
+## TODO: format as multiline type annotation once https://github.com/rtfeldman/roc/issues/2586 is fixed
+list : (child -> Elem child), parent, (parent -> List child), (parent, List child -> parent) -> List (Elem parent)
 list = \renderChild, parent, toChildren, toParent ->
     List.mapWithIndex (toChildren parent) \index, child ->
         toChild = \par -> List.get (toChildren par) index
@@ -138,11 +134,9 @@ list = \renderChild, parent, toChildren, toParent ->
 ## Tries to translate a child to a parent, but
 ## if the child has been removed from the parent,
 ## drops it.
-translateOrDrop :
-    Elem child,
-    (parent -> Result child *),
-    (parent, child -> parent)
-    -> Elem parent
+##
+## TODO: format as multiline type annotation once https://github.com/rtfeldman/roc/issues/2586 is fixed
+translateOrDrop : Elem child, (parent -> Result child *), (parent, child -> parent) -> Elem parent
 translateOrDrop = \child, toChild, toParent ->
     when child is
         Text str -> Text str
