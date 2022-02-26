@@ -204,13 +204,9 @@ fn format_compiler_load_error(e: std::io::Error) -> String {
         format!(
             "\n\n    {}\n\n",
             [
-                "CANNOT BUILD WASM REPL TESTS",
+                "ROC COMPILER WASM BINARY NOT FOUND",
                 "Please run these tests using repl_test/run_wasm.sh!",
-                "",
-                "These tests combine two builds for two different targets,",
-                "which Cargo doesn't handle very well.",
-                "It probably requires a second target directory to avoid locks.",
-                "We'll get to it eventually but it's not done yet.",
+                "It will build a .wasm binary for the compiler, and a native binary for the tests themselves",
             ]
             .join("\n    ")
         )

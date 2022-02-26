@@ -86,6 +86,8 @@ test-rust:
     # gen-wasm has some multithreading problems to do with the wasmer runtime. Run it single-threaded as a separate job
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
+    # repl_test build a .wasm binary for the compiler and tests it from a native binary, so it has a script
+    RUN --mount=type=cache,target=$SCCACHE_DIR repl_test/test_wasm.sh && sccache --show-stats
     # run i386 (32-bit linux) cli tests
     RUN echo "4" | cargo run --locked --release --features="target-x86" -- --backend=x86_32 examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
