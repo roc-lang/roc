@@ -122,6 +122,7 @@ mod test_parse {
     snapshot_tests! {
         fail/type_argument_no_arrow.expr,
         fail/type_double_comma.expr,
+        pass/list_closing_indent_not_enough.expr,
         pass/add_var_with_spaces.expr,
         pass/add_with_spaces.expr,
         pass/annotated_record_destructure.expr,
@@ -167,6 +168,8 @@ mod test_parse {
         pass/int_with_underscore.expr,
         pass/interface_with_newline.header,
         pass/lowest_float.expr,
+        pass/list_closing_same_indent_no_trailing_comma.expr,
+        pass/list_closing_same_indent_with_trailing_comma.expr,
         pass/lowest_int.expr,
         pass/malformed_ident_due_to_underscore.expr,
         pass/malformed_pattern_field_access.expr, // See https://github.com/rtfeldman/roc/issues/399
