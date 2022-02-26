@@ -29,10 +29,10 @@ const NESTED_DATATYPE: &str = "NESTED DATATYPE";
 const CONFLICTING_NUMBER_SUFFIX: &str = "CONFLICTING NUMBER SUFFIX";
 const NUMBER_OVERFLOWS_SUFFIX: &str = "NUMBER OVERFLOWS SUFFIX";
 const NUMBER_UNDERFLOWS_SUFFIX: &str = "NUMBER UNDERFLOWS SUFFIX";
-const OPAQUE_NOT_DEFINED: &str = "OPAQUE NOT DEFINED";
-const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE DECLARED OUTSIDE SCOPE";
-const OPAQUE_NOT_APPLIED: &str = "OPAQUE NOT APPLIED";
-const OPAQUE_OVER_APPLIED: &str = "OPAQUE APPLIED TO TOO MANY ARGS";
+const OPAQUE_NOT_DEFINED: &str = "OPAQUE TYPE NOT DEFINED";
+const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE TYPE DECLARED OUTSIDE SCOPE";
+const OPAQUE_NOT_APPLIED: &str = "OPAQUE TYPE NOT APPLIED";
+const OPAQUE_OVER_APPLIED: &str = "OPAQUE TYPE APPLIED TO TOO MANY ARGS";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -1451,7 +1451,7 @@ fn pretty_runtime_error<'b>(
         }
         RuntimeError::OpaqueNotApplied(loc_ident) => {
             doc = alloc.stack(vec![
-                alloc.reflow("This opaque is not applied to an argument:"),
+                alloc.reflow("This opaque type is not applied to an argument:"),
                 alloc.region(lines.convert_region(loc_ident.region)),
                 alloc.note("Opaque types always wrap exactly one argument!"),
             ]);
@@ -1460,7 +1460,7 @@ fn pretty_runtime_error<'b>(
         }
         RuntimeError::OpaqueAppliedToMultipleArgs(region) => {
             doc = alloc.stack(vec![
-                alloc.reflow("This opaque is applied to multiple arguments:"),
+                alloc.reflow("This opaque type is applied to multiple arguments:"),
                 alloc.region(lines.convert_region(region)),
                 alloc.note("Opaque types always wrap exactly one argument!"),
             ]);

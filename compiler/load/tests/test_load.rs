@@ -755,7 +755,7 @@ mod test_load {
             err,
             indoc!(
                 r#"
-                ── OPAQUE DECLARED OUTSIDE SCOPE ───────────────────────────────────────────────
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ───────────────────────────────────────────────
 
                 The unwrapped opaque type Age referenced here:
 
@@ -769,7 +769,7 @@ mod test_load {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── OPAQUE DECLARED OUTSIDE SCOPE ───────────────────────────────────────────────
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ───────────────────────────────────────────────
 
                 The unwrapped opaque type Age referenced here:
 

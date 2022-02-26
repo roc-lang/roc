@@ -40,7 +40,7 @@ pub enum Pattern {
         //
         //   f = \@Id who -> strToBool who
         //
-        // Then `name` is "Id", `argument` is "who", but this is not enough for us to
+        // Then `opaque` is "Id", `argument` is "who", but this is not enough for us to
         // infer the type of the expression as "Id Str" - we need to link the specialized type of
         // the variable "n".
         // That's what `specialized_def_type` and `type_arguments` are for; they are specialized

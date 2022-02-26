@@ -8147,7 +8147,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+                ── OPAQUE TYPE NOT DEFINED ──────────────────────────────────────────────────────────
 
                 The opaque type Age referenced here is not defined:
 
@@ -8172,7 +8172,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+                ── OPAQUE TYPE NOT DEFINED ──────────────────────────────────────────────────────────
 
                 The opaque type Age referenced here is not defined:
 
@@ -8213,9 +8213,9 @@ I need all branches in an `if` to have the same type!
             // Apply(Error(OtherModule), [ $Age, 21 ])
             indoc!(
                 r#"
-                ── OPAQUE NOT APPLIED ──────────────────────────────────────────────────────────
+                ── OPAQUE TYPE NOT APPLIED ──────────────────────────────────────────────────────────
 
-                This opaque is not applied to an argument:
+                This opaque type is not applied to an argument:
 
                 1│  OtherModule.$Age 21
                                 ^^^^
@@ -8263,7 +8263,7 @@ I need all branches in an `if` to have the same type!
                 If you didn't intend on using `Age` then remove it so future readers of
                 your code don't wonder why it is there.
 
-                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+                ── OPAQUE TYPE NOT DEFINED ──────────────────────────────────────────────────────────
 
                 The opaque type Age referenced here is not defined:
 
