@@ -291,15 +291,11 @@ mod test_parse {
         let result = func(&input);
 
         let actual_result = if should_pass {
-            eprintln!("The source code for this test did not successfully parse!\n");
-
-            result.unwrap()
+            result.expect("The source code for this test did not successfully parse!")
         } else {
-            eprintln!(
-                "The source code for this test successfully parsed, but it was not expected to!\n"
-            );
-
-            result.unwrap_err()
+            result.expect_err(
+                "The source code for this test successfully parsed, but it was not expected to!",
+            )
         };
 
         if std::env::var("ROC_PARSER_SNAPSHOT_TEST_OVERWRITE").is_ok() {
