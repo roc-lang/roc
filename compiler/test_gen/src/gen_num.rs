@@ -373,6 +373,7 @@ fn character_literal() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dec_float_alias() {
     assert_evals_to!(
         indoc!(
