@@ -948,13 +948,25 @@ fn to_expr_report<'b>(
                 None,
             ),
 
-            Reason::LowLevelOpArg { op, arg_index } => {
-                panic!(
-                    "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
+            Reason::LowLevelOpArg { op, arg_index } => report_mismatch(
+                alloc,
+                lines,
+                filename,
+                &category,
+                found,
+                expected_type,
+                region,
+                Some(expr_region),
+                alloc.text(format!(
+                    "The {} argument to low level operation {:?} has the wrong type:",
                     arg_index.ordinal(),
                     op
-                );
-            }
+                )),
+                alloc.text("Here the value is used as a:"),
+                alloc.text("But the lowlevel expects it to be:"),
+                None,
+            ),
+
             Reason::ForeignCallArg {
                 foreign_symbol,
                 arg_index,

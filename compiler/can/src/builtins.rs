@@ -169,6 +169,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         SET_DIFFERENCE => set_difference,
         SET_TO_LIST => set_to_list,
         SET_FROM_LIST => set_from_list,
+        SET_TO_DICT=> set_to_dict,
         SET_INSERT => set_insert,
         SET_REMOVE => set_remove,
         SET_CONTAINS => set_contains,
@@ -3961,6 +3962,11 @@ fn set_to_list(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Set.fromList : List k -> Set k
 fn set_from_list(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::SetFromList, var_store)
+}
+
+/// Set.toDict : Set k -> Dict k {}
+fn set_to_dict(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::SetToDict, var_store)
 }
 
 /// Set.insert : Set k, k -> Set k

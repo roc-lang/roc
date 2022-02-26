@@ -111,9 +111,34 @@ impl Default for ModuleCache<'_> {
         );
 
         module_names.insert(
+            ModuleId::LIST,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::LIST)),
+        );
+
+        module_names.insert(
             ModuleId::STR,
             PQModuleName::Unqualified(ModuleName::from(ModuleName::STR)),
         );
+
+        module_names.insert(
+            ModuleId::DICT,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::DICT)),
+        );
+
+        module_names.insert(
+            ModuleId::SET,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::SET)),
+        );
+
+        module_names.insert(
+            ModuleId::BOOL,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::BOOL)),
+        );
+
+        //        module_names.insert(
+        //            ModuleId::NUM,
+        //            PQModuleName::Unqualified(ModuleName::from(ModuleName::NUM)),
+        //        );
 
         Self {
             module_names,
@@ -1692,8 +1717,9 @@ fn update<'a>(
             // add the prelude
             let mut header = header;
             // let mut imports = header.package_qualified_imported_modules.clone();
+            //
 
-            if header.module_id != ModuleId::RESULT {
+            if ![ModuleId::RESULT, ModuleId::BOOL].contains(&header.module_id) {
                 header
                     .package_qualified_imported_modules
                     .insert(PackageQualified::Unqualified(ModuleId::RESULT));
@@ -1708,6 +1734,36 @@ fn update<'a>(
                 );
             }
 
+            /*
+            if ![ModuleId::NUM, ModuleId::BOOL, ModuleId::RESULT].contains(&header.module_id) {
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::NUM));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::NUM, Region::zero());
+
+                header
+                    .exposed_imports
+                    .insert(Ident::from("Num"), (Symbol::NUM_NUM, Region::zero()));
+            }
+            */
+
+            if header.module_id != ModuleId::BOOL {
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::BOOL));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::BOOL, Region::zero());
+
+                header
+                    .exposed_imports
+                    .insert(Ident::from("Bool"), (Symbol::BOOL_BOOL, Region::zero()));
+            }
+
             if !header.module_id.is_builtin() {
                 header
                     .package_qualified_imported_modules
@@ -1716,9 +1772,31 @@ fn update<'a>(
                 header
                     .imported_modules
                     .insert(ModuleId::STR, Region::zero());
-            }
 
-            dbg!(header.module_id, &header.exposed_imports);
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::DICT));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::DICT, Region::zero());
+
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::SET));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::SET, Region::zero());
+
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::LIST));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::LIST, Region::zero());
+            }
 
             state
                 .module_cache
@@ -1745,6 +1823,8 @@ fn update<'a>(
             let work = state.dependencies.notify(home, Phase::LoadHeader);
 
             start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+
+            dbg!(&state.dependencies);
 
             Ok(state)
         }
@@ -2336,17 +2416,16 @@ fn load_module<'a>(
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
 
+    let parse_start = SystemTime::now();
+    let parse_header_duration = parse_start.elapsed().unwrap();
+
+    // Insert the first entries for this module's timings
+    let mut module_timing = ModuleTiming::new(module_start_time);
+
+    module_timing.read_roc_file = Default::default();
+    module_timing.parse_header = parse_header_duration;
     match module_name.as_inner().as_str() {
         "Result" => {
-            let parse_start = SystemTime::now();
-            let parse_header_duration = parse_start.elapsed().unwrap();
-
-            // Insert the first entries for this module's timings
-            let mut module_timing = ModuleTiming::new(module_start_time);
-
-            module_timing.read_roc_file = Default::default();
-            module_timing.parse_header = parse_header_duration;
-
             let filename = PathBuf::from("Result.roc");
 
             const EXPOSES: &[Loc<ExposedName>] = &[
@@ -2358,7 +2437,11 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("after")),
                 Loc::at_zero(ExposedName::new("withDefault")),
             ];
-            let imports = &[];
+
+            const IMPORTS: &[Loc<ImportsEntry>] = &[Loc::at_zero(ImportsEntry::Module(
+                roc_parse::header::ModuleName::new("Bool"),
+                Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Bool")))]),
+            ))];
 
             let info = HeaderInfo {
                 loc_name: Loc {
@@ -2369,8 +2452,8 @@ fn load_module<'a>(
                 is_root_module: false,
                 opt_shorthand: None,
                 packages: &[],
-                exposes: &EXPOSES,
-                imports,
+                exposes: EXPOSES,
+                imports: IMPORTS,
                 extra: HeaderFor::Builtin {
                     generates_with: &[],
                 },
@@ -2394,7 +2477,7 @@ fn load_module<'a>(
                 withDefault : Result ok err, ok -> ok
                 withDefault = \result, default ->
                     when result is
-                        Ok value -> value 
+                        Ok value -> value
                         Err _ -> default
 
                 map : Result a err, (a -> b) -> Result b err
@@ -2406,7 +2489,7 @@ fn load_module<'a>(
                 mapErr : Result ok a, (a -> b) -> Result ok b
                 mapErr = \result, transform ->
                     when result is
-                        Ok v -> Ok v 
+                        Ok v -> Ok v
                         Err e -> Err (transform e)
 
                 after : Result a err, (a -> Result b err) -> Result b err
@@ -2426,23 +2509,174 @@ fn load_module<'a>(
                 module_timing,
             ));
         }
+        "List" => {
+            let filename = PathBuf::from("List.roc");
+
+            const EXPOSES: &[Loc<ExposedName>] = &[
+                Loc::at_zero(ExposedName::new("isEmpty")),
+                Loc::at_zero(ExposedName::new("get")),
+                Loc::at_zero(ExposedName::new("set")),
+                Loc::at_zero(ExposedName::new("append")),
+                Loc::at_zero(ExposedName::new("map")),
+                Loc::at_zero(ExposedName::new("len")),
+                Loc::at_zero(ExposedName::new("walkBackwards")),
+                Loc::at_zero(ExposedName::new("concat")),
+                Loc::at_zero(ExposedName::new("first")),
+                Loc::at_zero(ExposedName::new("single")),
+                Loc::at_zero(ExposedName::new("repeat")),
+                Loc::at_zero(ExposedName::new("reverse")),
+                Loc::at_zero(ExposedName::new("prepend")),
+                Loc::at_zero(ExposedName::new("join")),
+                Loc::at_zero(ExposedName::new("keepIf")),
+                Loc::at_zero(ExposedName::new("contains")),
+                Loc::at_zero(ExposedName::new("sum")),
+                Loc::at_zero(ExposedName::new("walk")),
+                Loc::at_zero(ExposedName::new("last")),
+                Loc::at_zero(ExposedName::new("keepOks")),
+                Loc::at_zero(ExposedName::new("keepErrs")),
+                Loc::at_zero(ExposedName::new("mapWithIndex")),
+                Loc::at_zero(ExposedName::new("map2")),
+                Loc::at_zero(ExposedName::new("map3")),
+                Loc::at_zero(ExposedName::new("product")),
+                Loc::at_zero(ExposedName::new("walkUntil")),
+                Loc::at_zero(ExposedName::new("range")),
+                Loc::at_zero(ExposedName::new("sortWith")),
+                Loc::at_zero(ExposedName::new("drop")),
+                Loc::at_zero(ExposedName::new("swap")),
+                Loc::at_zero(ExposedName::new("dropAt")),
+                Loc::at_zero(ExposedName::new("dropLast")),
+                Loc::at_zero(ExposedName::new("min")),
+                Loc::at_zero(ExposedName::new("max")),
+                Loc::at_zero(ExposedName::new("map4")),
+                Loc::at_zero(ExposedName::new("dropFirst")),
+                Loc::at_zero(ExposedName::new("joinMap")),
+                Loc::at_zero(ExposedName::new("any")),
+                Loc::at_zero(ExposedName::new("takeFirst")),
+                Loc::at_zero(ExposedName::new("takeLast")),
+                Loc::at_zero(ExposedName::new("find")),
+                Loc::at_zero(ExposedName::new("sublist")),
+                Loc::at_zero(ExposedName::new("intersperse")),
+                Loc::at_zero(ExposedName::new("split")),
+                Loc::at_zero(ExposedName::new("all")),
+                Loc::at_zero(ExposedName::new("dropIf")),
+                Loc::at_zero(ExposedName::new("sortAsc")),
+                Loc::at_zero(ExposedName::new("sortDesc")),
+            ];
+
+            const IMPORTS: &[Loc<ImportsEntry>] = &[
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Result"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new(
+                        "Result",
+                    )))]),
+                )),
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Bool"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Bool")))]),
+                )),
+                //                Loc::at_zero(ImportsEntry::Module(
+                //                    roc_parse::header::ModuleName::new("Num"),
+                //                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Nat")))]),
+                //                )),
+            ];
+
+            const GENERATES_WITH: &[Symbol] = &[];
+
+            let info = HeaderInfo {
+                loc_name: Loc {
+                    region: Region::zero(),
+                    value: ModuleNameEnum::Interface(roc_parse::header::ModuleName::new("List")),
+                },
+                filename,
+                is_root_module: false,
+                opt_shorthand: None,
+                packages: &[],
+                exposes: EXPOSES,
+                imports: IMPORTS,
+                extra: HeaderFor::Builtin {
+                    generates_with: GENERATES_WITH,
+                },
+            };
+
+            let src_bytes = r#"
+                isEmpty : List a -> Bool
+                get : List a, Nat -> Result a [ OutOfBounds ]*
+                set : List a, Nat, a -> List a
+                append : List a, a -> List a
+                prepend : List a, a -> List a
+                len : List a -> Nat
+                concat : List a, List a -> List a
+                last : List a -> Result a [ ListWasEmpty ]*
+                single : a -> List a
+                repeat : a, Nat -> List a
+                reverse : List a -> List a
+                join : List (List a) -> List a
+                contains : List a, a -> Bool
+                walk : List elem, state, (state, elem -> state) -> state
+                walkBackwards  : List elem, state, (state, elem -> state) -> state
+                walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
+
+                sum : List (Num a) -> Num a
+                product : List (Num a) -> Num a
+
+                any : List a, (a -> Bool) -> Bool
+                all : List a, (a -> Bool) -> Bool
+
+                keepIf : List a, (a -> Bool) -> List a
+                dropIf : List a, (a -> Bool) -> List a
+
+                keepOks : List (Result ok err) -> List ok
+                keepErrs : List (Result ok err) -> List err
+                map : List a, (a -> b) -> List b
+                map2 : List a, List b, (a, b -> c) -> List c
+                map3 : List a, List b, List c, (a, b, c -> d) -> List d
+                map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
+                mapWithIndex : List a, (a -> b) -> List b
+                range : Int a, Int a -> List (Int a)
+                sortWith : List a, (a, a -> [ LT, EQ, GT ] ) -> List a
+                sortAsc : List (Num a) -> List (Num a)
+                sortDesc : List (Num a) -> List (Num a)
+                swap : List a, Nat, Nat -> List a
+
+                first : List a -> Result a [ ListWasEmpty ]*
+
+                dropFirst : List elem -> List elem
+                dropLast : List elem -> List elem
+
+                takeFirst : List elem, Nat -> List elem
+                takeLast : List elem, Nat -> List elem
+
+                drop : List elem, Nat -> List elem
+                dropAt : List elem, Nat -> List elem
+
+                min :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+                max :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+
+                joinMap : List a, (a -> List b) -> List b
+                find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
+                sublist : List elem, { start : Nat, len : Nat } -> List elem
+                intersperse : List elem, elem -> List elem
+                split : List elem, Nat -> { before: List elem, others: List elem }
+                "#;
+
+            let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
+
+            return Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ));
+        }
         "Str" => {
-            let parse_start = SystemTime::now();
-            let parse_header_duration = parse_start.elapsed().unwrap();
-
-            // Insert the first entries for this module's timings
-            let mut module_timing = ModuleTiming::new(module_start_time);
-
-            module_timing.read_roc_file = Default::default();
-            module_timing.parse_header = parse_header_duration;
-
             let filename = PathBuf::from("Str.roc");
 
             const EXPOSES: &[Loc<ExposedName>] = &[
+                Loc::at_zero(ExposedName::new("concat")),
                 Loc::at_zero(ExposedName::new("Utf8Problem")),
                 Loc::at_zero(ExposedName::new("Utf8ByteProblem")),
                 Loc::at_zero(ExposedName::new("isEmpty")),
-                Loc::at_zero(ExposedName::new("concat")),
                 Loc::at_zero(ExposedName::new("joinWith")),
                 Loc::at_zero(ExposedName::new("split")),
                 Loc::at_zero(ExposedName::new("repeat")),
@@ -2471,12 +2705,46 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("toU8")),
                 Loc::at_zero(ExposedName::new("toI8")),
             ];
-            const IMPORTS: &[Loc<ImportsEntry>] = &[Loc::at_zero(ImportsEntry::Module(
-                roc_parse::header::ModuleName::new("Result"),
-                Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Result")))]),
-            ))];
 
-            const GENERATES_WITH: &[Symbol] = &[Symbol::STR_IS_EMPTY, Symbol::STR_CONCAT];
+            const IMPORTS: &[Loc<ImportsEntry>] = &[
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Result"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new(
+                        "Result",
+                    )))]),
+                )),
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Bool"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Bool")))]),
+                )),
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("List"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("List")))]),
+                )),
+                //                Loc::at_zero(ImportsEntry::Module(
+                //                    roc_parse::header::ModuleName::new("Num"),
+                //                    Collection::with_items(&[
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("Int"))), // needed because used by the aliases below
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("Float"))), // needed because used by the aliases below
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("Dec"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("F64"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("F32"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("Nat"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("U128"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("I128"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("U64"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("I64"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("U32"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("I32"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("U16"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("I16"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("U8"))),
+                //                        Loc::at_zero(Spaced::Item(ExposedName::new("I8"))),
+                //                    ]),
+                //                )),
+            ];
+
+            const GENERATES_WITH: &[Symbol] = &[];
 
             let info = HeaderInfo {
                 loc_name: Loc {
@@ -2487,16 +2755,16 @@ fn load_module<'a>(
                 is_root_module: false,
                 opt_shorthand: None,
                 packages: &[],
-                exposes: &EXPOSES,
-                imports: &IMPORTS,
+                exposes: EXPOSES,
+                imports: IMPORTS,
                 extra: HeaderFor::Builtin {
                     generates_with: GENERATES_WITH,
                 },
             };
 
             let src_bytes = r#"
-                Utf8ByteProblem : 
-                    [ 
+                Utf8ByteProblem :
+                    [
                         InvalidStartByte,
                         UnexpectedEndOfSequence,
                         ExpectedContinuation,
@@ -2506,7 +2774,7 @@ fn load_module<'a>(
                     ]
 
                 Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
-                
+
                 isEmpty : Str -> Bool
                 concat : Str, Str -> Str
                 joinWith : List Str, Str -> Str
@@ -2530,20 +2798,599 @@ fn load_module<'a>(
                 trimLeft : Str -> Str
                 trimRight : Str -> Str
 
-                toDec : Str -> Result Dec [ InvalidNumStr ]* 
-                toF64 : Str -> Result F64 [ InvalidNumStr ]* 
-                toF32 : Str -> Result F32 [ InvalidNumStr ]* 
-                toNat : Str -> Result Nat [ InvalidNumStr ]* 
-                toU128 : Str -> Result U128 [ InvalidNumStr ]* 
-                toI128 : Str -> Result I128 [ InvalidNumStr ]* 
-                toU64 : Str -> Result U64 [ InvalidNumStr ]* 
-                toI64 : Str -> Result I64 [ InvalidNumStr ]* 
-                toU32 : Str -> Result U32 [ InvalidNumStr ]* 
-                toI32 : Str -> Result I32 [ InvalidNumStr ]* 
-                toU16 : Str -> Result U16 [ InvalidNumStr ]* 
-                toI16 : Str -> Result I16 [ InvalidNumStr ]* 
-                toU8 : Str -> Result U8 [ InvalidNumStr ]* 
-                toI8 : Str -> Result I8 [ InvalidNumStr ]* 
+                toDec : Str -> Result Dec [ InvalidNumStr ]*
+                toF64 : Str -> Result F64 [ InvalidNumStr ]*
+                toF32 : Str -> Result F32 [ InvalidNumStr ]*
+                toNat : Str -> Result Nat [ InvalidNumStr ]*
+                toU128 : Str -> Result U128 [ InvalidNumStr ]*
+                toI128 : Str -> Result I128 [ InvalidNumStr ]*
+                toU64 : Str -> Result U64 [ InvalidNumStr ]*
+                toI64 : Str -> Result I64 [ InvalidNumStr ]*
+                toU32 : Str -> Result U32 [ InvalidNumStr ]*
+                toI32 : Str -> Result I32 [ InvalidNumStr ]*
+                toU16 : Str -> Result U16 [ InvalidNumStr ]*
+                toI16 : Str -> Result I16 [ InvalidNumStr ]*
+                toU8 : Str -> Result U8 [ InvalidNumStr ]*
+                toI8 : Str -> Result I8 [ InvalidNumStr ]*
+                "#;
+
+            let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
+
+            return Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ));
+        }
+        "Dict" => {
+            let filename = PathBuf::from("Dict.roc");
+
+            const EXPOSES: &[Loc<ExposedName>] = &[
+                Loc::at_zero(ExposedName::new("empty")),
+                Loc::at_zero(ExposedName::new("single")),
+                Loc::at_zero(ExposedName::new("get")),
+                Loc::at_zero(ExposedName::new("walk")),
+                Loc::at_zero(ExposedName::new("insert")),
+                Loc::at_zero(ExposedName::new("len")),
+                Loc::at_zero(ExposedName::new("remove")),
+                Loc::at_zero(ExposedName::new("contains")),
+                Loc::at_zero(ExposedName::new("keys")),
+                Loc::at_zero(ExposedName::new("values")),
+                Loc::at_zero(ExposedName::new("union")),
+                Loc::at_zero(ExposedName::new("intersection")),
+                Loc::at_zero(ExposedName::new("difference")),
+            ];
+            const IMPORTS: &[Loc<ImportsEntry>] = &[
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Result"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new(
+                        "Result",
+                    )))]),
+                )),
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Bool"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Bool")))]),
+                )),
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("List"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("List")))]),
+                )),
+                //                Loc::at_zero(ImportsEntry::Module(
+                //                    roc_parse::header::ModuleName::new("Num"),
+                //                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Nat")))]),
+                //                )),
+            ];
+
+            const GENERATES_WITH: &[Symbol] = &[];
+
+            let info = HeaderInfo {
+                loc_name: Loc {
+                    region: Region::zero(),
+                    value: ModuleNameEnum::Interface(roc_parse::header::ModuleName::new("Dict")),
+                },
+                filename,
+                is_root_module: false,
+                opt_shorthand: None,
+                packages: &[],
+                exposes: EXPOSES,
+                imports: IMPORTS,
+                extra: HeaderFor::Builtin {
+                    generates_with: GENERATES_WITH,
+                },
+            };
+
+            let src_bytes = r#"
+                empty : Dict k v
+                single : k, v -> Dict k v
+                get : Dict k v, k -> Result v [ KeyNotFound ]*
+                walk : Dict k v, state, (state, k, v -> state) -> state
+                insert : Dict k v, k, v -> Dict k v
+                len : Dict k v -> Nat
+                remove : Dict k v, k -> Dict k v
+                contains : Dict k v, k -> Bool
+                keys : Dict k v -> List k
+                values : Dict k v -> List v
+                union : Dict k v, Dict k v -> Dict k v
+                intersection : Dict k v, Dict k v -> Dict k v
+                difference : Dict k v, Dict k v -> Dict k v
+                "#;
+
+            let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
+
+            return Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ));
+        }
+        "Set" => {
+            let filename = PathBuf::from("Dict.roc");
+
+            const EXPOSES: &[Loc<ExposedName>] = &[
+                Loc::at_zero(ExposedName::new("empty")),
+                Loc::at_zero(ExposedName::new("single")),
+                Loc::at_zero(ExposedName::new("walk")),
+                Loc::at_zero(ExposedName::new("insert")),
+                Loc::at_zero(ExposedName::new("len")),
+                Loc::at_zero(ExposedName::new("remove")),
+                Loc::at_zero(ExposedName::new("contains")),
+                Loc::at_zero(ExposedName::new("toList")),
+                Loc::at_zero(ExposedName::new("fromList")),
+                Loc::at_zero(ExposedName::new("union")),
+                Loc::at_zero(ExposedName::new("intersection")),
+                Loc::at_zero(ExposedName::new("difference")),
+            ];
+            const IMPORTS: &[Loc<ImportsEntry>] = &[
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Result"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new(
+                        "Result",
+                    )))]),
+                )),
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Bool"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Bool")))]),
+                )),
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("List"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("List")))]),
+                )),
+                //                Loc::at_zero(ImportsEntry::Module(
+                //                    roc_parse::header::ModuleName::new("Num"),
+                //                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Nat")))]),
+                //                )),
+            ];
+
+            const GENERATES_WITH: &[Symbol] = &[];
+
+            let info = HeaderInfo {
+                loc_name: Loc {
+                    region: Region::zero(),
+                    value: ModuleNameEnum::Interface(roc_parse::header::ModuleName::new("Set")),
+                },
+                filename,
+                is_root_module: false,
+                opt_shorthand: None,
+                packages: &[],
+                exposes: EXPOSES,
+                imports: IMPORTS,
+                extra: HeaderFor::Builtin {
+                    generates_with: GENERATES_WITH,
+                },
+            };
+
+            let src_bytes = r#"
+                empty : Set k
+                single : k -> Set k
+                insert : Set k, k -> Set k
+                len : Set k -> Nat
+                remove : Set k, k -> Set k
+                contains : Set k, k -> Bool
+
+                # toList = \set -> Dict.keys (toDict set)
+                toList : Set k -> List k
+                fromList : List k -> Set k
+
+                union : Set k, Set k -> Set k
+                intersection : Set k, Set k -> Set k
+                difference : Set k, Set k -> Set k
+
+                toDict : Set k -> Dict k {}
+
+                walk : Set k, state, (state, k -> state) -> state
+                walk = \set, state, step ->
+                    Dict.walk (toDict set) state (\s, k, _ -> step s k)
+                "#;
+
+            let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
+
+            return Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ));
+        }
+        "Num" => {
+            let filename = PathBuf::from("Num.roc");
+
+            const EXPOSES: &[Loc<ExposedName>] = &[
+                Loc::at_zero(ExposedName::new("Num")),
+                Loc::at_zero(ExposedName::new("Int")),
+                Loc::at_zero(ExposedName::new("Float")),
+                //
+                Loc::at_zero(ExposedName::new("I128")),
+                Loc::at_zero(ExposedName::new("I64")),
+                Loc::at_zero(ExposedName::new("I32")),
+                Loc::at_zero(ExposedName::new("I16")),
+                Loc::at_zero(ExposedName::new("I8")),
+                //
+                Loc::at_zero(ExposedName::new("U128")),
+                Loc::at_zero(ExposedName::new("U64")),
+                Loc::at_zero(ExposedName::new("U32")),
+                Loc::at_zero(ExposedName::new("U16")),
+                Loc::at_zero(ExposedName::new("U8")),
+                //
+                Loc::at_zero(ExposedName::new("Nat")),
+                Loc::at_zero(ExposedName::new("Dec")),
+                //
+                // Loc::at_zero(ExposedName::new("maxFloat")),
+                // Loc::at_zero(ExposedName::new("minFloat")),
+                Loc::at_zero(ExposedName::new("abs")),
+                Loc::at_zero(ExposedName::new("neg")),
+                Loc::at_zero(ExposedName::new("add")),
+                Loc::at_zero(ExposedName::new("sub")),
+                Loc::at_zero(ExposedName::new("mul")),
+                Loc::at_zero(ExposedName::new("isLt")),
+                Loc::at_zero(ExposedName::new("isLte")),
+                Loc::at_zero(ExposedName::new("isGt")),
+                Loc::at_zero(ExposedName::new("isGte")),
+                Loc::at_zero(ExposedName::new("toFloat")),
+                Loc::at_zero(ExposedName::new("sin")),
+                Loc::at_zero(ExposedName::new("cos")),
+                Loc::at_zero(ExposedName::new("tan")),
+                Loc::at_zero(ExposedName::new("isZero")),
+                Loc::at_zero(ExposedName::new("isEven")),
+                Loc::at_zero(ExposedName::new("isOdd")),
+                Loc::at_zero(ExposedName::new("isPositive")),
+                Loc::at_zero(ExposedName::new("isNegative")),
+                Loc::at_zero(ExposedName::new("rem")),
+                Loc::at_zero(ExposedName::new("div")),
+                //Loc::at_zero(ExposedName::new("divFloor")),
+                //Loc::at_zero(ExposedName::new("modInt")),
+                //Loc::at_zero(ExposedName::new("modFloat")),
+                Loc::at_zero(ExposedName::new("sqrt")),
+                Loc::at_zero(ExposedName::new("log")),
+                Loc::at_zero(ExposedName::new("round")),
+                Loc::at_zero(ExposedName::new("compare")),
+                Loc::at_zero(ExposedName::new("pow")),
+                Loc::at_zero(ExposedName::new("ceiling")),
+                Loc::at_zero(ExposedName::new("powInt")),
+                Loc::at_zero(ExposedName::new("floor")),
+                Loc::at_zero(ExposedName::new("addWrap")),
+                Loc::at_zero(ExposedName::new("addChecked")),
+                Loc::at_zero(ExposedName::new("addSaturated")),
+                Loc::at_zero(ExposedName::new("atan")),
+                Loc::at_zero(ExposedName::new("acos")),
+                Loc::at_zero(ExposedName::new("asin")),
+                Loc::at_zero(ExposedName::new("bitwiseAnd")),
+                Loc::at_zero(ExposedName::new("bitwiseXor")),
+                Loc::at_zero(ExposedName::new("bitwiseOr")),
+                Loc::at_zero(ExposedName::new("shiftLeftBy")),
+                Loc::at_zero(ExposedName::new("shiftRightBy")),
+                Loc::at_zero(ExposedName::new("shiftRightZfBy")),
+                Loc::at_zero(ExposedName::new("subWrap")),
+                Loc::at_zero(ExposedName::new("subChecked")),
+                Loc::at_zero(ExposedName::new("subSaturated")),
+                Loc::at_zero(ExposedName::new("mulWrap")),
+                Loc::at_zero(ExposedName::new("mulChecked")),
+                Loc::at_zero(ExposedName::new("intCast")),
+                Loc::at_zero(ExposedName::new("isMultipleOf")),
+                Loc::at_zero(ExposedName::new("bytesToU16")),
+                Loc::at_zero(ExposedName::new("bytesToU32")),
+                Loc::at_zero(ExposedName::new("divCeil")),
+                Loc::at_zero(ExposedName::new("toStr")),
+                Loc::at_zero(ExposedName::new("minI8")),
+                Loc::at_zero(ExposedName::new("maxI8")),
+                Loc::at_zero(ExposedName::new("minU8")),
+                Loc::at_zero(ExposedName::new("maxU8")),
+                Loc::at_zero(ExposedName::new("minI16")),
+                Loc::at_zero(ExposedName::new("maxI16")),
+                Loc::at_zero(ExposedName::new("minU16")),
+                Loc::at_zero(ExposedName::new("maxU16")),
+                Loc::at_zero(ExposedName::new("minI32")),
+                Loc::at_zero(ExposedName::new("maxI32")),
+                Loc::at_zero(ExposedName::new("minU32")),
+                Loc::at_zero(ExposedName::new("maxU32")),
+                Loc::at_zero(ExposedName::new("minI64")),
+                Loc::at_zero(ExposedName::new("maxI64")),
+                Loc::at_zero(ExposedName::new("minU64")),
+                Loc::at_zero(ExposedName::new("maxU64")),
+                Loc::at_zero(ExposedName::new("minI128")),
+                Loc::at_zero(ExposedName::new("maxI128")),
+                Loc::at_zero(ExposedName::new("toI8")),
+                Loc::at_zero(ExposedName::new("toI8Checked")),
+                Loc::at_zero(ExposedName::new("toI16")),
+                Loc::at_zero(ExposedName::new("toI16Checked")),
+                Loc::at_zero(ExposedName::new("toI32")),
+                Loc::at_zero(ExposedName::new("toI32Checked")),
+                Loc::at_zero(ExposedName::new("toI64")),
+                Loc::at_zero(ExposedName::new("toI64Checked")),
+                Loc::at_zero(ExposedName::new("toI128")),
+                Loc::at_zero(ExposedName::new("toI128Checked")),
+                Loc::at_zero(ExposedName::new("toU8")),
+                Loc::at_zero(ExposedName::new("toU8Checked")),
+                Loc::at_zero(ExposedName::new("toU16")),
+                Loc::at_zero(ExposedName::new("toU16Checked")),
+                Loc::at_zero(ExposedName::new("toU32")),
+                Loc::at_zero(ExposedName::new("toU32Checked")),
+                Loc::at_zero(ExposedName::new("toU64")),
+                Loc::at_zero(ExposedName::new("toU64Checked")),
+                Loc::at_zero(ExposedName::new("toU128")),
+                Loc::at_zero(ExposedName::new("toU128Checked")),
+            ];
+            const IMPORTS: &[Loc<ImportsEntry>] = &[];
+
+            const GENERATES_WITH: &[Symbol] = &[];
+
+            let info = HeaderInfo {
+                loc_name: Loc {
+                    region: Region::zero(),
+                    value: ModuleNameEnum::Interface(roc_parse::header::ModuleName::new("Num")),
+                },
+                filename,
+                is_root_module: false,
+                opt_shorthand: None,
+                packages: &[],
+                exposes: EXPOSES,
+                imports: IMPORTS,
+                extra: HeaderFor::Builtin {
+                    generates_with: GENERATES_WITH,
+                },
+            };
+
+            let src_bytes = r#"
+
+                Num range : [ @Num range ]
+                Integer range : [ @Integer range ]
+                Float range : [ @Float range ]
+
+                Natural : [ @Natural ]
+                Nat : Int Natural
+
+                Signed128 : [ @Signed128 ]
+                I128 : Int Signed128
+
+                Unsigned128 : [ @Unsigned128 ]
+                U128 : Int Unsigned128
+
+                Signed64 : [ @Signed64 ]
+                I64 : Int Signed64
+
+                Unsigned64 : [ @Unsigned64 ]
+                U64 : Int Unsigned64
+
+                Signed32 : [ @Signed32 ]
+                I32 : Int Signed32
+
+                Unsigned32 : [ @Unsigned32 ]
+                U32 : Int Unsigned32
+
+                Signed16 : [ @Signed16 ]
+                I16 : Int Signed16
+
+                Unsigned16 : [ @Unsigned16 ]
+                U16 : Int Unsigned16
+
+                Signed8 : [ @Signed8 ]
+                I8 : Int Signed8
+
+                Unsigned8 : [ @Unsigned8 ]
+                U8 : Int Unsigned8
+
+                Decimal : [ @Decimal ]
+                Dec : Float Decimal
+
+                Binary64 : [ @Binary64 ]
+                F64 : Float Binary64
+
+                Binary32 : [ @Binary32 ]
+                F32 : Float Binary32
+
+                compare : Num a, Num a -> [ LT, EQ, GT ]
+
+                isLt : Num a, Num a -> Bool
+                isGt : Num a, Num a -> Bool
+                isLte : Num a, Num a -> Bool
+                isLte : Num a, Num a -> Bool
+
+                isZero : Num a -> Bool
+
+                isEven : Int a -> Bool
+                isOdd : Int a -> Bool
+
+                toFloat : Num * -> Float *
+
+                abs : Num a -> Num a
+                neg : Num a -> Num a
+
+                add : Num a, Num a -> Num a
+                sub : Num a, Num a -> Num a
+                mul : Num a, Num a -> Num a
+
+                # maxFloat : Float a
+                # minFloat : Float a
+
+                sin : Float a -> Float a
+                cos : Float a -> Float a
+                tan : Float a -> Float a
+
+                asin : Float a -> Float a
+                acos : Float a -> Float a
+                atan : Float a -> Float a
+
+                sqrt : Float a -> Float a
+                log : Float a, Float a -> Float a
+                mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
+
+                rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
+                mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
+                isMultipleOf : Int a, Int a -> Bool
+
+                round : Float a -> Int b
+                floor : Float a -> Int b
+                ceiling : Float a -> Int b
+
+                pow : Float a, Float a -> Float a
+                powInt : Int a, Int a -> Int a
+
+                addWrap : Int range, Int range -> Int range
+                addSaturated : Num a, Num a -> Num a
+                addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+
+                subWrap : Int range, Int range -> Int range
+                subSaturated : Num a, Num a -> Num a
+                subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+
+                mulWrap : Int range, Int range -> Int range
+                # mulSaturated : Num a, Num a -> Num a
+                mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+
+                bitwiseAnd : Int a, Int a -> Int a
+                bitwiseXor : Int a, Int a -> Int a
+                bitwiseOr : Int a, Int a -> Int a
+                shiftLeftBy : Int a, Int a -> Int a
+                shiftRightBy : Int a, Int a -> Int a
+                shiftRightZfBy : Int a, Int a -> Int a
+
+                intCast : Int a -> Int b
+
+                minI8 : I8
+                maxI8 : I8
+                minU8 : U8
+                maxU8 : U8
+                minI16 : I16
+                maxI16 : I16
+                minU16 : U16
+                maxU16 : U16
+                minI32 : I32
+                maxI32 : I32
+                minU32 : U32
+                maxU32 : U32
+                minI64 : I64
+                maxI64 : I64
+                minU64 : U64
+                maxU64 : U64
+
+                toI8 : Int * -> I8
+                toI16 : Int * -> I16
+                toI32 : Int * -> I32
+                toI64 : Int * -> I64
+                toI128 : Int * -> I128
+                toU8 : Int * -> U8
+                toU16 : Int * -> U16
+                toU32 : Int * -> U32
+                toU64 : Int * -> U64
+                toU128 : Int * -> U128
+
+                toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
+                toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
+                toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
+                toI64Checked : Int * -> Result I64 [ OutOfBounds ]*
+                toI128Checked : Int * -> Result I128 [ OutOfBounds ]*
+                toU8Checked : Int * -> Result U8 [ OutOfBounds ]*
+                toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
+                toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
+                toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
+                toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+                "#;
+
+            let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
+
+            return Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ));
+        }
+        "Bool" => {
+            let filename = PathBuf::from("Bool.roc");
+
+            const EXPOSES: &[Loc<ExposedName>] = &[
+                Loc::at_zero(ExposedName::new("and")),
+                Loc::at_zero(ExposedName::new("or")),
+                // Loc::at_zero(ExposedName::new("xor")),
+                Loc::at_zero(ExposedName::new("not")),
+                Loc::at_zero(ExposedName::new("isEq")),
+                Loc::at_zero(ExposedName::new("isNotEq")),
+            ];
+            const IMPORTS: &[Loc<ImportsEntry>] = &[];
+
+            const GENERATES_WITH: &[Symbol] = &[];
+
+            let info = HeaderInfo {
+                loc_name: Loc {
+                    region: Region::zero(),
+                    value: ModuleNameEnum::Interface(roc_parse::header::ModuleName::new("Bool")),
+                },
+                filename,
+                is_root_module: false,
+                opt_shorthand: None,
+                packages: &[],
+                exposes: EXPOSES,
+                imports: IMPORTS,
+                extra: HeaderFor::Builtin {
+                    generates_with: GENERATES_WITH,
+                },
+            };
+
+            let src_bytes = r#"
+                Bool : [ True, False ]
+
+                and : Bool, Bool -> Bool
+                or : Bool, Bool -> Bool
+                # xor : Bool, Bool -> Bool # currently unimplemented
+
+                not : Bool -> Bool
+
+                isEq : a, a -> Bool
+                isNotEq : a, a -> Bool
+                "#;
+
+            let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
+
+            return Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ));
+        }
+        "Box" => {
+            let filename = PathBuf::from("Box.roc");
+
+            const EXPOSES: &[Loc<ExposedName>] = &[
+                Loc::at_zero(ExposedName::new("box")),
+                Loc::at_zero(ExposedName::new("unbox")),
+            ];
+            const IMPORTS: &[Loc<ImportsEntry>] = &[];
+
+            const GENERATES_WITH: &[Symbol] = &[];
+
+            let info = HeaderInfo {
+                loc_name: Loc {
+                    region: Region::zero(),
+                    value: ModuleNameEnum::Interface(roc_parse::header::ModuleName::new("Box")),
+                },
+                filename,
+                is_root_module: false,
+                opt_shorthand: None,
+                packages: &[],
+                exposes: EXPOSES,
+                imports: IMPORTS,
+                extra: HeaderFor::Builtin {
+                    generates_with: GENERATES_WITH,
+                },
+            };
+
+            let src_bytes = r#"
+                box : a -> Box a
+                unbox : Box a -> a
+
+                map : Box a, (a -> b) -> Box b
+                map = \boxed, transform =
+                    boxed
+                        |> Box.unbox
+                        |> transform
+                        |> Box.box
                 "#;
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());

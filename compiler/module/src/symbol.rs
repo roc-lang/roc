@@ -897,11 +897,11 @@ define_builtins! {
         9 NUM_U16: "U16" imported // the Num.U16 type alias
         10 NUM_I8: "I8" imported // the Num.I8 type alias
         11 NUM_U8: "U8" imported // the Num.U8 type alias
-        12 NUM_INTEGER: "Integer" imported // Int : Num Integer
+        12 NUM_INTEGER: "Integer" // Int : Num Integer
         13 NUM_AT_INTEGER: "@Integer" // the Int.@Integer private tag
         14 NUM_F64: "F64" imported // the Num.F64 type alias
         15 NUM_F32: "F32" imported // the Num.F32 type alias
-        16 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
+        16 NUM_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
         17 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
         18 NUM_MAX_FLOAT: "maxFloat"
         19 NUM_MIN_FLOAT: "minFloat"
@@ -943,29 +943,29 @@ define_builtins! {
         55 NUM_ACOS: "acos"
         56 NUM_ASIN: "asin"
         57 NUM_AT_SIGNED128: "@Signed128"
-        58 NUM_SIGNED128: "Signed128" imported
+        58 NUM_SIGNED128: "Signed128"
         59 NUM_AT_SIGNED64: "@Signed64"
-        60 NUM_SIGNED64: "Signed64" imported
+        60 NUM_SIGNED64: "Signed64"
         61 NUM_AT_SIGNED32: "@Signed32"
-        62 NUM_SIGNED32: "Signed32" imported
+        62 NUM_SIGNED32: "Signed32"
         63 NUM_AT_SIGNED16: "@Signed16"
-        64 NUM_SIGNED16: "Signed16" imported
+        64 NUM_SIGNED16: "Signed16"
         65 NUM_AT_SIGNED8: "@Signed8"
-        66 NUM_SIGNED8: "Signed8" imported
+        66 NUM_SIGNED8: "Signed8"
         67 NUM_AT_UNSIGNED128: "@Unsigned128"
-        68 NUM_UNSIGNED128: "Unsigned128" imported
+        68 NUM_UNSIGNED128: "Unsigned128"
         69 NUM_AT_UNSIGNED64: "@Unsigned64"
-        70 NUM_UNSIGNED64: "Unsigned64" imported
+        70 NUM_UNSIGNED64: "Unsigned64"
         71 NUM_AT_UNSIGNED32: "@Unsigned32"
-        72 NUM_UNSIGNED32: "Unsigned32" imported
+        72 NUM_UNSIGNED32: "Unsigned32"
         73 NUM_AT_UNSIGNED16: "@Unsigned16"
-        74 NUM_UNSIGNED16: "Unsigned16" imported
+        74 NUM_UNSIGNED16: "Unsigned16"
         75 NUM_AT_UNSIGNED8: "@Unsigned8"
-        76 NUM_UNSIGNED8: "Unsigned8" imported
+        76 NUM_UNSIGNED8: "Unsigned8"
         77 NUM_AT_BINARY64: "@Binary64"
-        78 NUM_BINARY64: "Binary64" imported
+        78 NUM_BINARY64: "Binary64"
         79 NUM_AT_BINARY32: "@Binary32"
-        80 NUM_BINARY32: "Binary32" imported
+        80 NUM_BINARY32: "Binary32"
         81 NUM_BITWISE_AND: "bitwiseAnd"
         82 NUM_BITWISE_XOR: "bitwiseXor"
         83 NUM_BITWISE_OR: "bitwiseOr"
@@ -980,13 +980,13 @@ define_builtins! {
         92 NUM_INT: "Int" imported
         93 NUM_FLOAT: "Float" imported
         94 NUM_AT_NATURAL: "@Natural"
-        95 NUM_NATURAL: "Natural" imported
+        95 NUM_NATURAL: "Natural"
         96 NUM_NAT: "Nat" imported
         97 NUM_INT_CAST: "intCast"
         98 NUM_IS_MULTIPLE_OF: "isMultipleOf"
         99 NUM_AT_DECIMAL: "@Decimal"
-        100 NUM_DECIMAL: "Decimal" imported
-        101 NUM_DEC: "Dec" imported // the Num.Dectype alias
+        100 NUM_DECIMAL: "Decimal"
+        101 NUM_DEC: "Dec"  imported // the Num.Dectype alias
         102 NUM_BYTES_TO_U16: "bytesToU16"
         103 NUM_BYTES_TO_U32: "bytesToU32"
         104 NUM_CAST_TO_NAT: "#castToNat"
@@ -1032,7 +1032,7 @@ define_builtins! {
         144 NUM_TO_U128_CHECKED: "toU128Checked"
     }
     2 BOOL: "Bool" => {
-        0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
+        0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
         1 BOOL_FALSE: "False" imported // Bool.Bool = [ False, True ]
                                        // NB: not strictly needed; used for finding global tag names in error suggestions
         2 BOOL_TRUE: "True" imported // Bool.Bool = [ False, True ]
@@ -1191,6 +1191,7 @@ define_builtins! {
         12 SET_WALK: "walk"
         13 SET_WALK_USER_FUNCTION: "#walk_user_function"
         14 SET_CONTAINS: "contains"
+        15 SET_TO_DICT: "toDict"
     }
 
     num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)

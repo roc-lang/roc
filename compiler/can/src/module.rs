@@ -242,6 +242,8 @@ pub fn canonicalize_module_defs<'a>(
                     panic!("TODO gracefully handle shadowing in imports.")
                 }
             }
+        } else if symbol == Symbol::LIST_LIST || symbol == Symbol::STR_STR {
+            // These are not aliases but Apply's and we make sure they are always in scope
         } else {
             // This is a type alias
 
@@ -260,8 +262,11 @@ pub fn canonicalize_module_defs<'a>(
                 Ok(()) => {
                     // here we do nothing special
                 }
-                Err((_shadowed_symbol, _region)) => {
-                    panic!("TODO gracefully handle shadowing in imports.")
+                Err((shadowed_symbol, _region)) => {
+                    panic!(
+                        "TODO gracefully handle shadowing in imports, {:?} is shadowed.",
+                        shadowed_symbol
+                    )
                 }
             }
         }
@@ -376,7 +381,7 @@ pub fn canonicalize_module_defs<'a>(
                                     let symbol = def.pattern_vars.iter().next().unwrap().0;
                                     match crate::builtins::builtin_defs_map(*symbol, var_store) {
                                         None => {
-                                            panic!("A builtin module contains a signature without implementation")
+                                            panic!("A builtin module contains a signature without implementation for {:?}", symbol)
                                         }
                                         Some(mut replacement_def) => {
                                             replacement_def.annotation = def.annotation.take();

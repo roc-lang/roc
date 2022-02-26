@@ -87,16 +87,19 @@ impl<'a> Env<'a> {
 
                             Ok(symbol)
                         }
-                        None => Err(RuntimeError::LookupNotInScope(
-                            Loc {
-                                value: ident,
-                                region,
-                            },
-                            self.ident_ids
-                                .idents()
-                                .map(|(_, string)| string.as_ref().into())
-                                .collect(),
-                        )),
+                        None => {
+                            let error = RuntimeError::LookupNotInScope(
+                                Loc {
+                                    value: ident,
+                                    region,
+                                },
+                                self.ident_ids
+                                    .idents()
+                                    .map(|(_, string)| string.as_ref().into())
+                                    .collect(),
+                            );
+                            Err(error)
+                        }
                     }
                 } else {
                     match self.dep_idents.get(&module_id) {
