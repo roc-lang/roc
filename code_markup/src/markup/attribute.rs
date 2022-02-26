@@ -66,9 +66,17 @@ pub enum Attribute {
     },
 
     Underline {
-        underline_start: UnderlineStart,
-        underline_end: UnderlineEnd,
+        underline_spec: UnderlineSpec,
     },
+}
+
+#[derive(Debug)]
+pub enum UnderlineSpec {
+    Partial{
+        start: usize,
+        end: usize,
+    },
+    Full
 }
 
 #[derive(Debug, Default)]

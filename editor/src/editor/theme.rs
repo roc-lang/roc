@@ -1,7 +1,7 @@
 use gr_colors::{from_hsb, RgbaTup};
 use roc_code_markup::{
     syntax_highlight::{default_highlight_map, HighlightStyle},
-    underline_style::{default_underline_colors, UnderlineStyle},
+    underline_style::{default_underline_color_map, UnderlineStyle},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -15,7 +15,7 @@ pub struct EdTheme {
     pub subtle_text: RgbaTup,
     pub syntax_high_map: HashMap<HighlightStyle, RgbaTup>,
     pub ui_theme: UITheme,
-    pub underline_colors: HashMap<UnderlineStyle, RgbaTup>,
+    pub underline_color_map: HashMap<UnderlineStyle, RgbaTup>,
 }
 
 impl Default for EdTheme {
@@ -25,7 +25,7 @@ impl Default for EdTheme {
             subtle_text: from_hsb(240, 5, 60),
             syntax_high_map: default_highlight_map(),
             ui_theme: UITheme::default(),
-            underline_colors: default_underline_colors(),
+            underline_color_map: default_underline_color_map(),
         }
     }
 }

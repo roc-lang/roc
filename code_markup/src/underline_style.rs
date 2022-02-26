@@ -10,7 +10,7 @@ pub enum UnderlineStyle {
     Warning,
 }
 
-pub fn default_underline_colors() -> HashMap<UnderlineStyle, RgbaTup> {
+pub fn default_underline_color_map() -> HashMap<UnderlineStyle, RgbaTup> {
     let mut underline_colors = HashMap::new();
 
     underline_colors.insert(UnderlineStyle::Error, from_hsb(0, 50, 75));

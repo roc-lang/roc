@@ -148,9 +148,9 @@ fn markup_to_wgpu_helper<'a>(
             for attribute in &attributes.all {
                 match attribute {
                     Attribute::Underline {
-                        underline_start: _,
-                        underline_end: _,
+                        underline_spec: _,
                     } => {
+                        // TODO use underline_spec
                         let top_left_coords = (
                             code_style.txt_coords.x + (txt_row_col.1 as f32) * char_width,
                             code_style.txt_coords.y
@@ -164,7 +164,7 @@ fn markup_to_wgpu_helper<'a>(
                             height: 5.0,
                             color: *code_style
                                 .ed_theme
-                                .underline_colors
+                                .underline_color_map
                                 .get(&UnderlineStyle::Error)
                                 .unwrap(),
                         };
