@@ -1214,7 +1214,11 @@ macro_rules! collection_trailing_sep_e {
                                             $indent_problem
                                         )
                                     ),
-                                    $crate::blankspace::space0_e($min_indent, $indent_problem)
+                                    $crate::blankspace::space0_e(
+                                        // we use min_indent=0 because we want to parse incorrectly indented closing braces
+                                        // and later fix these up in the formatter.
+                                        0 /* min_indent */,
+                                        $indent_problem)
                                 ).parse(arena, state)?;
 
                 let (_,_, state) =
