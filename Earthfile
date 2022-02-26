@@ -35,13 +35,13 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add rustfmt
     # wasm repl
     RUN rustup target add wasm32-unknown-unknown
+    RUN apt -y install libssl-dev
     RUN cargo install wasm-pack
     # criterion
     RUN cargo install cargo-criterion
     # editor
     RUN apt -y install libxkbcommon-dev
     # sccache
-    RUN apt -y install libssl-dev
     RUN cargo install sccache
     RUN sccache -V
     ENV RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
