@@ -1,7 +1,6 @@
 interface Elem
     exposes [ Elem, PressEvent, row, col, text, button, none, translate, list ]
-    imports [ Action.{ Action }]
-
+    imports [ Action.{ Action } ]
 
 Elem state :
     # PERFORMANCE NOTE:
@@ -15,12 +14,12 @@ Elem state :
         Row (List (Elem state)),
         Lazy (Result { state, elem : Elem state } [ NotCached ] -> { state, elem : Elem state }),
         # TODO FIXME: using this definition of Lazy causes a stack overflow in the compiler!
-        #Lazy (Result (Cached state) [ NotCached ] -> Cached state),
+        # Lazy (Result (Cached state) [ NotCached ] -> Cached state),
         None,
     ]
 
 ## Used internally in the type definition of Lazy
-Cached state : { state, elem: Elem state }
+Cached state : { state, elem : Elem state }
 
 ButtonConfig state : { onPress : state, PressEvent -> Action state }
 
@@ -47,23 +46,23 @@ lazy = \state, render ->
     # This function gets called by the host during rendering. It will
     # receive the cached state and element (wrapped in Ok) if we've
     # ever rendered this before, and Err otherwise.
-    Lazy \result ->
-        when result is
-            Ok cached if cached.state == state ->
-                # If we have a cached value, and the new state is the
-                # same as the cached one, then we can return exactly
-                # what we had cached.
-                cached
+    Lazy
+        \result ->
+            when result is
+                Ok cached if cached.state == state ->
+                    # If we have a cached value, and the new state is the
+                    # same as the cached one, then we can return exactly
+                    # what we had cached.
+                    cached
 
-            _ ->
-                # Either the state changed or else we didn't have a
-                # cached value to use. Either way, we need to render
-                # with the new state and store that for future use.
-                { state, elem: render state }
+                _ ->
+                    # Either the state changed or else we didn't have a
+                    # cached value to use. Either way, we need to render
+                    # with the new state and store that for future use.
+                    { state, elem: render state }
 
 none : Elem *
-none = None # I've often wanted this in elm/html. Usually end up resorting to (Html.text "") - this seems nicer.
-
+none = None# I've often wanted this in elm/html. Usually end up resorting to (Html.text "") - this seems nicer.
 ## Change an element's state type.
 ##
 ## TODO: indent the following once https://github.com/rtfeldman/roc/issues/2585 is fixed.
@@ -77,11 +76,18 @@ none = None # I've often wanted this in elm/html. Usually end up resorting to (H
 ## |> Elem.translate .photo &photo
 ##
 ## col {} [ child, otherElems ]
+##
 translate = \child, toChild, toParent ->
     when child is
-        Text str -> Text str
-        Col elems -> Col (List.map elems \elem -> translate elem toChild toParent)
-        Row elems -> Row (List.map elems \elem -> translate elem toChild toParent)
+        Text str ->
+            Text str
+
+        Col elems ->
+            Col (List.map elems \elem -> translate elem toChild toParent)
+
+        Row elems ->
+            Row (List.map elems \elem -> translate elem toChild toParent)
+
         Button config label ->
             onPress = \parentState, event ->
                 toChild parentState
@@ -89,17 +95,19 @@ translate = \child, toChild, toParent ->
                     |> Action.map \c -> toParent parentState c
 
             Button { onPress } (translate label toChild toParent)
+
         Lazy renderChild ->
-            Lazy \parentState ->
-                { elem, state } = renderChild (toChild parentState)
+            Lazy
+                \parentState ->
+                    { elem, state } = renderChild (toChild parentState)
 
-                {
-                    elem: translate toChild toParent newChild,
-                    state: toParent parentState state
-                }
+                    {
+                        elem: translate toChild toParent newChild,
+                        state: toParent parentState state,
+                    }
 
-        None -> None
-
+        None ->
+            None
 
 ## Render a list of elements, using [Elem.translate] on each of them.
 ##
@@ -119,15 +127,20 @@ translate = \child, toChild, toParent ->
 ## TODO: format as multiline type annotation once https://github.com/rtfeldman/roc/issues/2586 is fixed
 list : (child -> Elem child), parent, (parent -> List child), (parent, List child -> parent) -> List (Elem parent)
 list = \renderChild, parent, toChildren, toParent ->
-    List.mapWithIndex (toChildren parent) \index, child ->
-        toChild = \par -> List.get (toChildren par) index
+    List.mapWithIndex
+        (toChildren parent)
+        \index, child ->
+            toChild = \par -> List.get (toChildren par) index
 
-        newChild = translateOrDrop child toChild \par, ch ->
-            toChildren par
-                |> List.set ch index
-                |> toParent
+            newChild = translateOrDrop
+                child
+                toChild
+                \par, ch ->
+                    toChildren par
+                        |> List.set ch index
+                        |> toParent
 
-        renderChild newChild
+            renderChild newChild
 
 ## Internal helper function for Elem.list
 ##
@@ -139,9 +152,15 @@ list = \renderChild, parent, toChildren, toParent ->
 translateOrDrop : Elem child, (parent -> Result child *), (parent, child -> parent) -> Elem parent
 translateOrDrop = \child, toChild, toParent ->
     when child is
-        Text str -> Text str
-        Col elems -> Col (List.map elems \elem -> translateOrDrop elem toChild toParent)
-        Row elems -> Row (List.map elems \elem -> translateOrDrop elem toChild toParent)
+        Text str ->
+            Text str
+
+        Col elems ->
+            Col (List.map elems \elem -> translateOrDrop elem toChild toParent)
+
+        Row elems ->
+            Row (List.map elems \elem -> translateOrDrop elem toChild toParent)
+
         Button config label ->
             onPress = \parentState, event ->
                 when toChild parentState is
@@ -156,12 +175,19 @@ translateOrDrop = \child, toChild, toParent ->
                         Action.none
 
             Button { onPress } (translateOrDrop label toChild toParent)
-        Lazy childState renderChild ->
-            Lazy (toParent childState) \parentState ->
-                when toChild parentState is
-                    Ok newChild ->
-                        renderChild newChild
-                            |> translateOrDrop toChild toParent
 
-                    Err _ -> None # I don't think this should ever happen in practice.
-        None -> None
+        Lazy childState renderChild ->
+            Lazy
+                (toParent childState)
+                \parentState ->
+                    when toChild parentState is
+                        Ok newChild ->
+                            renderChild newChild
+                                |> translateOrDrop toChild toParent
+
+                        Err _ ->
+                            None
+
+        # I don't think this should ever happen in practice.
+        None ->
+            None
