@@ -126,8 +126,15 @@ mod solve_expr {
     }
 
     fn promote_expr_to_module(src: &str) -> String {
-        let mut buffer =
-            String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
+        let mut buffer = String::from(indoc!(
+            r#"
+            app "test" 
+                imports [ Result.{ Result } ]
+                provides [ main ] to "./platform"
+
+            main =
+            "#
+        ));
 
         for line in src.lines() {
             // indent the body!
@@ -3503,7 +3510,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" imports [ Result.{ Result } ] provides [ main ] to "./platform"
 
                 boom = \_ -> boom {}
 
@@ -4728,7 +4735,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                canIGo : _ -> Result _ _
+                canIGo : _ -> Result.Result _ _
                 canIGo = \color ->
                     when color is
                         "green" -> Ok "go!"

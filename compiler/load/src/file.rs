@@ -23,7 +23,7 @@ use roc_mono::ir::{
     UpdateModeIds,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
-use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral};
+use roc_parse::ast::{self, Collection, ExtractSpaces, Spaced, StrLiteral};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
@@ -65,7 +65,7 @@ const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
-const SHOW_MESSAGE_LOG: bool = false;
+const SHOW_MESSAGE_LOG: bool = true;
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -77,7 +77,7 @@ macro_rules! log {
 const BUILTIN_MODULES: &[(ModuleId, &[ModuleId])] = &[(ModuleId::RESULT, &[])];
 
 /// Struct storing various intermediate stages by their ModuleId
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ModuleCache<'a> {
     module_names: MutMap<ModuleId, PQModuleName<'a>>,
 
@@ -99,6 +99,40 @@ struct ModuleCache<'a> {
     mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
+}
+
+impl Default for ModuleCache<'_> {
+    fn default() -> Self {
+        let mut module_names = MutMap::default();
+
+        module_names.insert(
+            ModuleId::RESULT,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::RESULT)),
+        );
+
+        module_names.insert(
+            ModuleId::STR,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::STR)),
+        );
+
+        Self {
+            module_names,
+            headers: Default::default(),
+            parsed: Default::default(),
+            aliases: Default::default(),
+            constrained: Default::default(),
+            typechecked: Default::default(),
+            found_specializations: Default::default(),
+            external_specializations_requested: Default::default(),
+            imports: Default::default(),
+            top_level_thunks: Default::default(),
+            documentation: Default::default(),
+            can_problems: Default::default(),
+            type_problems: Default::default(),
+            mono_problems: Default::default(),
+            sources: Default::default(),
+        }
+    }
 }
 
 fn start_phase<'a>(
@@ -130,20 +164,24 @@ fn start_phase<'a>(
     let task = {
         match phase {
             Phase::LoadHeader => {
-                let dep_name = state
-                    .module_cache
-                    .module_names
-                    .get(&module_id)
-                    .expect("module id is present")
-                    .clone();
+                let opt_dep_name = state.module_cache.module_names.get(&module_id);
 
-                BuildTask::LoadModule {
-                    module_name: dep_name,
-                    // Provide mutexes of ModuleIds and IdentIds by module,
-                    // so other modules can populate them as they load.
-                    module_ids: Arc::clone(&state.arc_modules),
-                    shorthands: Arc::clone(&state.arc_shorthands),
-                    ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                match opt_dep_name {
+                    None => {
+                        panic!("Module {:?} is not in module_cache.module_names", module_id)
+                    }
+                    Some(dep_name) => {
+                        let module_name = dep_name.clone();
+
+                        BuildTask::LoadModule {
+                            module_name,
+                            // Provide mutexes of ModuleIds and IdentIds by module,
+                            // so other modules can populate them as they load.
+                            module_ids: Arc::clone(&state.arc_modules),
+                            shorthands: Arc::clone(&state.arc_shorthands),
+                            ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                        }
+                    }
                 }
             }
             Phase::Parse => {
@@ -214,6 +252,8 @@ fn start_phase<'a>(
                         }
                     }
                 }
+
+                dbg!(module_id, &parsed.imported_modules);
 
                 BuildTask::CanonicalizeAndConstrain {
                     parsed,
@@ -1037,7 +1077,7 @@ fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     // When compiling to wasm, we cannot spawn extra threads
     // so we have a single-threaded implementation
-    if cfg!(target_family = "wasm") {
+    if true || cfg!(target_family = "wasm") {
         load_single_threaded(
             arena,
             load_start,
@@ -1613,7 +1653,7 @@ fn update<'a>(
                         state.platform_path = PlatformPath::RootIsPkgConfig;
                     }
                 }
-                Interface => {
+                Builtin { .. } | Interface => {
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::RootIsInterface;
@@ -1648,6 +1688,37 @@ fn update<'a>(
             state
                 .exposed_symbols_by_module
                 .insert(home, exposed_symbols);
+
+            // add the prelude
+            let mut header = header;
+            // let mut imports = header.package_qualified_imported_modules.clone();
+
+            if header.module_id != ModuleId::RESULT {
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::RESULT));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::RESULT, Region::zero());
+
+                header.exposed_imports.insert(
+                    Ident::from("Result"),
+                    (Symbol::RESULT_RESULT, Region::zero()),
+                );
+            }
+
+            if !header.module_id.is_builtin() {
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::STR));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::STR, Region::zero());
+            }
+
+            dbg!(header.module_id, &header.exposed_imports);
 
             state
                 .module_cache
@@ -1770,7 +1841,9 @@ fn update<'a>(
             };
 
             for (unused, region) in unused_imports.drain() {
-                existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+                if !unused.is_builtin() {
+                    existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+                }
             }
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
@@ -2209,6 +2282,12 @@ fn load_pkg_config<'a>(
                         header
                     )))
                 }
+                Ok((ast::Module::Hosted { header }, _parse_state)) => {
+                    Err(LoadingProblem::UnexpectedHeader(format!(
+                        "expected platform/package module, got Hosted module with header\n{:?}",
+                        header
+                    )))
+                }
                 Ok((ast::Module::App { header }, _parse_state)) => {
                     Err(LoadingProblem::UnexpectedHeader(format!(
                         "expected platform/package module, got App with header\n{:?}",
@@ -2231,12 +2310,6 @@ fn load_pkg_config<'a>(
                     .1;
 
                     Ok(pkg_config_module_msg)
-                }
-                Ok((ast::Module::Hosted { header }, _parse_state)) => {
-                    Err(LoadingProblem::UnexpectedHeader(format!(
-                        "expected platform/package module, got Hosted module with header\n{:?}",
-                        header
-                    )))
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
@@ -2261,11 +2334,7 @@ fn load_module<'a>(
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
-    use PackageQualified::*;
-
     let module_start_time = SystemTime::now();
-
-    dbg!(&module_name);
 
     match module_name.as_inner().as_str() {
         "Result" => {
@@ -2302,7 +2371,9 @@ fn load_module<'a>(
                 packages: &[],
                 exposes: &EXPOSES,
                 imports,
-                extra: HeaderFor::Interface,
+                extra: HeaderFor::Builtin {
+                    generates_with: &[],
+                },
             };
 
             let src_bytes = r#"
@@ -2343,6 +2414,136 @@ fn load_module<'a>(
                     when result is
                         Ok v -> transform v
                         Err e -> Err e
+                "#;
+
+            let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
+
+            return Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ));
+        }
+        "Str" => {
+            let parse_start = SystemTime::now();
+            let parse_header_duration = parse_start.elapsed().unwrap();
+
+            // Insert the first entries for this module's timings
+            let mut module_timing = ModuleTiming::new(module_start_time);
+
+            module_timing.read_roc_file = Default::default();
+            module_timing.parse_header = parse_header_duration;
+
+            let filename = PathBuf::from("Str.roc");
+
+            const EXPOSES: &[Loc<ExposedName>] = &[
+                Loc::at_zero(ExposedName::new("Utf8Problem")),
+                Loc::at_zero(ExposedName::new("Utf8ByteProblem")),
+                Loc::at_zero(ExposedName::new("isEmpty")),
+                Loc::at_zero(ExposedName::new("concat")),
+                Loc::at_zero(ExposedName::new("joinWith")),
+                Loc::at_zero(ExposedName::new("split")),
+                Loc::at_zero(ExposedName::new("repeat")),
+                Loc::at_zero(ExposedName::new("countGraphemes")),
+                Loc::at_zero(ExposedName::new("startsWithCodePt")),
+                Loc::at_zero(ExposedName::new("toUtf8")),
+                Loc::at_zero(ExposedName::new("fromUtf8")),
+                Loc::at_zero(ExposedName::new("fromUtf8Range")),
+                Loc::at_zero(ExposedName::new("startsWith")),
+                Loc::at_zero(ExposedName::new("endsWith")),
+                Loc::at_zero(ExposedName::new("trim")),
+                Loc::at_zero(ExposedName::new("trimLeft")),
+                Loc::at_zero(ExposedName::new("trimRight")),
+                Loc::at_zero(ExposedName::new("toDec")),
+                Loc::at_zero(ExposedName::new("toF64")),
+                Loc::at_zero(ExposedName::new("toF32")),
+                Loc::at_zero(ExposedName::new("toNat")),
+                Loc::at_zero(ExposedName::new("toU128")),
+                Loc::at_zero(ExposedName::new("toI128")),
+                Loc::at_zero(ExposedName::new("toU64")),
+                Loc::at_zero(ExposedName::new("toI64")),
+                Loc::at_zero(ExposedName::new("toU32")),
+                Loc::at_zero(ExposedName::new("toI32")),
+                Loc::at_zero(ExposedName::new("toU16")),
+                Loc::at_zero(ExposedName::new("toI16")),
+                Loc::at_zero(ExposedName::new("toU8")),
+                Loc::at_zero(ExposedName::new("toI8")),
+            ];
+            const IMPORTS: &[Loc<ImportsEntry>] = &[Loc::at_zero(ImportsEntry::Module(
+                roc_parse::header::ModuleName::new("Result"),
+                Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Result")))]),
+            ))];
+
+            const GENERATES_WITH: &[Symbol] = &[Symbol::STR_IS_EMPTY, Symbol::STR_CONCAT];
+
+            let info = HeaderInfo {
+                loc_name: Loc {
+                    region: Region::zero(),
+                    value: ModuleNameEnum::Interface(roc_parse::header::ModuleName::new("Str")),
+                },
+                filename,
+                is_root_module: false,
+                opt_shorthand: None,
+                packages: &[],
+                exposes: &EXPOSES,
+                imports: &IMPORTS,
+                extra: HeaderFor::Builtin {
+                    generates_with: GENERATES_WITH,
+                },
+            };
+
+            let src_bytes = r#"
+                Utf8ByteProblem : 
+                    [ 
+                        InvalidStartByte,
+                        UnexpectedEndOfSequence,
+                        ExpectedContinuation,
+                        OverlongEncoding,
+                        CodepointTooLarge,
+                        EncodesSurrogateHalf,
+                    ]
+
+                Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
+                
+                isEmpty : Str -> Bool
+                concat : Str, Str -> Str
+                joinWith : List Str, Str -> Str
+                split : Str, Str -> List Str
+                repeat : Str, Nat -> Str
+                countGraphemes : Str -> Nat
+                startsWithCodePt : Str, U32 -> Bool
+
+                toUtf8 : Str -> List U8
+
+                # fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
+                # fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem, OutOfBounds ]*
+
+                fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*
+                fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat, OutOfBounds ]*
+
+                startsWith : Str, Str -> Bool
+                endsWith : Str, Str -> Bool
+
+                trim : Str -> Str
+                trimLeft : Str -> Str
+                trimRight : Str -> Str
+
+                toDec : Str -> Result Dec [ InvalidNumStr ]* 
+                toF64 : Str -> Result F64 [ InvalidNumStr ]* 
+                toF32 : Str -> Result F32 [ InvalidNumStr ]* 
+                toNat : Str -> Result Nat [ InvalidNumStr ]* 
+                toU128 : Str -> Result U128 [ InvalidNumStr ]* 
+                toI128 : Str -> Result I128 [ InvalidNumStr ]* 
+                toU64 : Str -> Result U64 [ InvalidNumStr ]* 
+                toI64 : Str -> Result I64 [ InvalidNumStr ]* 
+                toU32 : Str -> Result U32 [ InvalidNumStr ]* 
+                toI32 : Str -> Result I32 [ InvalidNumStr ]* 
+                toU16 : Str -> Result U16 [ InvalidNumStr ]* 
+                toI16 : Str -> Result I16 [ InvalidNumStr ]* 
+                toU8 : Str -> Result U8 [ InvalidNumStr ]* 
+                toI8 : Str -> Result I8 [ InvalidNumStr ]* 
                 "#;
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());

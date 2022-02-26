@@ -1048,7 +1048,7 @@ define_builtins! {
         0 STR_STR: "Str" imported // the Str.Str type alias
         1 STR_AT_STR: "@Str" // the Str.@Str private tag
         2 STR_IS_EMPTY: "isEmpty"
-        3 STR_APPEND: "append"
+        3 STR_APPEND: "#append" // unused
         4 STR_CONCAT: "concat"
         5 STR_JOIN_WITH: "joinWith"
         6 STR_SPLIT: "split"

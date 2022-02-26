@@ -144,7 +144,7 @@ pub fn pre_constrain_imports(
         // We used this module, so clearly it is not unused!
         unused_imports.remove(&module_id);
 
-        if module_id.is_builtin() {
+        if module_id.is_builtin() && module_id != ModuleId::STR {
             // For builtin modules, we create imports from the
             // hardcoded builtin map.
             match stdlib.types.get(&symbol) {

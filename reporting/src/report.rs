@@ -509,8 +509,11 @@ impl<'a> RocDocAllocator<'a> {
         // debug_assert!(region.contains(&sub_region));
 
         // If the outer region takes more than 1 full screen (~60 lines), only show the inner region
-        if region.end().line - region.start().line > 60 {
-            return self.region_with_subregion(sub_region, sub_region);
+        match region.end().line.checked_sub(region.start().line) {
+            Some(v) if v > 60 => {
+                return self.region_with_subregion(sub_region, sub_region);
+            }
+            _ => {}
         }
 
         // if true, the final line of the snippet will be some ^^^ that point to the region where

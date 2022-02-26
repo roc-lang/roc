@@ -17,7 +17,7 @@ pub struct Scope {
     symbols: SendMap<Symbol, Region>,
 
     /// The type aliases currently in scope
-    aliases: SendMap<Symbol, Alias>,
+    pub aliases: SendMap<Symbol, Alias>,
 
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
@@ -88,13 +88,17 @@ impl Scope {
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
         match self.idents.get(ident) {
             Some((symbol, _)) => Ok(*symbol),
-            None => Err(RuntimeError::LookupNotInScope(
-                Loc {
-                    region,
-                    value: ident.clone(),
-                },
-                self.idents.keys().map(|v| v.as_ref().into()).collect(),
-            )),
+            None => {
+                let error = RuntimeError::LookupNotInScope(
+                    Loc {
+                        region,
+                        value: ident.clone(),
+                    },
+                    self.idents.keys().map(|v| v.as_ref().into()).collect(),
+                );
+
+                Err(error)
+            }
         }
     }
 
