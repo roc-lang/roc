@@ -179,7 +179,7 @@ pub fn gen_from_mono_module(
     _emit_debug_info: bool,
 ) -> CodeGenTiming {
     match opt_level {
-        OptLevel::Optimize => {
+        OptLevel::Optimize | OptLevel::Size => {
             todo!("Return this error message in a better way: optimized builds not supported without llvm backend");
         }
         OptLevel::Normal | OptLevel::Development => {

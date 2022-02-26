@@ -835,8 +835,6 @@ fn link_linux(
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
 
-    init_arch(target);
-
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
 
@@ -1107,14 +1105,4 @@ fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
             ),
         }
     }
-}
-
-#[cfg(feature = "llvm")]
-fn init_arch(target: &Triple) {
-    crate::target::init_arch(target);
-}
-
-#[cfg(not(feature = "llvm"))]
-fn init_arch(_target: &Triple) {
-    panic!("Tried to initialize LLVM when crate was not built with `feature = \"llvm\"` enabled");
 }
