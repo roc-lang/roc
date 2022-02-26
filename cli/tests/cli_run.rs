@@ -420,7 +420,7 @@ mod cli_run {
         //     expected_ending: "",
         //     use_valgrind: true,
         // },
-        cli:"cli" => Example {
+        cli:"interactive" => Example {
             filename: "form.roc",
             executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
@@ -428,8 +428,8 @@ mod cli_run {
             expected_ending: "Hi, Giovanni Giorgio! 👋\n",
             use_valgrind: true,
         },
-        tui:"tui" => Example {
-            filename: "Main.roc",
+        tui:"interactive" => Example {
+            filename: "tui.roc",
             executable_filename: "tui",
             stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
             input_file: None,
