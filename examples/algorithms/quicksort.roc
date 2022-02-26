@@ -1,5 +1,5 @@
 app "quicksort"
-    packages { pf: "platform" }
+    packages { pf: "quicksort-platform" }
     imports []
     provides [ quicksort ] to pf
 

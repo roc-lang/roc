@@ -372,9 +372,9 @@ mod cli_run {
             expected_ending:"Hello, World!",
             use_valgrind: true,
         },
-        fib:"fib" => Example {
-            filename: "Fib.roc",
-            executable_filename: "fib",
+        fib:"algorithms" => Example {
+            filename: "fibonacci.roc",
+            executable_filename: "fibonacci",
             stdin: &[],
             input_file: None,
             expected_ending:"55\n",
@@ -388,8 +388,8 @@ mod cli_run {
             expected_ending: "",
             use_valgrind: false,
         },
-        quicksort:"quicksort" => Example {
-            filename: "Quicksort.roc",
+        quicksort:"algorithms" => Example {
+            filename: "quicksort.roc",
             executable_filename: "quicksort",
             stdin: &[],
             input_file: None,
