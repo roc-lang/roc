@@ -1,16 +1,22 @@
 # Hello, World!
 
-To run, `cd` into this directory and run:
+To run, go to the project home directory and run:
 
 ```bash
-$ cargo run Hello.roc
+cargo run -- build --target=wasm32 examples/hello-world/hello_web.roc
+mv examples/hello-world/hello_web.wasm examples/hello-world/website/
 ```
 
-To run in release mode instead, do:
+Then `cd` into the website directory and run any web server that can handle WebAssembly.
+For example with `http-server`:
 
 ```bash
-$ cargo run --release Hello.roc
+cd examples/hello-world/website
+npm install -g http-server
+http-server
 ```
+
+Now open your browser at http://localhost:8080
 
 ## Design Notes
 
@@ -24,7 +30,7 @@ For example, things get more interesting when the compiled Roc function returns
 a `Task` - that is, a tagged union data structure containing function pointers
 to callback closures. This lets the Roc pure function describe arbitrary
 chainable effects, which the host can interpret to perform I/O as requested by
-the Roc program.  (The tagged union `Task` would have a variant for each supported
+the Roc program. (The tagged union `Task` would have a variant for each supported
 I/O operation.)
 
 In this trivial example, it's very easy to line up the API between the host and

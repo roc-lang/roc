@@ -1,4 +1,4 @@
-platform "hello-web"
+platform "hello-world-in-zig"
     requires {} { main : Str }
     exposes []
     packages {}

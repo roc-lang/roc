@@ -1,4 +1,4 @@
-platform "hello-zig"
+platform "hello-world-in-web-assembly"
     requires {} { main : Str }
     exposes []
     packages {}

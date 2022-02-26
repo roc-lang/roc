@@ -124,7 +124,7 @@ build-nightly-release:
     RUN printf " on: " >> version.txt
     RUN date >> version.txt
     RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release
-    RUN cd ./target/release && tar -czvf roc_linux_x86_64.tar.gz ./roc ../../LICENSE ../../LEGAL_DETAILS ../../examples/hello-c ../../examples/hello-rust ../../examples/hello-zig ../../compiler/builtins/bitcode/src/ ../../roc_std
+    RUN cd ./target/release && tar -czvf roc_linux_x86_64.tar.gz ./roc ../../LICENSE ../../LEGAL_DETAILS ../../examples/hello-world ../../compiler/builtins/bitcode/src/ ../../roc_std
     SAVE ARTIFACT ./target/release/roc_linux_x86_64.tar.gz AS LOCAL roc_linux_x86_64.tar.gz
 
 # compile everything needed for benchmarks and output a self-contained dir from which benchmarks can be run.

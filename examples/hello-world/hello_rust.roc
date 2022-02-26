@@ -1,5 +1,5 @@
-app "hello-rust"
-    packages { pf: "platform" }
+app "hello_rust"
+    packages { pf: "rust-platform" }
     imports []
     provides [ main ] to pf
 

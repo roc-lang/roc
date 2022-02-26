@@ -1,5 +1,5 @@
-app "hello-c"
-    packages { pf: "platform" }
+app "hello_c"
+    packages { pf: "c-platform" }
     imports []
     provides [ main ] to pf
 

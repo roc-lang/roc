@@ -1,5 +1,5 @@
-app "hello-web"
-    packages { pf: "platform" }
+app "hello_web"
+    packages { pf: "web-platform" }
     imports []
     provides [ main ] to pf
 

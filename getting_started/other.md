@@ -4,11 +4,11 @@
 3. Run examples with:
     ```
     # Rust
-    cargo run examples/hello-rust/Hello.roc
+    cargo run examples/hello-world/hello_rust.roc
     # Zig
-    cargo run examples/hello-zig/Hello.roc
+    cargo run examples/hello-world/hello_zig.roc
     # C
-    cargo run examples/hello-c/Hello.roc
+    cargo run examples/hello-world/hello_c.roc
     ```
 4. See [here](../README.md#examples) for the other examples.
 
