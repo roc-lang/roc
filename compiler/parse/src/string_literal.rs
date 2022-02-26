@@ -59,9 +59,14 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
                             && (state.bytes().first() == Some(&b'\''))
                         {
                             state = advance_state!(state, 1)?;
-                            // since we checked the current char between the single quotes we
-                            // know they are valid UTF-8, allowing us to use 'from_u32_unchecked'
-                            let test = unsafe { char::from_u32_unchecked(ch as u32) };
+                            let test = match ch {
+                                b'n' => '\n',
+                                b't' => '\t',
+                                b'r' => '\r',
+                                // since we checked the current char between the single quotes we
+                                // know they are valid UTF-8, allowing us to use 'from_u32_unchecked'
+                                _ => unsafe { char::from_u32_unchecked(ch as u32) },
+                            };
 
                             return Ok((MadeProgress, &*arena.alloc_str(&test.to_string()), state));
                         }
