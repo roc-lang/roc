@@ -13,7 +13,7 @@ roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
-roc_std = { path = "../../roc_std" }
+roc_std = { path = "../../roc_std", default-features = false }
 roc_problem = { path = "../problem" }
 roc_builtins = { path = "../builtins" }
 roc_target = { path = "../roc_target" }

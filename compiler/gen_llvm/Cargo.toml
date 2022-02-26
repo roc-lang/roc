@@ -13,7 +13,7 @@ roc_builtins = { path = "../builtins" }
 roc_error_macros = { path = "../../error_macros" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
-roc_std = { path = "../../roc_std" }
+roc_std = { path = "../../roc_std", default-features = false }
 morphic_lib = { path = "../../vendor/morphic_lib" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 inkwell = { path = "../../vendor/inkwell" }

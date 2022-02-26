@@ -32,7 +32,7 @@ roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
 roc_build = { path = "../build", features = ["target-aarch64", "target-x86_64", "target-wasm32"]  }
 roc_target = { path = "../roc_target" }
-roc_std = { path = "../../roc_std", features = ["platform"] }
+roc_std = { path = "../../roc_std" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 either = "1.6.1"
 libc = "0.2.106"

@@ -16,4 +16,5 @@ quickcheck_macros = "1.0.0"
 libc = "0.2.106"
 
 [features]
+default = ["platform"]
 platform = []
