@@ -1,5 +1,5 @@
 app "hello_zig"
-    packages { pf: "zig-platform" }
+    packages { pf: "." }
     imports []
     provides [ main ] to pf
 

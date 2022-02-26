@@ -1,5 +1,5 @@
-app "hello_swift"
-    packages { pf: "swift-platform" }
+app "hello_c"
+    packages { pf: "." }
     imports []
     provides [ main ] to pf
 

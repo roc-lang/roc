@@ -324,7 +324,15 @@ mod cli_run {
     //     },
     // ]
     examples! {
-        hello_c:"hello-world" => Example {
+        hello_world:"hello-world" => Example {
+            filename: "hello_world.roc",
+            executable_filename: "hello_world",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"Hello, World!",
+            use_valgrind: true,
+        },
+        hello_c:"hello-world/c-platform" => Example {
             filename: "hello_c.roc",
             executable_filename: "hello_c",
             stdin: &[],
@@ -332,7 +340,7 @@ mod cli_run {
             expected_ending:"Hello, World!",
             use_valgrind: true,
         },
-        hello_zig:"hello-world" => Example {
+        hello_zig:"hello-world/zig-platform" => Example {
             filename: "hello_zig.roc",
             executable_filename: "hello_zig",
             stdin: &[],
@@ -340,7 +348,7 @@ mod cli_run {
             expected_ending:"Hello, World!",
             use_valgrind: true,
         },
-        hello_rust:"hello-world" => Example {
+        hello_rust:"hello-world/rust-platform" => Example {
             filename: "hello_rust.roc",
             executable_filename: "hello_rust",
             stdin: &[],
@@ -348,7 +356,7 @@ mod cli_run {
             expected_ending:"Hello, World!",
             use_valgrind: true,
         },
-        hello_swift:"hello-world" => Example {
+        hello_swift:"hello-world/swift-platform" => Example {
             filename: "hello_swift.roc",
             executable_filename: "hello_swift",
             stdin: &[],
@@ -356,7 +364,7 @@ mod cli_run {
             expected_ending:"Hello, World!",
             use_valgrind: true,
         },
-        hello_web:"hello-world" => Example {
+        hello_web:"hello-world/web-platform" => Example {
             filename: "hello_web.roc",
             executable_filename: "hello_web",
             stdin: &[],

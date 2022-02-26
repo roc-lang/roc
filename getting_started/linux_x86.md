@@ -22,11 +22,11 @@
 0. Run examples with:
     ```
     # Rust. If you installed rust in this terminal you'll need to open a new one first!
-    ./roc examples/hello-world/hello_rust.roc
+    ./roc examples/hello-world/rust-platform/hello_rust.roc
     # Zig
-    ./roc examples/hello-world/hello_zig.roc
+    ./roc examples/hello-world/zig-platform/hello_zig.roc
     # C
-    ./roc examples/hello-world/hello_c.roc
+    ./roc examples/hello-world/c-platform/hello_c.roc
     ```
 0. See [here](../README.md#examples) for the other examples.
 

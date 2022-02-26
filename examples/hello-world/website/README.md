@@ -1,10 +1,12 @@
 # Hello, World!
 
-To run, go to the project home directory and run:
+To run this website, first modify `hello_world.roc` to use the `web-platform`.
+
+Next, go to the project home directory and run:
 
 ```bash
-cargo run -- build --target=wasm32 examples/hello-world/hello_web.roc
-mv examples/hello-world/hello_web.wasm examples/hello-world/website/
+cargo run -- build --target=wasm32 examples/hello-world/hello_world.roc
+mv examples/hello-world/hello_world.wasm examples/hello-world/website/
 ```
 
 Then `cd` into the website directory and run any web server that can handle WebAssembly.
