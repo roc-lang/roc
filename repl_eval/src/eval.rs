@@ -333,10 +333,16 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
 
             Ok(result)
         }
-        Layout::Builtin(Builtin::Str) => Ok(app
-            .call_function(main_fn_name, |_, string: &'static str| {
-                str_to_ast(env.arena, env.arena.alloc(string))
-            })),
+        Layout::Builtin(Builtin::Str) => {
+            let size = layout.stack_size(env.target_info) as usize;
+            Ok(
+                app.call_function_dynamic_size(main_fn_name, size, |mem: &A::Memory, addr| {
+                    let string = mem.deref_str(addr);
+                    let arena_str = env.arena.alloc_str(string);
+                    Expr::Str(StrLiteral::PlainLine(arena_str))
+                }),
+            )
+        }
         Layout::Builtin(Builtin::List(elem_layout)) => Ok(app.call_function(
             main_fn_name,
             |mem: &A::Memory, (addr, len): (usize, usize)| {
@@ -523,9 +529,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             list_to_ast(env, mem, elem_addr, len, elem_layout, content)
         }
         (_, Layout::Builtin(Builtin::Str)) => {
-            let arena_str = mem.deref_str(addr);
-
-            str_to_ast(env.arena, arena_str)
+            let string = mem.deref_str(addr);
+            let arena_str = env.arena.alloc_str(string);
+            Expr::Str(StrLiteral::PlainLine(arena_str))
         }
         (_, Layout::Struct{field_layouts, ..}) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
@@ -1241,42 +1247,4 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 /// e.g. adding underscores for large numbers
 fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_> {
     Expr::Num(arena.alloc(format!("{}", num)))
-}
-
-#[cfg(target_endian = "little")]
-/// NOTE: As of this writing, we don't have big-endian small strings implemented yet!
-fn str_to_ast<'a>(arena: &'a Bump, string: &'a str) -> Expr<'a> {
-    const STR_SIZE: usize = 2 * std::mem::size_of::<usize>();
-
-    let bytes: [u8; STR_SIZE] = unsafe { std::mem::transmute(string) };
-    let is_small = (bytes[STR_SIZE - 1] & 0b1000_0000) != 0;
-
-    if is_small {
-        let len = (bytes[STR_SIZE - 1] & 0b0111_1111) as usize;
-        let mut string = bumpalo::collections::String::with_capacity_in(len, arena);
-
-        for byte in bytes.iter().take(len) {
-            string.push(*byte as char);
-        }
-
-        str_slice_to_ast(arena, arena.alloc(string))
-    } else {
-        // Roc string literals are stored inside the constant section of the program
-        // That means this memory is gone when the jit function is done
-        // (as opposed to heap memory, which we can leak and then still use after)
-        // therefore we must make an owned copy of the string here
-        let string = bumpalo::collections::String::from_str_in(string, arena).into_bump_str();
-        str_slice_to_ast(arena, string)
-    }
-}
-
-fn str_slice_to_ast<'a>(_arena: &'a Bump, string: &'a str) -> Expr<'a> {
-    if string.contains('\n') {
-        todo!(
-            "this string contains newlines, so render it as a multiline string: {:?}",
-            Expr::Str(StrLiteral::PlainLine(string))
-        );
-    } else {
-        Expr::Str(StrLiteral::PlainLine(string))
-    }
 }
