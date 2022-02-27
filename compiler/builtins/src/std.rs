@@ -314,7 +314,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
 
-    //divCeil: Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // divCeil: Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_top_level_function_type!(
         Symbol::NUM_DIV_CEIL,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],

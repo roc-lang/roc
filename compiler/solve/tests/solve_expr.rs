@@ -129,7 +129,7 @@ mod solve_expr {
         let mut buffer = String::from(indoc!(
             r#"
             app "test" 
-                imports [ Result.{ Result } ]
+                imports []
                 provides [ main ] to "./platform"
 
             main =

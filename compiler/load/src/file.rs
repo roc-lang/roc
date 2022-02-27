@@ -278,8 +278,6 @@ fn start_phase<'a>(
                     }
                 }
 
-                dbg!(module_id, &parsed.imported_modules);
-
                 BuildTask::CanonicalizeAndConstrain {
                     parsed,
                     dep_idents,
@@ -1744,29 +1742,45 @@ fn update<'a>(
                     .insert(ModuleId::NUM, Region::zero());
 
                 let prelude_types = [
-                    Symbol::NUM_NUM,
-                    Symbol::NUM_INT,
-                    Symbol::NUM_FLOAT,
-                    Symbol::NUM_NAT,
-                    Symbol::NUM_I8,
-                    Symbol::NUM_I16,
-                    Symbol::NUM_I32,
-                    Symbol::NUM_I64,
-                    Symbol::NUM_I128,
-                    Symbol::NUM_U8,
-                    Symbol::NUM_U16,
-                    Symbol::NUM_U32,
-                    Symbol::NUM_U64,
-                    Symbol::NUM_U128,
-                    Symbol::NUM_F32,
-                    Symbol::NUM_F64,
-                    Symbol::NUM_DEC,
+                    (Ident::from("Num"), Symbol::NUM_NUM),
+                    (Ident::from("Int"), Symbol::NUM_INT),
+                    (Ident::from("Float"), Symbol::NUM_FLOAT),
+                    (Ident::from("Integer"), Symbol::NUM_INTEGER),
+                    (Ident::from("FloatingPoint"), Symbol::NUM_FLOATINGPOINT),
+                    (Ident::from("Binary32"), Symbol::NUM_BINARY32),
+                    (Ident::from("Binary64"), Symbol::NUM_BINARY64),
+                    (Ident::from("Signed128"), Symbol::NUM_SIGNED128),
+                    (Ident::from("Signed64"), Symbol::NUM_SIGNED64),
+                    (Ident::from("Signed32"), Symbol::NUM_SIGNED32),
+                    (Ident::from("Signed16"), Symbol::NUM_SIGNED16),
+                    (Ident::from("Signed8"), Symbol::NUM_SIGNED8),
+                    (Ident::from("Unsigned128"), Symbol::NUM_UNSIGNED128),
+                    (Ident::from("Unsigned64"), Symbol::NUM_UNSIGNED64),
+                    (Ident::from("Unsigned32"), Symbol::NUM_UNSIGNED32),
+                    (Ident::from("Unsigned16"), Symbol::NUM_UNSIGNED16),
+                    (Ident::from("Unsigned8"), Symbol::NUM_UNSIGNED8),
+                    (Ident::from("Natural"), Symbol::NUM_NATURAL),
+                    (Ident::from("Decimal"), Symbol::NUM_DECIMAL),
+                    (Ident::from("Nat"), Symbol::NUM_NAT),
+                    (Ident::from("I8"), Symbol::NUM_I8),
+                    (Ident::from("I16"), Symbol::NUM_I16),
+                    (Ident::from("I32"), Symbol::NUM_I32),
+                    (Ident::from("I64"), Symbol::NUM_I64),
+                    (Ident::from("I128"), Symbol::NUM_I128),
+                    (Ident::from("U8"), Symbol::NUM_U8),
+                    (Ident::from("U16"), Symbol::NUM_U16),
+                    (Ident::from("U32"), Symbol::NUM_U32),
+                    (Ident::from("U64"), Symbol::NUM_U64),
+                    (Ident::from("U128"), Symbol::NUM_U128),
+                    (Ident::from("F32"), Symbol::NUM_F32),
+                    (Ident::from("F64"), Symbol::NUM_F64),
+                    (Ident::from("Dec"), Symbol::NUM_DEC),
                 ];
 
-                for symbol in prelude_types {
+                for (ident, symbol) in prelude_types {
                     header
                         .exposed_imports
-                        .insert(Ident::from("Num"), (symbol, Region::zero()));
+                        .insert(ident, (symbol, Region::zero()));
                 }
             }
 
@@ -1785,15 +1799,14 @@ fn update<'a>(
             }
 
             if !header.module_id.is_builtin() {
-                //                header
-                //                    .package_qualified_imported_modules
-                //                    .insert(PackageQualified::Unqualified(ModuleId::STR));
-                //
-                //                header
-                //                    .imported_modules
-                //                    .insert(ModuleId::STR, Region::zero());
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::STR));
 
-                /*
+                header
+                    .imported_modules
+                    .insert(ModuleId::STR, Region::zero());
+
                 header
                     .package_qualified_imported_modules
                     .insert(PackageQualified::Unqualified(ModuleId::DICT));
@@ -1817,7 +1830,6 @@ fn update<'a>(
                 header
                     .imported_modules
                     .insert(ModuleId::LIST, Region::zero());
-                */
             }
 
             state
@@ -2622,6 +2634,9 @@ fn load_module<'a>(
 
             let src_bytes = r#"
                 isEmpty : List a -> Bool
+                isEmpty = \list ->
+                    List.len list == 0
+
                 get : List a, Nat -> Result a [ OutOfBounds ]*
                 set : List a, Nat, a -> List a
                 append : List a, a -> List a
@@ -2639,7 +2654,12 @@ fn load_module<'a>(
                 walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
 
                 sum : List (Num a) -> Num a
+                sum = \list -> 
+                    List.walk list 0 Num.add
+
                 product : List (Num a) -> Num a
+                product = \list -> 
+                    List.walk list 1 Num.mul
 
                 any : List a, (a -> Bool) -> Bool
                 all : List a, (a -> Bool) -> Bool
@@ -2657,7 +2677,11 @@ fn load_module<'a>(
                 range : Int a, Int a -> List (Int a)
                 sortWith : List a, (a, a -> [ LT, EQ, GT ] ) -> List a
                 sortAsc : List (Num a) -> List (Num a)
+                sortAsc = \list -> List.sortWith list Num.compare
+
                 sortDesc : List (Num a) -> List (Num a)
+                sortDesc = \list -> List.sortWith list (\a, b -> Num.compare b a)
+
                 swap : List a, Nat, Nat -> List a
 
                 first : List a -> Result a [ ListWasEmpty ]*
@@ -2704,15 +2728,15 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("repeat")),
                 Loc::at_zero(ExposedName::new("countGraphemes")),
                 Loc::at_zero(ExposedName::new("startsWithCodePt")),
-                // Loc::at_zero(ExposedName::new("toUtf8")),
-                // Loc::at_zero(ExposedName::new("fromUtf8")),
-                // Loc::at_zero(ExposedName::new("fromUtf8Range")),
+                Loc::at_zero(ExposedName::new("toUtf8")),
+                Loc::at_zero(ExposedName::new("fromUtf8")),
+                Loc::at_zero(ExposedName::new("fromUtf8Range")),
                 Loc::at_zero(ExposedName::new("startsWith")),
                 Loc::at_zero(ExposedName::new("endsWith")),
                 Loc::at_zero(ExposedName::new("trim")),
                 Loc::at_zero(ExposedName::new("trimLeft")),
                 Loc::at_zero(ExposedName::new("trimRight")),
-                /*
+                //
                 Loc::at_zero(ExposedName::new("toDec")),
                 Loc::at_zero(ExposedName::new("toF64")),
                 Loc::at_zero(ExposedName::new("toF32")),
@@ -2727,7 +2751,6 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("toI16")),
                 Loc::at_zero(ExposedName::new("toU8")),
                 Loc::at_zero(ExposedName::new("toI8")),
-                */
             ];
 
             const IMPORTS: &[Loc<ImportsEntry>] = &[
@@ -2741,12 +2764,10 @@ fn load_module<'a>(
                     roc_parse::header::ModuleName::new("Bool"),
                     Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Bool")))]),
                 )),
-                /*
                 Loc::at_zero(ImportsEntry::Module(
                     roc_parse::header::ModuleName::new("List"),
                     Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("List")))]),
                 )),
-                */
                 Loc::at_zero(ImportsEntry::Module(
                     roc_parse::header::ModuleName::new("Num"),
                     Collection::with_items(&[
@@ -2799,7 +2820,7 @@ fn load_module<'a>(
                         EncodesSurrogateHalf,
                     ]
 
-                # Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
+                Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 
                 isEmpty : Str -> Bool
                 concat : Str, Str -> Str
@@ -2810,13 +2831,13 @@ fn load_module<'a>(
                 countGraphemes : Str -> Nat
                 startsWithCodePt : Str, U32 -> Bool
 
-                # toUtf8 : Str -> List U8
+                toUtf8 : Str -> List U8
 
                 # fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
                 # fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem, OutOfBounds ]*
 
-                # fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*
-                # fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat, OutOfBounds ]*
+                fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*
+                fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat, OutOfBounds ]*
 
                 startsWith : Str, Str -> Bool
                 endsWith : Str, Str -> Bool
@@ -2824,6 +2845,21 @@ fn load_module<'a>(
                 trim : Str -> Str
                 trimLeft : Str -> Str
                 trimRight : Str -> Str
+
+                toDec : Str -> Result Dec [ InvalidNumStr ]*
+                toF64 : Str -> Result F64 [ InvalidNumStr ]*
+                toF32 : Str -> Result F32 [ InvalidNumStr ]*
+                toNat : Str -> Result Nat [ InvalidNumStr ]*
+                toU128 : Str -> Result U128 [ InvalidNumStr ]*
+                toI128 : Str -> Result I128 [ InvalidNumStr ]*
+                toU64 : Str -> Result U64 [ InvalidNumStr ]*
+                toI64 : Str -> Result I64 [ InvalidNumStr ]*
+                toU32 : Str -> Result U32 [ InvalidNumStr ]*
+                toI32 : Str -> Result I32 [ InvalidNumStr ]*
+                toU16 : Str -> Result U16 [ InvalidNumStr ]*
+                toI16 : Str -> Result I16 [ InvalidNumStr ]*
+                toU8 : Str -> Result U8 [ InvalidNumStr ]*
+                toI8 : Str -> Result I8 [ InvalidNumStr ]*
                 "#;
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
@@ -2869,10 +2905,10 @@ fn load_module<'a>(
                     roc_parse::header::ModuleName::new("List"),
                     Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("List")))]),
                 )),
-                //                Loc::at_zero(ImportsEntry::Module(
-                //                    roc_parse::header::ModuleName::new("Num"),
-                //                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Nat")))]),
-                //                )),
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Num"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Nat")))]),
+                )),
             ];
 
             const GENERATES_WITH: &[Symbol] = &[];
@@ -2920,7 +2956,7 @@ fn load_module<'a>(
             ));
         }
         "Set" => {
-            let filename = PathBuf::from("Dict.roc");
+            let filename = PathBuf::from("Set.roc");
 
             const EXPOSES: &[Loc<ExposedName>] = &[
                 Loc::at_zero(ExposedName::new("empty")),
@@ -2950,6 +2986,10 @@ fn load_module<'a>(
                 Loc::at_zero(ImportsEntry::Module(
                     roc_parse::header::ModuleName::new("List"),
                     Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("List")))]),
+                )),
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Dict"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Dict")))]),
                 )),
                 Loc::at_zero(ImportsEntry::Module(
                     roc_parse::header::ModuleName::new("Num"),
@@ -3109,9 +3149,9 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("intCast")),
                 Loc::at_zero(ExposedName::new("bytesToU16")),
                 Loc::at_zero(ExposedName::new("bytesToU32")),
-                Loc::at_zero(ExposedName::new("divCeil")),
-                Loc::at_zero(ExposedName::new("toStr")),
                 */
+                // Loc::at_zero(ExposedName::new("divCeil")),
+                // Loc::at_zero(ExposedName::new("toStr")),
                 Loc::at_zero(ExposedName::new("isMultipleOf")),
                 // Loc::at_zero(ExposedName::new("minI8")),
                 // Loc::at_zero(ExposedName::new("maxI8")),
@@ -3255,6 +3295,8 @@ fn load_module<'a>(
                 sqrt : Float a -> Result (Float a) [ SqrtOfNegative ]*
                 log : Float a, Float a -> Result (Float a) [ LogNeedsPositive ]*
                 div : Float a -> Result (Float a) [ DivByZero ]*
+
+                # divCeil: Int a, Int a -> Result (Int a) [ DivByZero ]*
                 # mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
                 rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
@@ -3287,7 +3329,7 @@ fn load_module<'a>(
                 # mulSaturated : Num a, Num a -> Num a
                 mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 
-                minI8 : I8
+                # minI8 : I8
                 # maxI8 : I8
                 # minU8 : U8
                 # maxU8 : U8
@@ -4285,7 +4327,7 @@ fn run_solve<'a>(
     // Finish constraining the module by wrapping the existing Constraint
     // in the ones we just computed. We can do this off the main thread.
     let constraint = constrain_imports(imported_symbols, constraint, &mut var_store);
-    dbg!(&constraint);
+    // dbg!(&constraint);
 
     let constrain_end = SystemTime::now();
 
@@ -4304,6 +4346,8 @@ fn run_solve<'a>(
 
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
+
+    dbg!(module_id, &problems);
 
     let mut exposed_vars_by_symbol: MutMap<Symbol, Variable> = solved_env.vars_by_symbol.clone();
     exposed_vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));

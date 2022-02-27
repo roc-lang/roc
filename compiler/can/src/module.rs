@@ -242,12 +242,19 @@ pub fn canonicalize_module_defs<'a>(
                     panic!("TODO gracefully handle shadowing in imports.")
                 }
             }
-        } else if symbol == Symbol::LIST_LIST || symbol == Symbol::STR_STR {
+        } else if [
+            Symbol::LIST_LIST,
+            Symbol::STR_STR,
+            Symbol::DICT_DICT,
+            Symbol::SET_SET,
+            // Symbol::BOX_BOX,
+        ]
+        .contains(&symbol)
+        {
             // These are not aliases but Apply's and we make sure they are always in scope
         } else {
             // This is a type alias
 
-            dbg!(scope.aliases.keys().collect::<Vec<_>>());
             // the symbol should already be added to the scope when this module is canonicalized
             debug_assert!(
                 scope.contains_alias(symbol),

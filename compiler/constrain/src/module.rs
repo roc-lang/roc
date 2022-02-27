@@ -144,7 +144,14 @@ pub fn pre_constrain_imports(
         // We used this module, so clearly it is not unused!
         unused_imports.remove(&module_id);
 
-        if module_id.is_builtin() && module_id != ModuleId::STR {
+        let builtin_applies = [
+            Symbol::LIST_LIST,
+            Symbol::STR_STR,
+            Symbol::DICT_DICT,
+            Symbol::SET_SET,
+        ];
+
+        if module_id.is_builtin() && builtin_applies.contains(&symbol) {
             // For builtin modules, we create imports from the
             // hardcoded builtin map.
             match stdlib.types.get(&symbol) {
@@ -197,10 +204,7 @@ pub fn pre_constrain_imports(
                                 });
                             }
                             None => {
-                                panic!(
-                                    "Could not find module {:?} in exposed_types {:?}",
-                                    module_id, exposed_types
-                                );
+                                panic!("Module {:?} does not have info for module {:?} in its exposed types", module_id, home)
                             }
                         }
 
@@ -254,9 +258,9 @@ pub fn pre_constrain_imports(
                 }
                 None => {
                     panic!(
-                        "Could not find module {:?} in exposed_types {:?}",
-                        module_id, exposed_types
-                    );
+                        "Module {:?} does not have info for module {:?} in its exposed types.\n I was looking for symbol {:?}",
+                        home, module_id, symbol,
+                    )
                 }
             }
         }
