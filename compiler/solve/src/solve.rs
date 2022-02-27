@@ -1,7 +1,7 @@
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::PresenceConstraint;
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::MutMap;
+use roc_collections::all::{MutMap, SendMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -177,8 +177,24 @@ pub fn run_in_place(
     state.env
 }
 
-enum After {
+enum After<'a> {
     CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
+    /// Saves the solved types of definitins from a let constraint, and then solves
+    /// the let constraint's return constraint.
+    SaveDefTypes {
+        next_rank: Rank,
+        flex_vars: &'a Vec<Variable>,
+        rigid_vars: &'a Vec<Variable>,
+        local_def_vars: LocalDefVarsVec<(Symbol, Loc<Variable>)>,
+        def_types: &'a SendMap<Symbol, Loc<Type>>,
+        ret_con: &'a Constraint,
+    },
+    /// Like `SaveDefTypes`, but optimized for the case when there are no flex or rigid
+    /// variables in the let.
+    SaveDefTypesNoTypeVariables {
+        def_types: &'a SendMap<Symbol, Loc<Type>>,
+        ret_con: &'a Constraint,
+    },
 }
 
 enum Work<'a> {
@@ -186,10 +202,10 @@ enum Work<'a> {
         env: Env,
         rank: Rank,
         constraint: &'a Constraint,
-        after: Option<After>,
+        after: Option<After<'a>>,
     },
     /// Something to be done after a constraint and all its dependencies are fully solved.
-    After(After),
+    After(Env, After<'a>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -212,13 +228,153 @@ fn solve(
 
     while let Some(work_item) = stack.pop() {
         let (env, rank, constraint) = match work_item {
-            Work::After(After::CheckForInfiniteTypes(def_vars)) => {
+            Work::After(_, After::CheckForInfiniteTypes(def_vars)) => {
                 for (symbol, loc_var) in def_vars.iter() {
                     check_for_infinite_type(subs, problems, *symbol, *loc_var);
                 }
                 // No constraint to be solved
                 continue;
             }
+
+            Work::After(env, After::SaveDefTypesNoTypeVariables { def_types, ret_con }) => {
+                // Add a variable for each def to new_vars_by_env.
+                let mut local_def_vars = LocalDefVarsVec::with_length(def_types.len());
+
+                for (symbol, loc_type) in def_types.iter() {
+                    let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
+
+                    local_def_vars.push((
+                        *symbol,
+                        Loc {
+                            value: var,
+                            region: loc_type.region,
+                        },
+                    ));
+                }
+
+                let mut new_env = env.clone();
+                for (symbol, loc_var) in local_def_vars.iter() {
+                    match new_env.vars_by_symbol.entry(*symbol) {
+                        Entry::Occupied(_) => {
+                            // keep the existing value
+                        }
+                        Entry::Vacant(vacant) => {
+                            vacant.insert(loc_var.value);
+                        }
+                    }
+                }
+
+                stack.push(Work::Constraint {
+                    env: new_env,
+                    rank,
+                    constraint: ret_con,
+                    after: Some(After::CheckForInfiniteTypes(local_def_vars)),
+                });
+
+                continue;
+            }
+
+            Work::After(
+                env,
+                After::SaveDefTypes {
+                    next_rank,
+                    rigid_vars,
+                    flex_vars,
+                    def_types,
+                    ret_con,
+                    local_def_vars,
+                },
+            ) => {
+                // Solve the assignments' constraints first.
+                let State {
+                    env: saved_env,
+                    mark,
+                } = state;
+
+                let young_mark = mark;
+                let visit_mark = young_mark.next();
+                let final_mark = visit_mark.next();
+
+                debug_assert_eq!(
+                    {
+                        let offenders = pools
+                            .get(next_rank)
+                            .iter()
+                            .filter(|var| {
+                                let current_rank =
+                                    subs.get_rank(roc_types::subs::Variable::clone(var));
+
+                                current_rank.into_usize() > next_rank.into_usize()
+                            })
+                            .collect::<Vec<_>>();
+
+                        let result = offenders.len();
+
+                        if result > 0 {
+                            dbg!(&subs, &offenders, &def_types);
+                        }
+
+                        result
+                    },
+                    0
+                );
+
+                // pop pool
+                generalize(subs, young_mark, visit_mark, next_rank, pools);
+
+                pools.get_mut(next_rank).clear();
+
+                // check that things went well
+                debug_assert!({
+                    // NOTE the `subs.redundant` check is added for the uniqueness
+                    // inference, and does not come from elm. It's unclear whether this is
+                    // a bug with uniqueness inference (something is redundant that
+                    // shouldn't be) or that it just never came up in elm.
+                    let failing: Vec<_> = rigid_vars
+                        .iter()
+                        .filter(|&var| !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE)
+                        .collect();
+
+                    if !failing.is_empty() {
+                        println!("Rigids {:?}", &rigid_vars);
+                        println!("Failing {:?}", failing);
+                    }
+
+                    failing.is_empty()
+                });
+
+                let mut new_env = env.clone();
+                for (symbol, loc_var) in local_def_vars.iter() {
+                    match new_env.vars_by_symbol.entry(*symbol) {
+                        Entry::Occupied(_) => {
+                            // keep the existing value
+                        }
+                        Entry::Vacant(vacant) => {
+                            vacant.insert(loc_var.value);
+                        }
+                    }
+                }
+
+                // Note that this vars_by_symbol is the one returned by the
+                // previous call to solve()
+                let state_for_ret_con = State {
+                    env: saved_env,
+                    mark: final_mark,
+                };
+
+                state = state_for_ret_con;
+
+                // Now solve the body, using the new vars_by_symbol which includes
+                // the assignments' name-to-variable mappings.
+                stack.push(Work::Constraint {
+                    env: new_env,
+                    rank,
+                    constraint: ret_con,
+                    after: Some(After::CheckForInfiniteTypes(local_def_vars)),
+                });
+                continue;
+            }
+
             Work::Constraint {
                 env,
                 rank,
@@ -228,7 +384,7 @@ fn solve(
                 // Push the `after` on first so that we look at it immediately after finishing all
                 // the children of this constraint.
                 if let Some(after) = after {
-                    stack.push(Work::After(after));
+                    stack.push(Work::After(env.clone(), after));
                 }
                 (env, rank, constraint)
             }
@@ -453,54 +609,15 @@ fn solve(
                         state
                     }
                     ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
-                        // TODO: make into `WorkItem` with `After`
-                        let state = solve(
-                            &env,
-                            state,
-                            rank,
-                            pools,
-                            problems,
-                            cached_aliases,
-                            subs,
-                            &let_con.defs_constraint,
-                        );
-
-                        // Add a variable for each def to new_vars_by_env.
-                        let mut local_def_vars =
-                            LocalDefVarsVec::with_length(let_con.def_types.len());
-
-                        for (symbol, loc_type) in let_con.def_types.iter() {
-                            let var =
-                                type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
-
-                            local_def_vars.push((
-                                *symbol,
-                                Loc {
-                                    value: var,
-                                    region: loc_type.region,
-                                },
-                            ));
-                        }
-
-                        let mut new_env = env.clone();
-                        for (symbol, loc_var) in local_def_vars.iter() {
-                            match new_env.vars_by_symbol.entry(*symbol) {
-                                Entry::Occupied(_) => {
-                                    // keep the existing value
-                                }
-                                Entry::Vacant(vacant) => {
-                                    vacant.insert(loc_var.value);
-                                }
-                            }
-                        }
-
                         stack.push(Work::Constraint {
-                            env: new_env,
+                            env,
                             rank,
-                            constraint: ret_con,
-                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
+                            constraint: &let_con.defs_constraint,
+                            after: Some(After::SaveDefTypesNoTypeVariables {
+                                def_types: &let_con.def_types,
+                                ret_con,
+                            }),
                         });
-
                         state
                     }
                     ret_con => {
@@ -553,105 +670,20 @@ fn solve(
                             ));
                         }
 
-                        // Solve the assignments' constraints first.
-                        // TODO: make into `WorkItem` with `After`
-                        let State {
-                            env: saved_env,
-                            mark,
-                        } = solve(
-                            &env,
-                            state,
-                            next_rank,
-                            pools,
-                            problems,
-                            cached_aliases,
-                            subs,
-                            &let_con.defs_constraint,
-                        );
-
-                        let young_mark = mark;
-                        let visit_mark = young_mark.next();
-                        let final_mark = visit_mark.next();
-
-                        debug_assert_eq!(
-                            {
-                                let offenders = pools
-                                    .get(next_rank)
-                                    .iter()
-                                    .filter(|var| {
-                                        let current_rank =
-                                            subs.get_rank(roc_types::subs::Variable::clone(var));
-
-                                        current_rank.into_usize() > next_rank.into_usize()
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let result = offenders.len();
-
-                                if result > 0 {
-                                    dbg!(&subs, &offenders, &let_con.def_types);
-                                }
-
-                                result
-                            },
-                            0
-                        );
-
-                        // pop pool
-                        generalize(subs, young_mark, visit_mark, next_rank, pools);
-
-                        pools.get_mut(next_rank).clear();
-
-                        // check that things went well
-                        debug_assert!({
-                            // NOTE the `subs.redundant` check is added for the uniqueness
-                            // inference, and does not come from elm. It's unclear whether this is
-                            // a bug with uniqueness inference (something is redundant that
-                            // shouldn't be) or that it just never came up in elm.
-                            let failing: Vec<_> = rigid_vars
-                                .iter()
-                                .filter(|&var| {
-                                    !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE
-                                })
-                                .collect();
-
-                            if !failing.is_empty() {
-                                println!("Rigids {:?}", &rigid_vars);
-                                println!("Failing {:?}", failing);
-                            }
-
-                            failing.is_empty()
-                        });
-
-                        let mut new_env = env.clone();
-                        for (symbol, loc_var) in local_def_vars.iter() {
-                            match new_env.vars_by_symbol.entry(*symbol) {
-                                Entry::Occupied(_) => {
-                                    // keep the existing value
-                                }
-                                Entry::Vacant(vacant) => {
-                                    vacant.insert(loc_var.value);
-                                }
-                            }
-                        }
-
-                        // Note that this vars_by_symbol is the one returned by the
-                        // previous call to solve()
-                        let state_for_ret_con = State {
-                            env: saved_env,
-                            mark: final_mark,
-                        };
-
-                        // Now solve the body, using the new vars_by_symbol which includes
-                        // the assignments' name-to-variable mappings.
                         stack.push(Work::Constraint {
-                            env: new_env,
-                            rank,
-                            constraint: ret_con,
-                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
+                            env,
+                            rank: next_rank,
+                            constraint: &let_con.defs_constraint,
+                            after: Some(After::SaveDefTypes {
+                                next_rank,
+                                flex_vars,
+                                rigid_vars,
+                                local_def_vars,
+                                def_types: &let_con.def_types,
+                                ret_con,
+                            }),
                         });
-
-                        state_for_ret_con
+                        state
                     }
                 }
             }
