@@ -115,7 +115,7 @@ fn unroll_newtypes<'a>(
                 let field_var = *field.as_inner();
                 content = env.subs.get_content_without_compacting(field_var);
             }
-            Content::Alias(_, _, real_var) => {
+            Content::Alias(_, _, real_var, _) => {
                 // We need to pass through aliases too, because their underlying types may have
                 // unrolled newtypes. In such cases return the list of unrolled newtypes, but keep
                 // the content as the alias for readability. For example,
