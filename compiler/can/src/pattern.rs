@@ -196,7 +196,7 @@ pub fn canonicalize_pattern<'a>(
             env.problem(Problem::RuntimeError(RuntimeError::OpaqueNotApplied(
                 loc_name.clone(),
             )));
-            Pattern::OpaqueNotInScope(loc_name)
+            Pattern::UnsupportedPattern(region)
         }
         Apply(tag, patterns) => {
             let mut can_patterns = Vec::with_capacity(patterns.len());
