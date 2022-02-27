@@ -898,6 +898,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56899898ce76aaf4a0f24d914c97ea6ed976d42fec6ad33fcbb0a1103e07b2b0"
 
 [[package]]
+name = "dunce"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "453440c271cf5577fd2a40e4942540cb7d0d2f85e27c8d07dd0023c925a67541"
+
+[[package]]
 name = "either"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2504,6 +2510,7 @@ dependencies = [
 name = "roc_builtins"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "roc_collections",
  "roc_module",
  "roc_region",
@@ -2518,6 +2525,7 @@ dependencies = [
  "bumpalo",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_parse",
  "roc_problem",
@@ -2587,6 +2595,7 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_parse",
  "roc_region",
@@ -2687,6 +2696,7 @@ dependencies = [
  "roc_mono",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_solve",
  "roc_target",
  "roc_types",
@@ -2760,6 +2770,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
  "roc_parse",

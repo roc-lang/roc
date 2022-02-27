@@ -194,6 +194,21 @@ pub fn num_floatingpoint(range: Type) -> Type {
 }
 
 #[inline(always)]
+pub fn num_u32() -> Type {
+    builtin_alias(Symbol::NUM_U32, vec![], Box::new(num_int(num_unsigned32())))
+}
+
+#[inline(always)]
+fn num_unsigned32() -> Type {
+    let alias_content = Type::TagUnion(
+        vec![(TagName::Private(Symbol::NUM_AT_UNSIGNED32), vec![])],
+        Box::new(Type::EmptyTagUnion),
+    );
+
+    builtin_alias(Symbol::NUM_UNSIGNED32, vec![], Box::new(alias_content))
+}
+
+#[inline(always)]
 pub fn num_binary64() -> Type {
     let alias_content = Type::TagUnion(
         vec![(TagName::Private(Symbol::NUM_AT_BINARY64), vec![])],

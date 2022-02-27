@@ -19,10 +19,10 @@ bench = false
 
 [dependencies]
 roc_mono = { path = "../compiler/mono" }
-roc_build = { path = "../compiler/build", default-features = false }
+roc_build = { path = "../compiler/build" }
 roc_collections = { path = "../compiler/collections" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
-clap = { version = "= 3.0.0-beta.5", default-features = false, features = ["std", "color", "suggestions"] }
+clap = { version = "3.0.0-beta.5", default-features = false, features = ["std", "color", "suggestions"] }
 iced-x86 = { version = "1.15.0", default-features = false, features = ["std", "decoder", "op_code_info", "instr_info"] }
 memmap2 = "0.5.0"
 object = { version = "0.26.2", features = ["read", "write"] }

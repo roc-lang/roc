@@ -160,12 +160,17 @@ impl<'a> Env<'a> {
                                 })
                             }
                         },
-                        None => {
-                            panic!(
-                                "Module {} exists, but is not recorded in dep_idents",
-                                module_name
-                            )
-                        }
+                        None => Err(RuntimeError::ModuleNotImported {
+                            module_name,
+                            imported_modules: self
+                                .dep_idents
+                                .keys()
+                                .filter_map(|module_id| self.module_ids.get_name(*module_id))
+                                .map(|module_name| module_name.as_ref().into())
+                                .collect(),
+                            region,
+                            module_exists: true,
+                        }),
                     }
                 }
             }
@@ -177,6 +182,7 @@ impl<'a> Env<'a> {
                     .map(|string| string.as_ref().into())
                     .collect(),
                 region,
+                module_exists: false,
             }),
         }
     }

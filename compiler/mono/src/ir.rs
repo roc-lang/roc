@@ -2040,8 +2040,11 @@ fn pattern_to_when<'a>(
         }
 
         UnwrappedOpaque { .. } => todo_opaques!(),
-
-        IntLiteral(..) | NumLiteral(..) | FloatLiteral(..) | StrLiteral(_) => {
+        IntLiteral(..)
+        | NumLiteral(..)
+        | FloatLiteral(..)
+        | StrLiteral(..)
+        | roc_can::pattern::Pattern::SingleQuote(..) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -3144,6 +3147,13 @@ pub fn with_hole<'a>(
             assigned,
             Expr::Literal(Literal::Str(arena.alloc(string))),
             Layout::Builtin(Builtin::Str),
+            hole,
+        ),
+
+        SingleQuote(character) => Stmt::Let(
+            assigned,
+            Expr::Literal(Literal::Int(character as _)),
+            Layout::int_width(IntWidth::I32),
             hole,
         ),
 
@@ -7226,7 +7236,8 @@ fn call_by_name_help<'a>(
         } else {
             debug_assert!(
                 !field_symbols.is_empty(),
-                "should be in the list of imported_module_thunks"
+                "{} should be in the list of imported_module_thunks",
+                proc_name
             );
 
             debug_assert_eq!(
@@ -7745,6 +7756,7 @@ fn from_can_pattern_help<'a>(
             }
         }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
+        SingleQuote(c) => Ok(Pattern::IntLiteral(*c as _, IntWidth::I32)),
         Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),

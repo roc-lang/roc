@@ -15,21 +15,24 @@ test = false
 bench = false
 
 [features]
-default = ["target-aarch64", "target-x86_64", "target-wasm32", "editor"]
+default = ["target-aarch64", "target-x86_64", "target-wasm32", "editor", "llvm"]
 
 wasm32-cli-run = ["target-wasm32", "run-wasm32"]
 i386-cli-run = ["target-x86"]
+
+# TODO: change to roc_repl_cli/llvm once roc_repl can run without llvm.
+llvm = ["roc_build/llvm", "roc_repl_cli"]
 
 editor = ["roc_editor"]
 
 run-wasm32 = ["wasmer", "wasmer-wasi"]
 
 # Compiling for a different platform than the host can cause linker errors.
-target-arm = ["roc_build/target-arm"]
-target-aarch64 = ["roc_build/target-aarch64"]
-target-x86 = ["roc_build/target-x86"]
-target-x86_64 = ["roc_build/target-x86_64"]
-target-wasm32 = ["roc_build/target-wasm32"]
+target-arm = ["roc_build/target-arm", "roc_repl_cli/target-arm"]
+target-aarch64 = ["roc_build/target-aarch64", "roc_repl_cli/target-aarch64"]
+target-x86 = ["roc_build/target-x86", "roc_repl_cli/target-x86"]
+target-x86_64 = ["roc_build/target-x86_64", "roc_repl_cli/target-x86_64"]
+target-wasm32 = ["roc_build/target-wasm32", "roc_repl_cli/target-wasm32"]
 
 target-all = [
     "target-aarch64",
@@ -50,15 +53,15 @@ roc_module = { path = "../compiler/module" }
 roc_builtins = { path = "../compiler/builtins" }
 roc_mono = { path = "../compiler/mono" }
 roc_load = { path = "../compiler/load" }
-roc_build = { path = "../compiler/build", default-features = false }
+roc_build = { path = "../compiler/build" }
 roc_fmt = { path = "../compiler/fmt" }
 roc_target = { path = "../compiler/roc_target" }
 roc_reporting = { path = "../reporting" }
 roc_error_macros = { path = "../error_macros" }
 roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
-roc_repl_cli = { path = "../repl_cli" }
-clap = { version = "= 3.0.0-beta.5", default-features = false, features = ["std", "color", "suggestions"] }
+roc_repl_cli = { path = "../repl_cli", optional = true }
+clap = { version = "3.0.0-beta.5", default-features = false, features = ["std", "color", "suggestions"] }
 const_format = "0.2.22"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 mimalloc = { version = "0.1.26", default-features = false }

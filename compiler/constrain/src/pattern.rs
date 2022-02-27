@@ -60,6 +60,7 @@ fn headers_from_annotation_help(
         | NumLiteral(..)
         | IntLiteral(..)
         | FloatLiteral(..)
+        | SingleQuote(_)
         | StrLiteral(_) => true,
 
         RecordDestructure { destructs, .. } => match annotation.value.shallow_dealias() {
@@ -248,6 +249,15 @@ pub fn constrain_pattern(
                 region,
                 PatternCategory::Str,
                 builtins::str_type(),
+                expected,
+            ));
+        }
+
+        SingleQuote(_) => {
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Character,
+                builtins::num_u32(),
                 expected,
             ));
         }

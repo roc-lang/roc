@@ -355,6 +355,7 @@ pub enum EExpr<'a> {
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
     Str(EString<'a>, Position),
+    SingleQuote(EString<'a>, Position),
     Number(ENumber, Position),
     List(EList<'a>, Position),
 

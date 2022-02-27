@@ -30,7 +30,7 @@ roc_reporting = { path = "../../reporting" }
 roc_load = { path = "../load" }
 roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
-roc_build = { path = "../build" }
+roc_build = { path = "../build", features = ["target-aarch64", "target-x86_64", "target-wasm32"]  }
 roc_target = { path = "../roc_target" }
 roc_std = { path = "../../roc_std" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
@@ -52,7 +52,7 @@ wasmer = { version = "2.0.0", default-features = false, features = ["default-cra
 
 [features]
 default = ["gen-llvm"]
-gen-llvm = []
+gen-llvm = ["roc_build/llvm"]
 gen-dev = []
 gen-wasm = []
 wasm-cli-run = []

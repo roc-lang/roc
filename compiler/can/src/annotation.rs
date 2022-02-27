@@ -130,7 +130,9 @@ fn make_apply_symbol(
                 // it was imported but it doesn't expose this ident.
                 env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
-                Err(Type::Erroneous(Problem::UnrecognizedIdent((*ident).into())))
+                // A failed import should have already been reported through
+                // roc_can::env::Env::qualified_lookup's checks
+                Err(Type::Erroneous(Problem::SolvedTypeError))
             }
         }
     }

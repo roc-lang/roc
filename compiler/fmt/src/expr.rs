@@ -30,6 +30,7 @@ impl<'a> Formattable for Expr<'a> {
             Float(..)
             | Num(..)
             | NonBase10Int { .. }
+            | SingleQuote(_)
             | Access(_, _)
             | AccessorFunction(_)
             | Var { .. }
@@ -208,6 +209,11 @@ impl<'a> Formattable for Expr<'a> {
             GlobalTag(string) | PrivateTag(string) | OpaqueRef(string) => {
                 buf.indent(indent);
                 buf.push_str(string)
+            }
+            SingleQuote(string) => {
+                buf.push('\'');
+                buf.push_str(string);
+                buf.push('\'');
             }
             &NonBase10Int {
                 base,

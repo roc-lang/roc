@@ -358,6 +358,66 @@ fn u8_hex_int_alias() {
 }
 
 #[test]
+fn character_literal() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = 'A'
+
+                    x
+                "#
+        ),
+        65,
+        u32
+    );
+}
+
+#[test]
+fn character_literal_back_slash() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = '\\'
+
+                    x
+                "#
+        ),
+        92,
+        u32
+    );
+}
+
+#[test]
+fn character_literal_single_quote() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = '\''
+
+                    x
+                "#
+        ),
+        39,
+        u32
+    );
+}
+
+#[test]
+fn character_literal_new_line() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = '\n'
+
+                    x
+                "#
+        ),
+        10,
+        u32
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dec_float_alias() {
     assert_evals_to!(

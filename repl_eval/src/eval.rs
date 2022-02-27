@@ -5,11 +5,11 @@ use std::cmp::{max_by_key, min_by_key};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::called_via::CalledVia;
-use roc_module::ident::TagName;
+use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant, WrappedVariant,
+    union_sorted_tags_help, Builtin, Layout, LayoutCache, UnionLayout, UnionVariant, WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
@@ -70,6 +70,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     }
 }
 
+#[derive(Debug)]
 enum NewtypeKind<'a> {
     Tag(&'a TagName),
     RecordField(&'a str),
@@ -89,10 +90,11 @@ fn unroll_newtypes<'a>(
     mut content: &'a Content,
 ) -> (Vec<'a, NewtypeKind<'a>>, &'a Content) {
     let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
+    let mut force_alias_content = None;
     loop {
         match content {
             Content::Structure(FlatType::TagUnion(tags, _))
-                if tags.is_newtype_wrapper(env.subs) =>
+                if tags.is_newtype_wrapper_of_global_tag(env.subs) =>
             {
                 let (tag_name, vars): (&TagName, &[Variable]) = tags
                     .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
@@ -113,7 +115,20 @@ fn unroll_newtypes<'a>(
                 let field_var = *field.as_inner();
                 content = env.subs.get_content_without_compacting(field_var);
             }
-            _ => return (newtype_containers, content),
+            Content::Alias(_, _, real_var) => {
+                // We need to pass through aliases too, because their underlying types may have
+                // unrolled newtypes. In such cases return the list of unrolled newtypes, but keep
+                // the content as the alias for readability. For example,
+                //   T : { a : Str }
+                //   v : T
+                //   v = { a : "value" }
+                //   v
+                // Here we need the newtype container to be `[RecordField(a)]`, but the content to
+                // remain as the alias `T`.
+                force_alias_content = Some(content);
+                content = env.subs.get_content_without_compacting(*real_var);
+            }
+            _ => return (newtype_containers, force_alias_content.unwrap_or(content)),
         }
     }
 }
@@ -334,15 +349,11 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         Layout::Struct { field_layouts, .. } => {
             let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
-                    Ok(struct_to_ast(env, mem, addr, field_layouts, *fields))
+                    Ok(struct_to_ast(env, mem, addr, *fields))
                 }
-                Content::Structure(FlatType::EmptyRecord) => Ok(struct_to_ast(
-                    env,
-                    mem,
-                    addr,
-                    field_layouts,
-                    RecordFields::empty(),
-                )),
+                Content::Structure(FlatType::EmptyRecord) => {
+                    Ok(struct_to_ast(env, mem, addr, RecordFields::empty()))
+                }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     debug_assert_eq!(tags.len(), 1);
 
@@ -518,7 +529,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         }
         (_, Layout::Struct{field_layouts, ..}) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
-                struct_to_ast(env, mem, addr, field_layouts, *fields)
+                struct_to_ast(env, mem, addr, *fields)
             }
             Content::Structure(FlatType::TagUnion(tags, _)) => {
                 debug_assert_eq!(tags.len(), 1);
@@ -531,7 +542,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
-                struct_to_ast(env, mem, addr, &[], RecordFields::empty())
+                struct_to_ast(env, mem, addr, RecordFields::empty())
             }
             other => {
                 unreachable!(
@@ -841,30 +852,46 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
     env: &Env<'a, 'a>,
     mem: &'a M,
     addr: usize,
-    field_layouts: &'a [Layout<'a>],
     record_fields: RecordFields,
 ) -> Expr<'a> {
     let arena = env.arena;
     let subs = env.subs;
-    let mut output = Vec::with_capacity_in(field_layouts.len(), arena);
+    let mut output = Vec::with_capacity_in(record_fields.len(), arena);
 
     let sorted_fields: Vec<_> = Vec::from_iter_in(
         record_fields.sorted_iterator(env.subs, Variable::EMPTY_RECORD),
-        env.arena,
+        arena,
     );
+
+    let mut layout_cache = LayoutCache::new(env.target_info);
+    // We recalculate the layouts here because we will have compiled the record so that its fields
+    // are sorted by descending alignment, and then alphabetic, but the type of the record is
+    // always only sorted alphabetically. We want to arrange the rendered record in the order of
+    // the type.
+    let field_to_layout: MutMap<Lowercase, Layout> = sorted_fields
+        .iter()
+        .map(|(label, field)| {
+            let layout = layout_cache
+                .from_var(arena, *field.as_inner(), env.subs)
+                .unwrap();
+            (label.clone(), layout)
+        })
+        .collect();
 
     if sorted_fields.len() == 1 {
         // this is a 1-field wrapper record around another record or 1-tag tag union
         let (label, field) = sorted_fields.into_iter().next().unwrap();
 
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
+        debug_assert_eq!(field_to_layout.len(), 1);
+        let inner_layouts = arena.alloc([field_to_layout.into_values().next().unwrap()]);
 
         let loc_expr = &*arena.alloc(Loc {
             value: addr_to_ast(
                 env,
                 mem,
                 addr,
-                &Layout::struct_no_name_order(field_layouts),
+                &Layout::struct_no_name_order(inner_layouts),
                 WhenRecursive::Unreachable,
                 inner_content,
             ),
@@ -880,19 +907,20 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
             region: Region::zero(),
         };
 
-        let output = env.arena.alloc([loc_field]);
+        let output = arena.alloc([loc_field]);
 
         Expr::Record(Collection::with_items(output))
     } else {
-        debug_assert_eq!(sorted_fields.len(), field_layouts.len());
+        debug_assert_eq!(sorted_fields.len(), field_to_layout.len());
 
         // We'll advance this as we iterate through the fields
         let mut field_addr = addr;
 
-        for ((label, field), field_layout) in sorted_fields.into_iter().zip(field_layouts.iter()) {
+        for (label, field) in sorted_fields.into_iter() {
             let var = field.into_inner();
 
             let content = subs.get_content_without_compacting(var);
+            let field_layout = field_to_layout.get(&label).unwrap();
 
             let loc_expr = &*arena.alloc(Loc {
                 value: addr_to_ast(

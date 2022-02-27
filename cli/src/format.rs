@@ -607,6 +607,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
+            Expr::SingleQuote(a) => Expr::Num(a),
         }
     }
 }
@@ -649,6 +650,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             }
             Pattern::SpaceBefore(a, _) => a.remove_spaces(arena),
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
+            Pattern::SingleQuote(a) => Pattern::NumLiteral(a),
         }
     }
 }

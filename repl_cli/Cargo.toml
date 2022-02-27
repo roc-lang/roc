@@ -5,16 +5,25 @@ version = "0.1.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+# pipe target to roc_build
+target-arm = ["roc_build/target-arm"]
+target-aarch64 = ["roc_build/target-aarch64"]
+target-x86 = ["roc_build/target-x86"]
+target-x86_64 = ["roc_build/target-x86_64"]
+target-wasm32 = ["roc_build/target-wasm32"]
+
 [dependencies]
-bumpalo = {version = "3.8.0", features = ["collections"]}
+bumpalo = { version = "3.8.0", features = ["collections"] }
 const_format = "0.2.22"
 inkwell = {path = "../vendor/inkwell"}
-libloading = {version = "0.7.1"}
+libloading = "0.7.1"
 rustyline = {git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1"}
 rustyline-derive = {git = "https://github.com/rtfeldman/rustyline", tag = "v9.1.1"}
 target-lexicon = "0.12.2"
 
-roc_build = {path = "../compiler/build"}
+# TODO: make llvm optional
+roc_build = {path = "../compiler/build", features = ["llvm"]}
 roc_collections = {path = "../compiler/collections"}
 roc_gen_llvm = {path = "../compiler/gen_llvm"}
 roc_load = {path = "../compiler/load"}

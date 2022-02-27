@@ -1,90 +1,5 @@
 # Building the Roc compiler from source
 
-
-## Installing LLVM, Zig, valgrind, and Python
-
-To build the compiler, you need these installed:
-
-* [Zig](https://ziglang.org/), see below for version
-* `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
-* On Debian/Ubuntu `sudo apt-get install pkg-config`
-* LLVM, see below for version
-
-To run the test suite (via `cargo test`), you additionally need to install:
-
-* [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
-Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specific_tests` to skip over the valgrind failures & tests.
-
-For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal developtment you should be fine without it.
-
-### libcxb libraries
-
-You may see an error like this during builds:
-
-```
-/usr/bin/ld: cannot find -lxcb-render
-/usr/bin/ld: cannot find -lxcb-shape
-/usr/bin/ld: cannot find -lxcb-xfixes
-```
-
-If so, you can fix it like so:
-
-```
-sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
-```
-
-### Zig
-**version: 0.8.0**
-
-For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
-
-If you prefer a package manager, you can try the following:
-- For MacOS, you can install with `brew install zig`
-- For, Ubuntu, you can use Snap, you can install with `snap install zig --classic --beta`
-- For other systems, checkout this [page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
-
-If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
-
-### LLVM
-**version: 12.0.x**
-
-For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
-`$(brew --prefix llvm@12)/bin` to your `PATH`. You can confirm this worked by
-running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
-You may also need to manually specify a prefix env var like so:
-```
-export LLVM_SYS_120_PREFIX=/usr/local/opt/llvm@12
-```
-
-For Ubuntu and Debian:
-```
-sudo apt -y install lsb-release software-properties-common gnupg
-wget https://apt.llvm.org/llvm.sh
-chmod +x llvm.sh
-./llvm.sh 12
-```
-
-If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
-By default, the script installs them as `clang-12` and `llvm-as-12`,
-respectively. You can address this with symlinks like so:
-
-```
-sudo ln -s /usr/bin/clang-12 /usr/bin/clang
-```
-```
-sudo ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
-````
-
-There are also alternative installation options at http://releases.llvm.org/download.html
-
-[Troubleshooting](#troubleshooting)
-
-### Building
-
-Use `cargo build` to build the whole project.
-Use `cargo run help` to see all subcommands.
-To use the `repl` subcommand, execute `cargo run repl`.
-
 ## Using Nix
 
 ### Install
@@ -167,6 +82,90 @@ Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics confi
 
 Create an issue if you run into problems not listed here.
 That will help us improve this document for everyone who reads it in the future!
+
+## Manual Install
+
+To build the compiler, you need these installed:
+
+* [Zig](https://ziglang.org/), see below for version
+* `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
+* On Debian/Ubuntu `sudo apt-get install pkg-config`
+* LLVM, see below for version
+
+To run the test suite (via `cargo test`), you additionally need to install:
+
+* [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
+Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specific_tests` to skip over the valgrind failures & tests.
+
+For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal developtment you should be fine without it.
+
+### libcxb libraries
+
+You may see an error like this during builds:
+
+```
+/usr/bin/ld: cannot find -lxcb-render
+/usr/bin/ld: cannot find -lxcb-shape
+/usr/bin/ld: cannot find -lxcb-xfixes
+```
+
+If so, you can fix it like so:
+
+```
+sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+```
+
+### Zig
+**version: 0.8.0**
+
+For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
+
+If you prefer a package manager, you can try the following:
+- For MacOS, you can install with `brew install zig`
+- For, Ubuntu, you can use Snap, you can install with `snap install zig --classic --beta`
+- For other systems, checkout this [page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
+
+If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
+
+### LLVM
+**version: 12.0.x**
+
+For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
+`$(brew --prefix llvm@12)/bin` to your `PATH`. You can confirm this worked by
+running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
+You may also need to manually specify a prefix env var like so:
+```
+export LLVM_SYS_120_PREFIX=/usr/local/opt/llvm@12
+```
+
+For Ubuntu and Debian:
+```
+sudo apt -y install lsb-release software-properties-common gnupg
+wget https://apt.llvm.org/llvm.sh
+chmod +x llvm.sh
+./llvm.sh 12
+```
+
+If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
+By default, the script installs them as `clang-12` and `llvm-as-12`,
+respectively. You can address this with symlinks like so:
+
+```
+sudo ln -s /usr/bin/clang-12 /usr/bin/clang
+```
+```
+sudo ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
+````
+
+There are also alternative installation options at http://releases.llvm.org/download.html
+
+[Troubleshooting](#troubleshooting)
+
+### Building
+
+Use `cargo build` to build the whole project.
+Use `cargo run help` to see all subcommands.
+To use the `repl` subcommand, execute `cargo run repl`.
 
 ### LLVM installation on Linux
 
