@@ -1258,19 +1258,17 @@ fn lowlevel_spec(
 
             builder.add_bag_get(block, bag)
         }
-        ListSet => {
+        ListReplaceUnsafe => {
             let list = env.symbols[&arguments[0]];
             let to_insert = env.symbols[&arguments[2]];
 
             let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
             let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
 
-            // decrement the overwritten element
-            let overwritten = builder.add_bag_get(block, bag)?;
-            let _unit = builder.add_recursive_touch(block, overwritten)?;
-
             let _unit = builder.add_update(block, update_mode_var, cell)?;
 
+            // replace loads the old element and then inserts the new one.
+            builder.add_bag_get(block, bag)?;
             builder.add_bag_insert(block, bag, to_insert)?;
 
             with_new_heap_cell(builder, block, bag)

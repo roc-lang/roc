@@ -360,54 +360,6 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
         .into()
 }
 
-/// List.set : List elem, Nat, elem -> List elem
-pub fn list_set<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    list: BasicValueEnum<'ctx>,
-    index: IntValue<'ctx>,
-    element: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-    update_mode: UpdateMode,
-) -> BasicValueEnum<'ctx> {
-    let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
-
-    let (length, bytes) = load_list(
-        env.builder,
-        list.into_struct_value(),
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
-    );
-
-    let new_bytes = match update_mode {
-        UpdateMode::InPlace => call_bitcode_fn(
-            env,
-            &[
-                bytes.into(),
-                index.into(),
-                pass_element_as_opaque(env, element, *element_layout),
-                layout_width(env, element_layout),
-                dec_element_fn.as_global_value().as_pointer_value().into(),
-            ],
-            bitcode::LIST_SET_IN_PLACE,
-        ),
-        UpdateMode::Immutable => call_bitcode_fn(
-            env,
-            &[
-                bytes.into(),
-                length.into(),
-                env.alignment_intvalue(element_layout),
-                index.into(),
-                pass_element_as_opaque(env, element, *element_layout),
-                layout_width(env, element_layout),
-                dec_element_fn.as_global_value().as_pointer_value().into(),
-            ],
-            bitcode::LIST_SET,
-        ),
-    };
-
-    store_list(env, new_bytes.into_pointer_value(), length)
-}
-
 fn bounds_check_comparison<'ctx>(
     builder: &Builder<'ctx>,
     elem_index: IntValue<'ctx>,
