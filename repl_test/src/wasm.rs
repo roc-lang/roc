@@ -25,7 +25,7 @@ lazy_static! {
 }
 
 /// Load the compiler .wasm file and get it ready to execute
-/// THIS FUNCTION TAKES FIVE SECONDS TO RUN
+/// THIS FUNCTION TAKES 4 SECONDS TO RUN
 fn init_compiler() -> Instance {
     let path = Path::new(WASM_REPL_COMPILER_PATH);
     let wasm_module_bytes = match fs::read(&path) {
@@ -34,7 +34,11 @@ fn init_compiler() -> Instance {
     };
 
     let store = Store::default();
-    let wasmer_module = Module::new(&store, &wasm_module_bytes).unwrap();
+
+    // This is the slow line. Skipping validation checks reduces module compilation time from 5s to 4s.
+    // Safety: We trust rustc to produce a valid module.
+    let wasmer_module =
+        unsafe { Module::from_binary_unchecked(&store, &wasm_module_bytes).unwrap() };
 
     let import_object = imports! {
         "env" => {
@@ -47,7 +51,6 @@ fn init_compiler() -> Instance {
         }
     };
 
-    // This is the slow line
     Instance::new(&wasmer_module, &import_object).unwrap()
 }
 
