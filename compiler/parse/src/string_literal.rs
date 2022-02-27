@@ -35,6 +35,100 @@ macro_rules! advance_state {
     };
 }
 
+pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
+    move |arena: &'a Bump, mut state: State<'a>| {
+        if state.bytes().starts_with(b"\'") {
+            // we will be parsing a single-quote-string
+        } else {
+            return Err((NoProgress, EString::Open(state.pos()), state));
+        }
+
+        // early return did not hit, just advance one byte
+        state = advance_state!(state, 1)?;
+
+        // Handle back slaches in byte literal
+        // - starts with a backslash and used as an escape character. ex: '\n', '\t'
+        // - single quote floating (un closed single quote) should be an error
+        match state.bytes().first() {
+            Some(b'\\') => {
+                state = advance_state!(state, 1)?;
+                match state.bytes().first() {
+                    Some(&ch) => {
+                        state = advance_state!(state, 1)?;
+                        if (ch == b'n' || ch == b'r' || ch == b't' || ch == b'\'' || ch == b'\\')
+                            && (state.bytes().first() == Some(&b'\''))
+                        {
+                            state = advance_state!(state, 1)?;
+                            let test = match ch {
+                                b'n' => '\n',
+                                b't' => '\t',
+                                b'r' => '\r',
+                                // since we checked the current char between the single quotes we
+                                // know they are valid UTF-8, allowing us to use 'from_u32_unchecked'
+                                _ => unsafe { char::from_u32_unchecked(ch as u32) },
+                            };
+
+                            return Ok((MadeProgress, &*arena.alloc_str(&test.to_string()), state));
+                        }
+                        // invalid error, backslah escaping something we do not recognize
+                        return Err((NoProgress, EString::CodePtEnd(state.pos()), state));
+                    }
+                    None => {
+                        // no close quote found
+                        return Err((NoProgress, EString::CodePtEnd(state.pos()), state));
+                    }
+                }
+            }
+            Some(_) => {
+                // do nothing for other characters, handled below
+            }
+            None => return Err((NoProgress, EString::CodePtEnd(state.pos()), state)),
+        }
+
+        let mut bytes = state.bytes().iter();
+        let mut end_index = 1;
+
+        // Copy paste problem in mono
+
+        loop {
+            match bytes.next() {
+                Some(b'\'') => {
+                    break;
+                }
+                Some(_) => end_index += 1,
+                None => {
+                    return Err((NoProgress, EString::Open(state.pos()), state));
+                }
+            }
+        }
+
+        if end_index == 1 {
+            // no progress was made
+            // this case is a double single quote, ex: ''
+            // not supporting empty single quotes
+            return Err((NoProgress, EString::Open(state.pos()), state));
+        }
+
+        if end_index > (std::mem::size_of::<u32>() + 1) {
+            // bad case: too big to fit into u32
+            return Err((NoProgress, EString::Open(state.pos()), state));
+        }
+
+        // happy case -> we have some bytes that will fit into a u32
+        // ending up w/ a slice of bytes that we want to convert into an integer
+        let raw_bytes = &state.bytes()[0..end_index - 1];
+
+        state = advance_state!(state, end_index)?;
+        match std::str::from_utf8(raw_bytes) {
+            Ok(string) => Ok((MadeProgress, string, state)),
+            Err(_) => {
+                // invalid UTF-8
+                return Err((NoProgress, EString::CodePtEnd(state.pos()), state));
+            }
+        }
+    }
+}
+
 pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
     use StrLiteral::*;
 

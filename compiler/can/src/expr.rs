@@ -73,6 +73,7 @@ pub enum Expr {
     Int(Variable, Variable, Box<str>, IntValue, IntBound),
     Float(Variable, Variable, Box<str>, f64, FloatBound),
     Str(Box<str>),
+    SingleQuote(char),
     List {
         elem_var: Variable,
         loc_elems: Vec<Loc<Expr>>,
@@ -323,6 +324,28 @@ pub fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
+
+        ast::Expr::SingleQuote(string) => {
+            let mut it = string.chars().peekable();
+            if let Some(char) = it.next() {
+                if it.peek().is_none() {
+                    (Expr::SingleQuote(char), Output::default())
+                } else {
+                    // multiple chars is found
+                    let error = roc_problem::can::RuntimeError::MultipleCharsInSingleQuote(region);
+                    let answer = Expr::RuntimeError(error);
+
+                    (answer, Output::default())
+                }
+            } else {
+                // no characters found
+                let error = roc_problem::can::RuntimeError::EmptySingleQuote(region);
+                let answer = Expr::RuntimeError(error);
+
+                (answer, Output::default())
+            }
+        }
+
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
                 (
@@ -1267,6 +1290,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Int(..)
         | other @ Float(..)
         | other @ Str { .. }
+        | other @ SingleQuote(_)
         | other @ RuntimeError(_)
         | other @ EmptyRecord
         | other @ Accessor { .. }

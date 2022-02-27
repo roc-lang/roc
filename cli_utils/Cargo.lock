@@ -2696,6 +2696,7 @@ dependencies = [
  "roc_mono",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_solve",
  "roc_target",
  "roc_types",

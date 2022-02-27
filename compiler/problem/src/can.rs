@@ -230,6 +230,11 @@ pub enum RuntimeError {
     VoidValue,
 
     ExposedButNotDefined(Symbol),
+
+    /// where ''
+    EmptySingleQuote(Region),
+    /// where 'aa'
+    MultipleCharsInSingleQuote(Region),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -240,4 +245,6 @@ pub enum MalformedPatternProblem {
     Unknown,
     QualifiedIdentifier,
     BadIdent(roc_parse::ident::BadIdent),
+    EmptySingleQuote,
+    MultipleCharsInSingleQuote,
 }

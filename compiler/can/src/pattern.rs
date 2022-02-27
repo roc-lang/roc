@@ -39,6 +39,7 @@ pub enum Pattern {
     IntLiteral(Variable, Variable, Box<str>, IntValue, IntBound),
     FloatLiteral(Variable, Variable, Box<str>, f64, FloatBound),
     StrLiteral(Box<str>),
+    SingleQuote(char),
     Underscore,
 
     // Runtime Exceptions
@@ -108,6 +109,7 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
         | IntLiteral(..)
         | FloatLiteral(..)
         | StrLiteral(_)
+        | SingleQuote(_)
         | Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
@@ -308,6 +310,23 @@ pub fn canonicalize_pattern<'a>(
             WhenBranch => flatten_str_literal(literal),
             ptype => unsupported_pattern(env, ptype, region),
         },
+
+        SingleQuote(string) => {
+            let mut it = string.chars().peekable();
+            if let Some(char) = it.next() {
+                if it.peek().is_none() {
+                    Pattern::SingleQuote(char)
+                } else {
+                    // multiple chars is found
+                    let problem = MalformedPatternProblem::MultipleCharsInSingleQuote;
+                    malformed_pattern(env, problem, region)
+                }
+            } else {
+                // no characters found
+                let problem = MalformedPatternProblem::EmptySingleQuote;
+                malformed_pattern(env, problem, region)
+            }
+        }
 
         SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
             return canonicalize_pattern(env, var_store, scope, pattern_type, sub_pattern, region)
@@ -560,6 +579,7 @@ fn add_bindings_from_patterns(
         | IntLiteral(..)
         | FloatLiteral(..)
         | StrLiteral(_)
+        | SingleQuote(_)
         | Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)

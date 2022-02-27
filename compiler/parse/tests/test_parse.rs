@@ -507,18 +507,27 @@ mod test_parse {
     }
 
     #[quickcheck]
-    fn all_f64_values_parse(num: f64) {
-        let string = num.to_string();
-        if string.contains('.') {
-            assert_parses_to(&string, Float(&string));
-        } else if num.is_nan() {
-            assert_parses_to(&string, Expr::GlobalTag(&string));
-        } else if num.is_finite() {
-            // These are whole numbers. Add the `.0` back to make float.
-            let float_string = format!("{}.0", string);
-            assert_parses_to(&float_string, Float(&float_string));
+    fn all_f64_values_parse(mut num: f64) {
+        // NaN, Infinity, -Infinity (these would all parse as tags in Roc)
+        if !num.is_finite() {
+            num = 0.0;
         }
+
+        // These can potentially be whole numbers. `Display` omits the decimal point for those,
+        // causing them to no longer be parsed as fractional numbers by Roc.
+        // Using `Debug` instead of `Display` ensures they always have a decimal point.
+        let float_string = format!("{:?}", num);
+
+        assert_parses_to(float_string.as_str(), Float(float_string.as_str()));
     }
+
+    // SINGLE QUOTE LITERAL
+    #[test]
+    fn single_quote() {
+        assert_parses_to("'b'", Expr::SingleQuote("b"));
+    }
+
+    // RECORD LITERALS
 
     // #[test]
     // fn type_signature_def() {
