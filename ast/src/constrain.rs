@@ -1940,11 +1940,10 @@ fn _num_signed64(pool: &mut Pool) -> Type2 {
 fn num_unsigned32(pool: &mut Pool) -> Type2 {
     let alias_content = Type2::TagUnion(
         PoolVec::new(
-            vec![(
+            std::iter::once((
                 TagName::Private(Symbol::NUM_UNSIGNED32),
                 PoolVec::empty(pool),
-            )]
-            .into_iter(),
+            )),
             pool,
         ),
         pool.add(Type2::EmptyTagUnion),
