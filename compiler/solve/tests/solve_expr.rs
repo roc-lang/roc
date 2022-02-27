@@ -10,7 +10,6 @@ mod helpers;
 #[cfg(test)]
 mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
-    use roc_can::builtins::builtin_defs_map;
     use roc_collections::all::MutMap;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
@@ -64,7 +63,6 @@ mod solve_expr {
                 dir.path(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
-                builtin_defs_map,
             );
 
             dir.close()?;
@@ -3036,7 +3034,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn typecheck_mutually_recursive_tag_union_2() {
         infer_eq_without_problem(
             indoc!(
@@ -3064,7 +3061,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn typecheck_mutually_recursive_tag_union_listabc() {
         infer_eq_without_problem(
             indoc!(
@@ -5194,6 +5190,323 @@ mod solve_expr {
                 "#
             ),
             r#"{ bi128 : I128 -> I128, bi16 : I16 -> I16, bi32 : I32 -> I32, bi64 : I64 -> I64, bi8 : I8 -> I8, bnat : Nat -> Nat, bu128 : U128 -> U128, bu16 : U16 -> U16, bu32 : U32 -> U32, bu64 : U64 -> U64, bu8 : U8 -> U8, dec : Dec -> Dec, f32 : F32 -> F32, f64 : F64 -> F64, fdec : Dec -> Dec, ff32 : F32 -> F32, ff64 : F64 -> F64, i128 : I128 -> I128, i16 : I16 -> I16, i32 : I32 -> I32, i64 : I64 -> I64, i8 : I8 -> I8, nat : Nat -> Nat, u128 : U128 -> U128, u16 : U16 -> U16, u32 : U32 -> U32, u64 : U64 -> U64, u8 : U8 -> U8 }"#,
+        )
+    }
+
+    #[test]
+    fn issue_2458() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Foo a : [ Blah (Result (Bar a) { val: a }) ]
+                Bar a : Foo a
+
+                v : Bar U8
+                v = Blah (Ok (Blah (Err { val: 1 })))
+
+                v
+                "#
+            ),
+            "Bar U8",
+        )
+    }
+
+    // https://github.com/rtfeldman/roc/issues/2379
+    #[test]
+    fn copy_vars_referencing_copied_vars() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Job : [ Job [ Command ] (List Job) ]
+
+                job : Job
+
+                job
+                "#
+            ),
+            "Job",
+        )
+    }
+
+    #[test]
+    fn copy_vars_referencing_copied_vars_specialized() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Job a : [ Job [ Command ] (Job a) (List (Job a)) a ]
+
+                job : Job Str
+
+                when job is
+                    Job _ j lst _ ->
+                        when j is
+                            Job _ _ _ s ->
+                                { j, lst, s }
+                "#
+            ),
+            // TODO: this means that we're doing our job correctly, as now both `Job a`s have been
+            // specialized to the same type, and the second destructuring proves the reified type
+            // is `Job Str`. But we should just print the structure of the recursive type directly.
+            // See https://github.com/rtfeldman/roc/issues/2513
+            "{ j : a, lst : List a, s : Str }",
+        )
+    }
+
+    #[test]
+    fn to_int() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                {
+                    toI8: Num.toI8,
+                    toI16: Num.toI16,
+                    toI32: Num.toI32,
+                    toI64: Num.toI64,
+                    toI128: Num.toI128,
+                    toU8: Num.toU8,
+                    toU16: Num.toU16,
+                    toU32: Num.toU32,
+                    toU64: Num.toU64,
+                    toU128: Num.toU128,
+                }
+                "#
+            ),
+            r#"{ toI128 : Int * -> I128, toI16 : Int * -> I16, toI32 : Int * -> I32, toI64 : Int * -> I64, toI8 : Int * -> I8, toU128 : Int * -> U128, toU16 : Int * -> U16, toU32 : Int * -> U32, toU64 : Int * -> U64, toU8 : Int * -> U8 }"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                $Age 21
+                "#
+            ),
+            r#"Age"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                a : Age
+                a = $Age 21
+
+                a
+                "#
+            ),
+            r#"Age"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                $Id (Id 21 "sasha")
+                "#
+            ),
+            r#"Id Str"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                a : Id Str
+                a = $Id (Id 21 "sasha")
+
+                a
+                "#
+            ),
+            r#"Id Str"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_from_multiple_branches_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+                condition : Bool
+
+                if condition
+                then $Id (Id 21 (Y "sasha"))
+                else $Id (Id 21 (Z "felix"))
+                "#
+            ),
+            r#"Id [ Y Str, Z Str ]*"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_from_multiple_branches_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+                condition : Bool
+
+                v : Id [ Y Str, Z Str ]
+                v = 
+                    if condition
+                    then $Id (Id 21 (Y "sasha"))
+                    else $Id (Id 21 (Z "felix"))
+
+                v
+                "#
+            ),
+            r#"Id [ Y Str, Z Str ]"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                \$Age n -> n
+                "#
+            ),
+            r#"Age -> U32"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                v : Age -> U32
+                v = \$Age n -> n
+                v
+                "#
+            ),
+            r#"Age -> U32"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                \$Id (Id _ n) -> n
+                "#
+            ),
+            r#"Id a -> a"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                v : Id a -> a
+                v = \$Id (Id _ n) -> n
+
+                v
+                "#
+            ),
+            r#"Id a -> a"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_specialized_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                strToBool : Str -> Bool
+
+                \$Id (Id _ n) -> strToBool n
+                "#
+            ),
+            r#"Id Str -> Bool"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_specialized_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                strToBool : Str -> Bool
+
+                v : Id Str -> Bool
+                v = \$Id (Id _ n) -> strToBool n
+
+                v
+                "#
+            ),
+            r#"Id Str -> Bool"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_from_multiple_branches_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                \id ->
+                    when id is
+                        $Id (Id _ A) -> ""
+                        $Id (Id _ B) -> ""
+                        $Id (Id _ (C { a: "" })) -> ""
+                "#
+            ),
+            r#"Id [ A, B, C { a : Str }* ] -> Str"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_from_multiple_branches_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                f : Id [ A, B, C { a : Str }e ] -> Str
+                f = \id ->
+                    when id is
+                        $Id (Id _ A) -> ""
+                        $Id (Id _ B) -> ""
+                        $Id (Id _ (C { a: "" })) -> ""
+
+                f
+                "#
+            ),
+            r#"Id [ A, B, C { a : Str }e ] -> Str"#,
         )
     }
 }

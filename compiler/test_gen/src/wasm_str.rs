@@ -320,7 +320,7 @@ fn small_str_zeroed_literal() {
 fn long_str_literal() {
     assert_evals_to!(
         "\"0123456789 123456789 123456789\"",
-        RocStr::from_slice(b"0123456789 123456789 123456789"),
+        RocStr::from("0123456789 123456789 123456789"),
         RocStr
     );
 }
@@ -347,7 +347,7 @@ fn small_str_concat_empty_second_arg() {
 fn small_str_concat_small_to_big() {
     assert_evals_to!(
         r#"Str.concat "abc" " this is longer than 7 chars""#,
-        RocStr::from_slice(b"abc this is longer than 7 chars"),
+        RocStr::from("abc this is longer than 7 chars"),
         RocStr
     );
 }
@@ -365,7 +365,7 @@ fn small_str_concat_small_to_small_staying_small() {
 fn small_str_concat_small_to_small_overflow_to_big() {
     assert_evals_to!(
         r#"Str.concat "abcdefg" "hijklmn""#,
-        RocStr::from_slice(b"abcdefghijklmn"),
+        RocStr::from("abcdefghijklmn"),
         RocStr
     );
 }

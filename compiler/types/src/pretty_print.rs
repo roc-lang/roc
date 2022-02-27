@@ -197,7 +197,7 @@ fn find_names_needed(
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
             find_names_needed(*rec_var, subs, roots, root_appearances, names_taken);
         }
-        Alias(_symbol, args, _actual) => {
+        Alias(_symbol, args, _actual, _kind) => {
             // only find names for named parameters!
             for var_index in args.into_iter().take(args.len()) {
                 let var = subs[var_index];
@@ -319,14 +319,14 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
             None => buf.push_str(WILDCARD),
         },
         Structure(flat_type) => write_flat_type(env, flat_type, subs, buf, parens),
-        Alias(symbol, args, _actual) => {
+        Alias(symbol, args, _actual, _kind) => {
             let write_parens = parens == Parens::InTypeParam && !args.is_empty();
 
             match *symbol {
                 Symbol::NUM_NUM => {
                     let content = get_single_arg(subs, args);
                     match *content {
-                        Alias(nested, args, _actual) => match nested {
+                        Alias(nested, args, _actual, _kind) => match nested {
                             Symbol::NUM_INTEGER => {
                                 write_integer(
                                     env,
@@ -369,9 +369,9 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                     let content = subs.get_content_without_compacting(arg_var);
 
                     match content {
-                        Alias(Symbol::NUM_BINARY32, _, _) => buf.push_str("F32"),
-                        Alias(Symbol::NUM_BINARY64, _, _) => buf.push_str("F64"),
-                        Alias(Symbol::NUM_DECIMAL, _, _) => buf.push_str("Dec"),
+                        Alias(Symbol::NUM_BINARY32, _, _, _) => buf.push_str("F32"),
+                        Alias(Symbol::NUM_BINARY64, _, _, _) => buf.push_str("F64"),
+                        Alias(Symbol::NUM_DECIMAL, _, _, _) => buf.push_str("Dec"),
                         _ => write_parens!(write_parens, buf, {
                             buf.push_str("Float ");
                             write_content(env, content, subs, buf, parens);
@@ -432,7 +432,7 @@ fn write_integer(
                 buf,
                 match content {
                     $(
-                    &Alias($tag, _, _) => {
+                    &Alias($tag, _, _, _) => {
                         buf.push_str($lit)
                     },
                     )*
@@ -755,7 +755,7 @@ pub fn chase_ext_tag_union<'a>(
             chase_ext_tag_union(subs, *ext_var, fields)
         }
 
-        Content::Alias(_, _, var) => chase_ext_tag_union(subs, *var, fields),
+        Content::Alias(_, _, var, _) => chase_ext_tag_union(subs, *var, fields),
 
         content => Err((var, content)),
     }

@@ -64,7 +64,7 @@ mod test_reporting {
             var,
             constraint,
             home,
-            mut interns,
+            interns,
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
@@ -92,7 +92,7 @@ mod test_reporting {
 
             // Compile and add all the Procs before adding main
             let mut procs = Procs::new_in(&arena);
-            let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
+            let mut ident_ids = interns.all_ident_ids.get(&home).unwrap().clone();
             let mut update_mode_ids = UpdateModeIds::new();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
@@ -2852,7 +2852,7 @@ mod test_reporting {
                     ^^^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -3135,6 +3135,32 @@ mod test_reporting {
     }
 
     #[test]
+    fn invalid_opaque_rigid_var_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age 1 := I64
+
+                a : Age
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This pattern in the definition of `Age` is not what I expect:
+
+                1│  Age 1 := I64
+                        ^
+
+                Only type variables like `a` or `value` can occur in this position.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn invalid_num() {
         report_problem_as(
             indoc!(
@@ -3348,6 +3374,8 @@ mod test_reporting {
                 { x, y }
                 "#
             ),
+            // TODO render tag unions across multiple lines
+            // TODO do not show recursion var if the recursion var does not render on the surface of a type
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
@@ -3360,12 +3388,13 @@ mod test_reporting {
 
                 This `ACons` global tag application has the type:
 
-                    [ ACons Num (Integer Signed64) [ BCons (Num a) [ ACons Str [ BNil
-                    ]b ]c ]d, ANil ]
+                    [ ACons (Num (Integer Signed64)) [
+                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 a, BNil ],
+                    ANil ], BNil ], ANil ]
 
                 But the type annotation on `x` says it should be:
 
-                    [ ACons I64 BList I64 I64, ANil ]
+                    [ ACons I64 (BList I64 I64), ANil ] as a
                 "#
             ),
         )
@@ -5818,6 +5847,29 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
+    fn opaque_ref_field_access() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $UUID.bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am very confused by this field access:
+
+                1│  $UUID.bar
+                         ^^^^
+
+                It looks like a record field access on an opaque reference.
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn weird_accessor() {
         report_problem_as(
             indoc!(
@@ -7075,7 +7127,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7102,7 +7154,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7128,7 +7180,7 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
-                tag.
+                tagged union, at least one variant of which is not recursive.
                 "#
             ),
         )
@@ -7973,6 +8025,535 @@ I need all branches in an `if` to have the same type!
                 But the expression between `when` and `is` has the type:
 
                     I8, I16, I32, I64, I128, F32, F64, or Dec
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype() {
+        report_problem_as(
+            indoc!(
+                r#"
+                R a : [ Only (R a) ]
+
+                v : R U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `R` alias is self-recursive in an invalid way:
+
+                1│  R a : [ Only (R a) ]
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype_deep() {
+        report_problem_as(
+            indoc!(
+                r#"
+                R a : [ Only { very: [ Deep (R a) ] } ]
+
+                v : R U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `R` alias is self-recursive in an invalid way:
+
+                1│  R a : [ Only { very: [ Deep (R a) ] } ]
+                    ^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursive_type_alias_is_newtype_mutual() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo a : [ Thing (Bar a) ]
+                Bar a : [ Stuff (Foo a) ]
+
+                v : Bar U8
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
+
+                The `Bar` alias is recursive in an invalid way:
+
+                2│  Bar a : [ Stuff (Foo a) ]
+                    ^^^^^
+
+                The `Bar` alias depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     Bar
+                    │     ↓
+                    │     Foo
+                    └─────┘
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tagged union, at least one variant of which is not recursive.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn issue_2458() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo a : [ Blah (Result (Bar a) []) ]
+                Bar a : Foo a
+
+                v : Bar U8
+                v
+                "#
+            ),
+            "",
+        )
+    }
+
+    #[test]
+    fn opaque_type_not_in_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                1│  $Age 21
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_reference_not_opaque_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age : U8
+
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                3│  $Age 21
+                    ^^^^
+
+                Note: There is an alias of the same name:
+
+                1│  Age : U8
+                    ^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                1│  Age : U8
+                    ^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn qualified_opaque_reference() {
+        report_problem_as(
+            indoc!(
+                r#"
+                OtherModule.$Age 21
+                "#
+            ),
+            // TODO: get rid of the first error. Consider parsing OtherModule.$Age to completion
+            // and checking it during can. The reason the error appears is because it is parsed as
+            // Apply(Error(OtherModule), [ $Age, 21 ])
+            indoc!(
+                r#"
+                ── OPAQUE TYPE NOT APPLIED ─────────────────────────────────────────────────────
+
+                This opaque type is not applied to an argument:
+
+                1│  OtherModule.$Age 21
+                                ^^^^
+
+                Note: Opaque types always wrap exactly one argument!
+
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am trying to parse a qualified name here:
+
+                1│  OtherModule.$Age 21
+                                ^
+
+                I was expecting to see an identifier next, like height. A complete
+                qualified name looks something like Json.Decode.string.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_used_outside_declaration_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                age =
+                    Age := U8
+                    21u8
+
+                $Age age
+                "#
+            ),
+            // TODO(opaques): there is a potential for a better error message here, if the usage of
+            // `$Age` can be linked to the declaration of `Age` inside `age`, and a suggestion to
+            // raise that declaration to the outer scope.
+            indoc!(
+                r#"
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                2│      Age := U8
+                        ^^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+
+                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                5│  $Age age
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unimported_modules_reported() {
+        report_problem_as(
+            indoc!(
+                r#"
+                main : Task.Task {} []
+                main = "whatever man you don't even know my type"
+                main
+                "#
+            ),
+            indoc!(
+                r#"
+                ── MODULE NOT IMPORTED ─────────────────────────────────────────────────────────
+
+                The `Task` module is not imported:
+
+                1│  main : Task.Task {} []
+                           ^^^^^^^^^^^^^^^
+
+                Is there an import missing? Perhaps there is a typo. Did you mean one
+                of these?
+
+                    Test
+                    List
+                    Num
+                    Set
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_check() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age := U8
+
+                n : Age
+                n = $Age ""
+
+                n
+                "#
+            ),
+            // TODO(opaques): error could be improved by saying that the opaque definition demands
+            // that the argument be a U8, and linking to the definitin!
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This expression is used in an unexpected way:
+
+                4│  n = $Age ""
+                             ^^
+
+                This argument to an opaque type has type:
+
+                    Str
+
+                But you are trying to use it as:
+
+                    U8
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_infer() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                if True
+                then $F ""
+                else $F {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This expression is used in an unexpected way:
+
+                5│  else $F {}
+                            ^^
+
+                This argument to an opaque type has type:
+
+                    {}
+
+                But you are trying to use it as:
+
+                    Str
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_creation_is_not_wrapped() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F Str
+                v = ""
+
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `v` definition:
+
+                3│  v : F Str
+                4│  v = ""
+                        ^^
+
+                The body is a string of type:
+
+                    Str
+
+                But the type annotation on `v` says it should be:
+
+                    F Str
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_pattern_check() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age := U8
+
+                f : Age -> U8
+                f = \Age n -> n
+
+                f
+                "#
+            ),
+            // TODO(opaques): error could be improved by saying that the user-provided pattern
+            // probably wants to change "Age" to "@Age"!
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This pattern is being used in an unexpected way:
+
+                4│  f = \Age n -> n
+                         ^^^^^
+
+                It is a `Age` tag of type:
+
+                    [ Age a ]
+
+                But it needs to match:
+
+                    Age
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_pattern_infer() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                \x ->
+                    when x is
+                        $F A -> ""
+                        $F {} -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd pattern in this `when` does not match the previous ones:
+
+                6│          $F {} -> ""
+                            ^^^^^
+
+                The 2nd pattern is trying to matchF unwrappings of type:
+
+                    F {}a
+
+                But all the previous branches match:
+
+                    F [ A ]
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_pattern_match_not_exhaustive_tag() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F [ A, B, C ]
+
+                when v is
+                    $F A -> ""
+                    $F B -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                5│>  when v is
+                6│>      $F A -> ""
+                7│>      $F B -> ""
+
+                Other possibilities include:
+
+                    $F C
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_pattern_match_not_exhaustive_int() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F U8
+
+                when v is
+                    $F 1 -> ""
+                    $F 2 -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                5│>  when v is
+                6│>      $F 1 -> ""
+                7│>      $F 2 -> ""
+
+                Other possibilities include:
+
+                    $F _
+
+                I would have to crash if I saw one of those! Add branches for them!
                 "#
             ),
         )

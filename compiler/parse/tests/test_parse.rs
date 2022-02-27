@@ -105,6 +105,7 @@ mod test_parse {
         };
     }
 
+    // see tests/snapshots to see test input(.roc) and expected output(.result-ast)
     snapshot_tests! {
         fail/type_argument_no_arrow.expr,
         fail/type_double_comma.expr,
@@ -126,6 +127,7 @@ mod test_parse {
         pass/basic_private_tag.expr,
         pass/basic_var.expr,
         pass/closure_with_underscores.expr,
+        pass/comment_after_def.module,
         pass/comment_after_op.expr,
         pass/comment_before_op.expr,
         pass/comment_inside_empty_list.expr,
@@ -189,6 +191,12 @@ mod test_parse {
         pass/one_minus_two.expr,
         pass/one_plus_two.expr,
         pass/one_spaced_def.expr,
+        pass/opaque_simple.module,
+        pass/opaque_with_type_arguments.module,
+        pass/opaque_reference_expr.expr,
+        pass/opaque_reference_expr_with_arguments.expr,
+        pass/opaque_reference_pattern.expr,
+        pass/opaque_reference_pattern_with_arguments.expr,
         pass/ops_with_newlines.expr,
         pass/packed_singleton_list.expr,
         pass/parenthetical_apply.expr,
@@ -499,18 +507,27 @@ mod test_parse {
     }
 
     #[quickcheck]
-    fn all_f64_values_parse(num: f64) {
-        let string = num.to_string();
-        if string.contains('.') {
-            assert_parses_to(&string, Float(&string));
-        } else if num.is_nan() {
-            assert_parses_to(&string, Expr::GlobalTag(&string));
-        } else if num.is_finite() {
-            // These are whole numbers. Add the `.0` back to make float.
-            let float_string = format!("{}.0", string);
-            assert_parses_to(&float_string, Float(&float_string));
+    fn all_f64_values_parse(mut num: f64) {
+        // NaN, Infinity, -Infinity (these would all parse as tags in Roc)
+        if !num.is_finite() {
+            num = 0.0;
         }
+
+        // These can potentially be whole numbers. `Display` omits the decimal point for those,
+        // causing them to no longer be parsed as fractional numbers by Roc.
+        // Using `Debug` instead of `Display` ensures they always have a decimal point.
+        let float_string = format!("{:?}", num);
+
+        assert_parses_to(float_string.as_str(), Float(float_string.as_str()));
     }
+
+    // SINGLE QUOTE LITERAL
+    #[test]
+    fn single_quote() {
+        assert_parses_to("'b'", Expr::SingleQuote("b"));
+    }
+
+    // RECORD LITERALS
 
     // #[test]
     // fn type_signature_def() {

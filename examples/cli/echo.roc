@@ -18,12 +18,12 @@ echo = \shout ->
     silence = \length ->
         spaceInUtf8 = 32
 
-        List.repeat length spaceInUtf8
+        List.repeat spaceInUtf8 length
 
     shout
         |> Str.toUtf8
         |> List.mapWithIndex
-        (\i, _ ->
+        (\_, i ->
                 length = (List.len (Str.toUtf8 shout) - i)
                 phrase = (List.split (Str.toUtf8 shout) length).before
 

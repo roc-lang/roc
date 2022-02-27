@@ -5,7 +5,6 @@ use def::defs_to_html;
 use docs_error::DocsResult;
 use expr::expr_to_html;
 use roc_builtins::std::StdLib;
-use roc_can::builtins::builtin_defs_map;
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
 use roc_load::docs::DocEntry::DocDef;
@@ -429,7 +428,6 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>, std_lib: StdLib) -> Vec<L
             src_dir.as_path(),
             MutMap::default(),
             roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
-            builtin_defs_map,
         ) {
             Ok(loaded) => modules.push(loaded),
             Err(LoadingProblem::FormattedReport(report)) => {

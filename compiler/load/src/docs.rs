@@ -7,7 +7,7 @@ use roc_can::scope::Scope;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
 use roc_parse::ast::CommentOrNewline;
-use roc_parse::ast::{self, AliasHeader};
+use roc_parse::ast::{self, TypeHeader};
 use roc_parse::ast::{AssignedField, Def};
 use roc_region::all::Loc;
 
@@ -206,7 +206,7 @@ fn generate_entry_doc<'a>(
         },
 
         Def::Alias {
-            header: AliasHeader { name, vars },
+            header: TypeHeader { name, vars },
             ann,
         } => {
             let mut type_vars = Vec::new();
@@ -220,6 +220,29 @@ fn generate_entry_doc<'a>(
             let doc_def = DocDef {
                 name: name.value.to_string(),
                 type_annotation: type_to_docs(false, ann.value),
+                type_vars,
+                docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+            };
+            acc.push(DocEntry::DocDef(doc_def));
+
+            (acc, None)
+        }
+
+        Def::Opaque {
+            header: TypeHeader { name, vars },
+            ..
+        } => {
+            let mut type_vars = Vec::new();
+
+            for var in vars.iter() {
+                if let Pattern::Identifier(ident_name) = var.value {
+                    type_vars.push(ident_name.to_string());
+                }
+            }
+
+            let doc_def = DocDef {
+                name: name.value.to_string(),
+                type_annotation: TypeAnnotation::NoTypeAnn,
                 type_vars,
                 docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
             };

@@ -3,10 +3,10 @@ use crate::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_parse::ast::{AliasHeader, AssignedField, Pattern, Tag, TypeAnnotation};
+use roc_parse::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, LambdaSet, Problem, RecordField, Type};
+use roc_types::types::{Alias, AliasKind, LambdaSet, Problem, RecordField, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -130,13 +130,20 @@ fn make_apply_symbol(
                 // it was imported but it doesn't expose this ident.
                 env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
-                Err(Type::Erroneous(Problem::UnrecognizedIdent((*ident).into())))
+                // A failed import should have already been reported through
+                // roc_can::env::Env::qualified_lookup's checks
+                Err(Type::Erroneous(Problem::SolvedTypeError))
             }
         }
     }
 }
 
-pub fn find_alias_symbols(
+/// Retrieves all symbols in an annotations that reference a type definition, that is either an
+/// alias or an opaque type.
+///
+/// For example, in `[ A Age U8, B Str {} ]`, there are three type definition references - `Age`,
+/// `U8`, and `Str`.
+pub fn find_type_def_symbols(
     module_id: ModuleId,
     ident_ids: &mut IdentIds,
     initial_annotation: &roc_parse::ast::TypeAnnotation,
@@ -305,9 +312,6 @@ fn can_annotation_help(
             match scope.lookup_alias(symbol) {
                 Some(alias) => {
                     // use a known alias
-                    let mut actual = alias.typ.clone();
-                    let mut substitutions = ImMap::default();
-                    let mut vars = Vec::new();
 
                     if alias.type_variables.len() != args.len() {
                         let error = Type::Erroneous(Problem::BadTypeArguments {
@@ -319,42 +323,21 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    for (loc_var, arg_ann) in alias.type_variables.iter().zip(args.into_iter()) {
-                        let name = loc_var.value.0.clone();
-                        let var = loc_var.value.1;
-
-                        substitutions.insert(var, arg_ann.clone());
-                        vars.push((name.clone(), arg_ann));
-                    }
-
-                    // make sure the recursion variable is freshly instantiated
-                    if let Type::RecursiveTagUnion(rvar, _, _) = &mut actual {
-                        let new = var_store.fresh();
-                        substitutions.insert(*rvar, Type::Variable(new));
-                        *rvar = new;
-                    }
-
-                    // make sure hidden variables are freshly instantiated
-                    let mut lambda_set_variables =
-                        Vec::with_capacity(alias.lambda_set_variables.len());
-                    for typ in alias.lambda_set_variables.iter() {
-                        if let Type::Variable(var) = typ.0 {
-                            let fresh = var_store.fresh();
-                            substitutions.insert(var, Type::Variable(fresh));
-                            lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
-                        } else {
-                            unreachable!("at this point there should be only vars in there");
-                        }
-                    }
-
-                    // instantiate variables
-                    actual.substitute(&substitutions);
+                    let (type_arguments, lambda_set_variables, actual) =
+                        instantiate_and_freshen_alias_type(
+                            var_store,
+                            &alias.type_variables,
+                            args,
+                            &alias.lambda_set_variables,
+                            alias.typ.clone(),
+                        );
 
                     Type::Alias {
                         symbol,
-                        type_arguments: vars,
+                        type_arguments,
                         lambda_set_variables,
                         actual: Box::new(actual),
+                        kind: alias.kind,
                     }
                 }
                 None => Type::Apply(symbol, args, region),
@@ -378,7 +361,7 @@ fn can_annotation_help(
             loc_inner,
             _spaces,
             alias_header
-            @ AliasHeader {
+            @ TypeHeader {
                 name,
                 vars: loc_vars,
             },
@@ -488,7 +471,13 @@ fn can_annotation_help(
                 hidden_variables.remove(&loc_var.value.1);
             }
 
-            scope.add_alias(symbol, region, lowercase_vars, alias_actual);
+            scope.add_alias(
+                symbol,
+                region,
+                lowercase_vars,
+                alias_actual,
+                AliasKind::Structural, // aliases in "as" are never opaque
+            );
 
             let alias = scope.lookup_alias(symbol).unwrap();
             local_aliases.insert(symbol, alias.clone());
@@ -511,6 +500,7 @@ fn can_annotation_help(
                     type_arguments: vars,
                     lambda_set_variables: alias.lambda_set_variables.clone(),
                     actual: Box::new(alias.typ.clone()),
+                    kind: alias.kind,
                 }
             }
         }
@@ -635,6 +625,70 @@ fn can_annotation_help(
             Type::Variable(var)
         }
     }
+}
+
+pub fn instantiate_and_freshen_alias_type(
+    var_store: &mut VarStore,
+    type_variables: &[Loc<(Lowercase, Variable)>],
+    type_arguments: Vec<Type>,
+    lambda_set_variables: &[LambdaSet],
+    mut actual_type: Type,
+) -> (Vec<(Lowercase, Type)>, Vec<LambdaSet>, Type) {
+    let mut substitutions = ImMap::default();
+    let mut type_var_to_arg = Vec::new();
+
+    for (loc_var, arg_ann) in type_variables.iter().zip(type_arguments.into_iter()) {
+        let name = loc_var.value.0.clone();
+        let var = loc_var.value.1;
+
+        substitutions.insert(var, arg_ann.clone());
+        type_var_to_arg.push((name.clone(), arg_ann));
+    }
+
+    // make sure the recursion variable is freshly instantiated
+    if let Type::RecursiveTagUnion(rvar, _, _) = &mut actual_type {
+        let new = var_store.fresh();
+        substitutions.insert(*rvar, Type::Variable(new));
+        *rvar = new;
+    }
+
+    // make sure hidden variables are freshly instantiated
+    let mut new_lambda_set_variables = Vec::with_capacity(lambda_set_variables.len());
+    for typ in lambda_set_variables.iter() {
+        if let Type::Variable(var) = typ.0 {
+            let fresh = var_store.fresh();
+            substitutions.insert(var, Type::Variable(fresh));
+            new_lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
+        } else {
+            unreachable!("at this point there should be only vars in there");
+        }
+    }
+
+    // instantiate variables
+    actual_type.substitute(&substitutions);
+
+    (type_var_to_arg, new_lambda_set_variables, actual_type)
+}
+
+pub fn freshen_opaque_def(
+    var_store: &mut VarStore,
+    opaque: &Alias,
+) -> (Vec<(Lowercase, Type)>, Vec<LambdaSet>, Type) {
+    debug_assert!(opaque.kind == AliasKind::Opaque);
+
+    let fresh_arguments = opaque
+        .type_variables
+        .iter()
+        .map(|_| Type::Variable(var_store.fresh()))
+        .collect();
+
+    instantiate_and_freshen_alias_type(
+        var_store,
+        &opaque.type_variables,
+        fresh_arguments,
+        &opaque.lambda_set_variables,
+        opaque.typ.clone(),
+    )
 }
 
 fn insertion_sort_by<T, F>(arr: &mut [T], mut compare: F)

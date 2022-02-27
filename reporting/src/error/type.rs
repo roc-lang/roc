@@ -6,7 +6,9 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve::solve;
 use roc_types::pretty_print::{Parens, WILDCARD};
-use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
+use roc_types::types::{
+    AliasKind, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
+};
 use std::path::PathBuf;
 
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
@@ -148,6 +150,9 @@ pub fn cyclic_alias<'b>(
     region: roc_region::all::Region,
     others: Vec<Symbol>,
 ) -> (RocDocBuilder<'b>, String) {
+    let when_is_recursion_legal =
+        alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive.");
+
     let doc = if others.is_empty() {
         alloc.stack(vec![
             alloc
@@ -155,7 +160,7 @@ pub fn cyclic_alias<'b>(
                 .append(alloc.symbol_unqualified(symbol))
                 .append(alloc.reflow(" alias is self-recursive in an invalid way:")),
             alloc.region(lines.convert_region(region)),
-            alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
+            when_is_recursion_legal,
         ])
     } else {
         alloc.stack(vec![
@@ -179,7 +184,7 @@ pub fn cyclic_alias<'b>(
                     .map(|other| alloc.symbol_unqualified(other))
                     .collect::<Vec<_>>(),
             ),
-            alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
+            when_is_recursion_legal,
         ])
     };
 
@@ -697,7 +702,9 @@ fn to_expr_report<'b>(
                         You can achieve that with record literal syntax.",
                 )),
             ),
-            Reason::RecordUpdateKeys(symbol, expected_fields) => match found.clone().unwrap_alias()
+            Reason::RecordUpdateKeys(symbol, expected_fields) => match found
+                .clone()
+                .unwrap_structural_alias()
             {
                 ErrorType::Record(actual_fields, ext) => {
                     let expected_set: MutSet<_> = expected_fields.keys().cloned().collect();
@@ -983,7 +990,7 @@ fn count_arguments(tipe: &ErrorType) -> usize {
 
     match tipe {
         Function(args, _, _) => args.len(),
-        Alias(_, _, actual) => count_arguments(actual),
+        Alias(_, _, actual, _) => count_arguments(actual),
         _ => 0,
     }
 }
@@ -1097,7 +1104,6 @@ fn format_category<'b>(
             ]),
             alloc.text(" produces:"),
         ),
-
         List => (
             alloc.concat(vec![this_is, alloc.text(" a list")]),
             alloc.text(" of type:"),
@@ -1125,15 +1131,33 @@ fn format_category<'b>(
             ]),
             alloc.text(" which was of type:"),
         ),
-
+        Character => (
+            alloc.concat(vec![this_is, alloc.text(" a character")]),
+            alloc.text(" of type:"),
+        ),
         Lambda => (
             alloc.concat(vec![this_is, alloc.text(" an anonymous function")]),
             alloc.text(" of type:"),
         ),
-
         ClosureSize => (
             alloc.concat(vec![this_is, alloc.text(" the closure size of a function")]),
             alloc.text(" of type:"),
+        ),
+
+        OpaqueWrap(opaque) => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.opaque_name(*opaque),
+                alloc.text(" opaque wrapping"),
+            ]),
+            alloc.text(" has the type:"),
+        ),
+
+        OpaqueArg => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his argument to an opaque type", t))
+            ]),
+            alloc.text(" has type:"),
         ),
 
         TagApply {
@@ -1462,13 +1486,19 @@ fn add_pattern_category<'b>(
         Set => alloc.reflow(" sets of type:"),
         Map => alloc.reflow(" maps of type:"),
         Ctor(tag_name) => alloc.concat(vec![
+            alloc.reflow(" a "),
             alloc.tag_name(tag_name.clone()),
-            alloc.reflow(" values of type:"),
+            alloc.reflow(" tag of type:"),
+        ]),
+        Opaque(opaque) => alloc.concat(vec![
+            alloc.opaque_name(*opaque),
+            alloc.reflow(" unwrappings of type:"),
         ]),
         Str => alloc.reflow(" strings:"),
         Num => alloc.reflow(" numbers:"),
         Int => alloc.reflow(" integers:"),
         Float => alloc.reflow(" floats:"),
+        Character => alloc.reflow(" characters:"),
     };
 
     alloc.concat(vec![i_am_trying_to_match, rest])
@@ -1516,6 +1546,7 @@ pub enum Problem {
     TagsMissing(Vec<TagName>),
     BadRigidVar(Lowercase, ErrorType),
     OptionalRequiredMismatch(Lowercase),
+    OpaqueComparedToNonOpaque,
 }
 
 fn problems_to_tip<'b>(
@@ -1696,7 +1727,7 @@ pub fn to_doc<'b>(
                 .collect(),
         ),
 
-        Alias(symbol, args, _) => report_text::apply(
+        Alias(symbol, args, _, _) => report_text::apply(
             alloc,
             parens,
             alloc.symbol_foreign_qualified(symbol),
@@ -1876,7 +1907,7 @@ fn to_diff<'b>(
             }
         }
 
-        (Alias(symbol1, args1, _), Alias(symbol2, args2, _)) if symbol1 == symbol2 => {
+        (Alias(symbol1, args1, _, _), Alias(symbol2, args2, _, _)) if symbol1 == symbol2 => {
             let args_diff = traverse(alloc, Parens::InTypeParam, args1, args2);
             let left = report_text::apply(
                 alloc,
@@ -1898,12 +1929,27 @@ fn to_diff<'b>(
             }
         }
 
-        (Alias(symbol, _, actual), other) if !symbol.module_id().is_builtin() => {
-            // when diffing an alias with a non-alias, de-alias
+        (Alias(_, _, _, AliasKind::Opaque), _) | (_, Alias(_, _, _, AliasKind::Opaque)) => {
+            let left = to_doc(alloc, Parens::InFn, type1);
+            let right = to_doc(alloc, Parens::InFn, type2);
+
+            Diff {
+                left,
+                right,
+                status: Status::Different(vec![Problem::OpaqueComparedToNonOpaque]),
+            }
+        }
+
+        (Alias(symbol, _, actual, AliasKind::Structural), other)
+            if !symbol.module_id().is_builtin() =>
+        {
+            // when diffing a structural alias with a non-alias, de-alias
             to_diff(alloc, parens, *actual, other)
         }
-        (other, Alias(symbol, _, actual)) if !symbol.module_id().is_builtin() => {
-            // when diffing an alias with a non-alias, de-alias
+        (other, Alias(symbol, _, actual, AliasKind::Structural))
+            if !symbol.module_id().is_builtin() =>
+        {
+            // when diffing a structural alias with a non-alias, de-alias
             to_diff(alloc, parens, other, *actual)
         }
 
@@ -1934,41 +1980,41 @@ fn to_diff<'b>(
 
             let is_int = |t: &ErrorType| match t {
                 ErrorType::Type(Symbol::NUM_INT, _) => true,
-                ErrorType::Alias(Symbol::NUM_INT, _, _) => true,
+                ErrorType::Alias(Symbol::NUM_INT, _, _, _) => true,
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
                     matches!(
                         &args.get(0),
                         Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
-                            | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _))
+                            | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _, _))
                     )
                 }
-                ErrorType::Alias(Symbol::NUM_NUM, args, _) => {
+                ErrorType::Alias(Symbol::NUM_NUM, args, _, _) => {
                     matches!(
                         &args.get(0),
                         Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
-                            | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _))
+                            | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _, _))
                     )
                 }
                 _ => false,
             };
             let is_float = |t: &ErrorType| match t {
                 ErrorType::Type(Symbol::NUM_FLOAT, _) => true,
-                ErrorType::Alias(Symbol::NUM_FLOAT, _, _) => true,
+                ErrorType::Alias(Symbol::NUM_FLOAT, _, _, _) => true,
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
                     matches!(
                         &args.get(0),
                         Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
-                            | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _))
+                            | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _, _))
                     )
                 }
 
-                ErrorType::Alias(Symbol::NUM_NUM, args, _) => {
+                ErrorType::Alias(Symbol::NUM_NUM, args, _, _) => {
                     matches!(
                         &args.get(0),
                         Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
-                            | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _))
+                            | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _, _))
                     )
                 }
                 _ => false,
@@ -2825,7 +2871,7 @@ fn type_problem_to_pretty<'b>(
                 TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
                     bad_rigid_var(x, alloc.reflow("a tag value"))
                 }
-                Alias(symbol, _, _) | Type(symbol, _) => bad_rigid_var(
+                Alias(symbol, _, _, _) | Type(symbol, _) => bad_rigid_var(
                     x,
                     alloc.concat(vec![
                         alloc.reflow("a "),
@@ -2897,6 +2943,18 @@ fn type_problem_to_pretty<'b>(
                 " field it must be non-optional, but the type says this field is optional. ",
             ),
             alloc.reflow("Learn more about optional fields at TODO."),
+        ])),
+
+        (OpaqueComparedToNonOpaque, _) => alloc.tip().append(alloc.concat(vec![
+            alloc.reflow(
+                "Type comparisons between an opaque type are only ever \
+                equal if both types are the same opaque type. Did you mean \
+                to create an opaque type by wrapping it? If I have an opaque type ",
+            ),
+            alloc.type_str("Age := U32"),
+            alloc.reflow(" I can create an instance of this opaque type by doing "),
+            alloc.type_str("@Age 23"),
+            alloc.reflow("."),
         ])),
     }
 }

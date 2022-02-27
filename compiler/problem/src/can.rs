@@ -39,7 +39,7 @@ pub enum Problem {
     CyclicAlias(Symbol, Region, Vec<Symbol>),
     BadRecursion(Vec<CycleEntry>),
     PhantomTypeArgument {
-        alias: Symbol,
+        typ: Symbol,
         variable_region: Region,
         variable_name: Lowercase,
     },
@@ -155,16 +155,55 @@ pub enum RuntimeError {
     ErroneousType,
 
     LookupNotInScope(Loc<Ident>, MutSet<Box<str>>),
+    OpaqueNotDefined {
+        usage: Loc<Ident>,
+        opaques_in_scope: MutSet<Box<str>>,
+        opt_defined_alias: Option<Region>,
+    },
+    OpaqueOutsideScope {
+        opaque: Ident,
+        referenced_region: Region,
+        imported_region: Region,
+    },
+    OpaqueNotApplied(Loc<Ident>),
+    OpaqueAppliedToMultipleArgs(Region),
     ValueNotExposed {
         module_name: ModuleName,
         ident: Ident,
         region: Region,
         exposed_values: Vec<Lowercase>,
     },
+    /// A module was referenced, but hasn't been imported anywhere in the program
+    ///
+    /// An example would be:
+    /// ```roc
+    /// app "hello"
+    ///     packages { pf: "platform" }
+    ///     imports [ pf.Stdout]
+    ///     provides [ main ] to pf
+    ///
+    /// main : Task.Task {} [] // Task isn't imported!
+    /// main = Stdout.line "I'm a Roc application!"
+    /// ```
     ModuleNotImported {
+        /// The name of the module that was referenced
         module_name: ModuleName,
+        /// A list of modules which *have* been imported
         imported_modules: MutSet<Box<str>>,
+        /// Where the problem occurred
         region: Region,
+        /// Whether or not the module exists at all
+        ///
+        /// This is used to suggest that the user import the module, as opposed to fix a
+        /// typo in the spelling.  For example, if the user typed `Task`, and the platform
+        /// exposes a `Task` module that hasn't been imported, we can sugguest that they
+        /// add the import statement.
+        ///
+        /// On the other hand, if the user typed `Tesk`, they might want to check their
+        /// spelling.
+        ///
+        /// If unsure, this should be set to `false`
+        module_exists: bool,
     },
     InvalidPrecedence(PrecedenceProblem, Region),
     MalformedIdentifier(Box<str>, roc_parse::ident::BadIdent, Region),
@@ -193,6 +232,11 @@ pub enum RuntimeError {
     VoidValue,
 
     ExposedButNotDefined(Symbol),
+
+    /// where ''
+    EmptySingleQuote(Region),
+    /// where 'aa'
+    MultipleCharsInSingleQuote(Region),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -203,4 +247,6 @@ pub enum MalformedPatternProblem {
     Unknown,
     QualifiedIdentifier,
     BadIdent(roc_parse::ident::BadIdent),
+    EmptySingleQuote,
+    MultipleCharsInSingleQuote,
 }

@@ -18,7 +18,7 @@ Defs(
                     ],
                 ),
                 [],
-                AliasHeader {
+                TypeHeader {
                     name: @25-29 "Blah",
                     vars: [
                         @30-31 Identifier(

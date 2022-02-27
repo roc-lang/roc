@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -eux
 
@@ -10,6 +10,7 @@ fi
 
 if ! which wasm-pack
 then
+    echo "Installing wasm-pack CLI"
     cargo install wasm-pack
 fi
 
@@ -17,8 +18,15 @@ WWW_DIR="repl_www/build"
 mkdir -p $WWW_DIR
 cp repl_www/public/* $WWW_DIR
 
-# Pass all script arguments through to wasm-pack (such as --release)
-wasm-pack build --target web "$@" repl_wasm
+# When debugging the REPL, use `REPL_DEBUG=1 repl_www/build.sh`
+if [ -n "${REPL_DEBUG:-}" ]
+then
+    # Leave out wasm-opt since it takes too long when debugging, and provide some debug options
+    cargo build --target wasm32-unknown-unknown -p roc_repl_wasm --release
+    wasm-bindgen --target web --keep-debug target/wasm32-unknown-unknown/release/roc_repl_wasm.wasm --out-dir repl_wasm/pkg/
+else
+    wasm-pack build --target web repl_wasm
+fi
 
 cp repl_wasm/pkg/*.wasm $WWW_DIR
 

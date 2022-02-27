@@ -30,6 +30,7 @@ impl<'a> Formattable for Expr<'a> {
             Float(..)
             | Num(..)
             | NonBase10Int { .. }
+            | SingleQuote(_)
             | Access(_, _)
             | AccessorFunction(_)
             | Var { .. }
@@ -37,7 +38,8 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedIdent(_, _)
             | MalformedClosure
             | GlobalTag(_)
-            | PrivateTag(_) => false,
+            | PrivateTag(_)
+            | OpaqueRef(_) => false,
 
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
@@ -204,9 +206,14 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 buf.push_str(string);
             }
-            GlobalTag(string) | PrivateTag(string) => {
+            GlobalTag(string) | PrivateTag(string) | OpaqueRef(string) => {
                 buf.indent(indent);
                 buf.push_str(string)
+            }
+            SingleQuote(string) => {
+                buf.push('\'');
+                buf.push_str(string);
+                buf.push('\'');
             }
             &NonBase10Int {
                 base,
@@ -347,7 +354,8 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::Or => buf.push_str("||"),
         called_via::BinOp::Pizza => buf.push_str("|>"),
         called_via::BinOp::Assignment => unreachable!(),
-        called_via::BinOp::HasType => unreachable!(),
+        called_via::BinOp::IsAliasType => unreachable!(),
+        called_via::BinOp::IsOpaqueType => unreachable!(),
         called_via::BinOp::Backpassing => unreachable!(),
     }
 }
@@ -1067,7 +1075,11 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::GreaterThanOrEq
                     | BinOp::And
                     | BinOp::Or => true,
-                    BinOp::Pizza | BinOp::Assignment | BinOp::HasType | BinOp::Backpassing => false,
+                    BinOp::Pizza
+                    | BinOp::Assignment
+                    | BinOp::IsAliasType
+                    | BinOp::IsOpaqueType
+                    | BinOp::Backpassing => false,
                 })
         }
         Expr::If(_, _) => true,

@@ -6,7 +6,8 @@ The user needs to analyse the Wasm module's memory to decode the result.
 
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_std::ReferenceCount;
 use roc_target::TargetInfo;
 
 use crate::wasm32_sized::Wasm32Sized;
@@ -41,6 +42,18 @@ pub fn insert_wrapper_for_layout<'a>(
     main_fn_index: u32,
     layout: &Layout<'a>,
 ) {
+    let mut stack_data_structure = || {
+        let size = layout.stack_size(TargetInfo::default_wasm32());
+        if size == 0 {
+            <() as Wasm32Result>::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+        } else {
+            insert_wrapper_metadata(arena, module, wrapper_name);
+            let mut code_builder = CodeBuilder::new(arena);
+            build_wrapper_body_stack_memory(&mut code_builder, main_fn_index, size as usize);
+            module.code.code_builders.push(code_builder);
+        }
+    };
+
     match layout {
         Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
             i8::insert_wrapper(arena, module, wrapper_name, main_fn_index);
@@ -60,14 +73,14 @@ pub fn insert_wrapper_for_layout<'a>(
         Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
             f64::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        _ => {
-            // The result is not a Wasm primitive, it's an array of bytes in stack memory.
-            let size = layout.stack_size(TargetInfo::default_wasm32());
-            insert_wrapper_metadata(arena, module, wrapper_name);
-            let mut code_builder = CodeBuilder::new(arena);
-            build_wrapper_body_stack_memory(&mut code_builder, main_fn_index, size as usize);
-            module.code.code_builders.push(code_builder);
+        Layout::Builtin(Builtin::Bool) => {
+            bool::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
+        Layout::Union(UnionLayout::NonRecursive(_)) => stack_data_structure(),
+        Layout::Union(_) => {
+            i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
+        }
+        _ => stack_data_structure(),
     }
 }
 
@@ -175,7 +188,7 @@ wasm_result_stack_memory!(i128);
 wasm_result_stack_memory!(RocDec);
 wasm_result_stack_memory!(RocStr);
 
-impl<T: Wasm32Result> Wasm32Result for RocList<T> {
+impl<T: Wasm32Result + ReferenceCount> Wasm32Result for RocList<T> {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(code_builder, main_function_index, 12)
     }

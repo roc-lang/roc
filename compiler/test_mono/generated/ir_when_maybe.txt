@@ -1,12 +1,12 @@
 procedure Test.0 ():
-    let Test.9 : Builtin(Int(I64)) = 3i64;
-    let Test.3 : Union(NonRecursive([[Builtin(Int(I64))], []])) = Just Test.9;
-    let Test.6 : Builtin(Int(U8)) = 0i64;
-    let Test.7 : Builtin(Int(U8)) = GetTagId Test.3;
-    let Test.8 : Builtin(Bool) = lowlevel Eq Test.6 Test.7;
+    let Test.9 : I64 = 3i64;
+    let Test.3 : [C I64, C ] = Just Test.9;
+    let Test.6 : U8 = 0i64;
+    let Test.7 : U8 = GetTagId Test.3;
+    let Test.8 : Int1 = lowlevel Eq Test.6 Test.7;
     if Test.8 then
-        let Test.2 : Builtin(Int(I64)) = UnionAtIndex (Id 0) (Index 0) Test.3;
+        let Test.2 : I64 = UnionAtIndex (Id 0) (Index 0) Test.3;
         ret Test.2;
     else
-        let Test.5 : Builtin(Int(I64)) = 0i64;
+        let Test.5 : I64 = 0i64;
         ret Test.5;

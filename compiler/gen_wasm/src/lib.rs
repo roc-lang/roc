@@ -73,7 +73,7 @@ pub fn build_module_without_wrapper<'a>(
 ) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
-    let mut proc_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
+    let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut exports = Vec::with_capacity_in(4, env.arena);
     let mut maybe_main_fn_index = None;
@@ -81,7 +81,7 @@ pub fn build_module_without_wrapper<'a>(
     // Collect the symbols & names for the procedures,
     // and filter out procs we're going to inline
     let mut fn_index: u32 = 0;
-    for ((sym, layout), proc) in procedures.into_iter() {
+    for ((sym, proc_layout), proc) in procedures.into_iter() {
         if matches!(
             LowLevelWrapperType::from_symbol(sym),
             LowLevelWrapperType::CanBeReplacedBy(_)
@@ -91,7 +91,7 @@ pub fn build_module_without_wrapper<'a>(
         procs.push(proc);
 
         let fn_name = layout_ids
-            .get_toplevel(sym, &layout)
+            .get_toplevel(sym, &proc_layout)
             .to_symbol_string(sym, interns);
 
         if env.exposed_to_host.contains(&sym) {
@@ -104,7 +104,10 @@ pub fn build_module_without_wrapper<'a>(
         }
 
         let linker_sym = SymInfo::for_function(fn_index, fn_name);
-        proc_symbols.push((sym, linker_symbols.len() as u32));
+        let linker_sym_index = linker_symbols.len() as u32;
+
+        // linker_sym_index is redundant for these procs from user code, but needed for generated helpers!
+        proc_lookup.push((sym, proc_layout, linker_sym_index));
         linker_symbols.push(linker_sym);
 
         fn_index += 1;
@@ -121,7 +124,7 @@ pub fn build_module_without_wrapper<'a>(
         env,
         interns,
         layout_ids,
-        proc_symbols,
+        proc_lookup,
         initial_module,
         fn_index_offset,
         CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),

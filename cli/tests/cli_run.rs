@@ -12,8 +12,9 @@ extern crate indoc;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        example_file, examples_dir, extract_valgrind_errors, fixture_file, known_bad_file, run_cmd,
-        run_roc, run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
+        example_file, examples_dir, extract_valgrind_errors, fixture_file, fixtures_dir,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
+        ValgrindErrorXWhat,
     };
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
@@ -69,6 +70,28 @@ mod cli_run {
         assert_multiline_str_eq!(err, expected.into());
     }
 
+    fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
+        let flags = &["--check"];
+        let out = run_roc(&[&["format", &file.to_str().unwrap()], &flags[..]].concat());
+
+        if expects_success_exit_code {
+            assert!(out.status.success());
+        } else {
+            assert!(!out.status.success());
+        }
+    }
+
+    fn build_example(file: &Path, flags: &[&str]) -> Out {
+        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
+        if !compile_out.stderr.is_empty() {
+            panic!("roc build had stderr: {}", compile_out.stderr);
+        }
+
+        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+
+        compile_out
+    }
+
     fn check_output_with_stdin(
         file: &Path,
         stdin: &[&str],
@@ -85,12 +108,7 @@ mod cli_run {
             all_flags.extend_from_slice(&["--valgrind"]);
         }
 
-        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], &all_flags[..]].concat());
-        if !compile_out.stderr.is_empty() {
-            panic!("roc build had stderr: {}", compile_out.stderr);
-        }
-
-        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+        build_example(file, &all_flags[..]);
 
         let out = if use_valgrind && ALLOW_VALGRIND {
             let (valgrind_out, raw_xml) = if let Some(input_file) = input_file {
@@ -227,6 +245,17 @@ mod cli_run {
                                 return;
                             }
                         }
+                        "hello-gui" => {
+                            // Since this one requires opening a window, we do `roc build` on it but don't run it.
+                            if cfg!(target_os = "linux") {
+                                // The surgical linker can successfully link this on Linux, but the legacy linker errors!
+                                build_example(&file_name, &["--optimize", "--roc-linker"]);
+                            } else {
+                                build_example(&file_name, &["--optimize"]);
+                            }
+
+                            return;
+                        }
                         _ => {}
                     }
 
@@ -342,6 +371,14 @@ mod cli_run {
             input_file: None,
             expected_ending:"55\n",
             use_valgrind: true,
+        },
+        gui:"gui" => Example {
+            filename: "Hello.roc",
+            executable_filename: "hello-gui",
+            stdin: &[],
+            input_file: None,
+            expected_ending: "",
+            use_valgrind: false,
         },
         quicksort:"quicksort" => Example {
             filename: "Quicksort.roc",
@@ -862,6 +899,25 @@ mod cli_run {
                 ────────────────────────────────────────────────────────────────────────────────"#
             ),
         );
+    }
+
+    #[test]
+    fn format_check_good() {
+        check_format_check_as_expected(&fixture_file("format", "Formatted.roc"), true);
+    }
+
+    #[test]
+    fn format_check_reformatting_needed() {
+        check_format_check_as_expected(&fixture_file("format", "NotFormatted.roc"), false);
+    }
+
+    #[test]
+    fn format_check_folders() {
+        // This fails, because "NotFormatted.roc" is present in this folder
+        check_format_check_as_expected(&fixtures_dir("format"), false);
+
+        // This doesn't fail, since only "Formatted.roc" is present in this folder
+        check_format_check_as_expected(&fixtures_dir("format/formatted_directory"), true);
     }
 }
 

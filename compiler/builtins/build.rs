@@ -27,7 +27,8 @@ fn main() {
     }
 
     // "." is relative to where "build.rs" is
-    let build_script_dir_path = fs::canonicalize(Path::new(".")).unwrap();
+    // dunce can be removed once ziglang/zig#5109 is fixed
+    let build_script_dir_path = dunce::canonicalize(Path::new(".")).unwrap();
     let bitcode_path = build_script_dir_path.join("bitcode");
 
     // LLVM .bc FILES
@@ -102,8 +103,8 @@ fn generate_object_file(
 
     println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
 
-    // we store this .o file in rust's `target` folder
-    run_command(&bitcode_path, "mv", &[src_obj, dest_obj]);
+    // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
+    run_command(&bitcode_path, "cp", &[src_obj, dest_obj]);
 }
 
 fn generate_bc_file(

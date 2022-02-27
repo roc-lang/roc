@@ -10,7 +10,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::Type;
+use roc_types::types::{AliasKind, Type};
 
 #[derive(Default, Clone, Copy)]
 pub(crate) struct HostedGeneratedFunctions {
@@ -1140,6 +1140,7 @@ fn build_effect_loop(
                     closure_var,
                 ))],
                 actual: Box::new(actual),
+                kind: AliasKind::Structural,
             }
         };
 
@@ -1579,6 +1580,7 @@ fn build_effect_alias(
         type_arguments: vec![(a_name.into(), Type::Variable(a_var))],
         lambda_set_variables: vec![roc_types::types::LambdaSet(Type::Variable(closure_var))],
         actual: Box::new(actual),
+        kind: AliasKind::Structural,
     }
 }
 

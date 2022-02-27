@@ -5,6 +5,7 @@ use build::{BuildOutcome, BuiltFile};
 use bumpalo::Bump;
 use clap::{App, AppSettings, Arg, ArgMatches};
 use roc_build::link::LinkType;
+use roc_error_macros::user_error;
 use roc_load::file::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use std::env;
@@ -31,12 +32,14 @@ pub const CMD_FORMAT: &str = "format";
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
+pub const FLAG_OPT_SIZE: &str = "opt-size";
 pub const FLAG_LIB: &str = "lib";
 pub const FLAG_BACKEND: &str = "backend";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINK: &str = "roc-linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const FLAG_VALGRIND: &str = "valgrind";
+pub const FLAG_CHECK: &str = "check";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const BACKEND: &str = "BACKEND";
@@ -58,6 +61,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::new(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .about("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_OPT_SIZE)
+                    .long(FLAG_OPT_SIZE)
+                    .about("Optimize your compiled Roc program to have a small binary size. (Optimization takes time to complete.)")
                     .required(false),
             )
             .arg(
@@ -122,6 +131,12 @@ pub fn build_app<'a>() -> App<'a> {
                     .index(1)
                     .multiple_values(true)
                     .required(false))
+            .arg(
+                Arg::new(FLAG_CHECK)
+                    .long(FLAG_CHECK)
+                    .about("Checks that specified files are formatted. If formatting is needed, it will return a non-zero exit code.")
+                    .required(false),
+            )
         )
         .subcommand(App::new(CMD_VERSION)
             .about("Print version information")
@@ -159,12 +174,18 @@ pub fn build_app<'a>() -> App<'a> {
                 .requires(ROC_FILE)
                 .required(false),
         )
-            .arg(
-                Arg::new(FLAG_DEV)
-                    .long(FLAG_DEV)
-                    .about("Make compilation as fast as possible. (Runtime performance may suffer)")
-                    .required(false),
-            )
+        .arg(
+            Arg::new(FLAG_OPT_SIZE)
+                .long(FLAG_OPT_SIZE)
+                .about("Optimize your compiled Roc program to have a small binary size. (Optimization takes time to complete.)")
+                .required(false),
+        )
+        .arg(
+            Arg::new(FLAG_DEV)
+                .long(FLAG_DEV)
+                .about("Make compilation as fast as possible. (Runtime performance may suffer)")
+                .required(false),
+        )
         .arg(
             Arg::new(FLAG_DEBUG)
                 .long(FLAG_DEBUG)
@@ -242,6 +263,11 @@ pub enum BuildConfig {
     BuildAndRun { roc_file_arg_index: usize },
 }
 
+pub enum FormatMode {
+    Format,
+    CheckOnly,
+}
+
 pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     use build::build_file;
     use std::str::FromStr;
@@ -260,12 +286,14 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let original_cwd = std::env::current_dir()?;
     let opt_level = match (
         matches.is_present(FLAG_OPTIMIZE),
+        matches.is_present(FLAG_OPT_SIZE),
         matches.is_present(FLAG_DEV),
     ) {
-        (true, false) => OptLevel::Optimize,
-        (true, true) => panic!("development cannot be optimized!"),
-        (false, true) => OptLevel::Development,
-        (false, false) => OptLevel::Normal,
+        (true, false, false) => OptLevel::Optimize,
+        (false, true, false) => OptLevel::Size,
+        (false, false, true) => OptLevel::Development,
+        (false, false, false) => OptLevel::Normal,
+        _ => user_error!("build can be only one of `--dev`, `--optimize`, or `--opt-size`"),
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);

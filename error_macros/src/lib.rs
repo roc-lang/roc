@@ -29,3 +29,83 @@ macro_rules! user_error {
         std::process::exit(1);
     })
 }
+
+/// Assert that a type has the expected size on ARM
+#[macro_export]
+macro_rules! assert_sizeof_aarch64 {
+    ($t: ty, $expected_size: expr) => {
+        #[cfg(target_arch = "aarch64")]
+        static_assertions::assert_eq_size!($t, [u8; $expected_size]);
+    };
+}
+
+/// Assert that a type has the expected size in Wasm
+#[macro_export]
+macro_rules! assert_sizeof_wasm {
+    ($t: ty, $expected_size: expr) => {
+        #[cfg(target_family = "wasm")]
+        static_assertions::assert_eq_size!($t, [u8; $expected_size]);
+    };
+}
+
+/// Assert that a type has the expected size on any target not covered above
+/// In practice we use this for x86_64, and add specific macros for other platforms
+#[macro_export]
+macro_rules! assert_sizeof_default {
+    ($t: ty, $expected_size: expr) => {
+        #[cfg(not(any(target_family = "wasm", target_arch = "aarch64")))]
+        static_assertions::assert_eq_size!($t, [u8; $expected_size]);
+    };
+}
+
+/// Assert that a type has the expected size on all targets
+#[macro_export]
+macro_rules! assert_sizeof_all {
+    ($t: ty, $expected_size: expr) => {
+        static_assertions::assert_eq_size!($t, [u8; $expected_size]);
+    };
+}
+
+// LARGE SCALE PROJECTS
+//
+// This section is for "todo!"-style macros enabled in sections where large-scale changes to the
+// language are in progress.
+
+#[macro_export]
+macro_rules! _incomplete_project {
+    ($project_name:literal, $tracking_issue_no:literal) => {
+        panic!(
+            "[{}] not yet implemented. Tracking issue: https://github.com/rtfeldman/roc/issues/{}",
+            $project_name, $tracking_issue_no,
+        )
+    };
+    ($project_name:literal, $tracking_issue_no:literal, $($arg:tt)+) => {
+        panic!(
+            "[{}] not yet implemented. Tracking issue: https://github.com/rtfeldman/roc/issues/{}.\nAdditional information: {}",
+            $project_name, $tracking_issue_no,
+            format_args!($($arg)+),
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! todo_abilities {
+    () => {
+        $crate::_incomplete_project!("Abilities", 2463)
+    };
+    ($($arg:tt)+) => {
+        $crate::_incomplete_project!("Abilities", 2463, $($arg)+)
+    };
+}
+
+#[macro_export]
+macro_rules! todo_opaques {
+    () => {
+        $crate::_incomplete_project!("Abilities (opaques)", 2463)
+    };
+    ($($arg:tt)+) => {
+        $crate::_incomplete_project!("Abilities (opaques)", 2463, $($arg)+)
+    };
+}
+
+// END LARGE SCALE PROJECTS

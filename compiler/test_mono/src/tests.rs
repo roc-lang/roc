@@ -18,7 +18,6 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 use test_mono_macros::*;
 
-use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
@@ -107,7 +106,6 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         src_dir,
         exposed_types,
         TARGET_INFO,
-        builtin_defs_map,
     );
 
     let mut loaded = match loaded {
@@ -1247,6 +1245,24 @@ fn aliased_polymorphic_closure() {
         f = \{} -> (\a -> n)
         g = f {}
         g {}
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_2535_polymorphic_fields_referenced_in_list() {
+    indoc!(
+        r#"
+        app "test" provides [ nums ] to "./platform"
+
+        alpha = { a: 1, b: 2 }
+
+        nums : List U8
+        nums =
+            [
+                alpha.a,
+                alpha.b,
+            ]
         "#
     )
 }
