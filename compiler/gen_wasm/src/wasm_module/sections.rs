@@ -383,8 +383,8 @@ impl<'a> ImportSection<'a> {
         let mut fn_signatures = bumpalo::vec![in arena];
         let mut cursor = 0;
         while cursor < self.bytes.len() {
-            String::skip_bytes(&self.bytes, &mut cursor);
-            String::skip_bytes(&self.bytes, &mut cursor);
+            String::skip_bytes(&self.bytes, &mut cursor); // import namespace
+            String::skip_bytes(&self.bytes, &mut cursor); // import name
 
             let type_id = ImportTypeId::from(self.bytes[cursor]);
             cursor += 1;

@@ -133,10 +133,10 @@ impl<'a> WasmModule<'a> {
         types.parse_offsets();
 
         let mut import = ImportSection::preload(arena, bytes, &mut cursor);
-        let import_signatures = import.parse(arena);
+        let imported_fn_signatures = import.parse(arena);
 
         let function = FunctionSection::preload(arena, bytes, &mut cursor);
-        let function_signatures = function.parse(arena);
+        let defined_fn_signatures = function.parse(arena);
 
         let table = OpaqueSection::preload(SectionId::Table, arena, bytes, &mut cursor);
 
@@ -155,8 +155,8 @@ impl<'a> WasmModule<'a> {
             arena,
             bytes,
             &mut cursor,
-            &import_signatures,
-            &function_signatures,
+            &imported_fn_signatures,
+            &defined_fn_signatures,
             &indirect_callees,
         );
 

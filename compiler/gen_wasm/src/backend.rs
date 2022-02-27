@@ -78,7 +78,7 @@ impl<'a> WasmBackend<'a> {
             index: STACK_POINTER_GLOBAL_ID,
         });
 
-        // TODO: Read the actual address ranges of preloaded data sections, in case they do something unexpected
+        // TODO: Examine the actual address ranges of every preloaded data segment in case they are not simply sequential
         let next_constant_addr = CONST_SEGMENT_BASE_ADDR + module.data.bytes.len() as u32;
 
         WasmBackend {
@@ -598,22 +598,9 @@ impl<'a> WasmBackend<'a> {
                 index,
             } => self.expr_union_at_index(*structure, *tag_id, union_layout, *index, sym),
 
-            Expr::Reuse {
-                symbol: _,
-                update_tag_id: _,
-                update_mode: _,
-                tag_layout: _,
-                tag_name: _,
-                tag_id: _,
-                arguments: _,
-            } => todo!("Expression `{}`", expr.to_pretty(100)),
-
-            Expr::Reset {
-                symbol: _,
-                update_mode: _,
-            } => todo!("Expression `{}`", expr.to_pretty(100)),
-
-            Expr::RuntimeErrorFunction(_) => todo!("Expression `{}`", expr.to_pretty(100)),
+            Expr::Reuse { .. } | Expr::Reset { .. } | Expr::RuntimeErrorFunction(_) => {
+                todo!("Expression `{}`", expr.to_pretty(100))
+            }
         }
     }
 

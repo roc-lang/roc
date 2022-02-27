@@ -66,17 +66,18 @@ impl<'a> PreloadsCallGraph<'a> {
 pub fn parse_preloads_call_graph<'a>(
     arena: &'a Bump,
     code_section_body: &[u8],
-    import_signatures: &[u32],
-    function_signatures: &[u32],
+    imported_fn_signatures: &[u32],
+    defined_fn_signatures: &[u32],
     indirect_callees: &[u32],
 ) -> PreloadsCallGraph<'a> {
     let mut call_graph =
-        PreloadsCallGraph::new(arena, import_signatures.len(), function_signatures.len());
+        PreloadsCallGraph::new(arena, imported_fn_signatures.len(), defined_fn_signatures.len());
 
+    // Function type signatures, used for indirect calls
     let mut signatures =
-        Vec::with_capacity_in(import_signatures.len() + function_signatures.len(), arena);
-    signatures.extend_from_slice(import_signatures);
-    signatures.extend_from_slice(function_signatures);
+        Vec::with_capacity_in(imported_fn_signatures.len() + defined_fn_signatures.len(), arena);
+    signatures.extend_from_slice(imported_fn_signatures);
+    signatures.extend_from_slice(defined_fn_signatures);
 
     // Iterate over the bytes of the Code section
     let mut cursor: usize = 0;
