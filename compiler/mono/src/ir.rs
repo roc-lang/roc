@@ -2038,8 +2038,6 @@ fn pattern_to_when<'a>(
             (symbol, Loc::at_zero(wrapped_body))
         }
 
-        UnwrappedOpaque { .. } => todo_opaques!(),
-
         IntLiteral(..)
         | NumLiteral(..)
         | FloatLiteral(..)
