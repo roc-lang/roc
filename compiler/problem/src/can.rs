@@ -165,6 +165,8 @@ pub enum RuntimeError {
         referenced_region: Region,
         imported_region: Region,
     },
+    OpaqueNotApplied(Loc<Ident>),
+    OpaqueAppliedToMultipleArgs(Region),
     ValueNotExposed {
         module_name: ModuleName,
         ident: Ident,

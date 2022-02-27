@@ -70,70 +70,70 @@ impl<'a> RawFunctionLayout<'a> {
             RangedNumber(typ, _) => Self::from_var(env, typ),
 
             // Ints
-            Alias(Symbol::NUM_I128, args, _) => {
+            Alias(Symbol::NUM_I128, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::i128()))
             }
-            Alias(Symbol::NUM_I64, args, _) => {
+            Alias(Symbol::NUM_I64, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::i64()))
             }
-            Alias(Symbol::NUM_I32, args, _) => {
+            Alias(Symbol::NUM_I32, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::i32()))
             }
-            Alias(Symbol::NUM_I16, args, _) => {
+            Alias(Symbol::NUM_I16, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::i16()))
             }
-            Alias(Symbol::NUM_I8, args, _) => {
+            Alias(Symbol::NUM_I8, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::i8()))
             }
 
             // I think unsigned and signed use the same layout
-            Alias(Symbol::NUM_U128, args, _) => {
+            Alias(Symbol::NUM_U128, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::u128()))
             }
-            Alias(Symbol::NUM_U64, args, _) => {
+            Alias(Symbol::NUM_U64, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::u64()))
             }
-            Alias(Symbol::NUM_U32, args, _) => {
+            Alias(Symbol::NUM_U32, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::u32()))
             }
-            Alias(Symbol::NUM_U16, args, _) => {
+            Alias(Symbol::NUM_U16, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::u16()))
             }
-            Alias(Symbol::NUM_U8, args, _) => {
+            Alias(Symbol::NUM_U8, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::u8()))
             }
 
             // Floats
-            Alias(Symbol::NUM_F64, args, _) => {
+            Alias(Symbol::NUM_F64, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::f64()))
             }
-            Alias(Symbol::NUM_F32, args, _) => {
+            Alias(Symbol::NUM_F32, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::f32()))
             }
 
             // Nat
-            Alias(Symbol::NUM_NAT, args, _) => {
+            Alias(Symbol::NUM_NAT, args, _, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Self::ZeroArgumentThunk(Layout::usize(env.target_info)))
             }
 
-            Alias(symbol, _, _) if symbol.is_builtin() => Ok(Self::ZeroArgumentThunk(
+            Alias(symbol, _, _, _) if symbol.is_builtin() => Ok(Self::ZeroArgumentThunk(
                 Layout::new_help(env, var, content)?,
             )),
 
-            Alias(_, _, var) => Self::from_var(env, var),
+            Alias(_, _, var, _) => Self::from_var(env, var),
             Error => Err(LayoutProblem::Erroneous),
         }
     }
@@ -922,7 +922,7 @@ impl<'a> Layout<'a> {
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
-            Alias(symbol, _args, actual_var) => {
+            Alias(symbol, _args, actual_var, _) => {
                 if let Some(int_width) = IntWidth::try_from_symbol(symbol) {
                     return Ok(Layout::Builtin(Builtin::Int(int_width)));
                 }
@@ -1980,7 +1980,7 @@ pub fn union_sorted_tags<'a>(
 fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     match subs.get_content_without_compacting(var) {
         Content::Structure(FlatType::RecursiveTagUnion(rec_var, _, _)) => Some(*rec_var),
-        Content::Alias(_, _, actual) => get_recursion_var(subs, *actual),
+        Content::Alias(_, _, actual, _) => get_recursion_var(subs, *actual),
         _ => None,
     }
 }
@@ -2623,7 +2623,7 @@ fn layout_from_num_content<'a>(
                 );
             }
         },
-        Alias(_, _, _) => {
+        Alias(_, _, _, _) => {
             todo!("TODO recursively resolve type aliases in num_from_content");
         }
         Structure(_) | RangedNumber(..) => {
@@ -2639,7 +2639,7 @@ fn unwrap_num_tag<'a>(
     target_info: TargetInfo,
 ) -> Result<Layout<'a>, LayoutProblem> {
     match subs.get_content_without_compacting(var) {
-        Content::Alias(Symbol::NUM_INTEGER, args, _) => {
+        Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
             debug_assert!(args.len() == 1);
 
             let precision_var = subs[args.variables().into_iter().next().unwrap()];
@@ -2647,7 +2647,7 @@ fn unwrap_num_tag<'a>(
             let precision = subs.get_content_without_compacting(precision_var);
 
             match precision {
-                Content::Alias(symbol, args, _) => {
+                Content::Alias(symbol, args, _, _) => {
                     debug_assert!(args.is_empty());
 
                     let layout = match *symbol {
@@ -2675,7 +2675,7 @@ fn unwrap_num_tag<'a>(
                 _ => unreachable!("not a valid int variant: {:?}", precision),
             }
         }
-        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
+        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _, _) => {
             debug_assert!(args.len() == 1);
 
             let precision_var = subs[args.variables().into_iter().next().unwrap()];
@@ -2683,17 +2683,17 @@ fn unwrap_num_tag<'a>(
             let precision = subs.get_content_without_compacting(precision_var);
 
             match precision {
-                Content::Alias(Symbol::NUM_BINARY32, args, _) => {
+                Content::Alias(Symbol::NUM_BINARY32, args, _, _) => {
                     debug_assert!(args.is_empty());
 
                     Ok(Layout::f32())
                 }
-                Content::Alias(Symbol::NUM_BINARY64, args, _) => {
+                Content::Alias(Symbol::NUM_BINARY64, args, _, _) => {
                     debug_assert!(args.is_empty());
 
                     Ok(Layout::f64())
                 }
-                Content::Alias(Symbol::NUM_DECIMAL, args, _) => {
+                Content::Alias(Symbol::NUM_DECIMAL, args, _, _) => {
                     debug_assert!(args.is_empty());
 
                     Ok(Layout::Builtin(Builtin::Decimal))

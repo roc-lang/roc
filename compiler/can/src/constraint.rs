@@ -11,7 +11,7 @@ use roc_types::{subs::Variable, types::VariableDetail};
 /// constraints makes them behaviorally different from unification-based constraints.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PresenceConstraint {
-    IncludesTag(TagName, Vec<Type>),
+    IncludesTag(TagName, Vec<Type>, Region, PatternCategory),
     IsOpen,
     Pattern(Region, PatternCategory, PExpected<Type>),
 }
@@ -159,7 +159,7 @@ fn validate_help(constraint: &Constraint, declared: &Declared, accum: &mut Varia
         Constraint::Present(typ, constr) => {
             subtract(declared, &typ.variables_detail(), accum);
             match constr {
-                PresenceConstraint::IncludesTag(_, tys) => {
+                PresenceConstraint::IncludesTag(_, tys, _, _) => {
                     for ty in tys {
                         subtract(declared, &ty.variables_detail(), accum);
                     }

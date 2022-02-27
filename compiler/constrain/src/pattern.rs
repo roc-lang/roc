@@ -5,12 +5,11 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, RecordDestruct};
 use roc_collections::all::{Index, SendMap};
-use roc_error_macros::todo_opaques;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
-use roc_types::types::{Category, PReason, PatternCategory, Reason, RecordField, Type};
+use roc_types::types::{AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type};
 
 #[derive(Default)]
 pub struct PatternState {
@@ -118,7 +117,35 @@ fn headers_from_annotation_help(
             _ => false,
         },
 
-        UnwrappedOpaque { .. } => todo_opaques!(),
+        UnwrappedOpaque {
+            whole_var: _,
+            opaque,
+            argument,
+            specialized_def_type: _,
+            type_arguments: pat_type_arguments,
+            lambda_set_variables: pat_lambda_set_variables,
+        } => match &annotation.value {
+            Type::Alias {
+                symbol,
+                kind: AliasKind::Opaque,
+                actual,
+                type_arguments,
+                lambda_set_variables,
+            } if symbol == opaque
+                && type_arguments.len() == pat_type_arguments.len()
+                && lambda_set_variables.len() == pat_lambda_set_variables.len() =>
+            {
+                headers.insert(*opaque, annotation.clone());
+
+                let (_, argument_pat) = &**argument;
+                headers_from_annotation_help(
+                    &argument_pat.value,
+                    &Loc::at(annotation.region, (**actual).clone()),
+                    headers,
+                )
+            }
+            _ => false,
+        },
     }
 }
 
@@ -393,18 +420,21 @@ pub fn constrain_pattern(
                 constrain_pattern(env, &loc_pattern.value, loc_pattern.region, expected, state);
             }
 
+            let pat_category = PatternCategory::Ctor(tag_name.clone());
+
             let whole_con = Constraint::Present(
                 expected.clone().get_type(),
-                PresenceConstraint::IncludesTag(tag_name.clone(), argument_types.clone()),
+                PresenceConstraint::IncludesTag(
+                    tag_name.clone(),
+                    argument_types.clone(),
+                    region,
+                    pat_category.clone(),
+                ),
             );
 
             let tag_con = Constraint::Present(
                 Type::Variable(*whole_var),
-                PresenceConstraint::Pattern(
-                    region,
-                    PatternCategory::Ctor(tag_name.clone()),
-                    expected,
-                ),
+                PresenceConstraint::Pattern(region, pat_category, expected),
             );
 
             state.vars.push(*whole_var);
@@ -413,6 +443,76 @@ pub fn constrain_pattern(
             state.constraints.push(tag_con);
         }
 
-        UnwrappedOpaque { .. } => todo_opaques!(),
+        UnwrappedOpaque {
+            whole_var,
+            opaque,
+            argument,
+            specialized_def_type,
+            type_arguments,
+            lambda_set_variables,
+        } => {
+            // Suppose we are constraining the pattern \@Id who, where Id n := [ Id U64 n ]
+            let (arg_pattern_var, loc_arg_pattern) = &**argument;
+            let arg_pattern_type = Type::Variable(*arg_pattern_var);
+
+            let opaque_type = Type::Alias {
+                symbol: *opaque,
+                type_arguments: type_arguments.clone(),
+                lambda_set_variables: lambda_set_variables.clone(),
+                actual: Box::new(arg_pattern_type.clone()),
+                kind: AliasKind::Opaque,
+            };
+
+            // First, add a constraint for the argument "who"
+            let arg_pattern_expected = PExpected::NoExpectation(arg_pattern_type.clone());
+            constrain_pattern(
+                env,
+                &loc_arg_pattern.value,
+                loc_arg_pattern.region,
+                arg_pattern_expected,
+                state,
+            );
+
+            // Next, link `whole_var` to the opaque type of "@Id who"
+            let whole_con = Constraint::Eq(
+                Type::Variable(*whole_var),
+                Expected::NoExpectation(opaque_type),
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            );
+
+            // Link the entire wrapped opaque type (with the now-constrained argument) to the type
+            // variables of the opaque type
+            // TODO: better expectation here
+            let link_type_variables_con = Constraint::Eq(
+                (**specialized_def_type).clone(),
+                Expected::NoExpectation(arg_pattern_type),
+                Category::OpaqueWrap(*opaque),
+                loc_arg_pattern.region,
+            );
+
+            // Next, link `whole_var` (the type of "@Id who") to the expected type
+            let opaque_pattern_con = Constraint::Present(
+                Type::Variable(*whole_var),
+                PresenceConstraint::Pattern(region, PatternCategory::Opaque(*opaque), expected),
+            );
+
+            state
+                .vars
+                .extend_from_slice(&[*arg_pattern_var, *whole_var]);
+            // Also add the fresh variables we created for the type argument and lambda sets
+            state.vars.extend(type_arguments.iter().map(|(_, t)| {
+                t.expect_variable("all type arguments should be fresh variables here")
+            }));
+            state.vars.extend(lambda_set_variables.iter().map(|v| {
+                v.0.expect_variable("all lambda sets should be fresh variables here")
+            }));
+
+            state.constraints.extend_from_slice(&[
+                whole_con,
+                link_type_variables_con,
+                opaque_pattern_con,
+            ]);
+        }
     }
 }

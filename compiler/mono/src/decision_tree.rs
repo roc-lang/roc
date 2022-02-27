@@ -565,6 +565,25 @@ fn test_at_path<'a>(
                     union: union.clone(),
                     arguments: arguments.to_vec(),
                 },
+
+                OpaqueUnwrap { opaque, argument } => {
+                    let union = Union {
+                        render_as: RenderAs::Tag,
+                        alternatives: vec![Ctor {
+                            tag_id: TagId(0),
+                            name: TagName::Private(*opaque),
+                            arity: 1,
+                        }],
+                    };
+
+                    IsCtor {
+                        tag_id: 0,
+                        tag_name: TagName::Private(*opaque),
+                        union,
+                        arguments: vec![(**argument).clone()],
+                    }
+                }
+
                 BitLiteral { value, .. } => IsBit(*value),
                 EnumLiteral { tag_id, union, .. } => IsByte {
                     tag_id: *tag_id as _,
@@ -683,6 +702,33 @@ fn to_relevant_branch_help<'a>(
                 start.extend(sub_positions);
                 start.extend(end);
 
+                Some(Branch {
+                    goal: branch.goal,
+                    guard: branch.guard.clone(),
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
+        OpaqueUnwrap { opaque, argument } => match test {
+            IsCtor {
+                tag_name: test_opaque_tag_name,
+                tag_id,
+                ..
+            } => {
+                debug_assert_eq!(test_opaque_tag_name, &TagName::Private(opaque));
+
+                let (argument, _) = *argument;
+
+                let mut new_path = path.to_vec();
+                new_path.push(PathInstruction {
+                    index: 0,
+                    tag_id: *tag_id,
+                });
+
+                start.push((new_path, argument));
+                start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
                     guard: branch.guard.clone(),
@@ -954,6 +1000,7 @@ fn needs_tests(pattern: &Pattern) -> bool {
         RecordDestructure(_, _)
         | NewtypeDestructure { .. }
         | AppliedTag { .. }
+        | OpaqueUnwrap { .. }
         | BitLiteral { .. }
         | EnumLiteral { .. }
         | IntLiteral(_, _)
@@ -1319,6 +1366,7 @@ fn test_to_equality<'a>(
                 _ => unreachable!("{:?}", (cond_layout, union)),
             }
         }
+
         Test::IsInt(test_int, precision) => {
             // TODO don't downcast i128 here
             debug_assert!(test_int <= i64::MAX as i128);

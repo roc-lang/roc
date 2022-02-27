@@ -67,8 +67,13 @@ pub fn make_solved_types(
         }
 
         let solved_type = SolvedType::from_type(solved_subs, &alias.typ);
-        let solved_alias =
-            SolvedType::Alias(*symbol, args, lambda_set_variables, Box::new(solved_type));
+        let solved_alias = SolvedType::Alias(
+            *symbol,
+            args,
+            lambda_set_variables,
+            Box::new(solved_type),
+            alias.kind,
+        );
 
         solved_types.insert(*symbol, solved_alias);
     }

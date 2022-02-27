@@ -30,6 +30,7 @@ impl Union {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RenderAs {
     Tag,
+    Opaque,
     Record(Vec<Lowercase>),
     Guard,
 }
@@ -131,6 +132,23 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
             let simplified_args: std::vec::Vec<_> =
                 arguments.iter().map(|v| simplify(&v.0)).collect();
             Ctor(union.clone(), TagId(*tag_id), simplified_args)
+        }
+
+        OpaqueUnwrap { opaque, argument } => {
+            let (argument, _) = &(**argument);
+
+            let tag_id = TagId(0);
+
+            let union = Union {
+                render_as: RenderAs::Opaque,
+                alternatives: vec![Ctor {
+                    name: TagName::Private(*opaque),
+                    tag_id,
+                    arity: 1,
+                }],
+            };
+
+            Ctor(union, tag_id, vec![simplify(argument)])
         }
     }
 }

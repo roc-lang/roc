@@ -1,4 +1,4 @@
-use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
+use crate::types::{name_type_var, AliasKind, ErrorType, Problem, RecordField, TypeExt};
 use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
@@ -375,10 +375,14 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             opt_name,
         } => write!(f, "Recursion({:?}, {:?})", structure, opt_name),
         Content::Structure(flat_type) => subs_fmt_flat_type(flat_type, subs, f),
-        Content::Alias(name, arguments, actual) => {
+        Content::Alias(name, arguments, actual, kind) => {
             let slice = subs.get_subs_slice(arguments.variables());
+            let wrap = match kind {
+                AliasKind::Structural => "Alias",
+                AliasKind::Opaque => "Opaque",
+            };
 
-            write!(f, "Alias({:?}, {:?}, {:?})", name, slice, actual)
+            write!(f, "{}({:?}, {:?}, {:?})", wrap, name, slice, actual)
         }
         Content::RangedNumber(typ, range) => {
             let slice = subs.get_subs_slice(*range);
@@ -870,7 +874,12 @@ fn integer_type(
         });
 
         subs.set_content(signed64, {
-            Content::Alias(num_signed64, AliasVariables::default(), at_signed64)
+            Content::Alias(
+                num_signed64,
+                AliasVariables::default(),
+                at_signed64,
+                AliasKind::Structural,
+            )
         });
     }
 
@@ -886,7 +895,12 @@ fn integer_type(
 
         let vars = AliasVariables::insert_into_subs(subs, [signed64], []);
         subs.set_content(integer_signed64, {
-            Content::Alias(Symbol::NUM_INTEGER, vars, at_signed64)
+            Content::Alias(
+                Symbol::NUM_INTEGER,
+                vars,
+                at_signed64,
+                AliasKind::Structural,
+            )
         });
     }
 
@@ -902,11 +916,21 @@ fn integer_type(
 
         let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], []);
         subs.set_content(num_integer_signed64, {
-            Content::Alias(Symbol::NUM_NUM, vars, at_num_integer_signed64)
+            Content::Alias(
+                Symbol::NUM_NUM,
+                vars,
+                at_num_integer_signed64,
+                AliasKind::Structural,
+            )
         });
 
         subs.set_content(var_i64, {
-            Content::Alias(num_i64, AliasVariables::default(), num_integer_signed64)
+            Content::Alias(
+                num_i64,
+                AliasVariables::default(),
+                num_integer_signed64,
+                AliasKind::Structural,
+            )
         });
     }
 }
@@ -1095,7 +1119,12 @@ fn float_type(
         });
 
         subs.set_content(binary64, {
-            Content::Alias(num_binary64, AliasVariables::default(), at_binary64)
+            Content::Alias(
+                num_binary64,
+                AliasVariables::default(),
+                at_binary64,
+                AliasKind::Structural,
+            )
         });
     }
 
@@ -1111,7 +1140,12 @@ fn float_type(
 
         let vars = AliasVariables::insert_into_subs(subs, [binary64], []);
         subs.set_content(float_binary64, {
-            Content::Alias(Symbol::NUM_FLOATINGPOINT, vars, at_binary64)
+            Content::Alias(
+                Symbol::NUM_FLOATINGPOINT,
+                vars,
+                at_binary64,
+                AliasKind::Structural,
+            )
         });
     }
 
@@ -1127,11 +1161,21 @@ fn float_type(
 
         let vars = AliasVariables::insert_into_subs(subs, [float_binary64], []);
         subs.set_content(num_float_binary64, {
-            Content::Alias(Symbol::NUM_NUM, vars, at_num_float_binary64)
+            Content::Alias(
+                Symbol::NUM_NUM,
+                vars,
+                at_num_float_binary64,
+                AliasKind::Structural,
+            )
         });
 
         subs.set_content(var_f64, {
-            Content::Alias(num_f64, AliasVariables::default(), num_float_binary64)
+            Content::Alias(
+                num_f64,
+                AliasVariables::default(),
+                num_float_binary64,
+                AliasKind::Structural,
+            )
         });
     }
 }
@@ -1249,6 +1293,7 @@ impl Subs {
                 Symbol::BOOL_BOOL,
                 AliasVariables::default(),
                 Variable::BOOL_ENUM,
+                AliasKind::Structural,
             )
         });
 
@@ -1650,7 +1695,7 @@ pub enum Content {
         opt_name: Option<Lowercase>,
     },
     Structure(FlatType),
-    Alias(Symbol, AliasVariables, Variable),
+    Alias(Symbol, AliasVariables, Variable, AliasKind),
     RangedNumber(Variable, VariableSubsSlice),
     Error,
 }
@@ -2107,7 +2152,7 @@ pub fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
                 var = *sub_ext;
             }
 
-            Alias(_, _, actual_var) => {
+            Alias(_, _, actual_var, _) => {
                 // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
                 var = *actual_var;
             }
@@ -2323,7 +2368,7 @@ fn is_empty_record(subs: &Subs, mut var: Variable) -> bool {
                 var = *sub_ext;
             }
 
-            Alias(_, _, actual_var) => {
+            Alias(_, _, actual_var, _) => {
                 // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
                 var = *actual_var;
             }
@@ -2400,7 +2445,7 @@ fn occurs(
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => Ok(()),
                 }
             }
-            Alias(_, args, _) => {
+            Alias(_, args, _, _) => {
                 let mut new_seen = seen.clone();
                 new_seen.insert(root_var);
 
@@ -2596,7 +2641,7 @@ fn explicit_substitute(
 
                     in_var
                 }
-                Alias(symbol, args, actual) => {
+                Alias(symbol, args, actual, kind) => {
                     for index in args.into_iter() {
                         let var = subs[index];
                         let new_var = explicit_substitute(subs, from, to, var, seen);
@@ -2605,7 +2650,7 @@ fn explicit_substitute(
 
                     let new_actual = explicit_substitute(subs, from, to, actual, seen);
 
-                    subs.set_content(in_var, Alias(symbol, args, new_actual));
+                    subs.set_content(in_var, Alias(symbol, args, new_actual, kind));
 
                     in_var
                 }
@@ -2667,7 +2712,7 @@ fn get_var_names(
 
             RigidVar(name) => add_name(subs, 0, name, var, RigidVar, taken_names),
 
-            Alias(_, args, _) => args.into_iter().fold(taken_names, |answer, arg_var| {
+            Alias(_, args, _, _) => args.into_iter().fold(taken_names, |answer, arg_var| {
                 get_var_names(subs, subs[arg_var], answer)
             }),
 
@@ -2874,7 +2919,7 @@ fn content_to_err_type(
             ErrorType::FlexVar(name)
         }
 
-        Alias(symbol, args, aliased_to) => {
+        Alias(symbol, args, aliased_to, kind) => {
             let err_type = var_to_err_type(subs, state, aliased_to);
 
             let mut err_args = Vec::with_capacity(args.len());
@@ -2887,7 +2932,7 @@ fn content_to_err_type(
                 err_args.push(arg);
             }
 
-            ErrorType::Alias(symbol, err_args, Box::new(err_type))
+            ErrorType::Alias(symbol, err_args, Box::new(err_type), kind)
         }
 
         RangedNumber(typ, range) => {
@@ -2968,7 +3013,7 @@ fn flat_type_to_err_type(
                 err_fields.insert(label, err_record_field);
             }
 
-            match var_to_err_type(subs, state, ext_var).unwrap_alias() {
+            match var_to_err_type(subs, state, ext_var).unwrap_structural_alias() {
                 ErrorType::Record(sub_fields, sub_ext) => {
                     ErrorType::Record(sub_fields.union(err_fields), sub_ext)
                 }
@@ -3002,7 +3047,7 @@ fn flat_type_to_err_type(
                 err_tags.insert(tag, err_vars);
             }
 
-            match var_to_err_type(subs, state, ext_var).unwrap_alias() {
+            match var_to_err_type(subs, state, ext_var).unwrap_structural_alias() {
                 ErrorType::TagUnion(sub_tags, sub_ext) => {
                     ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
                 }
@@ -3030,7 +3075,7 @@ fn flat_type_to_err_type(
 
             err_tags.insert(tag_name, vec![]);
 
-            match var_to_err_type(subs, state, ext_var).unwrap_alias() {
+            match var_to_err_type(subs, state, ext_var).unwrap_structural_alias() {
                 ErrorType::TagUnion(sub_tags, sub_ext) => {
                     ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
                 }
@@ -3069,7 +3114,7 @@ fn flat_type_to_err_type(
 
             let rec_error_type = Box::new(var_to_err_type(subs, state, rec_var));
 
-            match var_to_err_type(subs, state, ext_var).unwrap_alias() {
+            match var_to_err_type(subs, state, ext_var).unwrap_structural_alias() {
                 ErrorType::RecursiveTagUnion(rec_var, sub_tags, sub_ext) => {
                     debug_assert!(rec_var == rec_error_type);
                     ErrorType::RecursiveTagUnion(rec_error_type, sub_tags.union(err_tags), sub_ext)
@@ -3179,7 +3224,7 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
 
                     Erroneous(_) => (),
                 },
-                Alias(_, args, var) => {
+                Alias(_, args, var, _) => {
                     stack.extend(var_slice(args.variables()));
 
                     stack.push(*var);
@@ -3343,10 +3388,11 @@ impl StorageSubs {
                 opt_name: opt_name.clone(),
             },
             Structure(flat_type) => Structure(Self::offset_flat_type(offsets, flat_type)),
-            Alias(symbol, alias_variables, actual) => Alias(
+            Alias(symbol, alias_variables, actual, kind) => Alias(
                 *symbol,
                 Self::offset_alias_variables(offsets, *alias_variables),
                 Self::offset_variable(offsets, *actual),
+                *kind,
             ),
             RangedNumber(typ, vars) => RangedNumber(
                 Self::offset_variable(offsets, *typ),
@@ -3722,7 +3768,7 @@ fn deep_copy_var_to_help<'a>(
             copy
         }
 
-        Alias(symbol, arguments, real_type_var) => {
+        Alias(symbol, arguments, real_type_var, kind) => {
             let new_variables =
                 SubsSlice::reserve_into_subs(target, arguments.all_variables_len as _);
             for (target_index, var_index) in (new_variables.indices()).zip(arguments.variables()) {
@@ -3738,7 +3784,7 @@ fn deep_copy_var_to_help<'a>(
 
             let new_real_type_var =
                 deep_copy_var_to_help(arena, visited, source, target, max_rank, real_type_var);
-            let new_content = Alias(symbol, new_arguments, new_real_type_var);
+            let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
 
             target.set(copy, make_descriptor(new_content));
 
@@ -3830,7 +3876,7 @@ where
                 }
                 Erroneous(_) | EmptyRecord | EmptyTagUnion => {}
             },
-            Alias(_, arguments, real_type_var) => {
+            Alias(_, arguments, real_type_var, _) => {
                 push_var_slice!(arguments.variables());
                 stack.push(*real_type_var);
             }

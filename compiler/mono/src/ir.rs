@@ -10,7 +10,6 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
-use roc_error_macros::todo_opaques;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -2021,7 +2020,7 @@ fn pattern_to_when<'a>(
             (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
         }
 
-        AppliedTag { .. } | RecordDestructure { .. } => {
+        AppliedTag { .. } | RecordDestructure { .. } | UnwrappedOpaque { .. } => {
             let symbol = env.unique_symbol();
 
             let wrapped_body = When {
@@ -2039,7 +2038,6 @@ fn pattern_to_when<'a>(
             (symbol, Loc::at_zero(wrapped_body))
         }
 
-        UnwrappedOpaque { .. } => todo_opaques!(),
         IntLiteral(..)
         | NumLiteral(..)
         | FloatLiteral(..)
@@ -3433,7 +3431,18 @@ pub fn with_hole<'a>(
             }
         }
 
-        OpaqueRef { .. } => todo_opaques!(),
+        OpaqueRef { argument, .. } => {
+            let (arg_var, loc_arg_expr) = *argument;
+            with_hole(
+                env,
+                loc_arg_expr.value,
+                arg_var,
+                procs,
+                layout_cache,
+                assigned,
+                hole,
+            )
+        }
 
         Record {
             record_var,
@@ -6309,6 +6318,10 @@ fn store_pattern_help<'a>(
                 stmt,
             );
         }
+        OpaqueUnwrap { argument, .. } => {
+            return store_pattern_help(env, procs, layout_cache, &argument.0, outer_symbol, stmt);
+        }
+
         RecordDestructure(destructs, [_single_field]) => {
             for destruct in destructs {
                 match &destruct.typ {
@@ -7665,6 +7678,10 @@ pub enum Pattern<'a> {
         layout: UnionLayout<'a>,
         union: crate::exhaustive::Union,
     },
+    OpaqueUnwrap {
+        opaque: Symbol,
+        argument: Box<(Pattern<'a>, Layout<'a>)>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -8218,7 +8235,20 @@ fn from_can_pattern_help<'a>(
             Ok(result)
         }
 
-        UnwrappedOpaque { .. } => todo_opaques!(),
+        UnwrappedOpaque {
+            opaque, argument, ..
+        } => {
+            let (arg_var, loc_arg_pattern) = &(**argument);
+            let arg_layout = layout_cache
+                .from_var(env.arena, *arg_var, env.subs)
+                .unwrap();
+            let mono_arg_pattern =
+                from_can_pattern_help(env, layout_cache, &loc_arg_pattern.value, assignments)?;
+            Ok(Pattern::OpaqueUnwrap {
+                opaque: *opaque,
+                argument: Box::new((mono_arg_pattern, arg_layout)),
+            })
+        }
 
         RecordDestructure {
             whole_var,
@@ -8389,7 +8419,7 @@ pub fn num_argument_to_int_or_float(
         }
         Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::Int(IntWidth::I64), // We default (Num *) to I64
 
-        Content::Alias(Symbol::NUM_INTEGER, args, _) => {
+        Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
@@ -8397,7 +8427,7 @@ pub fn num_argument_to_int_or_float(
             num_argument_to_int_or_float(subs, target_info, var, false)
         }
 
-        other @ Content::Alias(symbol, args, _) => {
+        other @ Content::Alias(symbol, args, _, _) => {
             if let Some(int_width) = IntWidth::try_from_symbol(*symbol) {
                 return IntOrFloat::Int(int_width);
             }
