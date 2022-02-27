@@ -1782,6 +1782,23 @@ fn replace_unique_int_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn replace_unique_int_list_out_of_bounds() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                result = List.replace [ 12, 9, 7, 1, 5 ] 5 33
+                when result is
+                    Ok {value} -> value
+                    Err OutOfBounds -> -1 
+            "#
+        ),
+        -1,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn replace_unique_int_list_get_old_value() {
     assert_evals_to!(
         indoc!(
