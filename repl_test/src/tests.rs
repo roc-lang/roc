@@ -977,7 +977,6 @@ fn issue_2343_complete_mono_with_shadowed_vars() {
 }
 
 #[test]
-<<<<<<< HEAD
 fn record_with_type_behind_alias() {
     expect_success(
         indoc!(
