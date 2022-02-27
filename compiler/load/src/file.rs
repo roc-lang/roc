@@ -3287,7 +3287,7 @@ fn load_module<'a>(
                 # mulSaturated : Num a, Num a -> Num a
                 mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 
-                # minI8 : I8
+                minI8 : I8
                 # maxI8 : I8
                 # minU8 : U8
                 # maxU8 : U8
