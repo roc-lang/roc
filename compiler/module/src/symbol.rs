@@ -885,22 +885,22 @@ define_builtins! {
         26 DEV_TMP: "#dev_tmp"
     }
     1 NUM: "Num" => {
-        0 NUM_NUM: "Num" imported // the Num.Num type alias
+        0 NUM_NUM: "Num"  // the Num.Num type alias
         1 NUM_AT_NUM: "@Num" // the Num.@Num private tag
-        2 NUM_I128: "I128" imported // the Num.I128 type alias
-        3 NUM_U128: "U128" imported // the Num.U128 type alias
-        4 NUM_I64: "I64" imported // the Num.I64 type alias
-        5 NUM_U64: "U64" imported // the Num.U64 type alias
-        6 NUM_I32: "I32" imported // the Num.I32 type alias
-        7 NUM_U32: "U32" imported // the Num.U32 type alias
-        8 NUM_I16: "I16" imported // the Num.I16 type alias
-        9 NUM_U16: "U16" imported // the Num.U16 type alias
-        10 NUM_I8: "I8" imported // the Num.I8 type alias
-        11 NUM_U8: "U8" imported // the Num.U8 type alias
+        2 NUM_I128: "I128"  // the Num.I128 type alias
+        3 NUM_U128: "U128"  // the Num.U128 type alias
+        4 NUM_I64: "I64"  // the Num.I64 type alias
+        5 NUM_U64: "U64"  // the Num.U64 type alias
+        6 NUM_I32: "I32"  // the Num.I32 type alias
+        7 NUM_U32: "U32"  // the Num.U32 type alias
+        8 NUM_I16: "I16"  // the Num.I16 type alias
+        9 NUM_U16: "U16"  // the Num.U16 type alias
+        10 NUM_I8: "I8"  // the Num.I8 type alias
+        11 NUM_U8: "U8"  // the Num.U8 type alias
         12 NUM_INTEGER: "Integer" // Int : Num Integer
         13 NUM_AT_INTEGER: "@Integer" // the Int.@Integer private tag
-        14 NUM_F64: "F64" imported // the Num.F64 type alias
-        15 NUM_F32: "F32" imported // the Num.F32 type alias
+        14 NUM_F64: "F64"  // the Num.F64 type alias
+        15 NUM_F32: "F32"  // the Num.F32 type alias
         16 NUM_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
         17 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
         18 NUM_MAX_FLOAT: "maxFloat"
@@ -977,16 +977,16 @@ define_builtins! {
         89 NUM_SUB_SATURATED: "subSaturated"
         90 NUM_MUL_WRAP: "mulWrap"
         91 NUM_MUL_CHECKED: "mulChecked"
-        92 NUM_INT: "Int" imported
-        93 NUM_FLOAT: "Float" imported
+        92 NUM_INT: "Int"
+        93 NUM_FLOAT: "Float"
         94 NUM_AT_NATURAL: "@Natural"
         95 NUM_NATURAL: "Natural"
-        96 NUM_NAT: "Nat" imported
+        96 NUM_NAT: "Nat"
         97 NUM_INT_CAST: "intCast"
         98 NUM_IS_MULTIPLE_OF: "isMultipleOf"
         99 NUM_AT_DECIMAL: "@Decimal"
         100 NUM_DECIMAL: "Decimal"
-        101 NUM_DEC: "Dec"  imported // the Num.Dectype alias
+        101 NUM_DEC: "Dec"   // the Num.Dectype alias
         102 NUM_BYTES_TO_U16: "bytesToU16"
         103 NUM_BYTES_TO_U32: "bytesToU32"
         104 NUM_CAST_TO_NAT: "#castToNat"

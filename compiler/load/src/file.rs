@@ -135,10 +135,10 @@ impl Default for ModuleCache<'_> {
             PQModuleName::Unqualified(ModuleName::from(ModuleName::BOOL)),
         );
 
-        //        module_names.insert(
-        //            ModuleId::NUM,
-        //            PQModuleName::Unqualified(ModuleName::from(ModuleName::NUM)),
-        //        );
+        module_names.insert(
+            ModuleId::NUM,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::NUM)),
+        );
 
         Self {
             module_names,
@@ -1734,7 +1734,6 @@ fn update<'a>(
                 );
             }
 
-            /*
             if ![ModuleId::NUM, ModuleId::BOOL, ModuleId::RESULT].contains(&header.module_id) {
                 header
                     .package_qualified_imported_modules
@@ -1744,11 +1743,32 @@ fn update<'a>(
                     .imported_modules
                     .insert(ModuleId::NUM, Region::zero());
 
-                header
-                    .exposed_imports
-                    .insert(Ident::from("Num"), (Symbol::NUM_NUM, Region::zero()));
+                let prelude_types = [
+                    Symbol::NUM_NUM,
+                    Symbol::NUM_INT,
+                    Symbol::NUM_FLOAT,
+                    Symbol::NUM_NAT,
+                    Symbol::NUM_I8,
+                    Symbol::NUM_I16,
+                    Symbol::NUM_I32,
+                    Symbol::NUM_I64,
+                    Symbol::NUM_I128,
+                    Symbol::NUM_U8,
+                    Symbol::NUM_U16,
+                    Symbol::NUM_U32,
+                    Symbol::NUM_U64,
+                    Symbol::NUM_U128,
+                    Symbol::NUM_F32,
+                    Symbol::NUM_F64,
+                    Symbol::NUM_DEC,
+                ];
+
+                for symbol in prelude_types {
+                    header
+                        .exposed_imports
+                        .insert(Ident::from("Num"), (symbol, Region::zero()));
+                }
             }
-            */
 
             if header.module_id != ModuleId::BOOL {
                 header
@@ -1765,14 +1785,15 @@ fn update<'a>(
             }
 
             if !header.module_id.is_builtin() {
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::STR));
+                //                header
+                //                    .package_qualified_imported_modules
+                //                    .insert(PackageQualified::Unqualified(ModuleId::STR));
+                //
+                //                header
+                //                    .imported_modules
+                //                    .insert(ModuleId::STR, Region::zero());
 
-                header
-                    .imported_modules
-                    .insert(ModuleId::STR, Region::zero());
-
+                /*
                 header
                     .package_qualified_imported_modules
                     .insert(PackageQualified::Unqualified(ModuleId::DICT));
@@ -1796,6 +1817,7 @@ fn update<'a>(
                 header
                     .imported_modules
                     .insert(ModuleId::LIST, Region::zero());
+                */
             }
 
             state
@@ -2574,10 +2596,10 @@ fn load_module<'a>(
                     roc_parse::header::ModuleName::new("Bool"),
                     Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Bool")))]),
                 )),
-                //                Loc::at_zero(ImportsEntry::Module(
-                //                    roc_parse::header::ModuleName::new("Num"),
-                //                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Nat")))]),
-                //                )),
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Num"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Nat")))]),
+                )),
             ];
 
             const GENERATES_WITH: &[Symbol] = &[];
@@ -2682,14 +2704,15 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("repeat")),
                 Loc::at_zero(ExposedName::new("countGraphemes")),
                 Loc::at_zero(ExposedName::new("startsWithCodePt")),
-                Loc::at_zero(ExposedName::new("toUtf8")),
-                Loc::at_zero(ExposedName::new("fromUtf8")),
-                Loc::at_zero(ExposedName::new("fromUtf8Range")),
+                // Loc::at_zero(ExposedName::new("toUtf8")),
+                // Loc::at_zero(ExposedName::new("fromUtf8")),
+                // Loc::at_zero(ExposedName::new("fromUtf8Range")),
                 Loc::at_zero(ExposedName::new("startsWith")),
                 Loc::at_zero(ExposedName::new("endsWith")),
                 Loc::at_zero(ExposedName::new("trim")),
                 Loc::at_zero(ExposedName::new("trimLeft")),
                 Loc::at_zero(ExposedName::new("trimRight")),
+                /*
                 Loc::at_zero(ExposedName::new("toDec")),
                 Loc::at_zero(ExposedName::new("toF64")),
                 Loc::at_zero(ExposedName::new("toF32")),
@@ -2704,6 +2727,7 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("toI16")),
                 Loc::at_zero(ExposedName::new("toU8")),
                 Loc::at_zero(ExposedName::new("toI8")),
+                */
             ];
 
             const IMPORTS: &[Loc<ImportsEntry>] = &[
@@ -2717,31 +2741,33 @@ fn load_module<'a>(
                     roc_parse::header::ModuleName::new("Bool"),
                     Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Bool")))]),
                 )),
+                /*
                 Loc::at_zero(ImportsEntry::Module(
                     roc_parse::header::ModuleName::new("List"),
                     Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("List")))]),
                 )),
-                //                Loc::at_zero(ImportsEntry::Module(
-                //                    roc_parse::header::ModuleName::new("Num"),
-                //                    Collection::with_items(&[
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("Int"))), // needed because used by the aliases below
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("Float"))), // needed because used by the aliases below
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("Dec"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("F64"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("F32"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("Nat"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("U128"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("I128"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("U64"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("I64"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("U32"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("I32"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("U16"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("I16"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("U8"))),
-                //                        Loc::at_zero(Spaced::Item(ExposedName::new("I8"))),
-                //                    ]),
-                //                )),
+                */
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Num"),
+                    Collection::with_items(&[
+                        Loc::at_zero(Spaced::Item(ExposedName::new("Int"))), // needed because used by the aliases below
+                        Loc::at_zero(Spaced::Item(ExposedName::new("Float"))), // needed because used by the aliases below
+                        Loc::at_zero(Spaced::Item(ExposedName::new("Dec"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("F64"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("F32"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("Nat"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("U128"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("I128"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("U64"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("I64"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("U32"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("I32"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("U16"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("I16"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("U8"))),
+                        Loc::at_zero(Spaced::Item(ExposedName::new("I8"))),
+                    ]),
+                )),
             ];
 
             const GENERATES_WITH: &[Symbol] = &[];
@@ -2773,23 +2799,24 @@ fn load_module<'a>(
                         EncodesSurrogateHalf,
                     ]
 
-                Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
+                # Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 
                 isEmpty : Str -> Bool
                 concat : Str, Str -> Str
+
                 joinWith : List Str, Str -> Str
                 split : Str, Str -> List Str
                 repeat : Str, Nat -> Str
                 countGraphemes : Str -> Nat
                 startsWithCodePt : Str, U32 -> Bool
 
-                toUtf8 : Str -> List U8
+                # toUtf8 : Str -> List U8
 
                 # fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
                 # fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem, OutOfBounds ]*
 
-                fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*
-                fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat, OutOfBounds ]*
+                # fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*
+                # fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat, OutOfBounds ]*
 
                 startsWith : Str, Str -> Bool
                 endsWith : Str, Str -> Bool
@@ -2797,21 +2824,6 @@ fn load_module<'a>(
                 trim : Str -> Str
                 trimLeft : Str -> Str
                 trimRight : Str -> Str
-
-                toDec : Str -> Result Dec [ InvalidNumStr ]*
-                toF64 : Str -> Result F64 [ InvalidNumStr ]*
-                toF32 : Str -> Result F32 [ InvalidNumStr ]*
-                toNat : Str -> Result Nat [ InvalidNumStr ]*
-                toU128 : Str -> Result U128 [ InvalidNumStr ]*
-                toI128 : Str -> Result I128 [ InvalidNumStr ]*
-                toU64 : Str -> Result U64 [ InvalidNumStr ]*
-                toI64 : Str -> Result I64 [ InvalidNumStr ]*
-                toU32 : Str -> Result U32 [ InvalidNumStr ]*
-                toI32 : Str -> Result I32 [ InvalidNumStr ]*
-                toU16 : Str -> Result U16 [ InvalidNumStr ]*
-                toI16 : Str -> Result I16 [ InvalidNumStr ]*
-                toU8 : Str -> Result U8 [ InvalidNumStr ]*
-                toI8 : Str -> Result I8 [ InvalidNumStr ]*
                 "#;
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
@@ -2939,10 +2951,10 @@ fn load_module<'a>(
                     roc_parse::header::ModuleName::new("List"),
                     Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("List")))]),
                 )),
-                //                Loc::at_zero(ImportsEntry::Module(
-                //                    roc_parse::header::ModuleName::new("Num"),
-                //                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Nat")))]),
-                //                )),
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("Num"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Nat")))]),
+                )),
             ];
 
             const GENERATES_WITH: &[Symbol] = &[];
@@ -3004,6 +3016,9 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("Int")),
                 Loc::at_zero(ExposedName::new("Float")),
                 //
+                Loc::at_zero(ExposedName::new("Integer")),
+                Loc::at_zero(ExposedName::new("FloatingPoint")),
+                //
                 Loc::at_zero(ExposedName::new("I128")),
                 Loc::at_zero(ExposedName::new("I64")),
                 Loc::at_zero(ExposedName::new("I32")),
@@ -3016,8 +3031,29 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("U16")),
                 Loc::at_zero(ExposedName::new("U8")),
                 //
+                Loc::at_zero(ExposedName::new("Signed128")),
+                Loc::at_zero(ExposedName::new("Signed64")),
+                Loc::at_zero(ExposedName::new("Signed32")),
+                Loc::at_zero(ExposedName::new("Signed16")),
+                Loc::at_zero(ExposedName::new("Signed8")),
+                //
+                Loc::at_zero(ExposedName::new("Unsigned128")),
+                Loc::at_zero(ExposedName::new("Unsigned64")),
+                Loc::at_zero(ExposedName::new("Unsigned32")),
+                Loc::at_zero(ExposedName::new("Unsigned16")),
+                Loc::at_zero(ExposedName::new("Unsigned8")),
+                //
                 Loc::at_zero(ExposedName::new("Nat")),
                 Loc::at_zero(ExposedName::new("Dec")),
+                //
+                Loc::at_zero(ExposedName::new("F32")),
+                Loc::at_zero(ExposedName::new("F64")),
+                //
+                Loc::at_zero(ExposedName::new("Natural")),
+                Loc::at_zero(ExposedName::new("Decimal")),
+                //
+                Loc::at_zero(ExposedName::new("Binary32")),
+                Loc::at_zero(ExposedName::new("Binary64")),
                 //
                 // Loc::at_zero(ExposedName::new("maxFloat")),
                 // Loc::at_zero(ExposedName::new("minFloat")),
@@ -3030,13 +3066,16 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("isLte")),
                 Loc::at_zero(ExposedName::new("isGt")),
                 Loc::at_zero(ExposedName::new("isGte")),
-                Loc::at_zero(ExposedName::new("toFloat")),
                 Loc::at_zero(ExposedName::new("sin")),
                 Loc::at_zero(ExposedName::new("cos")),
                 Loc::at_zero(ExposedName::new("tan")),
+                Loc::at_zero(ExposedName::new("atan")),
+                Loc::at_zero(ExposedName::new("acos")),
+                Loc::at_zero(ExposedName::new("asin")),
                 Loc::at_zero(ExposedName::new("isZero")),
                 Loc::at_zero(ExposedName::new("isEven")),
                 Loc::at_zero(ExposedName::new("isOdd")),
+                Loc::at_zero(ExposedName::new("toFloat")),
                 Loc::at_zero(ExposedName::new("isPositive")),
                 Loc::at_zero(ExposedName::new("isNegative")),
                 Loc::at_zero(ExposedName::new("rem")),
@@ -3047,17 +3086,14 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("sqrt")),
                 Loc::at_zero(ExposedName::new("log")),
                 Loc::at_zero(ExposedName::new("round")),
+                Loc::at_zero(ExposedName::new("ceiling")),
+                Loc::at_zero(ExposedName::new("floor")),
                 Loc::at_zero(ExposedName::new("compare")),
                 Loc::at_zero(ExposedName::new("pow")),
-                Loc::at_zero(ExposedName::new("ceiling")),
                 Loc::at_zero(ExposedName::new("powInt")),
-                Loc::at_zero(ExposedName::new("floor")),
                 Loc::at_zero(ExposedName::new("addWrap")),
                 Loc::at_zero(ExposedName::new("addChecked")),
                 Loc::at_zero(ExposedName::new("addSaturated")),
-                Loc::at_zero(ExposedName::new("atan")),
-                Loc::at_zero(ExposedName::new("acos")),
-                Loc::at_zero(ExposedName::new("asin")),
                 Loc::at_zero(ExposedName::new("bitwiseAnd")),
                 Loc::at_zero(ExposedName::new("bitwiseXor")),
                 Loc::at_zero(ExposedName::new("bitwiseOr")),
@@ -3069,30 +3105,33 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("subSaturated")),
                 Loc::at_zero(ExposedName::new("mulWrap")),
                 Loc::at_zero(ExposedName::new("mulChecked")),
+                /*
                 Loc::at_zero(ExposedName::new("intCast")),
-                Loc::at_zero(ExposedName::new("isMultipleOf")),
                 Loc::at_zero(ExposedName::new("bytesToU16")),
                 Loc::at_zero(ExposedName::new("bytesToU32")),
                 Loc::at_zero(ExposedName::new("divCeil")),
                 Loc::at_zero(ExposedName::new("toStr")),
-                Loc::at_zero(ExposedName::new("minI8")),
-                Loc::at_zero(ExposedName::new("maxI8")),
-                Loc::at_zero(ExposedName::new("minU8")),
-                Loc::at_zero(ExposedName::new("maxU8")),
-                Loc::at_zero(ExposedName::new("minI16")),
-                Loc::at_zero(ExposedName::new("maxI16")),
-                Loc::at_zero(ExposedName::new("minU16")),
-                Loc::at_zero(ExposedName::new("maxU16")),
-                Loc::at_zero(ExposedName::new("minI32")),
-                Loc::at_zero(ExposedName::new("maxI32")),
-                Loc::at_zero(ExposedName::new("minU32")),
-                Loc::at_zero(ExposedName::new("maxU32")),
-                Loc::at_zero(ExposedName::new("minI64")),
-                Loc::at_zero(ExposedName::new("maxI64")),
-                Loc::at_zero(ExposedName::new("minU64")),
-                Loc::at_zero(ExposedName::new("maxU64")),
-                Loc::at_zero(ExposedName::new("minI128")),
-                Loc::at_zero(ExposedName::new("maxI128")),
+                */
+                Loc::at_zero(ExposedName::new("isMultipleOf")),
+                // Loc::at_zero(ExposedName::new("minI8")),
+                // Loc::at_zero(ExposedName::new("maxI8")),
+                // Loc::at_zero(ExposedName::new("minU8")),
+                // Loc::at_zero(ExposedName::new("maxU8")),
+                // Loc::at_zero(ExposedName::new("minI16")),
+                // Loc::at_zero(ExposedName::new("maxI16")),
+                // Loc::at_zero(ExposedName::new("minU16")),
+                // Loc::at_zero(ExposedName::new("maxU16")),
+                // Loc::at_zero(ExposedName::new("minI32")),
+                // Loc::at_zero(ExposedName::new("maxI32")),
+                // Loc::at_zero(ExposedName::new("minU32")),
+                // Loc::at_zero(ExposedName::new("maxU32")),
+                // Loc::at_zero(ExposedName::new("minI64")),
+                // Loc::at_zero(ExposedName::new("maxI64")),
+                // Loc::at_zero(ExposedName::new("minU64")),
+                // Loc::at_zero(ExposedName::new("maxU64")),
+                // Unimplemented
+                // Loc::at_zero(ExposedName::new("minI128")),
+                // Loc::at_zero(ExposedName::new("maxI128")),
                 Loc::at_zero(ExposedName::new("toI8")),
                 Loc::at_zero(ExposedName::new("toI8Checked")),
                 Loc::at_zero(ExposedName::new("toI16")),
@@ -3135,64 +3174,66 @@ fn load_module<'a>(
             };
 
             let src_bytes = r#"
-
                 Num range : [ @Num range ]
-                Integer range : [ @Integer range ]
-                Float range : [ @Float range ]
-
-                Natural : [ @Natural ]
-                Nat : Int Natural
+                Int range : Num (Integer range) 
+                Float range : Num (FloatingPoint range) 
 
                 Signed128 : [ @Signed128 ]
-                I128 : Int Signed128
+                Signed64 : [ @Signed64 ]
+                Signed32 : [ @Signed32 ]
+                Signed16 : [ @Signed16 ]
+                Signed8 : [ @Signed8 ]
 
                 Unsigned128 : [ @Unsigned128 ]
-                U128 : Int Unsigned128
-
-                Signed64 : [ @Signed64 ]
-                I64 : Int Signed64
-
                 Unsigned64 : [ @Unsigned64 ]
-                U64 : Int Unsigned64
-
-                Signed32 : [ @Signed32 ]
-                I32 : Int Signed32
-
                 Unsigned32 : [ @Unsigned32 ]
-                U32 : Int Unsigned32
-
-                Signed16 : [ @Signed16 ]
-                I16 : Int Signed16
-
                 Unsigned16 : [ @Unsigned16 ]
-                U16 : Int Unsigned16
-
-                Signed8 : [ @Signed8 ]
-                I8 : Int Signed8
-
                 Unsigned8 : [ @Unsigned8 ]
-                U8 : Int Unsigned8
+
+                Natural : [ @Natural ]
+
+                Integer range : [ @Integer range ]
+
+                I128 : Num (Integer Signed128)
+                I64 : Num (Integer Signed64)
+                I32 : Num (Integer Signed32)
+                I16 : Num (Integer Signed16)
+                I8 : Int Signed8 
+
+                U128 : Num (Integer Unsigned128)
+                U64 : Num (Integer Unsigned64)
+                U32 : Num (Integer Unsigned32)
+                U16 : Num (Integer Unsigned16)
+                U8 : Num (Integer Unsigned8)
+
+                Nat : Num (Integer Natural)
 
                 Decimal : [ @Decimal ]
-                Dec : Float Decimal
-
                 Binary64 : [ @Binary64 ]
-                F64 : Float Binary64
-
                 Binary32 : [ @Binary32 ]
-                F32 : Float Binary32
+
+                FloatingPoint range : [ @FloatingPoint range ]
+
+                F64 : Num (FloatingPoint Binary64)
+                F32 : Num (FloatingPoint Binary32)
+                Dec : Num (FloatingPoint Decimal)
+
+                # ------- Functions 
 
                 compare : Num a, Num a -> [ LT, EQ, GT ]
 
                 isLt : Num a, Num a -> Bool
                 isGt : Num a, Num a -> Bool
                 isLte : Num a, Num a -> Bool
-                isLte : Num a, Num a -> Bool
+                isGte : Num a, Num a -> Bool
 
                 isZero : Num a -> Bool
 
                 isEven : Int a -> Bool
                 isOdd : Int a -> Bool
+
+                isPositive : Num a -> Bool
+                isNegative : Num a -> Bool
 
                 toFloat : Num * -> Float *
 
@@ -3203,9 +3244,6 @@ fn load_module<'a>(
                 sub : Num a, Num a -> Num a
                 mul : Num a, Num a -> Num a
 
-                # maxFloat : Float a
-                # minFloat : Float a
-
                 sin : Float a -> Float a
                 cos : Float a -> Float a
                 tan : Float a -> Float a
@@ -3214,13 +3252,21 @@ fn load_module<'a>(
                 acos : Float a -> Float a
                 atan : Float a -> Float a
 
-                sqrt : Float a -> Float a
-                log : Float a, Float a -> Float a
-                mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
+                sqrt : Float a -> Result (Float a) [ SqrtOfNegative ]*
+                log : Float a, Float a -> Result (Float a) [ LogNeedsPositive ]*
+                div : Float a -> Result (Float a) [ DivByZero ]*
+                # mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
                 rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
-                mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
+                # mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
                 isMultipleOf : Int a, Int a -> Bool
+
+                bitwiseAnd : Int a, Int a -> Int a
+                bitwiseXor : Int a, Int a -> Int a
+                bitwiseOr : Int a, Int a -> Int a
+                shiftLeftBy : Int a, Int a -> Int a
+                shiftRightBy : Int a, Int a -> Int a
+                shiftRightZfBy : Int a, Int a -> Int a
 
                 round : Float a -> Int b
                 floor : Float a -> Int b
@@ -3241,31 +3287,27 @@ fn load_module<'a>(
                 # mulSaturated : Num a, Num a -> Num a
                 mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 
-                bitwiseAnd : Int a, Int a -> Int a
-                bitwiseXor : Int a, Int a -> Int a
-                bitwiseOr : Int a, Int a -> Int a
-                shiftLeftBy : Int a, Int a -> Int a
-                shiftRightBy : Int a, Int a -> Int a
-                shiftRightZfBy : Int a, Int a -> Int a
+                # minI8 : I8
+                # maxI8 : I8
+                # minU8 : U8
+                # maxU8 : U8
+                # minI16 : I16
+                # maxI16 : I16
+                # minU16 : U16
+                # maxU16 : U16
+                # minI32 : I32
+                # maxI32 : I32
+                # minU32 : U32
+                # maxU32 : U32
+                # minI64 : I64
+                # maxI64 : I64
+                # minU64 : U64
+                # maxU64 : U64
 
-                intCast : Int a -> Int b
-
-                minI8 : I8
-                maxI8 : I8
-                minU8 : U8
-                maxU8 : U8
-                minI16 : I16
-                maxI16 : I16
-                minU16 : U16
-                maxU16 : U16
-                minI32 : I32
-                maxI32 : I32
-                minU32 : U32
-                maxU32 : U32
-                minI64 : I64
-                maxI64 : I64
-                minU64 : U64
-                maxU64 : U64
+                # minI128 : I128
+                # maxI128 : I128
+                # minU128 : U128
+                # maxU128 : U128
 
                 toI8 : Int * -> I8
                 toI16 : Int * -> I16
@@ -4243,6 +4285,7 @@ fn run_solve<'a>(
     // Finish constraining the module by wrapping the existing Constraint
     // in the ones we just computed. We can do this off the main thread.
     let constraint = constrain_imports(imported_symbols, constraint, &mut var_store);
+    dbg!(&constraint);
 
     let constrain_end = SystemTime::now();
 

@@ -19,7 +19,7 @@ fn nat_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                    i : Nat
+                    i : Num.Nat
                     i = 1
 
                     i
