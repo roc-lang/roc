@@ -301,7 +301,7 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
-    let element_type = basic_type_from_layout(env, &element_layout);
+    let element_type = basic_type_from_layout(env, element_layout);
     let element_ptr = env
         .builder
         .build_alloca(element_type, "output_element_as_opaque");
@@ -340,10 +340,7 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
     let result = env
         .context
         .struct_type(
-            &[
-                super::convert::zig_list_type(env).into(),
-                element_type.into(),
-            ],
+            &[super::convert::zig_list_type(env).into(), element_type],
             false,
         )
         .const_zero();

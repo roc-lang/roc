@@ -1034,7 +1034,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::LIST_GET,
         vec![list_type(flex(TVAR1)), nat_type()],
-        Box::new(result_type(flex(TVAR1), index_out_of_bounds.clone())),
+        Box::new(result_type(flex(TVAR1), index_out_of_bounds)),
     );
 
     // first : List elem -> Result elem [ ListWasEmpty ]*
