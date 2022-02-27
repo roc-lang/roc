@@ -1,7 +1,7 @@
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::PresenceConstraint;
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::MutMap;
+use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -177,10 +177,163 @@ pub fn run_in_place(
     state.env
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct WorkId(u32);
+
+#[derive(Debug)]
+struct WorkItem<'a> {
+    env: Env,
+    rank: Rank,
+    constraint: &'a Constraint,
+    id: WorkId,
+}
+
+#[derive(Debug)]
+struct PartialWorkItem<'a> {
+    env: Env,
+    rank: Rank,
+    constraint: &'a Constraint,
+    after: After,
+}
+
+#[derive(Debug)]
+enum After {
+    Nothing,
+    CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
+}
+
+#[derive(Debug)]
+struct WorkState<'a> {
+    root_work_id: WorkId,
+    next_work_id: WorkId,
+    list: Vec<WorkItem<'a>>,
+    queued_descendants: MutMap<WorkId, MutSet<WorkId>>,
+    item_to_parent: MutMap<WorkId, WorkId>,
+    after: MutMap<WorkId, After>,
+}
+
+/// A work-list for constraints resolved in the solver.
+///
+/// We use this so as a pseudo-stack so that constraints can be resolved in a single stack frame
+/// rather than climbing up the stack, which can grow very large especially with `Let` constraint
+/// chains.
+///
+/// The fundamental idea is that the work for a constraint, and all of its children, must be
+/// resolved before any other constraint is considered. This is so that we resolve the solve
+/// [`State`] correctly, in the same order that the constraints appear in. It also ensures that if
+/// we have to do any checks after a constraint is solved, the state for those checks is correct.
+/// That is, we are attempting to exactly emulate a call stack.
+impl<'a> WorkState<'a> {
+    fn new_with_work(work_item: PartialWorkItem<'a>) -> Self {
+        let mut work = WorkState {
+            root_work_id: WorkId(0),
+            next_work_id: WorkId(1),
+            list: Vec::with_capacity(1),
+            queued_descendants: MutMap::default(),
+            item_to_parent: MutMap::default(),
+            after: MutMap::default(),
+        };
+
+        work.add_children_in_order(work.root_work_id, vec![work_item]);
+
+        work
+    }
+
+    fn remove_next(&mut self) -> Option<WorkItem<'a>> {
+        self.list.pop()
+    }
+
+    #[inline(always)]
+    fn add_children_in_order(&mut self, parent_id: WorkId, children: Vec<PartialWorkItem<'a>>) {
+        debug_assert!(self.queued_descendants.get(&parent_id).is_none());
+
+        if !children.is_empty() {
+            self.queued_descendants.insert(parent_id, MutSet::default());
+        }
+
+        // Reverse so that we `push` the first item last, hence it will be at the
+        // front of the work list.
+        let insert_iter = children.into_iter().rev();
+
+        for PartialWorkItem {
+            env,
+            rank,
+            constraint,
+            after,
+        } in insert_iter
+        {
+            let child_id = self.next_work_id;
+            self.next_work_id = WorkId(self.next_work_id.0 + 1);
+
+            self.list.push(WorkItem {
+                env,
+                rank,
+                constraint,
+                id: child_id,
+            });
+
+            self.queued_descendants
+                .get_mut(&parent_id)
+                .unwrap()
+                .insert(child_id);
+
+            self.item_to_parent.insert(child_id, parent_id);
+
+            self.after.insert(child_id, after);
+        }
+    }
+
+    /// Checks whether the work node identified by `work_id` is complete, and act on any `After`s
+    /// accordingly.
+    ///
+    /// If `work_id` is not waiting on any children to complete its solve state, then the `After`
+    /// associated with the `work_id` is checked, and the parent of `work_id` is checked for
+    /// completion. This continues until a parent is incomplete, or the root work node is hit.
+    fn notify_completion(
+        &mut self,
+        mut id: WorkId,
+        subs: &mut Subs,
+        problems: &mut Vec<TypeError>,
+    ) {
+        // Walk up the parents until we hit the root (where there is nothing extra to be done), or
+        // until we hit a parent that is still waiting on some children to complete.
+        while id != self.root_work_id && self.queued_descendants.get(&id).is_none() {
+            // The current work item is fully complete. Check if there are any `After`s that
+            // must be satisfied.
+            match self.after.get(&id).unwrap() {
+                After::Nothing => {}
+                After::CheckForInfiniteTypes(def_vars) => {
+                    for (symbol, loc_var) in def_vars.iter() {
+                        check_for_infinite_type(subs, problems, *symbol, *loc_var);
+                    }
+                }
+            }
+
+            // Now, update the parent of the work item that this work item is complete.
+            // Then queue up the parent to check if it's complete and check its afters, and so on.
+            let parent = self.item_to_parent.get(&id).unwrap();
+
+            let parent_deps = self.queued_descendants.get_mut(parent).unwrap();
+            debug_assert!(parent_deps.contains(&id));
+            parent_deps.remove(&id);
+
+            if parent_deps.is_empty() {
+                self.queued_descendants.remove(parent);
+            }
+
+            id = *parent;
+        }
+    }
+
+    fn has_waiting_work(&self) -> bool {
+        !self.queued_descendants.is_empty()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn solve(
     env: &Env,
-    state: State,
+    mut state: State,
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<TypeError>,
@@ -188,511 +341,526 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
-    match constraint {
-        True => state,
-        SaveTheEnvironment => {
-            // NOTE deviation: elm only copies the env into the state on SaveTheEnvironment
-            let mut copy = state;
+    let mut work = WorkState::new_with_work(PartialWorkItem {
+        env: env.clone(),
+        rank,
+        constraint,
+        after: After::Nothing,
+    });
 
-            copy.env = env.clone();
+    while let Some(WorkItem {
+        env,
+        rank,
+        constraint,
+        id,
+    }) = work.remove_next()
+    {
+        state = match constraint {
+            True => state,
+            SaveTheEnvironment => {
+                // NOTE deviation: elm only copies the env into the state on SaveTheEnvironment
+                let mut copy = state;
 
-            copy
-        }
-        Eq(typ, expectation, category, region) => {
-            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-            let expected = type_to_var(
-                subs,
-                rank,
-                pools,
-                cached_aliases,
-                expectation.get_type_ref(),
-            );
+                copy.env = env;
 
-            match unify(subs, actual, expected, Mode::EQ) {
-                Success(vars) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    state
-                }
-                Failure(vars, actual_type, expected_type) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    let problem = TypeError::BadExpr(
-                        *region,
-                        category.clone(),
-                        actual_type,
-                        expectation.clone().replace(expected_type),
-                    );
-
-                    problems.push(problem);
-
-                    state
-                }
-                BadType(vars, problem) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    problems.push(TypeError::BadType(problem));
-
-                    state
-                }
+                copy
             }
-        }
-        Store(source, target, _filename, _linenr) => {
-            // a special version of Eq that is used to store types in the AST.
-            // IT DOES NOT REPORT ERRORS!
-            let actual = type_to_var(subs, rank, pools, cached_aliases, source);
-            let target = *target;
-
-            match unify(subs, actual, target, Mode::EQ) {
-                Success(vars) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    state
-                }
-                Failure(vars, _actual_type, _expected_type) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    // ERROR NOT REPORTED
-
-                    state
-                }
-                BadType(vars, _) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    // ERROR NOT REPORTED
-
-                    state
-                }
-            }
-        }
-        Lookup(symbol, expectation, region) => {
-            match env.vars_by_symbol.get(symbol) {
-                Some(var) => {
-                    // Deep copy the vars associated with this symbol before unifying them.
-                    // Otherwise, suppose we have this:
-                    //
-                    // identity = \a -> a
-                    //
-                    // x = identity 5
-                    //
-                    // When we call (identity 5), it's important that we not unify
-                    // on identity's original vars. If we do, the type of `identity` will be
-                    // mutated to be `Int -> Int` instead of `a -> `, which would be incorrect;
-                    // the type of `identity` is more general than that!
-                    //
-                    // Instead, we want to unify on a *copy* of its vars. If the copy unifies
-                    // successfully (in this case, to `Int -> Int`), we can use that to
-                    // infer the type of this lookup (in this case, `Int`) without ever
-                    // having mutated the original.
-                    //
-                    // If this Lookup is targeting a value in another module,
-                    // then we copy from that module's Subs into our own. If the value
-                    // is being looked up in this module, then we use our Subs as both
-                    // the source and destination.
-                    let actual = deep_copy_var(subs, rank, pools, *var);
-                    let expected = type_to_var(
-                        subs,
-                        rank,
-                        pools,
-                        cached_aliases,
-                        expectation.get_type_ref(),
-                    );
-                    match unify(subs, actual, expected, Mode::EQ) {
-                        Success(vars) => {
-                            introduce(subs, rank, pools, &vars);
-
-                            state
-                        }
-
-                        Failure(vars, actual_type, expected_type) => {
-                            introduce(subs, rank, pools, &vars);
-
-                            let problem = TypeError::BadExpr(
-                                *region,
-                                Category::Lookup(*symbol),
-                                actual_type,
-                                expectation.clone().replace(expected_type),
-                            );
-
-                            problems.push(problem);
-
-                            state
-                        }
-                        BadType(vars, problem) => {
-                            introduce(subs, rank, pools, &vars);
-
-                            problems.push(TypeError::BadType(problem));
-
-                            state
-                        }
-                    }
-                }
-                None => {
-                    problems.push(TypeError::UnexposedLookup(*symbol));
-
-                    state
-                }
-            }
-        }
-        And(sub_constraints) => {
-            let mut state = state;
-
-            for sub_constraint in sub_constraints.iter() {
-                state = solve(
-                    env,
-                    state,
+            Eq(typ, expectation, category, region) => {
+                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let expected = type_to_var(
+                    subs,
                     rank,
                     pools,
-                    problems,
                     cached_aliases,
-                    subs,
-                    sub_constraint,
+                    expectation.get_type_ref(),
                 );
-            }
 
-            state
-        }
-        Pattern(region, category, typ, expectation)
-        | Present(typ, PresenceConstraint::Pattern(region, category, expectation)) => {
-            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-            let expected = type_to_var(
-                subs,
-                rank,
-                pools,
-                cached_aliases,
-                expectation.get_type_ref(),
-            );
+                match unify(subs, actual, expected, Mode::EQ) {
+                    Success(vars) => {
+                        introduce(subs, rank, pools, &vars);
 
-            let mode = match constraint {
-                Present(_, _) => Mode::PRESENT,
-                _ => Mode::EQ,
-            };
-
-            match unify(subs, actual, expected, mode) {
-                Success(vars) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    state
-                }
-                Failure(vars, actual_type, expected_type) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    let problem = TypeError::BadPattern(
-                        *region,
-                        category.clone(),
-                        actual_type,
-                        expectation.clone().replace(expected_type),
-                    );
-
-                    problems.push(problem);
-
-                    state
-                }
-                BadType(vars, problem) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    problems.push(TypeError::BadType(problem));
-
-                    state
-                }
-            }
-        }
-        Let(let_con) => {
-            match &let_con.ret_constraint {
-                True if let_con.rigid_vars.is_empty() => {
-                    introduce(subs, rank, pools, &let_con.flex_vars);
-
-                    // If the return expression is guaranteed to solve,
-                    // solve the assignments themselves and move on.
-                    solve(
-                        env,
-                        state,
-                        rank,
-                        pools,
-                        problems,
-                        cached_aliases,
-                        subs,
-                        &let_con.defs_constraint,
-                    )
-                }
-                ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
-                    let state = solve(
-                        env,
-                        state,
-                        rank,
-                        pools,
-                        problems,
-                        cached_aliases,
-                        subs,
-                        &let_con.defs_constraint,
-                    );
-
-                    // Add a variable for each def to new_vars_by_env.
-                    let mut local_def_vars = LocalDefVarsVec::with_length(let_con.def_types.len());
-
-                    for (symbol, loc_type) in let_con.def_types.iter() {
-                        let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
-
-                        local_def_vars.push((
-                            *symbol,
-                            Loc {
-                                value: var,
-                                region: loc_type.region,
-                            },
-                        ));
+                        state
                     }
+                    Failure(vars, actual_type, expected_type) => {
+                        introduce(subs, rank, pools, &vars);
 
-                    let mut new_env = env.clone();
-                    for (symbol, loc_var) in local_def_vars.iter() {
-                        match new_env.vars_by_symbol.entry(*symbol) {
-                            Entry::Occupied(_) => {
-                                // keep the existing value
+                        let problem = TypeError::BadExpr(
+                            *region,
+                            category.clone(),
+                            actual_type,
+                            expectation.clone().replace(expected_type),
+                        );
+
+                        problems.push(problem);
+
+                        state
+                    }
+                    BadType(vars, problem) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        problems.push(TypeError::BadType(problem));
+
+                        state
+                    }
+                }
+            }
+            Store(source, target, _filename, _linenr) => {
+                // a special version of Eq that is used to store types in the AST.
+                // IT DOES NOT REPORT ERRORS!
+                let actual = type_to_var(subs, rank, pools, cached_aliases, source);
+                let target = *target;
+
+                match unify(subs, actual, target, Mode::EQ) {
+                    Success(vars) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        state
+                    }
+                    Failure(vars, _actual_type, _expected_type) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        // ERROR NOT REPORTED
+
+                        state
+                    }
+                    BadType(vars, _) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        // ERROR NOT REPORTED
+
+                        state
+                    }
+                }
+            }
+            Lookup(symbol, expectation, region) => {
+                match env.vars_by_symbol.get(symbol) {
+                    Some(var) => {
+                        // Deep copy the vars associated with this symbol before unifying them.
+                        // Otherwise, suppose we have this:
+                        //
+                        // identity = \a -> a
+                        //
+                        // x = identity 5
+                        //
+                        // When we call (identity 5), it's important that we not unify
+                        // on identity's original vars. If we do, the type of `identity` will be
+                        // mutated to be `Int -> Int` instead of `a -> `, which would be incorrect;
+                        // the type of `identity` is more general than that!
+                        //
+                        // Instead, we want to unify on a *copy* of its vars. If the copy unifies
+                        // successfully (in this case, to `Int -> Int`), we can use that to
+                        // infer the type of this lookup (in this case, `Int`) without ever
+                        // having mutated the original.
+                        //
+                        // If this Lookup is targeting a value in another module,
+                        // then we copy from that module's Subs into our own. If the value
+                        // is being looked up in this module, then we use our Subs as both
+                        // the source and destination.
+                        let actual = deep_copy_var(subs, rank, pools, *var);
+                        let expected = type_to_var(
+                            subs,
+                            rank,
+                            pools,
+                            cached_aliases,
+                            expectation.get_type_ref(),
+                        );
+                        match unify(subs, actual, expected, Mode::EQ) {
+                            Success(vars) => {
+                                introduce(subs, rank, pools, &vars);
+
+                                state
                             }
-                            Entry::Vacant(vacant) => {
-                                vacant.insert(loc_var.value);
+
+                            Failure(vars, actual_type, expected_type) => {
+                                introduce(subs, rank, pools, &vars);
+
+                                let problem = TypeError::BadExpr(
+                                    *region,
+                                    Category::Lookup(*symbol),
+                                    actual_type,
+                                    expectation.clone().replace(expected_type),
+                                );
+
+                                problems.push(problem);
+
+                                state
+                            }
+                            BadType(vars, problem) => {
+                                introduce(subs, rank, pools, &vars);
+
+                                problems.push(TypeError::BadType(problem));
+
+                                state
                             }
                         }
                     }
+                    None => {
+                        problems.push(TypeError::UnexposedLookup(*symbol));
 
-                    let new_state = solve(
-                        &new_env,
-                        state,
-                        rank,
-                        pools,
-                        problems,
-                        cached_aliases,
-                        subs,
-                        ret_con,
-                    );
-
-                    for (symbol, loc_var) in local_def_vars.iter() {
-                        check_for_infinite_type(subs, problems, *symbol, *loc_var);
+                        state
                     }
-
-                    new_state
                 }
-                ret_con => {
-                    let rigid_vars = &let_con.rigid_vars;
-                    let flex_vars = &let_con.flex_vars;
+            }
+            And(sub_constraints) => {
+                let sub_constraints_work = sub_constraints
+                    .iter()
+                    .map(|sub_constraint| PartialWorkItem {
+                        env: env.clone(),
+                        rank,
+                        constraint: sub_constraint,
+                        after: After::Nothing,
+                    })
+                    .collect();
 
-                    // work in the next pool to localize header
-                    let next_rank = rank.next();
+                work.add_children_in_order(id, sub_constraints_work);
 
-                    // introduce variables
-                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-                        subs.set_rank(var, next_rank);
+                state
+            }
+            Pattern(region, category, typ, expectation)
+            | Present(typ, PresenceConstraint::Pattern(region, category, expectation)) => {
+                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let expected = type_to_var(
+                    subs,
+                    rank,
+                    pools,
+                    cached_aliases,
+                    expectation.get_type_ref(),
+                );
+
+                let mode = match constraint {
+                    Present(_, _) => Mode::PRESENT,
+                    _ => Mode::EQ,
+                };
+
+                match unify(subs, actual, expected, mode) {
+                    Success(vars) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        state
                     }
+                    Failure(vars, actual_type, expected_type) => {
+                        introduce(subs, rank, pools, &vars);
 
-                    // determine the next pool
-                    let next_pools;
-                    if next_rank.into_usize() < pools.len() {
-                        next_pools = pools
-                    } else {
-                        // we should be off by one at this point
-                        debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
-                        pools.extend_to(next_rank.into_usize());
-                        next_pools = pools;
+                        let problem = TypeError::BadPattern(
+                            *region,
+                            category.clone(),
+                            actual_type,
+                            expectation.clone().replace(expected_type),
+                        );
+
+                        problems.push(problem);
+
+                        state
                     }
+                    BadType(vars, problem) => {
+                        introduce(subs, rank, pools, &vars);
 
-                    let pool: &mut Vec<Variable> = next_pools.get_mut(next_rank);
+                        problems.push(TypeError::BadType(problem));
 
-                    // Replace the contents of this pool with rigid_vars and flex_vars
-                    pool.clear();
-                    pool.reserve(rigid_vars.len() + flex_vars.len());
-                    pool.extend(rigid_vars.iter());
-                    pool.extend(flex_vars.iter());
+                        state
+                    }
+                }
+            }
+            Let(let_con) => {
+                match &let_con.ret_constraint {
+                    True if let_con.rigid_vars.is_empty() => {
+                        introduce(subs, rank, pools, &let_con.flex_vars);
 
-                    // run solver in next pool
+                        // If the return expression is guaranteed to solve,
+                        // solve the assignments themselves and move on.
+                        work.add_children_in_order(
+                            id,
+                            vec![PartialWorkItem {
+                                env,
+                                rank,
+                                constraint: &let_con.defs_constraint,
+                                after: After::Nothing,
+                            }],
+                        );
+                        state
+                    }
+                    ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
+                        // TODO: make into `WorkItem` with `After`
+                        let state = solve(
+                            &env,
+                            state,
+                            rank,
+                            pools,
+                            problems,
+                            cached_aliases,
+                            subs,
+                            &let_con.defs_constraint,
+                        );
 
-                    // Add a variable for each def to local_def_vars.
-                    let mut local_def_vars = LocalDefVarsVec::with_length(let_con.def_types.len());
+                        // Add a variable for each def to new_vars_by_env.
+                        let mut local_def_vars =
+                            LocalDefVarsVec::with_length(let_con.def_types.len());
 
-                    for (symbol, loc_type) in let_con.def_types.iter() {
-                        let def_type = &loc_type.value;
+                        for (symbol, loc_type) in let_con.def_types.iter() {
+                            let var =
+                                type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
 
-                        let var =
-                            type_to_var(subs, next_rank, next_pools, cached_aliases, def_type);
+                            local_def_vars.push((
+                                *symbol,
+                                Loc {
+                                    value: var,
+                                    region: loc_type.region,
+                                },
+                            ));
+                        }
 
-                        local_def_vars.push((
-                            *symbol,
-                            Loc {
-                                value: var,
-                                region: loc_type.region,
+                        let mut new_env = env.clone();
+                        for (symbol, loc_var) in local_def_vars.iter() {
+                            match new_env.vars_by_symbol.entry(*symbol) {
+                                Entry::Occupied(_) => {
+                                    // keep the existing value
+                                }
+                                Entry::Vacant(vacant) => {
+                                    vacant.insert(loc_var.value);
+                                }
+                            }
+                        }
+
+                        work.add_children_in_order(
+                            id,
+                            vec![PartialWorkItem {
+                                env: new_env,
+                                rank,
+                                constraint: ret_con,
+                                after: After::CheckForInfiniteTypes(local_def_vars),
+                            }],
+                        );
+
+                        state
+                    }
+                    ret_con => {
+                        let rigid_vars = &let_con.rigid_vars;
+                        let flex_vars = &let_con.flex_vars;
+
+                        // work in the next pool to localize header
+                        let next_rank = rank.next();
+
+                        // introduce variables
+                        for &var in rigid_vars.iter().chain(flex_vars.iter()) {
+                            subs.set_rank(var, next_rank);
+                        }
+
+                        // determine the next pool
+                        if next_rank.into_usize() < pools.len() {
+                            // Nothing to do, we already accounted for the next rank, no need to
+                            // adjust the pools
+                        } else {
+                            // we should be off by one at this point
+                            debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
+                            pools.extend_to(next_rank.into_usize());
+                        }
+
+                        let pool: &mut Vec<Variable> = pools.get_mut(next_rank);
+
+                        // Replace the contents of this pool with rigid_vars and flex_vars
+                        pool.clear();
+                        pool.reserve(rigid_vars.len() + flex_vars.len());
+                        pool.extend(rigid_vars.iter());
+                        pool.extend(flex_vars.iter());
+
+                        // run solver in next pool
+
+                        // Add a variable for each def to local_def_vars.
+                        let mut local_def_vars =
+                            LocalDefVarsVec::with_length(let_con.def_types.len());
+
+                        for (symbol, loc_type) in let_con.def_types.iter() {
+                            let def_type = &loc_type.value;
+
+                            let var = type_to_var(subs, next_rank, pools, cached_aliases, def_type);
+
+                            local_def_vars.push((
+                                *symbol,
+                                Loc {
+                                    value: var,
+                                    region: loc_type.region,
+                                },
+                            ));
+                        }
+
+                        // Solve the assignments' constraints first.
+                        // TODO: make into `WorkItem` with `After`
+                        let State {
+                            env: saved_env,
+                            mark,
+                        } = solve(
+                            &env,
+                            state,
+                            next_rank,
+                            pools,
+                            problems,
+                            cached_aliases,
+                            subs,
+                            &let_con.defs_constraint,
+                        );
+
+                        let young_mark = mark;
+                        let visit_mark = young_mark.next();
+                        let final_mark = visit_mark.next();
+
+                        debug_assert_eq!(
+                            {
+                                let offenders = pools
+                                    .get(next_rank)
+                                    .iter()
+                                    .filter(|var| {
+                                        let current_rank =
+                                            subs.get_rank(roc_types::subs::Variable::clone(var));
+
+                                        current_rank.into_usize() > next_rank.into_usize()
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let result = offenders.len();
+
+                                if result > 0 {
+                                    dbg!(&subs, &offenders, &let_con.def_types);
+                                }
+
+                                result
                             },
-                        ));
-                    }
+                            0
+                        );
 
-                    // Solve the assignments' constraints first.
-                    let State {
-                        env: saved_env,
-                        mark,
-                    } = solve(
-                        env,
-                        state,
-                        next_rank,
-                        next_pools,
-                        problems,
-                        cached_aliases,
-                        subs,
-                        &let_con.defs_constraint,
-                    );
+                        // pop pool
+                        generalize(subs, young_mark, visit_mark, next_rank, pools);
 
-                    let young_mark = mark;
-                    let visit_mark = young_mark.next();
-                    let final_mark = visit_mark.next();
+                        pools.get_mut(next_rank).clear();
 
-                    debug_assert_eq!(
-                        {
-                            let offenders = next_pools
-                                .get(next_rank)
+                        // check that things went well
+                        debug_assert!({
+                            // NOTE the `subs.redundant` check is added for the uniqueness
+                            // inference, and does not come from elm. It's unclear whether this is
+                            // a bug with uniqueness inference (something is redundant that
+                            // shouldn't be) or that it just never came up in elm.
+                            let failing: Vec<_> = rigid_vars
                                 .iter()
-                                .filter(|var| {
-                                    let current_rank =
-                                        subs.get_rank(roc_types::subs::Variable::clone(var));
-
-                                    current_rank.into_usize() > next_rank.into_usize()
+                                .filter(|&var| {
+                                    !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE
                                 })
-                                .collect::<Vec<_>>();
+                                .collect();
 
-                            let result = offenders.len();
-
-                            if result > 0 {
-                                dbg!(&subs, &offenders, &let_con.def_types);
+                            if !failing.is_empty() {
+                                println!("Rigids {:?}", &rigid_vars);
+                                println!("Failing {:?}", failing);
                             }
 
-                            result
-                        },
-                        0
-                    );
+                            failing.is_empty()
+                        });
 
-                    // pop pool
-                    generalize(subs, young_mark, visit_mark, next_rank, next_pools);
-
-                    next_pools.get_mut(next_rank).clear();
-
-                    // check that things went well
-                    debug_assert!({
-                        // NOTE the `subs.redundant` check is added for the uniqueness
-                        // inference, and does not come from elm. It's unclear whether this is
-                        // a bug with uniqueness inference (something is redundant that
-                        // shouldn't be) or that it just never came up in elm.
-                        let failing: Vec<_> = rigid_vars
-                            .iter()
-                            .filter(|&var| {
-                                !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE
-                            })
-                            .collect();
-
-                        if !failing.is_empty() {
-                            println!("Rigids {:?}", &rigid_vars);
-                            println!("Failing {:?}", failing);
-                        }
-
-                        failing.is_empty()
-                    });
-
-                    let mut new_env = env.clone();
-                    for (symbol, loc_var) in local_def_vars.iter() {
-                        match new_env.vars_by_symbol.entry(*symbol) {
-                            Entry::Occupied(_) => {
-                                // keep the existing value
-                            }
-                            Entry::Vacant(vacant) => {
-                                vacant.insert(loc_var.value);
+                        let mut new_env = env.clone();
+                        for (symbol, loc_var) in local_def_vars.iter() {
+                            match new_env.vars_by_symbol.entry(*symbol) {
+                                Entry::Occupied(_) => {
+                                    // keep the existing value
+                                }
+                                Entry::Vacant(vacant) => {
+                                    vacant.insert(loc_var.value);
+                                }
                             }
                         }
+
+                        // Note that this vars_by_symbol is the one returned by the
+                        // previous call to solve()
+                        let state_for_ret_con = State {
+                            env: saved_env,
+                            mark: final_mark,
+                        };
+
+                        // Now solve the body, using the new vars_by_symbol which includes
+                        // the assignments' name-to-variable mappings.
+                        work.add_children_in_order(
+                            id,
+                            vec![PartialWorkItem {
+                                env: new_env,
+                                rank,
+                                constraint: ret_con,
+                                after: After::CheckForInfiniteTypes(local_def_vars),
+                            }],
+                        );
+
+                        state_for_ret_con
                     }
-
-                    // Note that this vars_by_symbol is the one returned by the
-                    // previous call to solve()
-                    let temp_state = State {
-                        env: saved_env,
-                        mark: final_mark,
-                    };
-
-                    // Now solve the body, using the new vars_by_symbol which includes
-                    // the assignments' name-to-variable mappings.
-                    let new_state = solve(
-                        &new_env,
-                        temp_state,
-                        rank,
-                        next_pools,
-                        problems,
-                        cached_aliases,
-                        subs,
-                        ret_con,
-                    );
-
-                    for (symbol, loc_var) in local_def_vars.iter() {
-                        check_for_infinite_type(subs, problems, *symbol, *loc_var);
+                }
+            }
+            Present(typ, PresenceConstraint::IsOpen) => {
+                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let mut new_desc = subs.get(actual);
+                match new_desc.content {
+                    Content::Structure(FlatType::TagUnion(tags, _)) => {
+                        let new_ext = subs.fresh_unnamed_flex_var();
+                        let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
+                        new_desc.content = new_union;
+                        subs.set(actual, new_desc);
+                        state
                     }
-
-                    new_state
+                    _ => {
+                        // Today, an "open" constraint doesn't affect any types
+                        // other than tag unions. Recursive tag unions are constructed
+                        // at a later time (during occurs checks after tag unions are
+                        // resolved), so that's not handled here either.
+                        // NB: Handle record types here if we add presence constraints
+                        // to their type inference as well.
+                        state
+                    }
                 }
             }
-        }
-        Present(typ, PresenceConstraint::IsOpen) => {
-            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-            let mut new_desc = subs.get(actual);
-            match new_desc.content {
-                Content::Structure(FlatType::TagUnion(tags, _)) => {
-                    let new_ext = subs.fresh_unnamed_flex_var();
-                    let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
-                    new_desc.content = new_union;
-                    subs.set(actual, new_desc);
-                    state
-                }
-                _ => {
-                    // Today, an "open" constraint doesn't affect any types
-                    // other than tag unions. Recursive tag unions are constructed
-                    // at a later time (during occurs checks after tag unions are
-                    // resolved), so that's not handled here either.
-                    // NB: Handle record types here if we add presence constraints
-                    // to their type inference as well.
-                    state
-                }
-            }
-        }
-        Present(typ, PresenceConstraint::IncludesTag(tag_name, tys, region, pattern_category)) => {
-            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-            let tag_ty = Type::TagUnion(
-                vec![(tag_name.clone(), tys.clone())],
-                Box::new(Type::EmptyTagUnion),
-            );
-            let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
+            Present(
+                typ,
+                PresenceConstraint::IncludesTag(tag_name, tys, region, pattern_category),
+            ) => {
+                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let tag_ty = Type::TagUnion(
+                    vec![(tag_name.clone(), tys.clone())],
+                    Box::new(Type::EmptyTagUnion),
+                );
+                let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
 
-            match unify(subs, actual, includes, Mode::PRESENT) {
-                Success(vars) => {
-                    introduce(subs, rank, pools, &vars);
+                match unify(subs, actual, includes, Mode::PRESENT) {
+                    Success(vars) => {
+                        introduce(subs, rank, pools, &vars);
 
-                    state
-                }
-                Failure(vars, actual_type, expected_to_include_type) => {
-                    introduce(subs, rank, pools, &vars);
+                        state
+                    }
+                    Failure(vars, actual_type, expected_to_include_type) => {
+                        introduce(subs, rank, pools, &vars);
 
-                    let problem = TypeError::BadPattern(
-                        *region,
-                        pattern_category.clone(),
-                        expected_to_include_type,
-                        PExpected::NoExpectation(actual_type),
-                    );
+                        let problem = TypeError::BadPattern(
+                            *region,
+                            pattern_category.clone(),
+                            expected_to_include_type,
+                            PExpected::NoExpectation(actual_type),
+                        );
+                        problems.push(problem);
 
-                    problems.push(problem);
+                        state
+                    }
+                    BadType(vars, problem) => {
+                        introduce(subs, rank, pools, &vars);
 
-                    state
-                }
-                BadType(vars, problem) => {
-                    introduce(subs, rank, pools, &vars);
+                        problems.push(TypeError::BadType(problem));
 
-                    problems.push(TypeError::BadType(problem));
-
-                    state
+                        state
+                    }
                 }
             }
-        }
+        };
+
+        work.notify_completion(id, subs, problems);
     }
+
+    // At this point, we should have no more work in the queue!
+    debug_assert!(!work.has_waiting_work());
+
+    state
 }
 
+#[derive(Debug)]
 enum LocalDefVarsVec<T> {
     Stack(arrayvec::ArrayVec<T, 32>),
     Heap(Vec<T>),
