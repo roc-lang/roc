@@ -1,7 +1,7 @@
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::PresenceConstraint;
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -177,157 +177,19 @@ pub fn run_in_place(
     state.env
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct WorkId(u32);
-
-#[derive(Debug)]
-struct WorkItem<'a> {
-    env: Env,
-    rank: Rank,
-    constraint: &'a Constraint,
-    id: WorkId,
-}
-
-#[derive(Debug)]
-struct PartialWorkItem<'a> {
-    env: Env,
-    rank: Rank,
-    constraint: &'a Constraint,
-    after: After,
-}
-
-#[derive(Debug)]
 enum After {
-    Nothing,
     CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
 }
 
-#[derive(Debug)]
-struct WorkState<'a> {
-    root_work_id: WorkId,
-    next_work_id: WorkId,
-    list: Vec<WorkItem<'a>>,
-    queued_descendants: MutMap<WorkId, MutSet<WorkId>>,
-    item_to_parent: MutMap<WorkId, WorkId>,
-    after: MutMap<WorkId, After>,
-}
-
-/// A work-list for constraints resolved in the solver.
-///
-/// We use this so as a pseudo-stack so that constraints can be resolved in a single stack frame
-/// rather than climbing up the stack, which can grow very large especially with `Let` constraint
-/// chains.
-///
-/// The fundamental idea is that the work for a constraint, and all of its children, must be
-/// resolved before any other constraint is considered. This is so that we resolve the solve
-/// [`State`] correctly, in the same order that the constraints appear in. It also ensures that if
-/// we have to do any checks after a constraint is solved, the state for those checks is correct.
-/// That is, we are attempting to exactly emulate a call stack.
-impl<'a> WorkState<'a> {
-    fn new_with_work(work_item: PartialWorkItem<'a>) -> Self {
-        let mut work = WorkState {
-            root_work_id: WorkId(0),
-            next_work_id: WorkId(1),
-            list: Vec::with_capacity(1),
-            queued_descendants: MutMap::default(),
-            item_to_parent: MutMap::default(),
-            after: MutMap::default(),
-        };
-
-        work.add_children_in_order(work.root_work_id, vec![work_item]);
-
-        work
-    }
-
-    fn remove_next(&mut self) -> Option<WorkItem<'a>> {
-        self.list.pop()
-    }
-
-    #[inline(always)]
-    fn add_children_in_order(&mut self, parent_id: WorkId, children: Vec<PartialWorkItem<'a>>) {
-        debug_assert!(self.queued_descendants.get(&parent_id).is_none());
-
-        if !children.is_empty() {
-            self.queued_descendants.insert(parent_id, MutSet::default());
-        }
-
-        // Reverse so that we `push` the first item last, hence it will be at the
-        // front of the work list.
-        let insert_iter = children.into_iter().rev();
-
-        for PartialWorkItem {
-            env,
-            rank,
-            constraint,
-            after,
-        } in insert_iter
-        {
-            let child_id = self.next_work_id;
-            self.next_work_id = WorkId(self.next_work_id.0 + 1);
-
-            self.list.push(WorkItem {
-                env,
-                rank,
-                constraint,
-                id: child_id,
-            });
-
-            self.queued_descendants
-                .get_mut(&parent_id)
-                .unwrap()
-                .insert(child_id);
-
-            self.item_to_parent.insert(child_id, parent_id);
-
-            self.after.insert(child_id, after);
-        }
-    }
-
-    /// Checks whether the work node identified by `work_id` is complete, and act on any `After`s
-    /// accordingly.
-    ///
-    /// If `work_id` is not waiting on any children to complete its solve state, then the `After`
-    /// associated with the `work_id` is checked, and the parent of `work_id` is checked for
-    /// completion. This continues until a parent is incomplete, or the root work node is hit.
-    fn notify_completion(
-        &mut self,
-        mut id: WorkId,
-        subs: &mut Subs,
-        problems: &mut Vec<TypeError>,
-    ) {
-        // Walk up the parents until we hit the root (where there is nothing extra to be done), or
-        // until we hit a parent that is still waiting on some children to complete.
-        while id != self.root_work_id && self.queued_descendants.get(&id).is_none() {
-            // The current work item is fully complete. Check if there are any `After`s that
-            // must be satisfied.
-            match self.after.get(&id).unwrap() {
-                After::Nothing => {}
-                After::CheckForInfiniteTypes(def_vars) => {
-                    for (symbol, loc_var) in def_vars.iter() {
-                        check_for_infinite_type(subs, problems, *symbol, *loc_var);
-                    }
-                }
-            }
-
-            // Now, update the parent of the work item that this work item is complete.
-            // Then queue up the parent to check if it's complete and check its afters, and so on.
-            let parent = self.item_to_parent.get(&id).unwrap();
-
-            let parent_deps = self.queued_descendants.get_mut(parent).unwrap();
-            debug_assert!(parent_deps.contains(&id));
-            parent_deps.remove(&id);
-
-            if parent_deps.is_empty() {
-                self.queued_descendants.remove(parent);
-            }
-
-            id = *parent;
-        }
-    }
-
-    fn has_waiting_work(&self) -> bool {
-        !self.queued_descendants.is_empty()
-    }
+enum Work<'a> {
+    Constraint {
+        env: Env,
+        rank: Rank,
+        constraint: &'a Constraint,
+        after: Option<After>,
+    },
+    /// Something to be done after a constraint and all its dependencies are fully solved.
+    After(After),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -341,20 +203,37 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
-    let mut work = WorkState::new_with_work(PartialWorkItem {
+    let mut stack = vec![Work::Constraint {
         env: env.clone(),
         rank,
         constraint,
-        after: After::Nothing,
-    });
+        after: None,
+    }];
 
-    while let Some(WorkItem {
-        env,
-        rank,
-        constraint,
-        id,
-    }) = work.remove_next()
-    {
+    while let Some(work_item) = stack.pop() {
+        let (env, rank, constraint) = match work_item {
+            Work::After(After::CheckForInfiniteTypes(def_vars)) => {
+                for (symbol, loc_var) in def_vars.iter() {
+                    check_for_infinite_type(subs, problems, *symbol, *loc_var);
+                }
+                // No constraint to be solved
+                continue;
+            }
+            Work::Constraint {
+                env,
+                rank,
+                constraint,
+                after,
+            } => {
+                // Push the `after` on first so that we look at it immediately after finishing all
+                // the children of this constraint.
+                if let Some(after) = after {
+                    stack.push(Work::After(after));
+                }
+                (env, rank, constraint)
+            }
+        };
+
         state = match constraint {
             True => state,
             SaveTheEnvironment => {
@@ -502,17 +381,14 @@ fn solve(
                 }
             }
             And(sub_constraints) => {
-                let sub_constraints_work = sub_constraints
-                    .iter()
-                    .map(|sub_constraint| PartialWorkItem {
+                for sub_constraint in sub_constraints.iter().rev() {
+                    stack.push(Work::Constraint {
                         env: env.clone(),
                         rank,
                         constraint: sub_constraint,
-                        after: After::Nothing,
+                        after: None,
                     })
-                    .collect();
-
-                work.add_children_in_order(id, sub_constraints_work);
+                }
 
                 state
             }
@@ -568,15 +444,12 @@ fn solve(
 
                         // If the return expression is guaranteed to solve,
                         // solve the assignments themselves and move on.
-                        work.add_children_in_order(
-                            id,
-                            vec![PartialWorkItem {
-                                env,
-                                rank,
-                                constraint: &let_con.defs_constraint,
-                                after: After::Nothing,
-                            }],
-                        );
+                        stack.push(Work::Constraint {
+                            env,
+                            rank,
+                            constraint: &let_con.defs_constraint,
+                            after: None,
+                        });
                         state
                     }
                     ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
@@ -621,15 +494,12 @@ fn solve(
                             }
                         }
 
-                        work.add_children_in_order(
-                            id,
-                            vec![PartialWorkItem {
-                                env: new_env,
-                                rank,
-                                constraint: ret_con,
-                                after: After::CheckForInfiniteTypes(local_def_vars),
-                            }],
-                        );
+                        stack.push(Work::Constraint {
+                            env: new_env,
+                            rank,
+                            constraint: ret_con,
+                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
+                        });
 
                         state
                     }
@@ -774,15 +644,12 @@ fn solve(
 
                         // Now solve the body, using the new vars_by_symbol which includes
                         // the assignments' name-to-variable mappings.
-                        work.add_children_in_order(
-                            id,
-                            vec![PartialWorkItem {
-                                env: new_env,
-                                rank,
-                                constraint: ret_con,
-                                after: After::CheckForInfiniteTypes(local_def_vars),
-                            }],
-                        );
+                        stack.push(Work::Constraint {
+                            env: new_env,
+                            rank,
+                            constraint: ret_con,
+                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
+                        });
 
                         state_for_ret_con
                     }
@@ -850,12 +717,7 @@ fn solve(
                 }
             }
         };
-
-        work.notify_completion(id, subs, problems);
     }
-
-    // At this point, we should have no more work in the queue!
-    debug_assert!(!work.has_waiting_work());
 
     state
 }
