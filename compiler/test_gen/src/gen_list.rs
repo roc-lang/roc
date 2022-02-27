@@ -1769,10 +1769,8 @@ fn replace_unique_int_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                result = List.replace [ 12, 9, 7, 1, 5 ] 2 33
-                when result is
-                    Ok {list} -> list
-                    Err _ -> []
+                record = List.replace [ 12, 9, 7, 1, 5 ] 2 33
+                record.list
             "#
         ),
         RocList::from_slice(&[12, 9, 33, 1, 5]),
@@ -1786,13 +1784,11 @@ fn replace_unique_int_list_out_of_bounds() {
     assert_evals_to!(
         indoc!(
             r#"
-                result = List.replace [ 12, 9, 7, 1, 5 ] 5 33
-                when result is
-                    Ok {value} -> value
-                    Err OutOfBounds -> -1 
+                record = List.replace [ 12, 9, 7, 1, 5 ] 5 33
+                record.value
             "#
         ),
-        -1,
+        33,
         i64
     );
 }
@@ -1803,10 +1799,8 @@ fn replace_unique_int_list_get_old_value() {
     assert_evals_to!(
         indoc!(
             r#"
-                result = List.replace [ 12, 9, 7, 1, 5 ] 2 33
-                when result is
-                    Ok {value} -> value
-                    Err _ -> -1
+                record = List.replace [ 12, 9, 7, 1, 5 ] 2 33
+                record.value
             "#
         ),
         7,
@@ -1822,10 +1816,8 @@ fn replace_unique_get_large_value() {
             r#"
                 list : List { a : U64, b: U64, c: U64, d: U64 }
                 list = [ { a: 1, b: 2, c: 3, d: 4 }, { a: 5, b: 6, c: 7, d: 8 }, { a: 9, b: 10, c: 11, d: 12 } ]
-                result = List.replace list 1 { a: 13, b: 14, c: 15, d: 16 }
-                when result is
-                    Ok {value} -> value
-                    Err _ -> { a: 0, b: 0, c: 0, d: 0 }
+                record = List.replace list 1 { a: 13, b: 14, c: 15, d: 16 }
+                record.value
             "#
         ),
         (5, 6, 7, 8),
@@ -1841,10 +1833,7 @@ fn replace_shared_int_list() {
             r#"
             wrapper = \shared ->
                 # This should not mutate the original
-                replaced =
-                    when List.replace shared 1 7.7 is
-                        Ok {list} -> list
-                        Err _ -> []
+                replaced = (List.replace shared 1 7.7).list
                 x =
                     when List.get replaced 1 is
                         Ok num -> num
