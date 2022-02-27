@@ -2408,6 +2408,7 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let len_var = var_store.fresh();
     let elem_var = var_store.fresh();
+    let replace_record_var = var_store.fresh();
     let list_arg_var = var_store.fresh(); // Uniqueness type Attr differs between
     let list_ret_var = var_store.fresh(); // the arg list and the returned list
 
@@ -2437,18 +2438,24 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 },
             ),
             // then-branch
-            no_region(
-                // List.setUnsafe list index elem
-                RunLowLevel {
-                    op: LowLevel::ListSet,
-                    args: vec![
-                        (list_arg_var, Var(arg_list)),
-                        (len_var, Var(arg_index)),
-                        (elem_var, Var(arg_elem)),
-                    ],
-                    ret_var: list_ret_var,
-                },
-            ),
+            no_region(Access {
+                record_var: replace_record_var,
+                ext_var: var_store.fresh(),
+                field_var: list_ret_var,
+                loc_expr: Box::new(no_region(
+                    // List.replaceUnsafe list index elem
+                    RunLowLevel {
+                        op: LowLevel::ListReplaceUnsafe,
+                        args: vec![
+                            (list_arg_var, Var(arg_list)),
+                            (len_var, Var(arg_index)),
+                            (elem_var, Var(arg_elem)),
+                        ],
+                        ret_var: replace_record_var,
+                    },
+                )),
+                field: "list".into(),
+            }),
         )],
         final_else: Box::new(
             // else-branch
