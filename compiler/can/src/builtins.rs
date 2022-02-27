@@ -57,6 +57,7 @@ pub fn builtin_dependencies(symbol: Symbol) -> &'static [Symbol] {
         Symbol::LIST_PRODUCT => &[Symbol::LIST_WALK, Symbol::NUM_MUL],
         Symbol::LIST_SUM => &[Symbol::LIST_WALK, Symbol::NUM_ADD],
         Symbol::LIST_JOIN_MAP => &[Symbol::LIST_WALK, Symbol::LIST_CONCAT],
+        Symbol::LIST_SET => &[Symbol::LIST_REPLACE],
         _ => &[],
     }
 }
@@ -2407,6 +2408,23 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_arg_var = var_store.fresh(); // Uniqueness type Attr differs between
     let list_ret_var = var_store.fresh(); // the arg list and the returned list
 
+    let replace_function = (
+        var_store.fresh(),
+        Loc::at_zero(Expr::Var(Symbol::LIST_REPLACE)),
+        var_store.fresh(),
+        replace_record_var,
+    );
+
+    let replace_call = Expr::Call(
+        Box::new(replace_function),
+        vec![
+            (list_arg_var, Loc::at_zero(Var(arg_list))),
+            (len_var, Loc::at_zero(Var(arg_index))),
+            (elem_var, Loc::at_zero(Var(arg_elem))),
+        ],
+        CalledVia::Space,
+    );
+
     // Perform a bounds check. If it passes, run LowLevel::ListSet.
     // Otherwise, return the list unmodified.
     let body = If {
@@ -2439,15 +2457,7 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 field_var: list_ret_var,
                 loc_expr: Box::new(no_region(
                     // List.replaceUnsafe list index elem
-                    RunLowLevel {
-                        op: LowLevel::ListReplaceUnsafe,
-                        args: vec![
-                            (list_arg_var, Var(arg_list)),
-                            (len_var, Var(arg_index)),
-                            (elem_var, Var(arg_elem)),
-                        ],
-                        ret_var: replace_record_var,
-                    },
+                    replace_call,
                 )),
                 field: "list".into(),
             }),
