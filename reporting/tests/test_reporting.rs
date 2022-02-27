@@ -8307,6 +8307,7 @@ I need all branches in an `if` to have the same type!
         )
     }
 
+    #[test]
     fn opaque_mismatch_check() {
         report_problem_as(
             indoc!(
