@@ -91,9 +91,7 @@ test-rust:
         cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
     # repl_test: build the compiler for wasm target, then run the tests on native target
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        RUSTFLAGS="" cargo build --target wasm32-unknown-unknown -p roc_repl_wasm --features wasmer --release && sccache --show-stats
-    RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test -p repl_test --features wasm -- --test-threads=1 && sccache --show-stats
+        repl_test/test_wasm.sh && sccache --show-stats
     # run i386 (32-bit linux) cli tests
     RUN echo "4" | cargo run --locked --release --features="target-x86" -- --backend=x86_32 examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
