@@ -194,7 +194,7 @@ pub fn canonicalize_pattern<'a>(
             // If this opaque ref had an argument, we would be in the "Apply" branch.
             let loc_name = Loc::at(region, (*name).into());
             env.problem(Problem::RuntimeError(RuntimeError::OpaqueNotApplied(
-                loc_name.clone(),
+                loc_name,
             )));
             Pattern::UnsupportedPattern(region)
         }
