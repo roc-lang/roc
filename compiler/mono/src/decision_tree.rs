@@ -747,7 +747,11 @@ fn to_relevant_branch_help<'a>(
 
                     // the test matches the constructor of this pattern
                     match layout {
-                        UnionLayout::NonRecursive([[Layout::Struct([_])]]) => {
+                        UnionLayout::NonRecursive(
+                            [[Layout::Struct {
+                                field_layouts: [_], ..
+                            }]],
+                        ) => {
                             // a one-element record equivalent
                             // Theory: Unbox doesn't have any value for us
                             debug_assert_eq!(arguments.len(), 1);
@@ -1235,7 +1239,7 @@ fn path_to_expr_help<'a>(
                 layout = inner_layout;
             }
 
-            Layout::Struct(field_layouts) => {
+            Layout::Struct { field_layouts, .. } => {
                 debug_assert!(field_layouts.len() > 1);
 
                 let inner_expr = Expr::StructAtIndex {

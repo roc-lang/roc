@@ -44,7 +44,7 @@ pub struct WasmBackend<'a> {
     next_constant_addr: u32,
     fn_index_offset: u32,
     called_preload_fns: Vec<'a, u32>,
-    proc_symbols: Vec<'a, (Symbol, u32)>,
+    proc_lookup: Vec<'a, (Symbol, ProcLayout<'a>, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
 
     // Function-level data
@@ -62,7 +62,7 @@ impl<'a> WasmBackend<'a> {
         env: &'a Env<'a>,
         interns: &'a mut Interns,
         layout_ids: LayoutIds<'a>,
-        proc_symbols: Vec<'a, (Symbol, u32)>,
+        proc_lookup: Vec<'a, (Symbol, ProcLayout<'a>, u32)>,
         mut module: WasmModule<'a>,
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
@@ -89,7 +89,7 @@ impl<'a> WasmBackend<'a> {
             next_constant_addr: CONST_SEGMENT_BASE_ADDR,
             fn_index_offset,
             called_preload_fns: Vec::with_capacity_in(2, env.arena),
-            proc_symbols,
+            proc_lookup,
             helper_proc_gen,
 
             // Function-level data
@@ -106,7 +106,7 @@ impl<'a> WasmBackend<'a> {
 
     fn register_helper_proc(&mut self, new_proc_info: (Symbol, ProcLayout<'a>)) {
         let (new_proc_sym, new_proc_layout) = new_proc_info;
-        let wasm_fn_index = self.proc_symbols.len() as u32;
+        let wasm_fn_index = self.proc_lookup.len() as u32;
         let linker_sym_index = self.module.linking.symbol_table.len() as u32;
 
         let name = self
@@ -114,7 +114,8 @@ impl<'a> WasmBackend<'a> {
             .get_toplevel(new_proc_sym, &new_proc_layout)
             .to_symbol_string(new_proc_sym, self.interns);
 
-        self.proc_symbols.push((new_proc_sym, linker_sym_index));
+        self.proc_lookup
+            .push((new_proc_sym, new_proc_layout, linker_sym_index));
         let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
             flags: 0,
             index: wasm_fn_index,
@@ -742,8 +743,24 @@ impl<'a> WasmBackend<'a> {
         ret_storage: &StoredValue,
     ) {
         match call_type {
-            CallType::ByName { name: func_sym, .. } => {
-                self.expr_call_by_name(*func_sym, arguments, ret_sym, ret_layout, ret_storage)
+            CallType::ByName {
+                name: func_sym,
+                arg_layouts,
+                ret_layout: result,
+                ..
+            } => {
+                let proc_layout = ProcLayout {
+                    arguments: arg_layouts,
+                    result: **result,
+                };
+                self.expr_call_by_name(
+                    *func_sym,
+                    &proc_layout,
+                    arguments,
+                    ret_sym,
+                    ret_layout,
+                    ret_storage,
+                )
             }
             CallType::LowLevel { op: lowlevel, .. } => {
                 self.expr_call_low_level(*lowlevel, arguments, ret_sym, ret_layout, ret_storage)
@@ -756,6 +773,7 @@ impl<'a> WasmBackend<'a> {
     fn expr_call_by_name(
         &mut self,
         func_sym: Symbol,
+        proc_layout: &ProcLayout<'a>,
         arguments: &'a [Symbol],
         ret_sym: Symbol,
         ret_layout: &Layout<'a>,
@@ -779,9 +797,10 @@ impl<'a> WasmBackend<'a> {
             CallConv::C,
         );
 
-        for (roc_proc_index, (ir_sym, linker_sym_index)) in self.proc_symbols.iter().enumerate() {
-            let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
-            if *ir_sym == func_sym {
+        let iter = self.proc_lookup.iter().enumerate();
+        for (roc_proc_index, (ir_sym, pl, linker_sym_index)) in iter {
+            if *ir_sym == func_sym && pl == proc_layout {
+                let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
                 let num_wasm_args = param_types.len();
                 let has_return_val = ret_type.is_some();
                 self.code_builder.call(
@@ -795,9 +814,10 @@ impl<'a> WasmBackend<'a> {
         }
 
         internal_error!(
-            "Could not find procedure {:?}\nKnown procedures: {:?}",
+            "Could not find procedure {:?} with proc_layout {:?}\nKnown procedures: {:#?}",
             func_sym,
-            self.proc_symbols
+            proc_layout,
+            self.proc_lookup
         );
     }
 
@@ -884,7 +904,7 @@ impl<'a> WasmBackend<'a> {
         storage: &StoredValue,
         fields: &'a [Symbol],
     ) {
-        if matches!(layout, Layout::Struct(_)) {
+        if matches!(layout, Layout::Struct { .. }) {
             match storage {
                 StoredValue::StackMemory { location, size, .. } => {
                     if *size > 0 {

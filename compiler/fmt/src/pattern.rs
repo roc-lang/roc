@@ -30,11 +30,13 @@ impl<'a> Formattable for Pattern<'a> {
             Pattern::Identifier(_)
             | Pattern::GlobalTag(_)
             | Pattern::PrivateTag(_)
+            | Pattern::OpaqueRef(_)
             | Pattern::Apply(_, _)
             | Pattern::NumLiteral(..)
             | Pattern::NonBase10Literal { .. }
             | Pattern::FloatLiteral(..)
             | Pattern::StrLiteral(_)
+            | Pattern::SingleQuote(_)
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
             | Pattern::MalformedIdent(_, _)
@@ -56,7 +58,7 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.indent(indent);
                 buf.push_str(string)
             }
-            GlobalTag(name) | PrivateTag(name) => {
+            GlobalTag(name) | PrivateTag(name) | OpaqueRef(name) => {
                 buf.indent(indent);
                 buf.push_str(name);
             }
@@ -145,6 +147,11 @@ impl<'a> Formattable for Pattern<'a> {
             }
             StrLiteral(literal) => {
                 todo!("Format string literal: {:?}", literal);
+            }
+            SingleQuote(string) => {
+                buf.push('\'');
+                buf.push_str(string);
+                buf.push('\'');
             }
             Underscore(name) => {
                 buf.indent(indent);

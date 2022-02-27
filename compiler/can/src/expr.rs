@@ -73,6 +73,7 @@ pub enum Expr {
     Int(Variable, Variable, Box<str>, IntValue, IntBound),
     Float(Variable, Variable, Box<str>, f64, FloatBound),
     Str(Box<str>),
+    SingleQuote(char),
     List {
         elem_var: Variable,
         loc_elems: Vec<Loc<Expr>>,
@@ -169,6 +170,11 @@ pub enum Expr {
         variant_var: Variable,
         ext_var: Variable,
         name: TagName,
+        arguments: Vec<(Variable, Loc<Expr>)>,
+    },
+
+    OpaqueRef {
+        name: Symbol,
         arguments: Vec<(Variable, Loc<Expr>)>,
     },
 
@@ -318,6 +324,28 @@ pub fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
+
+        ast::Expr::SingleQuote(string) => {
+            let mut it = string.chars().peekable();
+            if let Some(char) = it.next() {
+                if it.peek().is_none() {
+                    (Expr::SingleQuote(char), Output::default())
+                } else {
+                    // multiple chars is found
+                    let error = roc_problem::can::RuntimeError::MultipleCharsInSingleQuote(region);
+                    let answer = Expr::RuntimeError(error);
+
+                    (answer, Output::default())
+                }
+            } else {
+                // no characters found
+                let error = roc_problem::can::RuntimeError::EmptySingleQuote(region);
+                let answer = Expr::RuntimeError(error);
+
+                (answer, Output::default())
+            }
+        }
+
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
                 (
@@ -416,6 +444,10 @@ pub fn canonicalize_expr<'a>(
                 } => Tag {
                     variant_var,
                     ext_var,
+                    name,
+                    arguments: args,
+                },
+                OpaqueRef { name, .. } => OpaqueRef {
                     name,
                     arguments: args,
                 },
@@ -545,7 +577,7 @@ pub fn canonicalize_expr<'a>(
             output.union(new_output);
 
             // filter out aliases
-            captured_symbols.retain(|s| !output.references.referenced_aliases.contains(s));
+            captured_symbols.retain(|s| !output.references.referenced_type_defs.contains(s));
 
             // filter out functions that don't close over anything
             captured_symbols.retain(|s| !output.non_closures.contains(s));
@@ -696,6 +728,19 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
+        ast::Expr::OpaqueRef(opaque_ref) => match scope.lookup_opaque_ref(opaque_ref, region) {
+            Ok(name) => (
+                OpaqueRef {
+                    name,
+                    arguments: vec![],
+                },
+                Output::default(),
+            ),
+            Err(runtime_error) => {
+                env.problem(Problem::RuntimeError(runtime_error.clone()));
+                (RuntimeError(runtime_error), Output::default())
+            }
+        },
         ast::Expr::Expect(condition, continuation) => {
             let mut output = Output::default();
 
@@ -1245,6 +1290,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Int(..)
         | other @ Float(..)
         | other @ Str { .. }
+        | other @ SingleQuote(_)
         | other @ RuntimeError(_)
         | other @ EmptyRecord
         | other @ Accessor { .. }
@@ -1471,6 +1517,20 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 name,
                 arguments
             );
+        }
+
+        OpaqueRef { name, arguments } => {
+            let arguments = arguments
+                .into_iter()
+                .map(|(var, loc_expr)| {
+                    (
+                        var,
+                        loc_expr.map_owned(|expr| inline_calls(var_store, scope, expr)),
+                    )
+                })
+                .collect();
+
+            OpaqueRef { name, arguments }
         }
 
         ZeroArgumentTag {

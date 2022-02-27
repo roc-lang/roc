@@ -3,7 +3,8 @@
 use core::cmp::Ordering;
 use core::convert::From;
 use core::{fmt, mem, ptr, slice};
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{alloc, dealloc, Layout};
+use std::os::raw::c_char;
 
 /// A string which can store identifiers using the small string optimization.
 /// It relies on the invariant that it cannot store null characters to store
@@ -66,19 +67,7 @@ impl IdentStr {
     }
 
     pub fn get(&self, index: usize) -> Option<&u8> {
-        if index < self.len() {
-            Some(unsafe {
-                let raw = if self.is_small_str() {
-                    self.get_small_str_ptr().add(index)
-                } else {
-                    self.elements.add(index)
-                };
-
-                &*raw
-            })
-        } else {
-            None
-        }
+        self.as_bytes().get(index)
     }
 
     pub fn get_bytes(&self) -> *const u8 {
@@ -93,59 +82,38 @@ impl IdentStr {
         (self as *const IdentStr).cast()
     }
 
-    fn from_slice(slice: &[u8]) -> Self {
+    fn from_str(str: &str) -> Self {
+        let slice = str.as_bytes();
         let len = slice.len();
 
         match len.cmp(&mem::size_of::<Self>()) {
             Ordering::Less => {
-                // This fits in a small string, but needs its length recorded
-                let mut answer_bytes: [u8; mem::size_of::<Self>()] = unsafe {
-                    mem::transmute::<Self, [u8; mem::size_of::<Self>()]>(Self::default())
-                };
+                let mut bytes = [0; mem::size_of::<Self>()];
 
-                // Copy the bytes from the slice into the answer
-                let dest_slice =
-                    unsafe { slice::from_raw_parts_mut(&mut answer_bytes as *mut u8, len) };
-
-                dest_slice.copy_from_slice(slice);
-
-                let mut answer: Self =
-                    unsafe { mem::transmute::<[u8; mem::size_of::<Self>()], Self>(answer_bytes) };
+                // Copy the bytes from the slice into bytes.
+                bytes[..len].copy_from_slice(slice);
 
                 // Write length and small string bit to last byte of length.
-                {
-                    let mut bytes = answer.length.to_ne_bytes();
+                bytes[mem::size_of::<usize>() * 2 - 1] = u8::MAX - len as u8;
 
-                    bytes[mem::size_of::<usize>() - 1] = u8::MAX - len as u8;
-
-                    answer.length = usize::from_ne_bytes(bytes);
-                }
-
-                answer
+                unsafe { mem::transmute::<[u8; mem::size_of::<Self>()], Self>(bytes) }
             }
             Ordering::Equal => {
                 // This fits in a small string, and is exactly long enough to
                 // take up the entire available struct
-                let mut answer_bytes: [u8; mem::size_of::<Self>()] = unsafe {
-                    mem::transmute::<Self, [u8; mem::size_of::<Self>()]>(Self::default())
-                };
+                let mut bytes = [0; mem::size_of::<Self>()];
 
                 // Copy the bytes from the slice into the answer
-                let dest_slice = unsafe {
-                    slice::from_raw_parts_mut(&mut answer_bytes as *mut u8, mem::size_of::<Self>())
-                };
+                bytes.copy_from_slice(slice);
 
-                dest_slice.copy_from_slice(slice);
-
-                unsafe { mem::transmute::<[u8; mem::size_of::<Self>()], Self>(answer_bytes) }
+                unsafe { mem::transmute::<[u8; mem::size_of::<Self>()], Self>(bytes) }
             }
             Ordering::Greater => {
                 // This needs a big string
+                let align = mem::align_of::<u8>();
                 let elements = unsafe {
-                    let align = mem::align_of::<u8>();
                     let layout = Layout::from_size_align_unchecked(len, align);
-
-                    System.alloc(layout)
+                    alloc(layout)
                 };
 
                 // Turn the new elements into a slice, and copy the existing
@@ -167,7 +135,9 @@ impl IdentStr {
     pub fn as_slice(&self) -> &[u8] {
         use core::slice::from_raw_parts;
 
-        if self.is_small_str() {
+        if self.is_empty() {
+            &[]
+        } else if self.is_small_str() {
             unsafe { from_raw_parts(self.get_small_str_ptr(), self.len()) }
         } else {
             unsafe { from_raw_parts(self.elements, self.length) }
@@ -186,15 +156,12 @@ impl IdentStr {
     /// # Safety
     /// This assumes the given buffer has enough space, so make sure you only
     /// pass in a pointer to an allocation that's at least as long as this Str!
-    pub unsafe fn write_c_str(&self, buf: *mut char) {
-        if self.is_small_str() {
-            ptr::copy_nonoverlapping(self.get_small_str_ptr(), buf as *mut u8, self.len());
-        } else {
-            ptr::copy_nonoverlapping(self.elements, buf as *mut u8, self.len());
-        }
+    pub unsafe fn write_c_str(&self, buf: *mut c_char) {
+        let bytes = self.as_bytes();
+        ptr::copy_nonoverlapping(bytes.as_ptr().cast(), buf, bytes.len());
 
         // null-terminate
-        *(buf.add(self.len())) = '\0';
+        *buf.add(self.len()) = 0;
     }
 }
 
@@ -217,13 +184,13 @@ impl std::ops::Deref for IdentStr {
 
 impl From<&str> for IdentStr {
     fn from(str: &str) -> Self {
-        Self::from_slice(str.as_bytes())
+        Self::from_str(str)
     }
 }
 
 impl From<String> for IdentStr {
     fn from(str: String) -> Self {
-        Self::from_slice(str.as_bytes())
+        Self::from_str(&str)
     }
 }
 
@@ -279,44 +246,17 @@ impl std::hash::Hash for IdentStr {
 
 impl Clone for IdentStr {
     fn clone(&self) -> Self {
-        if self.is_small_str() || self.is_empty() {
-            Self {
-                elements: self.elements,
-                length: self.length,
-            }
-        } else {
-            let capacity_size = core::mem::size_of::<usize>();
-            let copy_length = self.length + capacity_size;
-            let elements = unsafe {
-                let align = mem::align_of::<u8>();
-                let layout = Layout::from_size_align_unchecked(copy_length, align);
-                let raw_ptr = System.alloc(layout);
-
-                let dest_slice = slice::from_raw_parts_mut(raw_ptr, copy_length);
-                let src_ptr = self.elements as *mut u8;
-                let src_slice = slice::from_raw_parts(src_ptr, copy_length);
-
-                dest_slice.copy_from_slice(src_slice);
-
-                raw_ptr as *mut u8
-            };
-
-            Self {
-                elements,
-                length: self.length,
-            }
-        }
+        Self::from_str(self.as_str())
     }
 }
 
 impl Drop for IdentStr {
     fn drop(&mut self) {
         if !self.is_empty() && !self.is_small_str() {
+            let align = mem::align_of::<u8>();
             unsafe {
-                let align = mem::align_of::<u8>();
                 let layout = Layout::from_size_align_unchecked(self.length, align);
-
-                System.dealloc(self.elements as *mut _, layout);
+                dealloc(self.elements as *mut _, layout);
             }
         }
     }

@@ -7,6 +7,7 @@ The user needs to analyse the Wasm module's memory to decode the result.
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Builtin, Layout};
+use roc_std::ReferenceCount;
 use roc_target::TargetInfo;
 
 use crate::wasm32_sized::Wasm32Sized;
@@ -175,7 +176,7 @@ wasm_result_stack_memory!(i128);
 wasm_result_stack_memory!(RocDec);
 wasm_result_stack_memory!(RocStr);
 
-impl<T: Wasm32Result> Wasm32Result for RocList<T> {
+impl<T: Wasm32Result + ReferenceCount> Wasm32Result for RocList<T> {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(code_builder, main_function_index, 12)
     }

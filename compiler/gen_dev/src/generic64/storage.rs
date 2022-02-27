@@ -641,7 +641,7 @@ impl<
         }
         let base_offset = self.claim_stack_area(sym, struct_size);
 
-        if let Layout::Struct(field_layouts) = layout {
+        if let Layout::Struct { field_layouts, .. } = layout {
             let mut current_offset = base_offset;
             for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
                 self.copy_symbol_to_stack_offset(buf, current_offset, field, field_layout);

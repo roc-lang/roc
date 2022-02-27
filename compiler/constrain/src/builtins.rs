@@ -7,9 +7,9 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::subs::Variable;
-use roc_types::types::Category;
 use roc_types::types::Reason;
 use roc_types::types::Type::{self, *};
+use roc_types::types::{AliasKind, Category};
 
 #[must_use]
 pub fn add_numeric_bound_constr(
@@ -162,6 +162,8 @@ fn builtin_alias(
         type_arguments,
         actual,
         lambda_set_variables: vec![],
+        // TODO(opaques): revisit later
+        kind: AliasKind::Structural,
     }
 }
 
@@ -189,6 +191,21 @@ pub fn num_floatingpoint(range: Type) -> Type {
         vec![("range".into(), range)],
         Box::new(alias_content),
     )
+}
+
+#[inline(always)]
+pub fn num_u32() -> Type {
+    builtin_alias(Symbol::NUM_U32, vec![], Box::new(num_int(num_unsigned32())))
+}
+
+#[inline(always)]
+fn num_unsigned32() -> Type {
+    let alias_content = Type::TagUnion(
+        vec![(TagName::Private(Symbol::NUM_AT_UNSIGNED32), vec![])],
+        Box::new(Type::EmptyTagUnion),
+    );
+
+    builtin_alias(Symbol::NUM_UNSIGNED32, vec![], Box::new(alias_content))
 }
 
 #[inline(always)]

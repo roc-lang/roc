@@ -13,9 +13,10 @@
 // use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 // use crate::procedure::References;
 use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
+use roc_error_macros::todo_opaques;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, AliasHeader};
+use roc_parse::ast::{self, TypeHeader};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -199,7 +200,7 @@ fn to_pending_def<'a>(
         }
 
         roc_parse::ast::Def::Alias {
-            header: AliasHeader { name, vars },
+            header: TypeHeader { name, vars },
             ann,
         } => {
             let region = Region::span_across(&name.region, &ann.region);
@@ -259,6 +260,8 @@ fn to_pending_def<'a>(
                 }
             }
         }
+
+        Opaque { .. } => todo_opaques!(),
 
         Expect(_) => todo!(),
 
@@ -321,7 +324,7 @@ fn from_pending_alias<'a>(
             for loc_lowercase in vars {
                 if !named_rigids.contains_key(&loc_lowercase.value) {
                     env.problem(Problem::PhantomTypeArgument {
-                        alias: symbol,
+                        typ: symbol,
                         variable_region: loc_lowercase.region,
                         variable_name: loc_lowercase.value.clone(),
                     });

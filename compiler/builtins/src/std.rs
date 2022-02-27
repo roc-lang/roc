@@ -445,6 +445,156 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // maxI128 : I128
     add_type!(Symbol::NUM_MAX_I128, i128_type());
 
+    // toI8 : Int * -> I8
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I8,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i8_type()),
+    );
+
+    let out_of_bounds = SolvedType::TagUnion(
+        vec![(TagName::Global("OutOfBounds".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    // toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I8_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i8_type(), out_of_bounds.clone())),
+    );
+
+    // toI16 : Int * -> I16
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I16,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i16_type()),
+    );
+
+    // toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I16_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i16_type(), out_of_bounds.clone())),
+    );
+
+    // toI32 : Int * -> I32
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I32,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i32_type()),
+    );
+
+    // toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I32_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i32_type(), out_of_bounds.clone())),
+    );
+
+    // toI64 : Int * -> I64
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I64,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i64_type()),
+    );
+
+    // toI64Checked : Int * -> Result I64 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I64_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i64_type(), out_of_bounds.clone())),
+    );
+
+    // toI128 : Int * -> I128
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I128,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i128_type()),
+    );
+
+    // toI128Checked : Int * -> Result I128 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I128_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i128_type(), out_of_bounds)),
+    );
+
+    // toU8 : Int * -> U8
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U8,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u8_type()),
+    );
+
+    let out_of_bounds = SolvedType::TagUnion(
+        vec![(TagName::Global("OutOfBounds".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    // toU8Checked : Int * -> Result U8 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U8_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u8_type(), out_of_bounds.clone())),
+    );
+
+    // toU16 : Int * -> U16
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U16,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u16_type()),
+    );
+
+    // toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U16_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u16_type(), out_of_bounds.clone())),
+    );
+
+    // toU32 : Int * -> U32
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U32,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u32_type()),
+    );
+
+    // toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U32_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u32_type(), out_of_bounds.clone())),
+    );
+
+    // toU64 : Int * -> U64
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U64,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u64_type()),
+    );
+
+    // toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U64_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u64_type(), out_of_bounds.clone())),
+    );
+
+    // toU128 : Int * -> U128
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U128,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u128_type()),
+    );
+
+    // toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U128_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u128_type(), out_of_bounds)),
+    );
+
     // toStr : Num a -> Str
     add_top_level_function_type!(
         Symbol::NUM_TO_STR,

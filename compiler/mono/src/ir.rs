@@ -10,6 +10,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
+use roc_error_macros::todo_opaques;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -89,6 +90,7 @@ macro_rules! return_on_layout_error_help {
 pub enum OptLevel {
     Development,
     Normal,
+    Size,
     Optimize,
 }
 
@@ -1125,7 +1127,7 @@ impl<'a> Param<'a> {
     pub const EMPTY: Self = Param {
         symbol: Symbol::EMPTY_PARAM,
         borrow: false,
-        layout: Layout::Struct(&[]),
+        layout: Layout::UNIT,
     };
 }
 
@@ -1725,11 +1727,11 @@ impl<'a> Stmt<'a> {
         use Stmt::*;
 
         match self {
-            Let(symbol, expr, _layout, cont) => alloc
+            Let(symbol, expr, layout, cont) => alloc
                 .text("let ")
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(" : ")
-                .append(alloc.text(format!("{:?}", _layout)))
+                .append(layout.to_doc(alloc, Parens::NotNeeded))
                 .append(" = ")
                 .append(expr.to_doc(alloc))
                 .append(";")
@@ -2012,6 +2014,13 @@ fn pattern_to_when<'a>(
             (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
         }
 
+        OpaqueNotInScope(loc_ident) => {
+            // create the runtime error here, instead of delegating to When.
+            // TODO(opaques) should be `RuntimeError::OpaqueNotDefined`
+            let error = roc_problem::can::RuntimeError::UnsupportedPattern(loc_ident.region);
+            (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
+        }
+
         AppliedTag { .. } | RecordDestructure { .. } => {
             let symbol = env.unique_symbol();
 
@@ -2030,7 +2039,12 @@ fn pattern_to_when<'a>(
             (symbol, Loc::at_zero(wrapped_body))
         }
 
-        IntLiteral(..) | NumLiteral(..) | FloatLiteral(..) | StrLiteral(_) => {
+        UnwrappedOpaque { .. } => todo_opaques!(),
+        IntLiteral(..)
+        | NumLiteral(..)
+        | FloatLiteral(..)
+        | StrLiteral(..)
+        | roc_can::pattern::Pattern::SingleQuote(..) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -2436,7 +2450,7 @@ fn specialize_external<'a>(
 
             let closure_data_layout = match opt_closure_layout {
                 Some(lambda_set) => Layout::LambdaSet(lambda_set),
-                None => Layout::Struct(&[]),
+                None => Layout::UNIT,
             };
 
             // I'm not sure how to handle the closure case, does it ever occur?
@@ -3136,6 +3150,13 @@ pub fn with_hole<'a>(
             hole,
         ),
 
+        SingleQuote(character) => Stmt::Let(
+            assigned,
+            Expr::Literal(Literal::Int(character as _)),
+            Layout::int_width(IntWidth::I32),
+            hole,
+        ),
+
         Num(var, num_str, num, _bound) => {
             // first figure out what kind of number this is
             match num_argument_to_int_or_float(env.subs, env.target_info, var, false) {
@@ -3412,6 +3433,8 @@ pub fn with_hole<'a>(
             }
         }
 
+        OpaqueRef { .. } => todo_opaques!(),
+
         Record {
             record_var,
             mut fields,
@@ -3430,6 +3453,7 @@ pub fn with_hole<'a>(
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
 
+            #[allow(clippy::enum_variant_names)]
             enum Field {
                 // TODO: rename this since it can handle unspecialized expressions now too
                 Function(Symbol, Variable),
@@ -3984,7 +4008,7 @@ pub fn with_hole<'a>(
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let field_layouts = match &record_layout {
-                Layout::Struct(layouts) => *layouts,
+                Layout::Struct { field_layouts, .. } => *field_layouts,
                 other => arena.alloc([*other]),
             };
 
@@ -4700,7 +4724,7 @@ fn construct_closure_data<'a>(
                 Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
 
             debug_assert_eq!(
-                Layout::Struct(field_layouts),
+                Layout::struct_no_name_order(field_layouts),
                 lambda_set.runtime_representation()
             );
 
@@ -4784,9 +4808,7 @@ fn convert_tag_union<'a>(
             "The `[]` type has no constructors, source var {:?}",
             variant_var
         ),
-        Unit | UnitWithArguments => {
-            Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
-        }
+        Unit | UnitWithArguments => Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole),
         BoolUnion { ttrue, .. } => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Bool(tag_name == ttrue)),
@@ -5095,7 +5117,7 @@ fn sorted_field_symbols<'a>(
                 // Note it does not catch the use of `[]` currently.
                 use roc_can::expr::Expr;
                 arg.value = Expr::RuntimeError(RuntimeError::VoidValue);
-                Layout::Struct(&[])
+                Layout::UNIT
             }
             Err(LayoutProblem::Erroneous) => {
                 // something went very wrong
@@ -5190,7 +5212,10 @@ fn register_capturing_closure<'a>(
             Content::Structure(FlatType::Func(_, closure_var, _)) => {
                 match LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info) {
                     Ok(lambda_set) => {
-                        if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
+                        if let Layout::Struct {
+                            field_layouts: &[], ..
+                        } = lambda_set.runtime_representation()
+                        {
                             CapturedSymbols::None
                         } else {
                             let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
@@ -6254,7 +6279,7 @@ fn store_pattern_help<'a>(
                 let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
                 fields.extend(arguments.iter().map(|x| x.1));
 
-                let layout = Layout::Struct(fields.into_bump_slice());
+                let layout = Layout::struct_no_name_order(fields.into_bump_slice());
 
                 return store_newtype_pattern(
                     env,
@@ -6675,7 +6700,7 @@ fn force_thunk<'a>(
 }
 
 fn let_empty_struct<'a>(assigned: Symbol, hole: &'a Stmt<'a>) -> Stmt<'a> {
-    Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
+    Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole)
 }
 
 /// If the symbol is a function, make sure it is properly specialized
@@ -7211,7 +7236,8 @@ fn call_by_name_help<'a>(
         } else {
             debug_assert!(
                 !field_symbols.is_empty(),
-                "should be in the list of imported_module_thunks"
+                "{} should be in the list of imported_module_thunks",
+                proc_name
             );
 
             debug_assert_eq!(
@@ -7730,6 +7756,7 @@ fn from_can_pattern_help<'a>(
             }
         }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
+        SingleQuote(c) => Ok(Pattern::IntLiteral(*c as _, IntWidth::I32)),
         Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
@@ -7738,6 +7765,10 @@ fn from_can_pattern_help<'a>(
         MalformedPattern(_problem, region) => {
             // TODO preserve malformed problem information here?
             Err(RuntimeError::UnsupportedPattern(*region))
+        }
+        OpaqueNotInScope(loc_ident) => {
+            // TODO(opaques) should be `RuntimeError::OpaqueNotDefined`
+            Err(RuntimeError::UnsupportedPattern(loc_ident.region))
         }
         NumLiteral(var, num_str, num, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
@@ -8187,6 +8218,8 @@ fn from_can_pattern_help<'a>(
             Ok(result)
         }
 
+        UnwrappedOpaque { .. } => todo_opaques!(),
+
         RecordDestructure {
             whole_var,
             destructs,
@@ -8456,7 +8489,7 @@ where
                 env.arena.alloc(result),
             )
         }
-        Layout::Struct(_) => match lambda_set.set.get(0) {
+        Layout::Struct { .. } => match lambda_set.set.get(0) {
             Some((function_symbol, _)) => {
                 let call_spec_id = env.next_call_specialization_id();
                 let update_mode = env.next_update_mode_id();
@@ -8629,7 +8662,10 @@ fn match_on_lambda_set<'a>(
                 env.arena.alloc(result),
             )
         }
-        Layout::Struct(fields) => {
+        Layout::Struct {
+            field_layouts,
+            field_order_hash,
+        } => {
             let function_symbol = lambda_set.set[0].0;
 
             union_lambda_set_branch_help(
@@ -8637,7 +8673,10 @@ fn match_on_lambda_set<'a>(
                 function_symbol,
                 lambda_set,
                 closure_data_symbol,
-                Layout::Struct(fields),
+                Layout::Struct {
+                    field_layouts,
+                    field_order_hash,
+                },
                 argument_symbols,
                 argument_layouts,
                 return_layout,
@@ -8796,7 +8835,9 @@ fn union_lambda_set_branch_help<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let (argument_layouts, argument_symbols) = match closure_data_layout {
-        Layout::Struct(&[])
+        Layout::Struct {
+            field_layouts: &[], ..
+        }
         | Layout::Builtin(Builtin::Bool)
         | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
             (argument_layouts_slice, argument_symbols_slice)
@@ -8923,7 +8964,9 @@ fn enum_lambda_set_branch<'a>(
     let assigned = result_symbol;
 
     let (argument_layouts, argument_symbols) = match closure_data_layout {
-        Layout::Struct(&[])
+        Layout::Struct {
+            field_layouts: &[], ..
+        }
         | Layout::Builtin(Builtin::Bool)
         | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
             (argument_layouts_slice, argument_symbols_slice)

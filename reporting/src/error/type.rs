@@ -1100,7 +1100,6 @@ fn format_category<'b>(
             ]),
             alloc.text(" produces:"),
         ),
-
         List => (
             alloc.concat(vec![this_is, alloc.text(" a list")]),
             alloc.text(" of type:"),
@@ -1128,17 +1127,18 @@ fn format_category<'b>(
             ]),
             alloc.text(" which was of type:"),
         ),
-
+        Character => (
+            alloc.concat(vec![this_is, alloc.text(" a character")]),
+            alloc.text(" of type:"),
+        ),
         Lambda => (
             alloc.concat(vec![this_is, alloc.text(" an anonymous function")]),
             alloc.text(" of type:"),
         ),
-
         ClosureSize => (
             alloc.concat(vec![this_is, alloc.text(" the closure size of a function")]),
             alloc.text(" of type:"),
         ),
-
         TagApply {
             tag_name: TagName::Global(name),
             args_count: 0,
@@ -1472,6 +1472,7 @@ fn add_pattern_category<'b>(
         Num => alloc.reflow(" numbers:"),
         Int => alloc.reflow(" integers:"),
         Float => alloc.reflow(" floats:"),
+        Character => alloc.reflow(" characters:"),
     };
 
     alloc.concat(vec![i_am_trying_to_match, rest])

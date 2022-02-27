@@ -1177,10 +1177,7 @@ fn applied_tag_function() {
             x
             "#
         ),
-        RocList::from_slice(&[
-            RocStr::from_slice("a".as_bytes()),
-            RocStr::from_slice("b".as_bytes())
-        ]),
+        RocList::from_slice(&[RocStr::from("a"), RocStr::from("b")]),
         RocList<RocStr>
     );
 }
@@ -1197,10 +1194,7 @@ fn applied_tag_function_result() {
             List.keepOks x (\y -> y)
             "#
         ),
-        RocList::from_slice(&[
-            (RocStr::from_slice("a".as_bytes())),
-            (RocStr::from_slice("b".as_bytes()))
-        ]),
+        RocList::from_slice(&[(RocStr::from("a")), (RocStr::from("b"))]),
         RocList<RocStr>
     );
 }
@@ -1297,7 +1291,7 @@ fn monomorphized_applied_tag() {
                 f a
             "#
         ),
-        RocStr::from_slice(b"abc"),
+        RocStr::from("abc"),
         RocStr
     )
 }

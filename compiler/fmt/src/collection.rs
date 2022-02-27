@@ -49,7 +49,6 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
         );
         buf.newline();
         buf.indent(braces_indent);
-        buf.push(end);
     } else {
         // is_multiline == false
         // there is no comment to add
@@ -67,7 +66,7 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
         if !items.is_empty() {
             buf.spaces(1);
         }
-
-        buf.push(end);
     }
+
+    buf.push(end);
 }
