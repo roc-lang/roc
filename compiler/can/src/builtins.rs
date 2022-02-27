@@ -2304,13 +2304,7 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.replace : List elem, Nat, elem -> Result { list: List elem, value: elem } [ OutOfBounds ]*
-///
-/// List.replace :
-///     Attr (w | u | v) (List (Attr u a)),
-///     Attr * Int,
-///     Attr (u | v) a
-///     -> Attr * (Result { list: List (Attr u a), value: Attr u a } (Attr * [ OutOfBounds ]*))
+/// List.replace : List elem, Nat, elem -> { list: List elem, value: elem }
 fn list_replace(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
@@ -2321,6 +2315,18 @@ fn list_replace(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_arg_var = var_store.fresh();
     let ret_record_var = var_store.fresh();
     let ret_result_var = var_store.fresh();
+
+    let list_field = Field {
+        var: list_arg_var,
+        region: Region::zero(),
+        loc_expr: Box::new(Loc::at_zero(Expr::Var(arg_list))),
+    };
+
+    let value_field = Field {
+        var: elem_var,
+        region: Region::zero(),
+        loc_expr: Box::new(Loc::at_zero(Expr::Var(arg_elem))),
+    };
 
     // Perform a bounds check. If it passes, run LowLevel::ListReplaceUnsafe.
     // Otherwise, return the list unmodified.
@@ -2349,35 +2355,24 @@ fn list_replace(symbol: Symbol, var_store: &mut VarStore) -> Def {
             ),
             // then-branch
             no_region(
-                // Ok
-                tag(
-                    "Ok",
-                    vec![
-                        // List.replaceUnsafe list index elem
-                        RunLowLevel {
-                            op: LowLevel::ListReplaceUnsafe,
-                            args: vec![
-                                (list_arg_var, Var(arg_list)),
-                                (len_var, Var(arg_index)),
-                                (elem_var, Var(arg_elem)),
-                            ],
-                            ret_var: ret_record_var,
-                        },
+                // List.replaceUnsafe list index elem
+                RunLowLevel {
+                    op: LowLevel::ListReplaceUnsafe,
+                    args: vec![
+                        (list_arg_var, Var(arg_list)),
+                        (len_var, Var(arg_index)),
+                        (elem_var, Var(arg_elem)),
                     ],
-                    var_store,
-                ),
+                    ret_var: ret_record_var,
+                },
             ),
         )],
         final_else: Box::new(
             // else-branch
-            no_region(
-                // Err
-                tag(
-                    "Err",
-                    vec![tag("OutOfBounds", Vec::new(), var_store)],
-                    var_store,
-                ),
-            ),
+            no_region(record(
+                vec![("list".into(), list_field), ("value".into(), value_field)],
+                var_store,
+            )),
         ),
     };
 
