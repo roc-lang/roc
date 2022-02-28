@@ -3195,7 +3195,6 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
- "slab",
  "snafu",
  "ven_graph",
  "winapi",
