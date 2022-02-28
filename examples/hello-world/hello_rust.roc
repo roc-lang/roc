@@ -7,6 +7,6 @@ greeting =
     hi = "Hello"
     name = "World"
 
-    "\(hi), \(name)!\n"
+    "\(hi), \(name)!"
 
 main = greeting

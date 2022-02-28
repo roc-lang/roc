@@ -97,7 +97,7 @@ pub fn main() u8 {
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
 
     // stdout the result
-    stdout.print("{s}\n", .{callresult.asSlice()}) catch unreachable;
+    stdout.print("{s}", .{callresult.asSlice()}) catch unreachable;
 
     callresult.deinit();
 

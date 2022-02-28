@@ -329,7 +329,7 @@ mod cli_run {
             executable_filename: "hello_c",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!\n",
+            expected_ending:"Hello, World!",
             use_valgrind: true,
         },
         hello_zig:"hello-world" => Example {
@@ -337,7 +337,7 @@ mod cli_run {
             executable_filename: "hello_zig",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!\n",
+            expected_ending:"Hello, World!",
             use_valgrind: true,
         },
         hello_rust:"hello-world" => Example {
@@ -345,7 +345,7 @@ mod cli_run {
             executable_filename: "hello_rust",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!\n",
+            expected_ending:"Hello, World!",
             use_valgrind: true,
         },
         hello_swift:"hello-world" => Example {
@@ -353,7 +353,7 @@ mod cli_run {
             executable_filename: "hello_swift",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello Swift, meet Roc\n",
+            expected_ending:"Hello, World!",
             use_valgrind: true,
         },
         hello_web:"hello-world" => Example {
@@ -361,7 +361,7 @@ mod cli_run {
             executable_filename: "hello_web",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!\n",
+            expected_ending:"Hello, World!",
             use_valgrind: true,
         },
         fib:"fib" => Example {

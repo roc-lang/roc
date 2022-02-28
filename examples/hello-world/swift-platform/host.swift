@@ -53,6 +53,6 @@ extension RocStr {
 
 @_cdecl("main")
 func main() -> UInt8 {
-    print(roc__mainForHost_1_exposed().string)
+    print(roc__mainForHost_1_exposed().string, terminator: "")
     return 0
 }

@@ -3,4 +3,4 @@ app "hello_c"
     imports []
     provides [ main ] to pf
 
-main = "Hello, World!\n"
+main = "Hello, World!"
