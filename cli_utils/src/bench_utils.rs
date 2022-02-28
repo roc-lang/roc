@@ -42,19 +42,16 @@ fn check_cmd_output(
         .unwrap()
         .to_string();
 
-    let out= if cmd_str.contains("cfold") {
+    let out = if cmd_str.contains("cfold") {
         let child = thread::Builder::new()
             .stack_size(CFOLD_STACK_SIZE)
-            .spawn(
-                move|| {run_cmd(&cmd_str, &[stdin_str], &[])}
-            )
+            .spawn(move || run_cmd(&cmd_str, &[stdin_str], &[]))
             .unwrap();
 
         child.join().unwrap()
     } else {
         run_cmd(&cmd_str, &[stdin_str], &[])
     };
-
 
     if !&out.stdout.ends_with(expected_ending) {
         panic!(
@@ -102,7 +99,6 @@ fn bench_cmd<T: Measurement>(
         );
     }
 }
-
 
 pub fn bench_nqueens<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T>>) {
     exec_bench_w_input(

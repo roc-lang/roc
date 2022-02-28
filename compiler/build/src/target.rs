@@ -45,7 +45,7 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Windows,
             ..
-        }=> "x86_64-pc-windows-gnu",
+        } => "x86_64-pc-windows-gnu",
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }

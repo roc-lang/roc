@@ -383,8 +383,7 @@ fn can_annotation_help(
         As(
             loc_inner,
             _spaces,
-            alias_header
-            @ TypeHeader {
+            alias_header @ TypeHeader {
                 name,
                 vars: loc_vars,
             },
