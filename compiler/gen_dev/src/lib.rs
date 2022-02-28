@@ -233,7 +233,7 @@ trait Backend<'a> {
     fn build_jump(
         &mut self,
         id: &JoinPointId,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     );
@@ -571,17 +571,18 @@ trait Backend<'a> {
                 debug_assert_eq!(
                     2,
                     args.len(),
-                    "ListLen: expected to have exactly two arguments"
+                    "ListGetUnsafe: expected to have exactly two arguments"
                 );
                 self.build_list_get_unsafe(sym, &args[0], &args[1], ret_layout)
             }
-            LowLevel::ListSet => self.build_fn_call(
-                sym,
-                bitcode::LIST_SET.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
+            LowLevel::ListReplaceUnsafe => {
+                debug_assert_eq!(
+                    3,
+                    args.len(),
+                    "ListReplaceUnsafe: expected to have exactly three arguments"
+                );
+                self.build_list_replace_unsafe(sym, args, arg_layouts, ret_layout)
+            }
             LowLevel::StrConcat => self.build_fn_call(
                 sym,
                 bitcode::STR_CONCAT.to_string(),
@@ -643,7 +644,7 @@ trait Backend<'a> {
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
-            Symbol::LIST_GET | Symbol::LIST_SET => {
+            Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE => {
                 // TODO: This is probably simple enough to be worth inlining.
                 let layout_id = LayoutIds::default().get(func_sym, ret_layout);
                 let fn_name = self.symbol_to_string(func_sym, layout_id);
@@ -661,7 +662,7 @@ trait Backend<'a> {
         &mut self,
         dst: &Symbol,
         fn_name: String,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     );
@@ -728,6 +729,16 @@ trait Backend<'a> {
         index: &Symbol,
         ret_layout: &Layout<'a>,
     );
+
+    /// build_list_replace_unsafe returns the old element and new list with the list having the new element inserted.
+    fn build_list_replace_unsafe(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
+        ret_layout: &Layout<'a>,
+    );
+
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
 

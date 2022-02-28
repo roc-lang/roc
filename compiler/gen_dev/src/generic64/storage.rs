@@ -806,6 +806,28 @@ impl<
         }
     }
 
+    pub fn ensure_symbol_on_stack(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) {
+        match self.remove_storage_for_sym(sym) {
+            Reg(reg_storage) => {
+                let base_offset = self.claim_stack_size(8);
+                match reg_storage {
+                    General(reg) => ASM::mov_base32_reg64(buf, base_offset, reg),
+                    Float(reg) => ASM::mov_base32_freg64(buf, base_offset, reg),
+                }
+                self.symbol_storage_map.insert(
+                    *sym,
+                    Stack(Primitive {
+                        base_offset,
+                        reg: Some(reg_storage),
+                    }),
+                );
+            }
+            x => {
+                self.symbol_storage_map.insert(*sym, x);
+            }
+        }
+    }
+
     /// Frees `wanted_reg` which is currently owned by `sym` by making sure the value is loaded on the stack.
     /// Note, used and free regs are expected to be updated outside of this function.
     fn free_to_stack(
@@ -960,7 +982,7 @@ impl<
         &mut self,
         buf: &mut Vec<'a, u8>,
         id: &JoinPointId,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
     ) {
         // TODO: remove was use here and for current_storage to deal with borrow checker.

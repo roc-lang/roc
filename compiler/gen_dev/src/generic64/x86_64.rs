@@ -267,7 +267,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             X86_64SystemV,
         >,
         dst: &Symbol,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     ) {
@@ -693,7 +693,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
             X86_64WindowsFastcall,
         >,
         dst: &Symbol,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     ) {

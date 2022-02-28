@@ -3,7 +3,7 @@ use crate::{
     Relocation,
 };
 use bumpalo::collections::Vec;
-use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, Symbol};
@@ -78,7 +78,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
         dst: &Symbol,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
         ret_layout: &Layout<'a>,
@@ -495,7 +495,7 @@ impl<
         &mut self,
         dst: &Symbol,
         fn_name: String,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     ) {
@@ -636,7 +636,7 @@ impl<
     fn build_jump(
         &mut self,
         id: &JoinPointId,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         _ret_layout: &Layout<'a>,
     ) {
@@ -897,6 +897,7 @@ impl<
     fn build_list_len(&mut self, dst: &Symbol, list: &Symbol) {
         self.storage_manager.list_len(&mut self.buf, dst, list);
     }
+
     fn build_list_get_unsafe(
         &mut self,
         dst: &Symbol,
@@ -929,6 +930,129 @@ impl<
                 });
             },
         );
+    }
+
+    fn build_list_replace_unsafe(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
+        ret_layout: &Layout<'a>,
+    ) {
+        // We want to delegate to the zig builtin, but it takes some extra parameters.
+        // Firstly, it takes the alignment of the list.
+        // Secondly, it takes the stack size of an element.
+        // Thirdly, it takes a pointer that it will write the output element to.
+        let list = args[0];
+        let list_layout = arg_layouts[0];
+        let index = args[1];
+        let index_layout = arg_layouts[1];
+        let elem = args[2];
+        let elem_layout = arg_layouts[2];
+
+        let u32_layout = &Layout::Builtin(Builtin::Int(IntWidth::U32));
+        let list_alignment = list_layout.alignment_bytes(self.storage_manager.target_info());
+        self.load_literal(
+            &Symbol::DEV_TMP,
+            &u32_layout,
+            &Literal::Int(list_alignment as i128),
+        );
+
+        // Have to pass the input element by pointer, so put it on the stack and load it's address.
+        self.storage_manager
+            .ensure_symbol_on_stack(&mut self.buf, &elem);
+        let u64_layout = &Layout::Builtin(Builtin::Int(IntWidth::U64));
+        let (new_elem_offset, _) = self.storage_manager.stack_offset_and_size(&elem);
+        // Load address of output element into register.
+        let reg = self
+            .storage_manager
+            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP2);
+        ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
+
+        // Load the elements size.
+        let elem_stack_size = elem_layout.stack_size(self.storage_manager.target_info());
+        self.load_literal(
+            &Symbol::DEV_TMP3,
+            &u64_layout,
+            &Literal::Int(elem_stack_size as i128),
+        );
+
+        // Setup the return location.
+        let base_offset = self.storage_manager.claim_stack_area(
+            &dst,
+            ret_layout.stack_size(self.storage_manager.target_info()),
+        );
+
+        let ret_fields = if let Layout::Struct { field_layouts, .. } = ret_layout {
+            field_layouts
+        } else {
+            internal_error!(
+                "Expected replace to return a struct instead found: {:?}",
+                ret_layout
+            )
+        };
+
+        // Only return list and old element.
+        debug_assert_eq!(ret_fields.len(), 2);
+
+        let (out_list_offset, out_elem_offset) = if ret_fields[0] == elem_layout {
+            (
+                base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
+                base_offset,
+            )
+        } else {
+            (
+                base_offset,
+                base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
+            )
+        };
+
+        // Load address of output element into register.
+        let reg = self
+            .storage_manager
+            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP4);
+        ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, out_elem_offset);
+
+        let lowlevel_args = bumpalo::vec![
+        in self.env.arena;
+            list,
+            Symbol::DEV_TMP,
+            index,
+            Symbol::DEV_TMP2,
+            Symbol::DEV_TMP3,
+            Symbol::DEV_TMP4,
+         ];
+        let lowlevel_arg_layouts = bumpalo::vec![
+        in self.env.arena;
+                list_layout,
+                *u32_layout,
+                index_layout,
+                *u64_layout,
+                *u64_layout,
+                *u64_layout,
+        ];
+
+        self.build_fn_call(
+            &Symbol::DEV_TMP5,
+            bitcode::LIST_REPLACE.to_string(),
+            &lowlevel_args,
+            &lowlevel_arg_layouts,
+            &list_layout,
+        );
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
+
+        // Copy from list to the output record.
+        self.storage_manager.copy_symbol_to_stack_offset(
+            &mut self.buf,
+            out_list_offset,
+            &Symbol::DEV_TMP5,
+            &list_layout,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP5);
     }
 
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
