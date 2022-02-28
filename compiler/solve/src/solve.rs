@@ -82,6 +82,23 @@ pub struct Env {
     pub aliases: MutMap<Symbol, Alias>,
 }
 
+impl Env {
+    fn get_var_by_symbol(&self, symbol: &Symbol) -> Option<Variable> {
+        self.vars_by_symbol.get(symbol).copied()
+    }
+
+    fn insert_symbol_var_if_vacant(&mut self, symbol: Symbol, var: Variable) {
+        match self.vars_by_symbol.entry(symbol) {
+            Entry::Occupied(_) => {
+                // keep the existing value
+            }
+            Entry::Vacant(vacant) => {
+                vacant.insert(var);
+            }
+        }
+    }
+}
+
 const DEFAULT_POOLS: usize = 8;
 
 #[derive(Clone, Debug)]
@@ -312,7 +329,7 @@ fn solve(
                 }
             }
             Lookup(symbol, expectation, region) => {
-                match env.vars_by_symbol.get(symbol) {
+                match env.get_var_by_symbol(symbol) {
                     Some(var) => {
                         // Deep copy the vars associated with this symbol before unifying them.
                         // Otherwise, suppose we have this:
@@ -335,7 +352,7 @@ fn solve(
                         // then we copy from that module's Subs into our own. If the value
                         // is being looked up in this module, then we use our Subs as both
                         // the source and destination.
-                        let actual = deep_copy_var(subs, rank, pools, *var);
+                        let actual = deep_copy_var(subs, rank, pools, var);
                         let expected = type_to_var(
                             subs,
                             rank,
@@ -484,14 +501,7 @@ fn solve(
 
                         let mut new_env = env.clone();
                         for (symbol, loc_var) in local_def_vars.iter() {
-                            match new_env.vars_by_symbol.entry(*symbol) {
-                                Entry::Occupied(_) => {
-                                    // keep the existing value
-                                }
-                                Entry::Vacant(vacant) => {
-                                    vacant.insert(loc_var.value);
-                                }
-                            }
+                            new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                         }
 
                         stack.push(Work::Constraint {
@@ -625,14 +635,7 @@ fn solve(
 
                         let mut new_env = env.clone();
                         for (symbol, loc_var) in local_def_vars.iter() {
-                            match new_env.vars_by_symbol.entry(*symbol) {
-                                Entry::Occupied(_) => {
-                                    // keep the existing value
-                                }
-                                Entry::Vacant(vacant) => {
-                                    vacant.insert(loc_var.value);
-                                }
-                            }
+                            new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                         }
 
                         // Note that this vars_by_symbol is the one returned by the

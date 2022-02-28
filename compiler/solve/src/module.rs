@@ -17,14 +17,13 @@ pub struct SolvedModule {
 }
 
 pub fn run_solve(
-    aliases: MutMap<Symbol, Alias>,
     rigid_variables: MutMap<Variable, Lowercase>,
     constraint: Constraint,
     var_store: VarStore,
 ) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
     let env = solve::Env {
         vars_by_symbol: MutMap::default(),
-        aliases,
+        aliases: MutMap::default(),
     };
 
     let mut subs = Subs::new_from_varstore(var_store);

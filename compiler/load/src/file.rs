@@ -3102,7 +3102,7 @@ fn run_solve<'a>(
     }
 
     let (solved_subs, solved_env, problems) =
-        roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
+        roc_solve::module::run_solve(rigid_variables, constraint, var_store);
 
     let mut exposed_vars_by_symbol: MutMap<Symbol, Variable> = solved_env.vars_by_symbol.clone();
     exposed_vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));
@@ -3115,7 +3115,7 @@ fn run_solve<'a>(
         exposed_symbols: exposed_symbols.into_iter().collect::<Vec<_>>(),
         solved_types,
         problems,
-        aliases: solved_env.aliases,
+        aliases,
     };
 
     // Record the final timings
