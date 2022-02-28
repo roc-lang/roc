@@ -121,12 +121,11 @@ pub fn check_patterns<'a>(
 ) {
     match to_nonredundant_rows(region, patterns) {
         Err(err) => errors.push(err),
-        Ok(matrix) => match roc_exhaustive::check(region, context, matrix) {
-            Err(err) => {
+        Ok(matrix) => {
+            if let Err(err) = roc_exhaustive::check(region, context, matrix) {
                 *errors = err;
             }
-            Ok(_) => {}
-        },
+        }
     }
 }
 

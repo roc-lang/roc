@@ -89,7 +89,7 @@ pub enum Guard {
 
 /// Check
 
-pub fn check<'a>(
+pub fn check(
     region: Region,
     context: Context,
     matrix: Vec<Vec<Pattern>>,
@@ -114,7 +114,7 @@ pub fn check<'a>(
 ///   The initial rows "matrix" are all of length 1
 ///   The initial count of items per row "n" is also 1
 ///   The resulting rows are examples of missing patterns
-fn is_exhaustive(matrix: &PatternMatrix, n: usize) -> PatternMatrix {
+fn is_exhaustive(matrix: &RefPatternMatrix, n: usize) -> PatternMatrix {
     if matrix.is_empty() {
         vec![std::iter::repeat(Anything).take(n).collect()]
     } else if n == 0 {
@@ -124,9 +124,9 @@ fn is_exhaustive(matrix: &PatternMatrix, n: usize) -> PatternMatrix {
         let num_seen = ctors.len();
 
         if num_seen == 0 {
-            let new_matrix = matrix
+            let new_matrix: Vec<_> = matrix
                 .iter()
-                .filter_map(specialize_row_by_anything)
+                .filter_map(|row| specialize_row_by_anything(row))
                 .collect();
             let mut rest = is_exhaustive(&new_matrix, n - 1);
 
@@ -142,9 +142,9 @@ fn is_exhaustive(matrix: &PatternMatrix, n: usize) -> PatternMatrix {
             let num_alts = alt_list.len();
 
             if num_seen < num_alts {
-                let new_matrix = matrix
+                let new_matrix: Vec<_> = matrix
                     .iter()
-                    .filter_map(specialize_row_by_anything)
+                    .filter_map(|row| specialize_row_by_anything(row))
                     .collect();
                 let rest: Vec<Vec<Pattern>> = is_exhaustive(&new_matrix, n - 1);
 
@@ -165,7 +165,7 @@ fn is_exhaustive(matrix: &PatternMatrix, n: usize) -> PatternMatrix {
                 result
             } else {
                 let is_alt_exhaustive = |Ctor { arity, tag_id, .. }| {
-                    let new_matrix = matrix
+                    let new_matrix: Vec<_> = matrix
                         .iter()
                         .filter_map(|r| specialize_row_by_ctor(tag_id, arity, r))
                         .collect();
@@ -353,8 +353,8 @@ fn specialize_row_by_ctor2(
 }
 
 /// INVARIANT: (length row == N) ==> (length result == arity + N - 1)
-fn specialize_row_by_ctor(tag_id: TagId, arity: usize, row: &Row) -> Option<Row> {
-    let mut row = row.clone();
+fn specialize_row_by_ctor(tag_id: TagId, arity: usize, row: &RefRow) -> Option<Row> {
+    let mut row = row.to_vec();
 
     let head = row.pop();
     let patterns = row;
@@ -387,8 +387,8 @@ fn specialize_row_by_ctor(tag_id: TagId, arity: usize, row: &Row) -> Option<Row>
 }
 
 /// INVARIANT: (length row == N) ==> (length result == N-1)
-fn specialize_row_by_anything(row: &Row) -> Option<Row> {
-    let mut row = row.clone();
+fn specialize_row_by_anything(row: &RefRow) -> Option<Row> {
+    let mut row = row.to_vec();
 
     match row.pop() {
         Some(Anything) => Some(row),
@@ -403,7 +403,7 @@ pub enum Complete {
     No,
 }
 
-fn is_complete(matrix: &PatternMatrix) -> Complete {
+fn is_complete(matrix: &RefPatternMatrix) -> Complete {
     let ctors = collect_ctors(matrix);
     let length = ctors.len();
     let mut it = ctors.into_iter();
@@ -424,6 +424,7 @@ fn is_complete(matrix: &PatternMatrix) -> Complete {
 
 type RefPatternMatrix = [Vec<Pattern>];
 type PatternMatrix = Vec<Vec<Pattern>>;
+type RefRow = [Pattern];
 type Row = Vec<Pattern>;
 
 fn collect_ctors(matrix: &RefPatternMatrix) -> MutMap<TagId, Union> {
