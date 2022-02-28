@@ -11,6 +11,12 @@ cd $SCRIPT_RELATIVE_DIR
 rm -rf build/
 cp -r public/ build/
 
+# Build the repl page
+mkdir -p build/repl
+pushd ..
+repl_www/build.sh www/build/repl
+popd
+
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
 pushd build
 wget https://github.com/rtfeldman/elm-css/files/8037422/roc-source-code.zip
