@@ -941,7 +941,7 @@ impl<
                     match ret_layout {
                         single_register_integers!() if ret_stack_size == 8 => {
                             let dst_reg = storage_manager.claim_general_reg(buf, dst);
-                            ASM::mov_reg64_mem64_offset32(buf, dst_reg, list_ptr, 0);
+                            ASM::mov_reg64_mem64_offset32(buf, dst_reg, tmp, 0);
                         }
                         x => internal_error!("Loading list element with layout: {:?}", x),
                     }
