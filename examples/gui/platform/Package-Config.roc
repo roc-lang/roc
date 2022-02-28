@@ -1,9 +1,9 @@
 platform "examples/hello-world"
-    requires {} { render : Elem }
+    requires {} { program : Program State }
     exposes []
     packages {}
     imports []
-    provides [ renderForHost ]
+    provides [ programForHost ]
 
 Rgba : { r : F32, g : F32, b : F32, a : F32 }
 
@@ -11,5 +11,10 @@ ButtonStyles : { bgColor : Rgba, borderColor : Rgba, borderWidth : F32, textColo
 
 Elem : [ Button Elem ButtonStyles, Col (List Elem), Row (List Elem), Text Str ]
 
-renderForHost : Elem
-renderForHost = render
+State : { width : U32, height : U32 } # TODO change from U32 to F32 once Num.toStr supports floats
+
+Program state : { render : state -> Elem }
+
+# TODO allow changing the title - maybe via Action.setTitle
+programForHost : { render : (State -> Elem) as Render }
+programForHost = program

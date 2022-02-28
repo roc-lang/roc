@@ -1,9 +1,11 @@
 app "hello-gui"
     packages { pf: "platform" }
     imports []# [ pf.Action.{ Action }, pf.Elem.{ button, text, row, col } ]
-    provides [ render ] to pf
+    provides [ program ] to pf
 
-render =
+program = { render }
+
+render = \state ->
     div0 = \numerator, denominator -> (numerator / denominator) |> Result.withDefault 0
 
     rgba = \r, g, b, a -> { r: div0 r 255, g: div0 g 255, b: div0 b 255, a }
