@@ -50,12 +50,17 @@ fn main() {
     );
 
     // OBJECT FILES
+    #[cfg(windows)]
+    const BUILTINS_HOST_FILE: &str = "builtins-host.obj";
+
+    #[cfg(not(windows))]
+    const BUILTINS_HOST_FILE: &str = "builtins-host.o";
 
     generate_object_file(
         &bitcode_path,
         "BUILTINS_HOST_O",
         "object",
-        "builtins-host.o",
+        BUILTINS_HOST_FILE,
     );
 
     generate_object_file(
