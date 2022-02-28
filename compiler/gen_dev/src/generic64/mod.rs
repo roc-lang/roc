@@ -645,6 +645,7 @@ impl<
         );
 
         // Build remainder of function.
+        self.storage_manager = base_storage;
         self.build_stmt(remainder, ret_layout)
     }
 
