@@ -1,3 +1,4 @@
+use bumpalo::Bump;
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::PresenceConstraint;
 use roc_can::expected::{Expected, PExpected};
@@ -192,7 +193,11 @@ pub fn run_in_place(
         mark: Mark::NONE.next(),
     };
     let rank = Rank::toplevel();
+
+    let arena = Bump::new();
+
     let state = solve(
+        &arena,
         env,
         state,
         rank,
@@ -212,7 +217,7 @@ enum After {
 
 enum Work<'a> {
     Constraint {
-        env: Env,
+        env: &'a Env,
         rank: Rank,
         constraint: &'a Constraint,
         after: Option<After>,
@@ -223,6 +228,7 @@ enum Work<'a> {
 
 #[allow(clippy::too_many_arguments)]
 fn solve(
+    arena: &Bump,
     env: &Env,
     mut state: State,
     rank: Rank,
@@ -233,7 +239,7 @@ fn solve(
     constraint: &Constraint,
 ) -> State {
     let mut stack = vec![Work::Constraint {
-        env: env.clone(),
+        env,
         rank,
         constraint,
         after: None,
@@ -269,7 +275,7 @@ fn solve(
                 // NOTE deviation: elm only copies the env into the state on SaveTheEnvironment
                 let mut copy = state;
 
-                copy.env = env;
+                copy.env = env.clone();
 
                 copy
             }
@@ -412,7 +418,7 @@ fn solve(
             And(sub_constraints) => {
                 for sub_constraint in sub_constraints.iter().rev() {
                     stack.push(Work::Constraint {
-                        env: env.clone(),
+                        env,
                         rank,
                         constraint: sub_constraint,
                         after: None,
@@ -484,7 +490,8 @@ fn solve(
                     ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
                         // TODO: make into `WorkItem` with `After`
                         let state = solve(
-                            &env,
+                            arena,
+                            env,
                             state,
                             rank,
                             pools,
@@ -517,7 +524,7 @@ fn solve(
                         }
 
                         stack.push(Work::Constraint {
-                            env: new_env,
+                            env: arena.alloc(new_env),
                             rank,
                             constraint: ret_con,
                             after: Some(After::CheckForInfiniteTypes(local_def_vars)),
@@ -581,7 +588,8 @@ fn solve(
                             env: saved_env,
                             mark,
                         } = solve(
-                            &env,
+                            arena,
+                            env,
                             state,
                             next_rank,
                             pools,
@@ -660,7 +668,7 @@ fn solve(
                         // Now solve the body, using the new vars_by_symbol which includes
                         // the assignments' name-to-variable mappings.
                         stack.push(Work::Constraint {
-                            env: new_env,
+                            env: arena.alloc(new_env),
                             rank,
                             constraint: ret_con,
                             after: Some(After::CheckForInfiniteTypes(local_def_vars)),
