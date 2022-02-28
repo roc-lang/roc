@@ -915,6 +915,15 @@ pub fn ordering_type() -> SolvedType {
 }
 
 #[inline(always)]
+pub fn pair_type(t1: SolvedType, t2: SolvedType) -> SolvedType {
+    // [ Pair t1 t2 ]
+    SolvedType::TagUnion(
+        vec![(TagName::Global("Pair".into()), vec![t1, t2])],
+        Box::new(SolvedType::EmptyTagUnion),
+    )
+}
+
+#[inline(always)]
 pub fn result_type(a: SolvedType, e: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::RESULT_RESULT,

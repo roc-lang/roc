@@ -1141,6 +1141,7 @@ define_builtins! {
         55 LIST_SORT_ASC: "sortAsc"
         56 LIST_SORT_DESC: "sortDesc"
         57 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
+        58 LIST_REPLACE: "replace"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
