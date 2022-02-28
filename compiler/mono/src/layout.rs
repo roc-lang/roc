@@ -2720,7 +2720,7 @@ fn unwrap_num_tag<'a>(
             Ok(Layout::default_integer())
         }
         other => {
-            todo!("TODO non structure Num.@Num flat_type {:?}", other);
+            todo!("TODO non structure Num.$Num flat_type {:?}", other);
         }
     }
 }

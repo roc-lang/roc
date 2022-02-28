@@ -4235,11 +4235,11 @@ mod test_reporting {
     }
 
     #[test]
-    fn qualified_private_tag() {
+    fn qualified_opaque_type() {
         report_problem_as(
             indoc!(
                 r#"
-                @Foo.Bar
+                $Foo.Bar
                 "#
             ),
             indoc!(
@@ -4248,11 +4248,11 @@ mod test_reporting {
 
                 I am very confused by this expression:
 
-                1│  @Foo.Bar
+                1│  $Foo.Bar
                         ^^^^
 
-                Looks like a private tag is treated like a module name. Maybe you
-                wanted a qualified name, like Json.Decode.string?
+                Looks like an opaque reference is treated like a module name. Maybe
+                you wanted a qualified name, like Json.Decode.string?
             "#
             ),
         )
@@ -5800,19 +5800,20 @@ I need all branches in an `if` to have the same type!
 
     #[test]
     fn private_tag_not_uppercase() {
+        // Error message doesn't seem correct, should not contain `tag names`
         report_problem_as(
             indoc!(
                 r#"
-                Num.add @foo 23
+                Num.add $foo 23
                 "#
             ),
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                I am trying to parse a private tag here:
+                I am trying to parse an opaque reference here:
 
-                1│  Num.add @foo 23
+                1│  Num.add $foo 23
                              ^
 
                 But after the `@` symbol I found a lowercase letter. All tag names
@@ -5828,7 +5829,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                @UUID.bar
+                $UUID.bar
                 "#
             ),
             indoc!(
@@ -5837,10 +5838,10 @@ I need all branches in an `if` to have the same type!
 
                 I am very confused by this field access:
 
-                1│  @UUID.bar
+                1│  $UUID.bar
                          ^^^^
 
-                It looks like a record field access on a private tag.
+                It looks like a record field access on an opaque reference.
             "#
             ),
         )
@@ -6122,7 +6123,7 @@ I need all branches in an `if` to have the same type!
                 app "test-base64"
                     packages { pf: "platform" }
                     imports [pf.Task, Base64 ]
-                    provides [ main, @Foo ] to pf
+                    provides [ main, $Foo ] to pf
                 "#
             ),
             indoc!(
@@ -6132,7 +6133,7 @@ I need all branches in an `if` to have the same type!
                 I am partway through parsing a provides list, but I got stuck here:
 
                 3│      imports [pf.Task, Base64 ]
-                4│      provides [ main, @Foo ] to pf
+                4│      provides [ main, $Foo ] to pf
                                          ^
 
                 I was expecting a type name, value name or function name next, like
@@ -6187,7 +6188,7 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 interface Foobar
-                    exposes [ main, @Foo ]
+                    exposes [ main, $Foo ]
                     imports [pf.Task, Base64 ]
                 "#
             ),
@@ -6198,7 +6199,7 @@ I need all branches in an `if` to have the same type!
                 I am partway through parsing an `exposes` list, but I got stuck here:
 
                 1│  interface Foobar
-                2│      exposes [ main, @Foo ]
+                2│      exposes [ main, $Foo ]
                                         ^
 
                 I was expecting a type name, value name or function name next, like
@@ -6215,7 +6216,7 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 interface foobar
-                    exposes [ main, @Foo ]
+                    exposes [ main, $Foo ]
                     imports [pf.Task, Base64 ]
                 "#
             ),
@@ -6241,7 +6242,7 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 app foobar
-                    exposes [ main, @Foo ]
+                    exposes [ main, $Foo ]
                     imports [pf.Task, Base64 ]
                 "#
             ),
@@ -7421,11 +7422,11 @@ I need all branches in an `if` to have the same type!
                                 {}
 
                         The first pattern is trying to match {}:
-        
+
                             {}
-        
+
                         But the expression between `when` and `is` has the type:
-        
+
                             {}
                         "#
                     ), number, $suffix, carets, kind, typ, bad_type),
