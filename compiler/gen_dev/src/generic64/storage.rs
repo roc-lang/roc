@@ -181,6 +181,27 @@ impl<
         self.fn_call_stack_size = 0;
     }
 
+    pub fn clone(&self) -> Self {
+        Self {
+            phantom_asm: PhantomData,
+            phantom_cc: PhantomData,
+            env: self.env,
+            target_info: self.target_info,
+            symbol_storage_map: self.symbol_storage_map.clone(),
+            allocation_map: self.allocation_map.clone(),
+            join_param_map: self.join_param_map.clone(),
+            general_free_regs: self.general_free_regs.clone(),
+            general_used_regs: self.general_used_regs.clone(),
+            general_used_callee_saved_regs: self.general_used_callee_saved_regs.clone(),
+            float_free_regs: self.float_free_regs.clone(),
+            float_used_regs: self.float_used_regs.clone(),
+            float_used_callee_saved_regs: self.float_used_callee_saved_regs.clone(),
+            free_stack_chunks: self.free_stack_chunks.clone(),
+            stack_size: self.stack_size,
+            fn_call_stack_size: self.fn_call_stack_size,
+        }
+    }
+
     pub fn target_info(&self) -> TargetInfo {
         self.target_info
     }
@@ -825,6 +846,36 @@ impl<
             x => {
                 self.symbol_storage_map.insert(*sym, x);
             }
+        }
+    }
+
+    /// Frees all symbols to the stack setuping up a clean slate.
+    pub fn free_all_to_stack(&mut self, buf: &mut Vec<'a, u8>) {
+        let mut free_list = bumpalo::vec![in self.env.arena];
+        for (sym, storage) in self.symbol_storage_map.iter() {
+            match storage {
+                Reg(reg_storage)
+                | Stack(Primitive {
+                    reg: Some(reg_storage),
+                    ..
+                }) => {
+                    free_list.push((*sym, *reg_storage));
+                }
+                _ => {}
+            }
+        }
+        for (sym, reg_storage) in free_list {
+            match reg_storage {
+                General(reg) => {
+                    self.general_free_regs.push(reg);
+                    self.general_used_regs.retain(|(r, _)| *r != reg);
+                }
+                Float(reg) => {
+                    self.float_free_regs.push(reg);
+                    self.float_used_regs.retain(|(r, _)| *r != reg);
+                }
+            }
+            self.free_to_stack(buf, &sym, reg_storage);
         }
     }
 

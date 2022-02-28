@@ -550,6 +550,10 @@ impl<
         default_branch: &(BranchInfo<'a>, &'a Stmt<'a>),
         ret_layout: &Layout<'a>,
     ) {
+        // Free everything to the stack to make sure they don't get messed with in the branch.
+        // TODO: look into a nicer solution.
+        self.storage_manager.free_all_to_stack(&mut self.buf);
+
         // Switches are a little complex due to keeping track of jumps.
         // In general I am trying to not have to loop over things multiple times or waste memory.
         // The basic plan is to make jumps to nowhere and then correct them once we know the correct address.
@@ -557,6 +561,7 @@ impl<
             .storage_manager
             .load_to_general_reg(&mut self.buf, cond_symbol);
 
+        let mut base_storage = self.storage_manager.clone();
         let mut ret_jumps = bumpalo::vec![in self.env.arena];
         let mut tmp = bumpalo::vec![in self.env.arena];
         for (val, _branch_info, stmt) in branches.iter() {
@@ -568,6 +573,7 @@ impl<
             let start_offset = ASM::jne_reg64_imm64_imm32(&mut self.buf, cond_reg, *val, 0);
 
             // Build all statements in this branch.
+            self.storage_manager = base_storage.clone();
             self.build_stmt(stmt, ret_layout);
 
             // Build unconditional jump to the end of this switch.
@@ -583,7 +589,10 @@ impl<
             for (i, byte) in tmp.iter().enumerate() {
                 self.buf[jne_location + i] = *byte;
             }
+
+            base_storage.update_fn_call_stack_size(self.storage_manager.fn_call_stack_size());
         }
+        self.storage_manager = base_storage;
         let (_branch_info, stmt) = default_branch;
         self.build_stmt(stmt, ret_layout);
 
@@ -607,6 +616,10 @@ impl<
         remainder: &'a Stmt<'a>,
         ret_layout: &Layout<'a>,
     ) {
+        // Free everything to the stack to make sure they don't get messed with in the branch.
+        // TODO: look into a nicer solution.
+        self.storage_manager.free_all_to_stack(&mut self.buf);
+
         // Ensure all the joinpoint parameters have storage locations.
         // On jumps to the joinpoint, we will overwrite those locations as a way to "pass parameters" to the joinpoint.
         self.storage_manager
@@ -617,8 +630,10 @@ impl<
         let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
 
         // Build all statements in body.
+        let mut base_storage = self.storage_manager.clone();
         self.join_map.insert(*id, self.buf.len() as u64);
         self.build_stmt(body, ret_layout);
+        base_storage.update_fn_call_stack_size(self.storage_manager.fn_call_stack_size());
 
         // Overwrite the original jump with the correct offset.
         let mut tmp = bumpalo::vec![in self.env.arena];
