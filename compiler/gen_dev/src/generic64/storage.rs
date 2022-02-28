@@ -967,6 +967,20 @@ impl<
                 reg: None,
             }),
         );
+        self.allocation_map.insert(*sym, Rc::new((base_offset, 8)));
+    }
+
+    /// Specifies a complex is loaded at the specific base offset.
+    pub fn complex_stack_arg(&mut self, sym: &Symbol, base_offset: i32, size: u32) {
+        self.symbol_storage_map
+            .insert(*sym, Stack(Complex { base_offset, size }));
+        self.allocation_map
+            .insert(*sym, Rc::new((base_offset, size)));
+    }
+
+    /// Specifies a no data exists.
+    pub fn no_data_arg(&mut self, sym: &Symbol) {
+        self.symbol_storage_map.insert(*sym, NoData);
     }
 
     /// Loads the arg pointer symbol to the specified general reg.

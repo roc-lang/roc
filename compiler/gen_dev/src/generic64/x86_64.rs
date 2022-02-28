@@ -216,6 +216,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             general_i += 1;
         }
         for (layout, sym) in args.iter() {
+            let stack_size = layout.stack_size(TARGET_INFO);
             match layout {
                 single_register_integers!() => {
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
@@ -248,7 +249,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                         todo!("loading lists and strings args on the stack");
                     }
                 }
-                x if x.stack_size(TARGET_INFO) == 0 => {}
+                _ if stack_size == 0 => {
+                    storage_manager.no_data_arg(sym);
+                }
+                _ if stack_size > 16 => {
+                    // TODO: Double check this.
+                    storage_manager.complex_stack_arg(sym, arg_offset, stack_size);
+                    arg_offset += stack_size as i32;
+                }
                 x => {
                     todo!("Loading args with layout {:?}", x);
                 }
