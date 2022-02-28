@@ -21,9 +21,7 @@ pub fn run_solve(
     constraint: Constraint,
     var_store: VarStore,
 ) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
-    let env = solve::Env {
-        vars_by_symbol: MutMap::default(),
-    };
+    let env = solve::Env::default();
 
     let mut subs = Subs::new_from_varstore(var_store);
 

@@ -78,10 +78,14 @@ pub enum TypeError {
 
 #[derive(Clone, Debug, Default)]
 pub struct Env {
-    pub vars_by_symbol: MutMap<Symbol, Variable>,
+    vars_by_symbol: MutMap<Symbol, Variable>,
 }
 
 impl Env {
+    pub fn vars_by_symbol(&self) -> MutMap<Symbol, Variable> {
+        self.vars_by_symbol.clone()
+    }
+
     fn get_var_by_symbol(&self, symbol: &Symbol) -> Option<Variable> {
         self.vars_by_symbol.get(symbol).copied()
     }
