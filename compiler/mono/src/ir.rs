@@ -1,6 +1,5 @@
 #![allow(clippy::manual_map)]
 
-use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
     RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
@@ -10,6 +9,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
+use roc_exhaustive::{Ctor, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -95,7 +95,7 @@ pub enum OptLevel {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MonoProblem {
-    PatternProblem(crate::exhaustive::Error),
+    PatternProblem(roc_exhaustive::Error),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1895,7 +1895,7 @@ fn patterns_to_when<'a>(
     // see https://github.com/rtfeldman/roc/issues/786
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
     for (pattern_var, pattern) in patterns.into_iter() {
-        let context = crate::exhaustive::Context::BadArg;
+        let context = roc_exhaustive::Context::BadArg;
         let mono_pattern = match from_can_pattern(env, layout_cache, &pattern.value) {
             Ok((pat, _assignments)) => {
                 // Don't apply any assignments (e.g. to initialize optional variables) yet.
@@ -1917,11 +1917,11 @@ fn patterns_to_when<'a>(
             }
         };
 
-        match crate::exhaustive::check(
+        match crate::exhaustive_wrap::check(
             pattern.region,
             &[(
                 Loc::at(pattern.region, mono_pattern),
-                crate::exhaustive::Guard::NoGuard,
+                roc_exhaustive::Guard::NoGuard,
             )],
             context,
         ) {
@@ -3279,12 +3279,12 @@ pub fn with_hole<'a>(
                         }
                     };
 
-                let context = crate::exhaustive::Context::BadDestruct;
-                match crate::exhaustive::check(
+                let context = roc_exhaustive::Context::BadDestruct;
+                match crate::exhaustive_wrap::check(
                     def.loc_pattern.region,
                     &[(
                         Loc::at(def.loc_pattern.region, mono_pattern.clone()),
-                        crate::exhaustive::Guard::NoGuard,
+                        roc_exhaustive::Guard::NoGuard,
                     )],
                     context,
                 ) {
@@ -5619,12 +5619,12 @@ pub fn from_can<'a>(
                     hole,
                 )
             } else {
-                let context = crate::exhaustive::Context::BadDestruct;
-                match crate::exhaustive::check(
+                let context = roc_exhaustive::Context::BadDestruct;
+                match crate::exhaustive_wrap::check(
                     def.loc_pattern.region,
                     &[(
                         Loc::at(def.loc_pattern.region, mono_pattern.clone()),
-                        crate::exhaustive::Guard::NoGuard,
+                        roc_exhaustive::Guard::NoGuard,
                     )],
                     context,
                 ) {
@@ -5750,11 +5750,11 @@ fn to_opt_branches<'a>(
     // NOTE exhaustiveness is checked after the construction of all the branches
     // In contrast to elm (currently), we still do codegen even if a pattern is non-exhaustive.
     // So we not only report exhaustiveness errors, but also correct them
-    let context = crate::exhaustive::Context::BadCase;
-    match crate::exhaustive::check(region, &loc_branches, context) {
+    let context = roc_exhaustive::Context::BadCase;
+    match crate::exhaustive_wrap::check(region, &loc_branches, context) {
         Ok(_) => {}
         Err(errors) => {
-            use crate::exhaustive::Error::*;
+            use roc_exhaustive::Error::*;
             let mut is_not_exhaustive = false;
             let mut overlapping_branches = std::vec::Vec::new();
 
@@ -7657,12 +7657,12 @@ pub enum Pattern<'a> {
     BitLiteral {
         value: bool,
         tag_name: TagName,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
     },
     EnumLiteral {
         tag_id: u8,
         tag_name: TagName,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
     },
     StrLiteral(Box<str>),
 
@@ -7676,7 +7676,7 @@ pub enum Pattern<'a> {
         tag_id: TagIdIntType,
         arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
         layout: UnionLayout<'a>,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
     },
     OpaqueUnwrap {
         opaque: Symbol,
@@ -7817,8 +7817,8 @@ fn from_can_pattern_help<'a>(
             arguments,
             ..
         } => {
-            use crate::exhaustive::Union;
             use crate::layout::UnionVariant::*;
+            use roc_exhaustive::Union;
 
             let res_variant =
                 crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.target_info)
@@ -7883,7 +7883,7 @@ fn from_can_pattern_help<'a>(
                         })
                     }
 
-                    let union = crate::exhaustive::Union {
+                    let union = roc_exhaustive::Union {
                         render_as: RenderAs::Tag,
                         alternatives: ctors,
                     };
@@ -7974,7 +7974,7 @@ fn from_can_pattern_help<'a>(
                                 })
                             }
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -8026,7 +8026,7 @@ fn from_can_pattern_help<'a>(
                                 })
                             }
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -8069,7 +8069,7 @@ fn from_can_pattern_help<'a>(
                                 arity: fields.len(),
                             });
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -8139,7 +8139,7 @@ fn from_can_pattern_help<'a>(
                                 });
                             }
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -8194,7 +8194,7 @@ fn from_can_pattern_help<'a>(
                                 arity: other_fields.len() - 1,
                             });
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };

@@ -1,7 +1,6 @@
-use crate::{ir::DestructType, layout::TagIdIntType};
 use roc_collections::all::{Index, MutMap};
-use roc_module::ident::{Lowercase, TagName};
-use roc_region::all::{Loc, Region};
+use roc_module::ident::{Lowercase, TagIdIntType, TagName};
+use roc_region::all::Region;
 use roc_std::RocDec;
 
 use self::Pattern::*;
@@ -63,96 +62,6 @@ pub enum Literal {
     Str(Box<str>),
 }
 
-fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
-    use crate::ir::Pattern::*;
-
-    match pattern {
-        IntLiteral(v, _) => Literal(Literal::Int(*v)),
-        U128Literal(v) => Literal(Literal::U128(*v)),
-        FloatLiteral(v, _) => Literal(Literal::Float(*v)),
-        DecimalLiteral(v) => Literal(Literal::Decimal(*v)),
-        StrLiteral(v) => Literal(Literal::Str(v.clone())),
-
-        // To make sure these are exhaustive, we have to "fake" a union here
-        BitLiteral { value, union, .. } => {
-            Ctor(union.clone(), TagId(*value as TagIdIntType), vec![])
-        }
-        EnumLiteral { tag_id, union, .. } => {
-            Ctor(union.clone(), TagId(*tag_id as TagIdIntType), vec![])
-        }
-
-        Underscore => Anything,
-        Identifier(_) => Anything,
-        RecordDestructure(destructures, _) => {
-            let tag_id = TagId(0);
-            let mut patterns = std::vec::Vec::with_capacity(destructures.len());
-            let mut field_names = std::vec::Vec::with_capacity(destructures.len());
-
-            for destruct in destructures {
-                field_names.push(destruct.label.clone());
-
-                match &destruct.typ {
-                    DestructType::Required(_) => patterns.push(Anything),
-                    DestructType::Guard(guard) => patterns.push(simplify(guard)),
-                }
-            }
-
-            let union = Union {
-                render_as: RenderAs::Record(field_names),
-                alternatives: vec![Ctor {
-                    name: TagName::Global("#Record".into()),
-                    tag_id,
-                    arity: destructures.len(),
-                }],
-            };
-
-            Ctor(union, tag_id, patterns)
-        }
-
-        NewtypeDestructure {
-            arguments,
-            tag_name,
-        } => {
-            let tag_id = 0;
-            let simplified_args: std::vec::Vec<_> =
-                arguments.iter().map(|v| simplify(&v.0)).collect();
-            Ctor(
-                Union::newtype_wrapper(tag_name.clone(), arguments.len()),
-                TagId(tag_id),
-                simplified_args,
-            )
-        }
-
-        AppliedTag {
-            tag_id,
-            arguments,
-            union,
-            ..
-        } => {
-            let simplified_args: std::vec::Vec<_> =
-                arguments.iter().map(|v| simplify(&v.0)).collect();
-            Ctor(union.clone(), TagId(*tag_id), simplified_args)
-        }
-
-        OpaqueUnwrap { opaque, argument } => {
-            let (argument, _) = &(**argument);
-
-            let tag_id = TagId(0);
-
-            let union = Union {
-                render_as: RenderAs::Opaque,
-                alternatives: vec![Ctor {
-                    name: TagName::Private(*opaque),
-                    tag_id,
-                    arity: 1,
-                }],
-            };
-
-            Ctor(union, tag_id, vec![simplify(argument)])
-        }
-    }
-}
-
 /// Error
 
 #[derive(Clone, Debug, PartialEq)]
@@ -180,42 +89,22 @@ pub enum Guard {
 
 /// Check
 
-pub fn check(
+pub fn check<'a>(
     region: Region,
-    patterns: &[(Loc<crate::ir::Pattern>, Guard)],
     context: Context,
+    matrix: Vec<Vec<Pattern>>,
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
-    check_patterns(region, context, patterns, &mut errors);
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
+    let bad_patterns = is_exhaustive(&matrix, 1);
+    if !bad_patterns.is_empty() {
+        // TODO i suspect this is like a concat in in practice? code below can panic
+        // if this debug_assert! ever fails, the theory is disproven
+        debug_assert!(bad_patterns.iter().map(|v| v.len()).sum::<usize>() == bad_patterns.len());
+        let heads = bad_patterns.into_iter().map(|mut v| v.remove(0)).collect();
+        errors.push(Error::Incomplete(region, context, heads));
+        return Err(errors);
     }
-}
-
-pub fn check_patterns<'a>(
-    region: Region,
-    context: Context,
-    patterns: &[(Loc<crate::ir::Pattern<'a>>, Guard)],
-    errors: &mut Vec<Error>,
-) {
-    match to_nonredundant_rows(region, patterns) {
-        Err(err) => errors.push(err),
-        Ok(matrix) => {
-            let bad_patterns = is_exhaustive(&matrix, 1);
-            if !bad_patterns.is_empty() {
-                // TODO i suspect this is like a concat in in practice? code below can panic
-                // if this debug_assert! ever fails, the theory is disproven
-                debug_assert!(
-                    bad_patterns.iter().map(|v| v.len()).sum::<usize>() == bad_patterns.len()
-                );
-                let heads = bad_patterns.into_iter().map(|mut v| v.remove(0)).collect();
-                errors.push(Error::Incomplete(region, context, heads));
-            }
-        }
-    }
+    Ok(())
 }
 
 /// EXHAUSTIVE PATTERNS
@@ -326,76 +215,8 @@ fn recover_ctor(
     rest
 }
 
-/// REDUNDANT PATTERNS
-
-/// INVARIANT: Produces a list of rows where (forall row. length row == 1)
-fn to_nonredundant_rows(
-    overall_region: Region,
-    patterns: &[(Loc<crate::ir::Pattern>, Guard)],
-) -> Result<Vec<Vec<Pattern>>, Error> {
-    let mut checked_rows = Vec::with_capacity(patterns.len());
-
-    // If any of the branches has a guard, e.g.
-    //
-    // when x is
-    //      y if y < 10 -> "foo"
-    //      _ -> "bar"
-    //
-    // then we treat it as a pattern match on the pattern and a boolean, wrapped in the #Guard
-    // constructor. We can use this special constructor name to generate better error messages.
-    // This transformation of the pattern match only works because we only report exhaustiveness
-    // errors: the Pattern created in this file is not used for code gen.
-    //
-    // when x is
-    //      #Guard y True -> "foo"
-    //      #Guard _ _    -> "bar"
-    let any_has_guard = patterns.iter().any(|(_, guard)| guard == &Guard::HasGuard);
-
-    for (loc_pat, guard) in patterns {
-        let region = loc_pat.region;
-
-        let next_row = if any_has_guard {
-            let guard_pattern = match guard {
-                Guard::HasGuard => Pattern::Literal(Literal::Bit(true)),
-                Guard::NoGuard => Pattern::Anything,
-            };
-
-            let tag_id = TagId(0);
-
-            let union = Union {
-                render_as: RenderAs::Guard,
-                alternatives: vec![Ctor {
-                    tag_id,
-                    name: TagName::Global("#Guard".into()),
-                    arity: 2,
-                }],
-            };
-
-            vec![Pattern::Ctor(
-                union,
-                tag_id,
-                vec![simplify(&loc_pat.value), guard_pattern],
-            )]
-        } else {
-            vec![simplify(&loc_pat.value)]
-        };
-
-        if matches!(guard, Guard::HasGuard) || is_useful(checked_rows.clone(), next_row.clone()) {
-            checked_rows.push(next_row);
-        } else {
-            return Err(Error::Redundant {
-                overall_region,
-                branch_region: region,
-                index: Index::zero_based(checked_rows.len()),
-            });
-        }
-    }
-
-    Ok(checked_rows)
-}
-
 /// Check if a new row "vector" is useful given previous rows "matrix"
-fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
+pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
     let mut matrix = Vec::with_capacity(old_matrix.len());
 
     // this loop ping-pongs the rows between old_matrix and matrix
