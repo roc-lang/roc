@@ -78,25 +78,29 @@ pub enum TypeError {
 
 #[derive(Clone, Debug, Default)]
 pub struct Env {
-    vars_by_symbol: MutMap<Symbol, Variable>,
+    vars_by_symbol: Vec<(Symbol, Variable)>,
 }
 
 impl Env {
     pub fn vars_by_symbol(&self) -> MutMap<Symbol, Variable> {
-        self.vars_by_symbol.clone()
+        self.vars_by_symbol.iter().copied().collect()
     }
 
     fn get_var_by_symbol(&self, symbol: &Symbol) -> Option<Variable> {
-        self.vars_by_symbol.get(symbol).copied()
+        self.vars_by_symbol
+            .iter()
+            .find(|(s, _)| s == symbol)
+            .map(|(_, var)| *var)
     }
 
     fn insert_symbol_var_if_vacant(&mut self, symbol: Symbol, var: Variable) {
-        match self.vars_by_symbol.entry(symbol) {
-            Entry::Occupied(_) => {
-                // keep the existing value
+        match self.get_var_by_symbol(&symbol) {
+            None => {
+                // symbol is not in vars_by_symbol yet; insert it
+                self.vars_by_symbol.push((symbol, var))
             }
-            Entry::Vacant(vacant) => {
-                vacant.insert(var);
+            Some(_) => {
+                // do nothing
             }
         }
     }
