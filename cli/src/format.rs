@@ -25,7 +25,49 @@ use roc_parse::{
 };
 use roc_region::all::{Loc, Region};
 
+fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> {
+    let mut to_flatten = files;
+    let mut files = vec![];
+
+    while let Some(path) = to_flatten.pop() {
+        if path.is_dir() {
+            match path.read_dir() {
+                Ok(directory) => {
+                    for item in directory {
+                        match item {
+                            Ok(file) => {
+                                let file_path = file.path();
+                                if file_path.is_dir() {
+                                    to_flatten.push(file_path);
+                                } else if file_path.ends_with(".roc") {
+                                    files.push(file_path);
+                                }
+                            }
+
+                            Err(error) => internal_error!(
+                                "There was an error while trying to read a file from a directory: {:?}",
+                                error
+                            ),
+                        }
+                    }
+                }
+
+                Err(error) => internal_error!(
+                    "There was an error while trying to read the contents of a directory: {:?}",
+                    error
+                ),
+            }
+        } else {
+            files.push(path)
+        }
+    }
+
+    files
+}
+
 pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
+    let files = flatten_directories(files);
+
     for file in files {
         let arena = Bump::new();
 
@@ -565,6 +607,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
+            Expr::SingleQuote(a) => Expr::Num(a),
         }
     }
 }
@@ -607,6 +650,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             }
             Pattern::SpaceBefore(a, _) => a.remove_spaces(arena),
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
+            Pattern::SingleQuote(a) => Pattern::NumLiteral(a),
         }
     }
 }

@@ -119,6 +119,8 @@ pub fn target_machine(
 pub fn convert_opt_level(level: OptLevel) -> OptimizationLevel {
     match level {
         OptLevel::Development | OptLevel::Normal => OptimizationLevel::None,
+        // Default is O2/Os. If we want Oz, we have to explicitly turn of loop vectorization as well.
+        OptLevel::Size => OptimizationLevel::Default,
         OptLevel::Optimize => OptimizationLevel::Aggressive,
     }
 }

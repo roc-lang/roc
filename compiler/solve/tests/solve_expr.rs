@@ -5274,4 +5274,239 @@ mod solve_expr {
             r#"{ toI128 : Int * -> I128, toI16 : Int * -> I16, toI32 : Int * -> I32, toI64 : Int * -> I64, toI8 : Int * -> I8, toU128 : Int * -> U128, toU16 : Int * -> U16, toU32 : Int * -> U32, toU64 : Int * -> U64, toU8 : Int * -> U8 }"#,
         )
     }
+
+    #[test]
+    fn opaque_wrap_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                $Age 21
+                "#
+            ),
+            r#"Age"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                a : Age
+                a = $Age 21
+
+                a
+                "#
+            ),
+            r#"Age"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                $Id (Id 21 "sasha")
+                "#
+            ),
+            r#"Id Str"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                a : Id Str
+                a = $Id (Id 21 "sasha")
+
+                a
+                "#
+            ),
+            r#"Id Str"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_from_multiple_branches_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+                condition : Bool
+
+                if condition
+                then $Id (Id 21 (Y "sasha"))
+                else $Id (Id 21 (Z "felix"))
+                "#
+            ),
+            r#"Id [ Y Str, Z Str ]*"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_from_multiple_branches_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+                condition : Bool
+
+                v : Id [ Y Str, Z Str ]
+                v = 
+                    if condition
+                    then $Id (Id 21 (Y "sasha"))
+                    else $Id (Id 21 (Z "felix"))
+
+                v
+                "#
+            ),
+            r#"Id [ Y Str, Z Str ]"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                \$Age n -> n
+                "#
+            ),
+            r#"Age -> U32"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                v : Age -> U32
+                v = \$Age n -> n
+                v
+                "#
+            ),
+            r#"Age -> U32"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                \$Id (Id _ n) -> n
+                "#
+            ),
+            r#"Id a -> a"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                v : Id a -> a
+                v = \$Id (Id _ n) -> n
+
+                v
+                "#
+            ),
+            r#"Id a -> a"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_specialized_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                strToBool : Str -> Bool
+
+                \$Id (Id _ n) -> strToBool n
+                "#
+            ),
+            r#"Id Str -> Bool"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_specialized_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                strToBool : Str -> Bool
+
+                v : Id Str -> Bool
+                v = \$Id (Id _ n) -> strToBool n
+
+                v
+                "#
+            ),
+            r#"Id Str -> Bool"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_from_multiple_branches_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                \id ->
+                    when id is
+                        $Id (Id _ A) -> ""
+                        $Id (Id _ B) -> ""
+                        $Id (Id _ (C { a: "" })) -> ""
+                "#
+            ),
+            r#"Id [ A, B, C { a : Str }* ] -> Str"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_from_multiple_branches_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                f : Id [ A, B, C { a : Str }e ] -> Str
+                f = \id ->
+                    when id is
+                        $Id (Id _ A) -> ""
+                        $Id (Id _ B) -> ""
+                        $Id (Id _ (C { a: "" })) -> ""
+
+                f
+                "#
+            ),
+            r#"Id [ A, B, C { a : Str }e ] -> Str"#,
+        )
+    }
 }

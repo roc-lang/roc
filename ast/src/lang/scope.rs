@@ -43,7 +43,8 @@ fn to_type2(
     var_store: &mut VarStore,
 ) -> Type2 {
     match solved_type {
-        SolvedType::Alias(symbol, solved_type_variables, _todo, solved_actual) => {
+        // TODO(opaques): take opaques into account
+        SolvedType::Alias(symbol, solved_type_variables, _todo, solved_actual, _kind) => {
             let type_variables = PoolVec::with_capacity(solved_type_variables.len() as u32, pool);
 
             for (type_variable_node_id, (lowercase, solved_arg)) in type_variables
