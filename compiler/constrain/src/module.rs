@@ -47,7 +47,7 @@ pub fn constrain_imported_values(
 
         // an imported symbol can be either an alias or a value
         match import.solved_type {
-            SolvedType::Alias(symbol, _, _, _) if symbol == loc_symbol.value => {
+            SolvedType::Alias(symbol, _, _, _, _) if symbol == loc_symbol.value => {
                 // do nothing, in the future the alias definitions should not be in the list of imported values
             }
             _ => {

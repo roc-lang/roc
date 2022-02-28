@@ -103,8 +103,8 @@ fn generate_object_file(
 
     println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
 
-    // we store this .o file in rust's `target` folder
-    run_command(&bitcode_path, "mv", &[src_obj, dest_obj]);
+    // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
+    run_command(&bitcode_path, "cp", &[src_obj, dest_obj]);
 }
 
 fn generate_bc_file(

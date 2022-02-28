@@ -136,6 +136,7 @@ pub struct Palette<'a> {
     pub type_variable: &'a str,
     pub structure: &'a str,
     pub alias: &'a str,
+    pub opaque: &'a str,
     pub error: &'a str,
     pub line_number: &'a str,
     pub header: &'a str,
@@ -155,6 +156,7 @@ pub const DEFAULT_PALETTE: Palette = Palette {
     type_variable: YELLOW_CODE,
     structure: GREEN_CODE,
     alias: YELLOW_CODE,
+    opaque: YELLOW_CODE,
     error: RED_CODE,
     line_number: CYAN_CODE,
     header: CYAN_CODE,
@@ -324,6 +326,29 @@ impl<'a> RocDocAllocator<'a> {
     pub fn global_tag_name(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
         self.text(format!("{}", uppercase))
             .annotate(Annotation::GlobalTag)
+    }
+
+    pub fn opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
+        let fmt = if opaque.module_id() == self.home {
+            // Render it unqualified if it's in the current module.
+            format!("{}", opaque.ident_str(self.interns))
+        } else {
+            format!(
+                "{}.{}",
+                opaque.module_string(self.interns),
+                opaque.ident_str(self.interns),
+            )
+        };
+
+        self.text(fmt).annotate(Annotation::Opaque)
+    }
+
+    pub fn wrapped_opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
+        debug_assert_eq!(opaque.module_id(), self.home, "Opaque wrappings can only be defined in the same module they're defined in, but this one is defined elsewhere: {:?}", opaque);
+
+        // TODO(opaques): $->@
+        self.text(format!("${}", opaque.ident_str(self.interns)))
+            .annotate(Annotation::Opaque)
     }
 
     pub fn record_field(&'a self, lowercase: Lowercase) -> DocBuilder<'a, Self, Annotation> {
@@ -670,7 +695,7 @@ impl<'a> RocDocAllocator<'a> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Annotation {
     Emphasized,
     Url,
@@ -680,6 +705,7 @@ pub enum Annotation {
     RecordField,
     TypeVariable,
     Alias,
+    Opaque,
     Structure,
     Symbol,
     BinOp,
@@ -852,6 +878,9 @@ where
             Alias => {
                 self.write_str(self.palette.alias)?;
             }
+            Opaque => {
+                self.write_str(self.palette.alias)?;
+            }
             BinOp => {
                 self.write_str(self.palette.alias)?;
             }
@@ -906,7 +935,7 @@ where
                     self.write_str(RESET_CODE)?;
                 }
 
-                TypeBlock | GlobalTag | PrivateTag | RecordField => { /* nothing yet */ }
+                TypeBlock | GlobalTag | PrivateTag | Opaque | RecordField => { /* nothing yet */ }
             },
         }
         Ok(())

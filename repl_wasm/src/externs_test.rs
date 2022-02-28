@@ -1,7 +1,7 @@
 use futures::executor;
 
 extern "C" {
-    fn wasmer_create_app(app_bytes_ptr: *const u8, app_bytes_len: usize);
+    fn wasmer_create_app(app_bytes_ptr: *const u8, app_bytes_len: usize) -> u32;
     fn wasmer_run_app() -> usize;
     fn wasmer_get_result_and_memory(buffer_alloc_addr: *mut u8) -> usize;
     fn wasmer_copy_input_string(src_buffer_addr: *mut u8);
@@ -10,10 +10,12 @@ extern "C" {
 
 /// Async wrapper to match the equivalent JS function
 pub async fn js_create_app(wasm_module_bytes: &[u8]) -> Result<(), String> {
-    unsafe {
-        wasmer_create_app(wasm_module_bytes.as_ptr(), wasm_module_bytes.len());
+    let ok = unsafe { wasmer_create_app(wasm_module_bytes.as_ptr(), wasm_module_bytes.len()) } != 0;
+    if ok {
+        Ok(())
+    } else {
+        Err("Compiler generated an invalid Wasm module".to_string())
     }
-    Ok(())
 }
 
 pub fn js_run_app() -> usize {

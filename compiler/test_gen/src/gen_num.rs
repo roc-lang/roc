@@ -358,6 +358,66 @@ fn u8_hex_int_alias() {
 }
 
 #[test]
+fn character_literal() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = 'A'
+
+                    x
+                "#
+        ),
+        65,
+        u32
+    );
+}
+
+#[test]
+fn character_literal_back_slash() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = '\\'
+
+                    x
+                "#
+        ),
+        92,
+        u32
+    );
+}
+
+#[test]
+fn character_literal_single_quote() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = '\''
+
+                    x
+                "#
+        ),
+        39,
+        u32
+    );
+}
+
+#[test]
+fn character_literal_new_line() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = '\n'
+
+                    x
+                "#
+        ),
+        10,
+        u32
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dec_float_alias() {
     assert_evals_to!(
@@ -2486,29 +2546,21 @@ fn when_on_i16() {
 fn num_to_str() {
     use roc_std::RocStr;
 
-    assert_evals_to!(
-        r#"Num.toStr 1234"#,
-        RocStr::from_slice("1234".as_bytes()),
-        RocStr
-    );
-    assert_evals_to!(r#"Num.toStr 0"#, RocStr::from_slice("0".as_bytes()), RocStr);
-    assert_evals_to!(
-        r#"Num.toStr -1"#,
-        RocStr::from_slice("-1".as_bytes()),
-        RocStr
-    );
+    assert_evals_to!(r#"Num.toStr 1234"#, RocStr::from("1234"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1"#, RocStr::from("-1"), RocStr);
 
     let max = format!("{}", i64::MAX);
     assert_evals_to!(
         r#"Num.toStr Num.maxI64"#,
-        RocStr::from_slice(max.as_bytes()),
+        RocStr::from(max.as_str()),
         RocStr
     );
 
     let min = format!("{}", i64::MIN);
     assert_evals_to!(
         r#"Num.toStr Num.minI64"#,
-        RocStr::from_slice(min.as_bytes()),
+        RocStr::from(min.as_str()),
         RocStr
     );
 }

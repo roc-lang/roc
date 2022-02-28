@@ -1,4 +1,5 @@
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
+use roc_module::ident::TagName;
 use roc_region::all::LineInfo;
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
@@ -9,8 +10,8 @@ pub fn mono_problem<'b>(
     filename: PathBuf,
     problem: roc_mono::ir::MonoProblem,
 ) -> Report<'b> {
-    use roc_mono::exhaustive::Context::*;
-    use roc_mono::exhaustive::Error::*;
+    use roc_exhaustive::Context::*;
+    use roc_exhaustive::Error::*;
     use roc_mono::ir::MonoProblem::*;
 
     match problem {
@@ -120,7 +121,7 @@ pub fn mono_problem<'b>(
 
 pub fn unhandled_patterns_to_doc_block<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    patterns: Vec<roc_mono::exhaustive::Pattern>,
+    patterns: Vec<roc_exhaustive::Pattern>,
 ) -> RocDocBuilder<'b> {
     alloc
         .vcat(patterns.into_iter().map(|v| pattern_to_doc(alloc, v)))
@@ -130,19 +131,19 @@ pub fn unhandled_patterns_to_doc_block<'b>(
 
 fn pattern_to_doc<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    pattern: roc_mono::exhaustive::Pattern,
+    pattern: roc_exhaustive::Pattern,
 ) -> RocDocBuilder<'b> {
     pattern_to_doc_help(alloc, pattern, false)
 }
 
 fn pattern_to_doc_help<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    pattern: roc_mono::exhaustive::Pattern,
+    pattern: roc_exhaustive::Pattern,
     in_type_param: bool,
 ) -> RocDocBuilder<'b> {
-    use roc_mono::exhaustive::Literal::*;
-    use roc_mono::exhaustive::Pattern::*;
-    use roc_mono::exhaustive::RenderAs;
+    use roc_exhaustive::Literal::*;
+    use roc_exhaustive::Pattern::*;
+    use roc_exhaustive::RenderAs;
 
     match pattern {
         Anything => alloc.text("_"),
@@ -184,19 +185,26 @@ fn pattern_to_doc_help<'b>(
                         .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
                         .append(" }")
                 }
-                RenderAs::Tag => {
+                RenderAs::Tag | RenderAs::Opaque => {
                     let has_args = !args.is_empty();
                     let arg_docs = args
                         .into_iter()
                         .map(|v| pattern_to_doc_help(alloc, v, true));
 
                     let tag = &union.alternatives[tag_id.0 as usize];
-                    let tag_name = tag.name.clone();
+                    let tag_name = match union.render_as {
+                        RenderAs::Tag => alloc.tag_name(tag.name.clone()),
+                        RenderAs::Opaque => match tag.name {
+                            TagName::Private(opaque) => alloc.wrapped_opaque_name(opaque),
+                            _ => unreachable!(),
+                        },
+                        _ => unreachable!(),
+                    };
 
                     // We assume the alternatives are sorted. If not, this assert will trigger
                     debug_assert!(tag_id == tag.tag_id);
 
-                    let docs = std::iter::once(alloc.tag_name(tag_name)).chain(arg_docs);
+                    let docs = std::iter::once(tag_name).chain(arg_docs);
 
                     if in_type_param && has_args {
                         alloc

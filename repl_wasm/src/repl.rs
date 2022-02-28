@@ -64,10 +64,22 @@ impl<'a> ReplAppMemory for WasmMemory<'a> {
     deref_number!(deref_f64, f64);
 
     fn deref_str(&self, addr: usize) -> &str {
-        let elems_addr = self.deref_usize(addr);
-        let len = self.deref_usize(addr + size_of::<usize>());
-        let bytes = &self.copied_bytes[elems_addr..][..len];
-        std::str::from_utf8(bytes).unwrap()
+        // We can't use RocStr, we need our own small/big string logic.
+        // The first field is *not* a pointer. We can calculate a pointer for it, but only for big strings.
+        // If changing this code, remember it also runs in wasm32, not just the app.
+        let last_byte = self.copied_bytes[addr + 7] as i8;
+        let is_small = last_byte < 0;
+
+        let str_bytes = if is_small {
+            let len = (last_byte & 0x7f) as usize;
+            &self.copied_bytes[addr..][..len]
+        } else {
+            let chars_index = self.deref_usize(addr);
+            let len = self.deref_usize(addr + 4);
+            &self.copied_bytes[chars_index..][..len]
+        };
+
+        unsafe { std::str::from_utf8_unchecked(str_bytes) }
     }
 }
 
