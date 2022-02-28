@@ -78,26 +78,31 @@ pub enum TypeError {
 
 #[derive(Clone, Debug, Default)]
 pub struct Env {
-    vars_by_symbol: Vec<(Symbol, Variable)>,
+    symbols: Vec<Symbol>,
+    variables: Vec<Variable>,
 }
 
 impl Env {
     pub fn vars_by_symbol(&self) -> MutMap<Symbol, Variable> {
-        self.vars_by_symbol.iter().copied().collect()
+        let it1 = self.symbols.iter().copied();
+        let it2 = self.variables.iter().copied();
+
+        it1.zip(it2).collect()
     }
 
     fn get_var_by_symbol(&self, symbol: &Symbol) -> Option<Variable> {
-        self.vars_by_symbol
+        self.symbols
             .iter()
-            .find(|(s, _)| s == symbol)
-            .map(|(_, var)| *var)
+            .position(|s| s == symbol)
+            .map(|index| self.variables[index])
     }
 
     fn insert_symbol_var_if_vacant(&mut self, symbol: Symbol, var: Variable) {
-        match self.get_var_by_symbol(&symbol) {
+        match self.symbols.iter().position(|s| *s == symbol) {
             None => {
                 // symbol is not in vars_by_symbol yet; insert it
-                self.vars_by_symbol.push((symbol, var))
+                self.symbols.push(symbol);
+                self.variables.push(var);
             }
             Some(_) => {
                 // do nothing
