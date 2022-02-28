@@ -1,4 +1,5 @@
 use crate::{
+    focus::Focus,
     graphics::{
         colors::Rgba,
         lowlevel::buffer::create_rect_buffers,
@@ -231,9 +232,15 @@ fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
                 //     wgpu::LoadOp::Load,
                 // );
 
-                // TODO use with_capacity based on some heuristic
+                let focus_ancestry: Vec<(*const RocElem, usize)> = Vec::new(); // TODO test that root node can get focus!
+                let focused_elem: *const RocElem = match focus_ancestry.first() {
+                    Some((ptr_ref, _)) => *ptr_ref,
+                    None => std::ptr::null(),
+                };
+
                 let (_bounds, drawable) = to_drawable(
                     &root,
+                    focused_elem,
                     Bounds {
                         width: size.width as f32,
                         height: size.height as f32,
@@ -496,18 +503,23 @@ fn draw(
     }
 }
 
+/// focused_elem is the currently-focused element (or NULL if nothing has the focus)
 fn to_drawable(
     elem: &RocElem,
+    focused_elem: *const RocElem,
     bounds: Bounds,
     glyph_brush: &mut GlyphBrush<()>,
 ) -> (Bounds, Drawable) {
     use RocElemTag::*;
 
+    let is_focused = focused_elem == elem as *const RocElem;
+
     match elem.tag() {
         Button => {
             let button = unsafe { &elem.entry().button };
             let styles = button.styles;
-            let (child_bounds, child_drawable) = to_drawable(&*button.child, bounds, glyph_brush);
+            let (child_bounds, child_drawable) =
+                to_drawable(&*button.child, focused_elem, bounds, glyph_brush);
 
             let button_drawable = Drawable {
                 bounds: child_bounds,
@@ -574,7 +586,8 @@ fn to_drawable(
             let mut offset_entries = Vec::with_capacity(row.children.len());
 
             for child in row.children.as_slice().iter() {
-                let (child_bounds, child_drawable) = to_drawable(&child, bounds, glyph_brush);
+                let (child_bounds, child_drawable) =
+                    to_drawable(&child, focused_elem, bounds, glyph_brush);
 
                 offset_entries.push((offset, child_drawable));
 
@@ -603,7 +616,8 @@ fn to_drawable(
             let mut offset_entries = Vec::with_capacity(col.children.len());
 
             for child in col.children.as_slice().iter() {
-                let (child_bounds, child_drawable) = to_drawable(&child, bounds, glyph_brush);
+                let (child_bounds, child_drawable) =
+                    to_drawable(&child, focused_elem, bounds, glyph_brush);
 
                 offset_entries.push((offset, child_drawable));
 

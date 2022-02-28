@@ -3,7 +3,7 @@ use palette::{FromColor, Hsv, Srgb};
 
 /// This order is optimized for what Roc will send
 #[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub struct Rgba {
     a: f32,
     b: f32,
