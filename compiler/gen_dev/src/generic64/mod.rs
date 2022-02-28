@@ -361,7 +361,7 @@ impl<
         self.join_map.clear();
         self.free_map.clear();
         self.buf.clear();
-        self.helper_proc_symbols.clear();
+        // self.helper_proc_symbols.clear();
         self.storage_manager.reset();
     }
 
