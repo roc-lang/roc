@@ -615,7 +615,7 @@ impl<
     ) {
         // Free everything to the stack to make sure they don't get messed with in the branch.
         // TODO: look into a nicer solution.
-        // self.storage_manager.free_all_to_stack(&mut self.buf);
+        self.storage_manager.free_all_to_stack(&mut self.buf);
 
         // Ensure all the joinpoint parameters have storage locations.
         // On jumps to the joinpoint, we will overwrite those locations as a way to "pass parameters" to the joinpoint.

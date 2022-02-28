@@ -712,7 +712,7 @@ impl<
         }
     }
 
-    /// Copies a complex symbol ot the stack to the arg pointer.
+    /// Copies a complex symbol on the stack to the arg pointer.
     pub fn copy_symbol_to_arg_pionter(
         &mut self,
         buf: &mut Vec<'a, u8>,
