@@ -1,8 +1,6 @@
 use core::cell::Cell;
-use libc::c_char;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
 use std::collections::hash_map::DefaultHasher;
-use std::ffi::CStr;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -196,19 +194,10 @@ where
 
     match test_wrapper.call(&[]) {
         Err(e) => {
-            // Check if the error is from roc_panic
-            // Our test roc_panic stores a pointer to its message in a global variable so we can find it.
-            let panic_msg_global = instance.exports.get_global(PANIC_MSG_NAME).unwrap();
-            let panic_msg_index = panic_msg_global.get().unwrap_i32() as usize;
-            if panic_msg_index == 0 {
-                 // Pointer is null. The error isn't a roc_panic.
-                Err(e.to_string())
+            if let Some(msg) = get_roc_panic_msg(&instance, memory) {
+                Err(msg)
             } else {
-                let memory_bytes = unsafe { memory.data_unchecked() };
-                let msg_ptr = memory_bytes[panic_msg_index..].as_ptr() as *const c_char;
-                let msg_cstr = unsafe { CStr::from_ptr(msg_ptr) };
-                let msg_str = msg_cstr.to_str().unwrap();
-                Err(msg_str.into())
+                Err(e.to_string())
             }
         }
         Ok(result) => {
@@ -229,6 +218,31 @@ where
             Ok(output)
         }
     }
+}
+
+/// Our test roc_panic stores a pointer to its message in a global variable so we can find it.
+fn get_roc_panic_msg(instance: &wasmer::Instance, memory: &Memory) -> Option<String> {
+    let memory_bytes = unsafe { memory.data_unchecked() };
+
+    // We need to dereference twice!
+    // The Wasm Global only points at the memory location of the C global value
+    let panic_msg_global = instance.exports.get_global(PANIC_MSG_NAME).unwrap();
+    let global_addr = panic_msg_global.get().unwrap_i32() as usize;
+    let global_ptr = memory_bytes[global_addr..].as_ptr() as *const u32;
+
+    // Dereference again to find the bytes of the message string
+    let msg_addr = unsafe { *global_ptr };
+    if msg_addr == 0 {
+        return None;
+    }
+    let msg_index = msg_addr as usize;
+    let msg_len = memory_bytes[msg_index..]
+        .iter()
+        .position(|c| *c == 0)
+        .unwrap();
+    let msg_bytes = memory_bytes[msg_index..][..msg_len].to_vec();
+    let msg = unsafe { String::from_utf8_unchecked(msg_bytes) };
+    Some(msg)
 }
 
 #[allow(dead_code)]
