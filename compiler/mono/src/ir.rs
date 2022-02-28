@@ -1917,7 +1917,7 @@ fn patterns_to_when<'a>(
             }
         };
 
-        match crate::exhaustive_wrap::check(
+        match crate::exhaustive::check(
             pattern.region,
             &[(
                 Loc::at(pattern.region, mono_pattern),
@@ -3280,7 +3280,7 @@ pub fn with_hole<'a>(
                     };
 
                 let context = roc_exhaustive::Context::BadDestruct;
-                match crate::exhaustive_wrap::check(
+                match crate::exhaustive::check(
                     def.loc_pattern.region,
                     &[(
                         Loc::at(def.loc_pattern.region, mono_pattern.clone()),
@@ -5620,7 +5620,7 @@ pub fn from_can<'a>(
                 )
             } else {
                 let context = roc_exhaustive::Context::BadDestruct;
-                match crate::exhaustive_wrap::check(
+                match crate::exhaustive::check(
                     def.loc_pattern.region,
                     &[(
                         Loc::at(def.loc_pattern.region, mono_pattern.clone()),
@@ -5751,7 +5751,7 @@ fn to_opt_branches<'a>(
     // In contrast to elm (currently), we still do codegen even if a pattern is non-exhaustive.
     // So we not only report exhaustiveness errors, but also correct them
     let context = roc_exhaustive::Context::BadCase;
-    match crate::exhaustive_wrap::check(region, &loc_branches, context) {
+    match crate::exhaustive::check(region, &loc_branches, context) {
         Ok(_) => {}
         Err(errors) => {
             use roc_exhaustive::Error::*;

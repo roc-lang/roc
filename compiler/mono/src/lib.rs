@@ -19,4 +19,4 @@ pub mod tail_recursion;
 //pub mod decision_tree;
 pub mod decision_tree;
 #[allow(clippy::ptr_arg)]
-pub mod exhaustive_wrap;
+pub mod exhaustive;
