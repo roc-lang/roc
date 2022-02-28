@@ -1025,12 +1025,20 @@ impl<
                 todo!("joinpoints with borrowed parameters");
             }
             // Claim a location for every join point parameter to be loaded at.
+            // Put everything on the stack for simplicity.
             match layout {
-                single_register_integers!() => {
-                    self.claim_general_reg(buf, symbol);
-                }
-                single_register_floats!() => {
-                    self.claim_float_reg(buf, symbol);
+                single_register_layouts!() => {
+                    let base_offset = self.claim_stack_size(8);
+                    self.symbol_storage_map.insert(
+                        *symbol,
+                        Stack(ReferencedPrimitive {
+                            base_offset,
+                            size: 8,
+                            sign_extend: false,
+                        }),
+                    );
+                    self.allocation_map
+                        .insert(*symbol, Rc::new((base_offset, 8)));
                 }
                 _ => {
                     let stack_size = layout.stack_size(self.target_info);
@@ -1069,17 +1077,8 @@ impl<
                 continue;
             }
             match wanted_storage {
-                Reg(General(reg)) => {
-                    // Ensure the reg is free, if not free it.
-                    self.ensure_reg_free(buf, General(*reg));
-                    // Copy the value over to the reg.
-                    self.load_to_specified_general_reg(buf, sym, *reg)
-                }
-                Reg(Float(reg)) => {
-                    // Ensure the reg is free, if not free it.
-                    self.ensure_reg_free(buf, Float(*reg));
-                    // Copy the value over to the reg.
-                    self.load_to_specified_float_reg(buf, sym, *reg)
+                Reg(_) => {
+                    internal_error!("Register storage is not allowed for jumping to joinpoint")
                 }
                 Stack(ReferencedPrimitive { base_offset, .. } | Complex { base_offset, .. }) => {
                     // TODO: This might be better not to call.
@@ -1090,7 +1089,9 @@ impl<
                 }
                 NoData => {}
                 Stack(Primitive { .. }) => {
-                    internal_error!("Primitive stack storage is not allowed for jumping")
+                    internal_error!(
+                        "Primitive stack storage is not allowed for jumping to joinpoint"
+                    )
                 }
             }
         }

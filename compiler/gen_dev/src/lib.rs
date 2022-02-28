@@ -950,15 +950,16 @@ trait Backend<'a> {
                 parameters,
                 body: continuation,
                 remainder,
-                id,
+                id: JoinPointId(sym),
                 ..
             } => {
-                join_map.insert(*id, parameters);
+                self.set_last_seen(*sym, stmt);
+                join_map.insert(JoinPointId(*sym), parameters);
                 for param in *parameters {
                     self.set_last_seen(param.symbol, stmt);
                 }
-                self.scan_ast(continuation);
                 self.scan_ast(remainder);
+                self.scan_ast(continuation);
             }
             Stmt::Jump(JoinPointId(sym), symbols) => {
                 if let Some(parameters) = join_map.get(&JoinPointId(*sym)) {
@@ -967,7 +968,6 @@ trait Backend<'a> {
                         self.set_last_seen(param.symbol, stmt);
                     }
                 }
-                self.set_last_seen(*sym, stmt);
                 for sym in *symbols {
                     self.set_last_seen(*sym, stmt);
                 }

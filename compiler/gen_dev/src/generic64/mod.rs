@@ -289,7 +289,7 @@ pub struct Backend64Bit<
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
 
     literal_map: MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>,
-    join_map: MutMap<JoinPointId, u64>,
+    join_map: MutMap<JoinPointId, Vec<'a, (u64, u64)>>,
 
     storage_manager: StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
 }
@@ -550,10 +550,6 @@ impl<
         default_branch: &(BranchInfo<'a>, &'a Stmt<'a>),
         ret_layout: &Layout<'a>,
     ) {
-        // Free everything to the stack to make sure they don't get messed with in the branch.
-        // TODO: look into a nicer solution.
-        self.storage_manager.free_all_to_stack(&mut self.buf);
-
         // Switches are a little complex due to keeping track of jumps.
         // In general I am trying to not have to loop over things multiple times or waste memory.
         // The basic plan is to make jumps to nowhere and then correct them once we know the correct address.
@@ -619,36 +615,34 @@ impl<
     ) {
         // Free everything to the stack to make sure they don't get messed with in the branch.
         // TODO: look into a nicer solution.
-        self.storage_manager.free_all_to_stack(&mut self.buf);
+        // self.storage_manager.free_all_to_stack(&mut self.buf);
 
         // Ensure all the joinpoint parameters have storage locations.
         // On jumps to the joinpoint, we will overwrite those locations as a way to "pass parameters" to the joinpoint.
         self.storage_manager
             .setup_joinpoint(&mut self.buf, id, parameters);
 
-        // Create jump to remaining.
-        let jmp_location = self.buf.len();
-        let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
+        self.join_map.insert(*id, bumpalo::vec![in self.env.arena]);
+
+        // Build remainder of function first. It is what gets run and jumps to join.
+        // self.storage_manager = base_storage;
+        self.build_stmt(remainder, ret_layout);
+
+        let join_location = self.buf.len() as u64;
 
         // Build all statements in body.
-        let mut base_storage = self.storage_manager.clone();
-        self.join_map.insert(*id, self.buf.len() as u64);
         self.build_stmt(body, ret_layout);
-        base_storage.update_stack_size(self.storage_manager.stack_size());
-        base_storage.update_fn_call_stack_size(self.storage_manager.fn_call_stack_size());
 
-        // Overwrite the original jump with the correct offset.
+        // Overwrite the all jumps to the joinpoint with the correct offset.
         let mut tmp = bumpalo::vec![in self.env.arena];
-        self.update_jmp_imm32_offset(
-            &mut tmp,
-            jmp_location as u64,
-            start_offset as u64,
-            self.buf.len() as u64,
-        );
-
-        // Build remainder of function.
-        self.storage_manager = base_storage;
-        self.build_stmt(remainder, ret_layout)
+        for (jmp_location, start_offset) in self
+            .join_map
+            .remove(id)
+            .unwrap_or_else(|| internal_error!("join point not defined"))
+        {
+            tmp.clear();
+            self.update_jmp_imm32_offset(&mut tmp, jmp_location, start_offset, join_location);
+        }
     }
 
     fn build_jump(
@@ -664,15 +658,8 @@ impl<
         let jmp_location = self.buf.len();
         let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
 
-        if let Some(offset) = self.join_map.get(id) {
-            let offset = *offset;
-            let mut tmp = bumpalo::vec![in self.env.arena];
-            self.update_jmp_imm32_offset(
-                &mut tmp,
-                jmp_location as u64,
-                start_offset as u64,
-                offset,
-            );
+        if let Some(vec) = self.join_map.get_mut(id) {
+            vec.push((jmp_location as u64, start_offset as u64))
         } else {
             internal_error!("Jump: unknown point specified to jump to: {:?}", id);
         }
