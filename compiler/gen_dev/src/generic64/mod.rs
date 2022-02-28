@@ -1071,12 +1071,11 @@ impl<
     }
 
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
-        // We may not strictly need an instruction here.
-        // What's important is to load the value, and for src and dest to have different Layouts.
-        // This is used for pointer math in refcounting and for pointer equality
         let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-        let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
-        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
+        self.storage_manager
+            .ensure_symbol_on_stack(&mut self.buf, src);
+        let (offset, _) = self.storage_manager.stack_offset_and_size(src);
+        ASM::add_reg64_reg64_imm32(&mut self.buf, dst_reg, CC::BASE_PTR_REG, offset);
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
