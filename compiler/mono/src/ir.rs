@@ -1108,7 +1108,6 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
-        // symbol.module_id() != self.home && !symbol.is_builtin()
         symbol.module_id() != self.home
     }
 }
@@ -7259,13 +7258,23 @@ fn call_by_name_help<'a>(
                 assigned,
                 hole,
             )
-        } else {
-            debug_assert!(
-                !field_symbols.is_empty(),
-                "{} should be in the list of imported_module_thunks",
-                proc_name
-            );
+        } else if field_symbols.is_empty() {
+            // this is a case like `Str.concat`, an imported standard function, applied to zero arguments
 
+            // imported symbols cannot capture anything
+            let captured= &[];
+
+            construct_closure_data(
+                env,
+                procs,
+                layout_cache,
+                lambda_set,
+                proc_name,
+                captured,
+                assigned,
+                hole,
+            )
+        } else {
             debug_assert_eq!(
                 argument_layouts.len(),
                 field_symbols.len(),

@@ -65,7 +65,7 @@ const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
-const SHOW_MESSAGE_LOG: bool = true;
+const SHOW_MESSAGE_LOG: bool = false;
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -1100,7 +1100,7 @@ fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     // When compiling to wasm, we cannot spawn extra threads
     // so we have a single-threaded implementation
-    if true || cfg!(target_family = "wasm") {
+    if cfg!(target_family = "wasm") {
         load_single_threaded(
             arena,
             load_start,
@@ -2665,8 +2665,8 @@ fn load_module<'a>(
                 keepIf : List a, (a -> Bool) -> List a
                 dropIf : List a, (a -> Bool) -> List a
 
-                keepOks : List (Result ok err) -> List ok
-                keepErrs : List (Result ok err) -> List err
+                keepOks : List before, (before -> Result after *) -> List after
+                keepErrs: List before, (before -> Result * after) -> List after
                 map : List a, (a -> b) -> List b
                 map2 : List a, List b, (a, b -> c) -> List c
                 map3 : List a, List b, List c, (a, b, c -> d) -> List d
