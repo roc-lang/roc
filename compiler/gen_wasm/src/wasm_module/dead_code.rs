@@ -70,12 +70,17 @@ pub fn parse_preloads_call_graph<'a>(
     defined_fn_signatures: &[u32],
     indirect_callees: &[u32],
 ) -> PreloadsCallGraph<'a> {
-    let mut call_graph =
-        PreloadsCallGraph::new(arena, imported_fn_signatures.len(), defined_fn_signatures.len());
+    let mut call_graph = PreloadsCallGraph::new(
+        arena,
+        imported_fn_signatures.len(),
+        defined_fn_signatures.len(),
+    );
 
     // Function type signatures, used for indirect calls
-    let mut signatures =
-        Vec::with_capacity_in(imported_fn_signatures.len() + defined_fn_signatures.len(), arena);
+    let mut signatures = Vec::with_capacity_in(
+        imported_fn_signatures.len() + defined_fn_signatures.len(),
+        arena,
+    );
     signatures.extend_from_slice(imported_fn_signatures);
     signatures.extend_from_slice(defined_fn_signatures);
 
@@ -211,11 +216,13 @@ pub fn copy_preloads_shrinking_dead_fns<'a, T: SerialBuffer>(
     live_preload_indices.sort_unstable();
     live_preload_indices.dedup();
 
-    let mut live_iter = live_preload_indices.iter();
+    let mut live_iter = live_preload_indices
+        .into_iter()
+        .filter(|f| (*f as usize) >= preload_idx_start);
     let mut next_live_idx = live_iter.next();
     for i in preload_idx_start..call_graph.num_preloads {
         match next_live_idx {
-            Some(live) if *live as usize == i => {
+            Some(live) if live as usize == i => {
                 next_live_idx = live_iter.next();
                 let live_body_start = call_graph.code_offsets[i] as usize;
                 let live_body_end = call_graph.code_offsets[i + 1] as usize;
