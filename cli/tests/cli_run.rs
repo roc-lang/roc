@@ -404,9 +404,9 @@ mod cli_run {
         //     expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
         //     use_valgrind: true,
         // },
-        effect:"effect" => Example {
-            filename: "Main.roc",
-            executable_filename: "effect-example",
+        effects:"interactive" => Example {
+            filename: "effects.roc",
+            executable_filename: "effects",
             stdin: &["hi there!"],
             input_file: None,
             expected_ending: "hi there!\nIt is known\n",

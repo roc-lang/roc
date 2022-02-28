@@ -1,5 +1,5 @@
-app "effect-example"
-    packages { pf: "platform" }
+app "effects"
+    packages { pf: "effects-platform" }
     imports [ pf.Effect ]
     provides [ main ] to pf
 
