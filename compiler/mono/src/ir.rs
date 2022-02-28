@@ -7420,8 +7420,6 @@ fn call_by_name_module_thunk<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    debug_assert!(!env.is_imported_symbol(proc_name));
-
     let top_level_layout = ProcLayout::new(env.arena, &[], *ret_layout);
 
     let inner_layout = *ret_layout;

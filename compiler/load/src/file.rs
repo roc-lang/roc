@@ -1858,8 +1858,6 @@ fn update<'a>(
 
             start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
-            dbg!(&state.dependencies);
-
             Ok(state)
         }
         Parsed(parsed) => {
@@ -2834,10 +2832,10 @@ fn load_module<'a>(
                 toUtf8 : Str -> List U8
 
                 # fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
-                # fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem, OutOfBounds ]*
+                # fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem Nat, OutOfBounds ]*
 
                 fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*
-                fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat, OutOfBounds ]*
+                fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [ BadUtf8 Utf8ByteProblem Nat, OutOfBounds ]*
 
                 startsWith : Str, Str -> Bool
                 endsWith : Str, Str -> Bool
@@ -3120,7 +3118,6 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("isNegative")),
                 Loc::at_zero(ExposedName::new("rem")),
                 Loc::at_zero(ExposedName::new("div")),
-                //Loc::at_zero(ExposedName::new("divFloor")),
                 //Loc::at_zero(ExposedName::new("modInt")),
                 //Loc::at_zero(ExposedName::new("modFloat")),
                 Loc::at_zero(ExposedName::new("sqrt")),
@@ -3145,33 +3142,31 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("subSaturated")),
                 Loc::at_zero(ExposedName::new("mulWrap")),
                 Loc::at_zero(ExposedName::new("mulChecked")),
-                /*
                 Loc::at_zero(ExposedName::new("intCast")),
                 Loc::at_zero(ExposedName::new("bytesToU16")),
                 Loc::at_zero(ExposedName::new("bytesToU32")),
-                */
-                // Loc::at_zero(ExposedName::new("divCeil")),
-                // Loc::at_zero(ExposedName::new("toStr")),
+                Loc::at_zero(ExposedName::new("divCeil")),
+                Loc::at_zero(ExposedName::new("divFloor")),
+                Loc::at_zero(ExposedName::new("toStr")),
                 Loc::at_zero(ExposedName::new("isMultipleOf")),
-                // Loc::at_zero(ExposedName::new("minI8")),
-                // Loc::at_zero(ExposedName::new("maxI8")),
-                // Loc::at_zero(ExposedName::new("minU8")),
-                // Loc::at_zero(ExposedName::new("maxU8")),
-                // Loc::at_zero(ExposedName::new("minI16")),
-                // Loc::at_zero(ExposedName::new("maxI16")),
-                // Loc::at_zero(ExposedName::new("minU16")),
-                // Loc::at_zero(ExposedName::new("maxU16")),
-                // Loc::at_zero(ExposedName::new("minI32")),
-                // Loc::at_zero(ExposedName::new("maxI32")),
-                // Loc::at_zero(ExposedName::new("minU32")),
-                // Loc::at_zero(ExposedName::new("maxU32")),
-                // Loc::at_zero(ExposedName::new("minI64")),
-                // Loc::at_zero(ExposedName::new("maxI64")),
-                // Loc::at_zero(ExposedName::new("minU64")),
-                // Loc::at_zero(ExposedName::new("maxU64")),
-                // Unimplemented
-                // Loc::at_zero(ExposedName::new("minI128")),
-                // Loc::at_zero(ExposedName::new("maxI128")),
+                Loc::at_zero(ExposedName::new("minI8")),
+                Loc::at_zero(ExposedName::new("maxI8")),
+                Loc::at_zero(ExposedName::new("minU8")),
+                Loc::at_zero(ExposedName::new("maxU8")),
+                Loc::at_zero(ExposedName::new("minI16")),
+                Loc::at_zero(ExposedName::new("maxI16")),
+                Loc::at_zero(ExposedName::new("minU16")),
+                Loc::at_zero(ExposedName::new("maxU16")),
+                Loc::at_zero(ExposedName::new("minI32")),
+                Loc::at_zero(ExposedName::new("maxI32")),
+                Loc::at_zero(ExposedName::new("minU32")),
+                Loc::at_zero(ExposedName::new("maxU32")),
+                Loc::at_zero(ExposedName::new("minI64")),
+                Loc::at_zero(ExposedName::new("maxI64")),
+                Loc::at_zero(ExposedName::new("minU64")),
+                Loc::at_zero(ExposedName::new("maxU64")),
+                Loc::at_zero(ExposedName::new("minI128")),
+                Loc::at_zero(ExposedName::new("maxI128")),
                 Loc::at_zero(ExposedName::new("toI8")),
                 Loc::at_zero(ExposedName::new("toI8Checked")),
                 Loc::at_zero(ExposedName::new("toI16")),
@@ -3260,6 +3255,12 @@ fn load_module<'a>(
 
                 # ------- Functions 
 
+                toStr : Num * -> Str
+                intCast : Int a -> Int b
+
+                bytesToU16 : List U8, Nat -> Result U16 [ OutOfBounds ]
+                bytesToU32 : List U8, Nat -> Result U32 [ OutOfBounds ]
+
                 compare : Num a, Num a -> [ LT, EQ, GT ]
 
                 isLt : Num a, Num a -> Bool
@@ -3275,7 +3276,7 @@ fn load_module<'a>(
                 isPositive : Num a -> Bool
                 isNegative : Num a -> Bool
 
-                toFloat : Num * -> Float *
+                toFloat : Num a -> Float b
 
                 abs : Num a -> Num a
                 neg : Num a -> Num a
@@ -3293,10 +3294,11 @@ fn load_module<'a>(
                 atan : Float a -> Float a
 
                 sqrt : Float a -> Result (Float a) [ SqrtOfNegative ]*
-                log : Float a, Float a -> Result (Float a) [ LogNeedsPositive ]*
-                div : Float a -> Result (Float a) [ DivByZero ]*
+                log : Float a -> Result (Float a) [ LogNeedsPositive ]*
+                div : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
-                # divCeil: Int a, Int a -> Result (Int a) [ DivByZero ]*
+                divCeil: Int a, Int a -> Result (Int a) [ DivByZero ]*
+                divFloor: Int a, Int a -> Result (Int a) [ DivByZero ]*
                 # mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
                 rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
@@ -3329,25 +3331,25 @@ fn load_module<'a>(
                 # mulSaturated : Num a, Num a -> Num a
                 mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 
-                # minI8 : I8
-                # maxI8 : I8
-                # minU8 : U8
-                # maxU8 : U8
-                # minI16 : I16
-                # maxI16 : I16
-                # minU16 : U16
-                # maxU16 : U16
-                # minI32 : I32
-                # maxI32 : I32
-                # minU32 : U32
-                # maxU32 : U32
-                # minI64 : I64
-                # maxI64 : I64
-                # minU64 : U64
-                # maxU64 : U64
+                minI8 : I8
+                maxI8 : I8
+                minU8 : U8
+                maxU8 : U8
+                minI16 : I16
+                maxI16 : I16
+                minU16 : U16
+                maxU16 : U16
+                minI32 : I32
+                maxI32 : I32
+                minU32 : U32
+                maxU32 : U32
+                minI64 : I64
+                maxI64 : I64
+                minU64 : U64
+                maxU64 : U64
 
-                # minI128 : I128
-                # maxI128 : I128
+                minI128 : I128
+                maxI128 : I128
                 # minU128 : U128
                 # maxU128 : U128
 
@@ -4327,7 +4329,6 @@ fn run_solve<'a>(
     // Finish constraining the module by wrapping the existing Constraint
     // in the ones we just computed. We can do this off the main thread.
     let constraint = constrain_imports(imported_symbols, constraint, &mut var_store);
-    // dbg!(&constraint);
 
     let constrain_end = SystemTime::now();
 
@@ -4346,8 +4347,6 @@ fn run_solve<'a>(
 
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
-
-    dbg!(module_id, &problems);
 
     let mut exposed_vars_by_symbol: MutMap<Symbol, Variable> = solved_env.vars_by_symbol.clone();
     exposed_vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));
