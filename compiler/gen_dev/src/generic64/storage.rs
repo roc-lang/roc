@@ -991,6 +991,11 @@ impl<
         self.general_used_regs.push((reg, Symbol::RET_POINTER));
     }
 
+    /// updates the stack size to the max of its current value and the tmp size needed.
+    pub fn update_stack_size(&mut self, tmp_size: u32) {
+        self.stack_size = max(self.stack_size, tmp_size);
+    }
+
     /// updates the function call stack size to the max of its current value and the size need for this call.
     pub fn update_fn_call_stack_size(&mut self, tmp_size: u32) {
         self.fn_call_stack_size = max(self.fn_call_stack_size, tmp_size);

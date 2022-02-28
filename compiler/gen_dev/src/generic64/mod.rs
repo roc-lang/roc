@@ -590,6 +590,7 @@ impl<
                 self.buf[jne_location + i] = *byte;
             }
 
+            base_storage.update_stack_size(self.storage_manager.stack_size());
             base_storage.update_fn_call_stack_size(self.storage_manager.fn_call_stack_size());
         }
         self.storage_manager = base_storage;
@@ -633,6 +634,7 @@ impl<
         let mut base_storage = self.storage_manager.clone();
         self.join_map.insert(*id, self.buf.len() as u64);
         self.build_stmt(body, ret_layout);
+        base_storage.update_stack_size(self.storage_manager.stack_size());
         base_storage.update_fn_call_stack_size(self.storage_manager.fn_call_stack_size());
 
         // Overwrite the original jump with the correct offset.
