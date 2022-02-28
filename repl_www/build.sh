@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -eux
+set -euxo pipefail
 
 if [[ ! -d repl_www ]]
 then
@@ -14,7 +14,8 @@ then
     cargo install wasm-pack
 fi
 
-WWW_DIR="repl_www/build"
+# output directory is first argument or default
+WWW_DIR="${1:-repl_www/build}"
 mkdir -p $WWW_DIR
 cp repl_www/public/* $WWW_DIR
 
