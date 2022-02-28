@@ -25,12 +25,12 @@ page_size = "0.4.2"
 snafu = { version = "0.6.10", features = ["backtraces"] }
 ven_graph = { path = "../vendor/pathfinding" }
 slab = "0.4.5"
+libc = "0.2.106"
 
 [dev-dependencies]
 indoc = "1.0.3"
 
 [target.'cfg(windows)'.dependencies]
-winapi = "0.3.9"
+winapi = { version = "0.3.9", features = ["memoryapi", "heapapi", "synchapi", "winbase", "sysinfoapi"]}
+# TODO I'm not sure if all these features are necessary
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2.106"

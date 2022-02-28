@@ -1,11 +1,12 @@
 use crate::helpers::{example_file, run_cmd, run_roc};
 use criterion::{black_box, measurement::Measurement, BenchmarkGroup};
-use rlimit::{setrlimit, Resource};
-use std::path::Path;
+use std::{path::Path, thread};
+
+const CFOLD_STACK_SIZE: usize = 8192 * 100000;
 
 fn exec_bench_w_input<T: Measurement>(
     file: &Path,
-    stdin_str: &str,
+    stdin_str: &'static str,
     executable_filename: &str,
     expected_ending: &str,
     bench_group_opt: Option<&mut BenchmarkGroup<T>>,
@@ -31,7 +32,7 @@ fn exec_bench_w_input<T: Measurement>(
 
 fn check_cmd_output(
     file: &Path,
-    stdin_str: &str,
+    stdin_str: &'static str,
     executable_filename: &str,
     expected_ending: &str,
 ) {
@@ -41,11 +42,19 @@ fn check_cmd_output(
         .unwrap()
         .to_string();
 
-    if cmd_str.contains("cfold") {
-        increase_stack_limit();
-    }
+    let out= if cmd_str.contains("cfold") {
+        let child = thread::Builder::new()
+            .stack_size(CFOLD_STACK_SIZE)
+            .spawn(
+                move|| {run_cmd(&cmd_str, &[stdin_str], &[])}
+            )
+            .unwrap();
 
-    let out = run_cmd(&cmd_str, &[stdin_str], &[]);
+        child.join().unwrap()
+    } else {
+        run_cmd(&cmd_str, &[stdin_str], &[])
+    };
+
 
     if !&out.stdout.ends_with(expected_ending) {
         panic!(
@@ -69,7 +78,16 @@ fn bench_cmd<T: Measurement>(
         .to_string();
 
     if cmd_str.contains("cfold") {
-        increase_stack_limit();
+        #[cfg(unix)]
+        use rlimit::{setrlimit, Resource};
+        #[cfg(unix)]
+        setrlimit(Resource::STACK, CFOLD_STACK_SIZE, CFOLD_STACK_SIZE)
+            .expect("Failed to increase stack limit.");
+
+        #[cfg(windows)]
+        println!("Skipping the cfold benchmark on windows, I can't adjust the stack size and use criterion at the same time.");
+        #[cfg(windows)]
+        return;
     }
 
     if let Some(bench_group) = bench_group_opt {
@@ -85,11 +103,6 @@ fn bench_cmd<T: Measurement>(
     }
 }
 
-fn increase_stack_limit() {
-    let new_stack_limit = 8192 * 100000;
-    setrlimit(Resource::STACK, new_stack_limit, new_stack_limit)
-        .expect("Failed to increase stack limit.");
-}
 
 pub fn bench_nqueens<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T>>) {
     exec_bench_w_input(

@@ -12,7 +12,9 @@ mod roc_str;
 pub use roc_list::RocList;
 pub use roc_str::RocStr;
 
+
 // A list of C functions that are being imported
+#[cfg(not(windows))]
 extern "C" {
     pub fn roc_alloc(size: usize, alignment: u32) -> *mut c_void;
     pub fn roc_realloc(
@@ -23,6 +25,22 @@ extern "C" {
     ) -> *mut c_void;
     pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
 }
+
+#[cfg(windows)]
+const ERR_MSG: &str = "should not be called from within the repo. If you got this while running a roc app, the linker should have filled this function in, but it did not happen.";
+#[cfg(windows)]
+pub fn roc_alloc(_size: usize, _alignment: u32) -> *mut c_void {panic!("roc_alloc {}", ERR_MSG)}
+#[cfg(windows)]
+pub fn roc_realloc(
+    _ptr: *mut c_void,
+    _new_size: usize,
+    _old_size: usize,
+    _alignment: u32,
+) -> *mut c_void {panic!("roc_realloc {}", ERR_MSG)}
+#[cfg(windows)]
+pub fn roc_dealloc(_ptr: *mut c_void, _alignment: u32) {panic!("roc_dealloc {}", ERR_MSG)}
+
+
 
 const REFCOUNT_1: isize = isize::MIN;
 
