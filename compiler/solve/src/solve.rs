@@ -12,7 +12,7 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, Alias, AliasKind, Category, ErrorType, PatternCategory,
+    gather_fields_unsorted_iter, AliasKind, Category, ErrorType, PatternCategory,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
 use std::collections::hash_map::Entry;
@@ -79,7 +79,6 @@ pub enum TypeError {
 #[derive(Clone, Debug, Default)]
 pub struct Env {
     pub vars_by_symbol: MutMap<Symbol, Variable>,
-    pub aliases: MutMap<Symbol, Alias>,
 }
 
 impl Env {

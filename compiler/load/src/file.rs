@@ -3107,8 +3107,7 @@ fn run_solve<'a>(
     let mut exposed_vars_by_symbol: MutMap<Symbol, Variable> = solved_env.vars_by_symbol.clone();
     exposed_vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));
 
-    let solved_types =
-        roc_solve::module::make_solved_types(&solved_env, &solved_subs, &exposed_vars_by_symbol);
+    let solved_types = roc_solve::module::make_solved_types(&solved_subs, &exposed_vars_by_symbol);
 
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
