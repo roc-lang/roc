@@ -3,8 +3,4 @@ app "hello_swift"
     imports []
     provides [ main ] to pf
 
-main =
-    host = "Swift"
-    app = "Roc"
-
-    "Hello \(host), meet \(app)"
+main = "Hello, World!"
