@@ -779,6 +779,7 @@ impl<
         }
     }
 
+    #[allow(dead_code)]
     /// Ensures that a register is free. If it is not free, data will be moved to make it free.
     fn ensure_reg_free(
         &mut self,
@@ -1007,7 +1008,7 @@ impl<
     /// Later jumps to the join point can overwrite the stored locations to pass parameters.
     pub fn setup_joinpoint(
         &mut self,
-        buf: &mut Vec<'a, u8>,
+        _buf: &mut Vec<'a, u8>,
         id: &JoinPointId,
         params: &'a [Param<'a>],
     ) {
