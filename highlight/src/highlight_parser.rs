@@ -1,3 +1,4 @@
+use peg::error::ParseError;
 use roc_code_markup::markup::nodes::MarkupNode;
 
 use crate::tokenizer::Token;
@@ -17,13 +18,13 @@ peg::parser!{
         common_expr()
 
       rule common_expr() -> MarkupNode =
-        [T::Number] { MarkupNode::Blank }
+        [T::Number] { new_blank_mn(None) }
       
     }
 }
 
-pub fn highlight(code_str: &str) -> MarkupNode {
-  let tokens = tokenize( r#"0"#);
+pub fn highlight(code_str: &str) -> Result<MarkupNode, ParseError<usize>> {
+  let tokens = tokenize(code_str);
 
   highlightparser::full_expr(&tokens)
 }
@@ -32,9 +33,6 @@ pub fn highlight(code_str: &str) -> MarkupNode {
 use crate::tokenizer::tokenize;
 
 #[test]
-fn test_interface_header() {
-  let tokens = tokenize( r#"
-interface Foo.Bar.Baz exposes [] imports []"#);
-
-  assert_eq!(highlightparser::header(&tokens), Ok(()));
+fn test_highlight() {
+  assert!(highlight("0").unwrap().is_blank());
 }
