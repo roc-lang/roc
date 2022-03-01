@@ -3222,6 +3222,7 @@ name = "repl_test"
 version = "0.1.0"
 dependencies = [
  "indoc",
+ "lazy_static",
  "roc_cli",
  "roc_repl_cli",
  "roc_test_utils",
@@ -3502,6 +3503,16 @@ name = "roc_error_macros"
 version = "0.1.0"
 
 [[package]]
+name = "roc_exhaustive"
+version = "0.1.0"
+dependencies = [
+ "roc_collections",
+ "roc_module",
+ "roc_region",
+ "roc_std",
+]
+
+[[package]]
 name = "roc_fmt"
 version = "0.1.0"
 dependencies = [
@@ -3650,6 +3661,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_error_macros",
+ "roc_exhaustive",
  "roc_module",
  "roc_problem",
  "roc_region",
@@ -3713,6 +3725,7 @@ dependencies = [
  "roc_mono",
  "roc_parse",
  "roc_repl_eval",
+ "roc_std",
  "roc_target",
  "roc_types",
  "rustyline",
@@ -3770,6 +3783,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_exhaustive",
  "roc_module",
  "roc_mono",
  "roc_parse",

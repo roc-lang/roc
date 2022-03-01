@@ -91,7 +91,7 @@ pub extern "C" fn rust_main() -> i32 {
     0
 }
 
-unsafe extern "C" fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
+unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
     let size = size_Fx_result() as usize;
     let layout = Layout::array::<u8>(size).unwrap();
     let buffer = std::alloc::alloc(layout) as *mut u8;

@@ -3,12 +3,11 @@ edition = "2021"
 name = "repl_test"
 version = "0.1.0"
 
-[[test]]
-name = "repl_test"
-path = "src/tests.rs"
-
 [build-dependencies]
 roc_cli = {path = "../cli"}
+
+[dependencies]
+lazy_static = "1.4.0"
 
 [dev-dependencies]
 indoc = "1.0.3"

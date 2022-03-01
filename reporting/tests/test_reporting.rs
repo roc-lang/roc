@@ -64,7 +64,7 @@ mod test_reporting {
             var,
             constraint,
             home,
-            mut interns,
+            interns,
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
@@ -92,7 +92,7 @@ mod test_reporting {
 
             // Compile and add all the Procs before adding main
             let mut procs = Procs::new_in(&arena);
-            let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
+            let mut ident_ids = interns.all_ident_ids.get(&home).unwrap().clone();
             let mut update_mode_ids = UpdateModeIds::new();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
@@ -4491,32 +4491,6 @@ mod test_reporting {
     }
 
     #[test]
-    fn record_type_indent_end() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { a: Int
-                }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a record type, but I got stuck here:
-
-                1│  f : { a: Int
-                2│  }
-                    ^
-
-                I need this curly brace to be indented more. Try adding more spaces
-                before it!
-            "#
-            ),
-        )
-    }
-
-    #[test]
     fn record_type_keyword_field_name() {
         report_problem_as(
             indoc!(
@@ -5446,36 +5420,6 @@ mod test_reporting {
                 Note: When I get stuck like this, it usually means that there is a
                 missing parenthesis or bracket somewhere earlier. It could also be a
                 stray keyword or operator.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn list_bad_indent() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = [ 1, 2,
-                ]
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
-
-                I cannot find the end of this list:
-
-                1│  x = [ 1, 2,
-                               ^
-
-                You could change it to something like [ 1, 2, 3 ] or even just [].
-                Anything where there is an open and a close square bracket, and where
-                the elements of the list are separated by commas.
-
-                Note: I may be confused by indentation
             "#
             ),
         )
@@ -6470,38 +6414,6 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn outdented_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Box item : [
-                    Box item,
-                    Items item item
-                ]
-
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a tag union type, but I got stuck here:
-
-                1│  Box item : [
-                2│      Box item,
-                3│      Items item item
-                4│  ]
-                    ^
-
-                I need this square bracket to be indented more. Try adding more spaces
-                before it!
-            "#
-            ),
-        )
-    }
-
-    #[test]
     fn outdented_in_parens() {
         report_problem_as(
             indoc!(
@@ -6526,36 +6438,6 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 I need this parenthesis to be indented more. Try adding more spaces
-                before it!
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn outdented_record() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Box : {
-                    id: Str
-                }
-
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a record type, but I got stuck here:
-
-                1│  Box : {
-                2│      id: Str
-                3│  }
-                    ^
-
-                I need this curly brace to be indented more. Try adding more spaces
                 before it!
             "#
             ),
@@ -8147,7 +8029,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────────────────────────────
 
                 The opaque type Age referenced here is not defined:
 
@@ -8172,7 +8054,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────────────────────────────
 
                 The opaque type Age referenced here is not defined:
 
@@ -8208,10 +8090,20 @@ I need all branches in an `if` to have the same type!
                 OtherModule.$Age 21
                 "#
             ),
-            // TODO: get rid of the second error. Consider parsing OtherModule.$Age to completion
-            // and checking it during can.
+            // TODO: get rid of the first error. Consider parsing OtherModule.$Age to completion
+            // and checking it during can. The reason the error appears is because it is parsed as
+            // Apply(Error(OtherModule), [ $Age, 21 ])
             indoc!(
                 r#"
+                ── OPAQUE TYPE NOT APPLIED ─────────────────────────────────────────────────────
+
+                This opaque type is not applied to an argument:
+
+                1│  OtherModule.$Age 21
+                                ^^^^
+
+                Note: Opaque types always wrap exactly one argument!
+
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 I am trying to parse a qualified name here:
@@ -8221,15 +8113,6 @@ I need all branches in an `if` to have the same type!
 
                 I was expecting to see an identifier next, like height. A complete
                 qualified name looks something like Json.Decode.string.
-
-                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
-
-                The opaque type Age referenced here is not defined:
-
-                1│  OtherModule.$Age 21
-                                ^^^^
-
-                Note: It looks like there are no opaque types declared in this scope yet!
                 "#
             ),
         )
@@ -8247,9 +8130,9 @@ I need all branches in an `if` to have the same type!
                 $Age age
                 "#
             ),
-            // TODO: there is a potential for a better error message here, if the usage of `$Age` can
-            // be linked to the declaration of `Age` inside `age`, and a suggestion to raise that
-            // declaration to the outer scope.
+            // TODO(opaques): there is a potential for a better error message here, if the usage of
+            // `$Age` can be linked to the declaration of `Age` inside `age`, and a suggestion to
+            // raise that declaration to the outer scope.
             indoc!(
                 r#"
                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
@@ -8262,7 +8145,7 @@ I need all branches in an `if` to have the same type!
                 If you didn't intend on using `Age` then remove it so future readers of
                 your code don't wonder why it is there.
 
-                ── OPAQUE NOT DEFINED ──────────────────────────────────────────────────────────
+                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────────────────────────────
 
                 The opaque type Age referenced here is not defined:
 
@@ -8301,6 +8184,258 @@ I need all branches in an `if` to have the same type!
                     List
                     Num
                     Set
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_check() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age := U8
+
+                n : Age
+                n = $Age ""
+
+                n
+                "#
+            ),
+            // TODO(opaques): error could be improved by saying that the opaque definition demands
+            // that the argument be a U8, and linking to the definitin!
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This expression is used in an unexpected way:
+
+                4│  n = $Age ""
+                             ^^
+
+                This argument to an opaque type has type:
+
+                    Str
+
+                But you are trying to use it as:
+
+                    U8
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_infer() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                if True
+                then $F ""
+                else $F {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This expression is used in an unexpected way:
+
+                5│  else $F {}
+                            ^^
+
+                This argument to an opaque type has type:
+
+                    {}
+
+                But you are trying to use it as:
+
+                    Str
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_creation_is_not_wrapped() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F Str
+                v = ""
+
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `v` definition:
+
+                3│  v : F Str
+                4│  v = ""
+                        ^^
+
+                The body is a string of type:
+
+                    Str
+
+                But the type annotation on `v` says it should be:
+
+                    F Str
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_pattern_check() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age := U8
+
+                f : Age -> U8
+                f = \Age n -> n
+
+                f
+                "#
+            ),
+            // TODO(opaques): error could be improved by saying that the user-provided pattern
+            // probably wants to change "Age" to "@Age"!
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This pattern is being used in an unexpected way:
+
+                4│  f = \Age n -> n
+                         ^^^^^
+
+                It is a `Age` tag of type:
+
+                    [ Age a ]
+
+                But it needs to match:
+
+                    Age
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_pattern_infer() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                \x ->
+                    when x is
+                        $F A -> ""
+                        $F {} -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd pattern in this `when` does not match the previous ones:
+
+                6│          $F {} -> ""
+                            ^^^^^
+
+                The 2nd pattern is trying to matchF unwrappings of type:
+
+                    F {}a
+
+                But all the previous branches match:
+
+                    F [ A ]
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_pattern_match_not_exhaustive_tag() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F [ A, B, C ]
+
+                when v is
+                    $F A -> ""
+                    $F B -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                5│>  when v is
+                6│>      $F A -> ""
+                7│>      $F B -> ""
+
+                Other possibilities include:
+
+                    $F C
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_pattern_match_not_exhaustive_int() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F U8
+
+                when v is
+                    $F 1 -> ""
+                    $F 2 -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                5│>  when v is
+                6│>      $F 1 -> ""
+                7│>      $F 2 -> ""
+
+                Other possibilities include:
+
+                    $F _
+
+                I would have to crash if I saw one of those! Add branches for them!
                 "#
             ),
         )

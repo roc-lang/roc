@@ -836,11 +836,10 @@ fn pattern_to_vars_by_symbol(
         }
 
         UnwrappedOpaque {
-            arguments, opaque, ..
+            argument, opaque, ..
         } => {
-            for (var, nested) in arguments {
-                pattern_to_vars_by_symbol(vars_by_symbol, &nested.value, *var);
-            }
+            let (var, nested) = &**argument;
+            pattern_to_vars_by_symbol(vars_by_symbol, &nested.value, *var);
             vars_by_symbol.insert(*opaque, expr_var);
         }
 

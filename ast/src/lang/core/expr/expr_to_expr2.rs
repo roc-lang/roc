@@ -50,6 +50,7 @@ pub fn expr_to_expr2<'a>(
     region: Region,
 ) -> (Expr2, self::Output) {
     use roc_parse::ast::Expr::*;
+    //dbg!("{:?}", parse_expr);
 
     match parse_expr {
         Float(string) => {
