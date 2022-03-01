@@ -21,6 +21,7 @@ use crate::ui::util::path_to_string;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use fs_extra::dir::{copy, ls, CopyOptions, DirEntryAttr, DirEntryValue};
+use futures::TryFutureExt;
 use pipelines::RectResources;
 use roc_ast::lang::env::Env;
 use roc_ast::mem_pool::pool::Pool;
@@ -73,28 +74,25 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
     // Initialize GPU
     let (gpu_device, cmd_queue) = futures::executor::block_on(async {
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .expect(r#"Request adapter
-            If you're running this from inside nix, follow the instructions here to resolve this: https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#editor
-            "#);
-
-        adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    features: wgpu::Features::empty(),
-                    limits: wgpu::Limits::default(),
-                },
-                None,
+        create_device(
+            &instance,
+            &surface,
+            wgpu::PowerPreference::HighPerformance,
+            false,
+        )
+        .or_else(|_| create_device(&instance, &surface, wgpu::PowerPreference::LowPower, false))
+        .or_else(|_| {
+            create_device(
+                &instance,
+                &surface,
+                wgpu::PowerPreference::HighPerformance,
+                true,
             )
-            .await
-            .expect("Request device")
+        })
+        .unwrap_or_else(|err| {
+            panic!("Failed to request device: `{}`", err);
+        })
+        .await
     });
 
     // Create staging belt and a local pool
@@ -393,6 +391,39 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     });
 
     Ok(())
+}
+
+async fn create_device(
+    instance: &wgpu::Instance,
+    surface: &wgpu::Surface,
+    power_preference: wgpu::PowerPreference,
+    force_fallback_adapter: bool,
+) -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
+    if force_fallback_adapter {
+        log::error!("Falling back to software renderer. GPU acceleration has been disabled.");
+    }
+
+    let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter,
+            })
+            .await
+            .expect(r#"Request adapter
+            If you're running this from inside nix, follow the instructions here to resolve this: https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#editor
+            "#);
+
+    adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                label: None,
+                features: wgpu::Features::empty(),
+                limits: wgpu::Limits::default(),
+            },
+            None,
+        )
+        .await
 }
 
 fn draw_rects(
