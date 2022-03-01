@@ -31,7 +31,7 @@ roc_load = {path = "../compiler/load"}
 roc_mono = {path = "../compiler/mono"}
 roc_parse = {path = "../compiler/parse"}
 roc_repl_eval = {path = "../repl_eval"}
-roc_std = {path = "../roc_std"}
+roc_std = {path = "../roc_std", default-features = false}
 roc_target = {path = "../compiler/roc_target"}
 roc_types = {path = "../compiler/types"}
 
