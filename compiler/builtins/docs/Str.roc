@@ -2,19 +2,19 @@ interface Str
     exposes
         [
             Str,
-            isEmpty,
             append,
             concat,
-            joinWith,
-            split,
             countGraphemes,
-            startsWith,
             endsWith,
             fromUtf8,
-            Utf8Problem,
-            Utf8ByteProblem,
+            isEmpty,
+            joinWith,
+            split,
+            startsWith,
+            startsWithCodePt,
             toUtf8,
-            startsWithCodePt
+            Utf8Problem,
+            Utf8ByteProblem
         ]
     imports []
 
@@ -392,27 +392,19 @@ toUtf32Le : Str -> List U8
 
 # Parsing
 
-## If the string begins with a valid [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster),
-## return it along with the rest of the string after that grapheme.
+## If the bytes begin with a valid [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster)
+## encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8), return it along with the number of bytes it took up.
 ##
-## If the string does not begin with a full grapheme, for example because it was
-## empty, return `Err`.
-parseGrapheme : Str -> Result { val : Str, rest : Str } [ Expected [ Grapheme ]* Str ]*
+## If the bytes do not begin with a valid grapheme, for example because the list was
+## empty or began with an invalid grapheme, return `Err`.
+parseUtf8Grapheme : List U8 -> Result { grapheme : Str, bytesParsed: Nat } [ InvalidGrapheme ]*
 
-## If the string begins with a valid [Unicode code point](http://www.unicode.org/glossary/#code_point),
-## return it along with the rest of the string after that code point.
+## If the bytes begin with a valid [Unicode code point](http://www.unicode.org/glossary/#code_point)
+## encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8), return it along with the number of bytes it took up.
 ##
-## If the string does not begin with a valid code point, for example because it was
-## empty, return `Err`.
-parseCodePt : Str -> Result { val : U32, rest : Str } [ Expected [ CodePt ]* Str ]*
-
-## If the first string begins with the second, return whatever comes
-## after the second.
-chomp : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Str ]*
-
-## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
-## equal to the given [U32], return whatever comes after that code point.
-chompCodePt : Str, U32 -> Result Str [ Expected [ ExactCodePt U32 ]* Str ]*
+## If the string does not begin with a valid code point, for example because the list was
+## empty or began with an invalid code point, return an `Err`.
+parseUtf8CodePt : List U8 -> Result { codePt : U32, bytesParsed: Nat } [ InvalidCodePt ]*
 
 ## If the string represents a valid [U8] number, return that number.
 ##
@@ -433,36 +425,33 @@ toDec : Str -> Result Dec [ InvalidDec ]*
 
 ## If the string represents a valid number, return that number.
 ##
-## The exact number type to look for will be inferred from usage. Here's an
-## example where the `Err` branch matches `Integer Signed64`, which causes this to
-## parse an [I64] because [I64] is defined as `I64 : Num [ Integer [ Signed64 ] ]`.
+## The exact number type to look for will be inferred from usage.
+## In the example below, the usage of I64 in the type signature will require that type instead of (Num *).
 ##
-## >>> when Str.toNum "12345" is
-## >>>     Ok i64 -> "The I64 was: \(i64)"
-## >>>     Err (ExpectedNum (Integer Signed64)) -> "Not a valid I64!"
+## >>> strToI64 : Str -> Result I64 [ InvalidNumStr ]*
+## >>> strToI64 = \inputStr ->
+## >>>     Str.toNum inputStr
 ##
 ## If the string is exactly `"NaN"`, `"∞"`, or `"-∞"`, they will be accepted
 ## only when converting to [F64] or [F32] numbers, and will be translated accordingly.
 ##
 ## This never accepts numbers with underscores or commas in them. For more
 ## advanced options, see [parseNum].
-toNum : Str -> Result (Num a) [ ExpectedNum a ]*
+toNum : Str -> Result (Num *) [ InvalidNumStr ]*
 
 ## If the string begins with an [Int] or a [finite](Num.isFinite) [Frac], return
 ## that number along with the rest of the string after it.
 ##
-## The exact number type to look for will be inferred from usage. Here's an
-## example where the `Err` branch matches `Float Binary64`, which causes this to
-## parse an [F64] because [F64] is defined as `F64 : Num [ Fraction [ Float64 ] ]`.
+## The exact number type to look for will be inferred from usage.
+## In the example below, the usage of Float64 in the type signature will require that type instead of (Num *).
 ##
-## >>> when Str.parseNum input {} is
-## >>>     Ok { val: f64, rest } -> "The F64 was: \(f64)"
-## >>>     Err (ExpectedNum (Fraction Float64)) -> "Not a valid F64!"
+## >>> parseFloat64 : Str -> Result { val: Float64, rest: Str } [ InvalidNumStr ]*
+## >>>     Str.parseNum input {}
 ##
 ## If the string begins with `"NaN"`, `"∞"`, and `"-∞"` (which do not represent
 ## [finite](Num.isFinite) numbers), they will be accepted only when parsing
 ## [F64] or [F32] numbers, and translated accordingly.
-# parseNum : Str, NumParseConfig -> Result { val : Num a, rest : Str } [ ExpectedNum a ]*
+# parseNum : Str, NumParseConfig -> Result { val : Num *, rest : Str } [ InvalidNumStr ]*
 
 ## Notes:
 ## * You can allow a decimal mark for integers; they'll only parse if the numbers after it are all 0.

@@ -118,7 +118,7 @@ pub fn canonical_string_literal<'a>(_arena: &Bump, _raw: &'a str, _region: Regio
 // }
 // }
 
-// fn loc_char<'a, V>(value: V, state: &State<'a>, buf_len: usize) -> Loc<V> {
+// fn loc_char<'a, V>(value: V, state: &State<'a>, buf_len: usize) -> Located<V> {
 // let start_line = state.line;
 // let start_col = state.column + buf_len as u16;
 // let end_line = start_line;
@@ -135,7 +135,7 @@ pub fn canonical_string_literal<'a>(_arena: &Bump, _raw: &'a str, _region: Regio
 // Loc { region, value }
 // }
 
-// fn loc_escaped_char<'a, V>(value: V, state: &State<'a>, buf_len: usize) -> Loc<V> {
+// fn loc_escaped_char<'a, V>(value: V, state: &State<'a>, buf_len: usize) -> Located<V> {
 // let start_line = state.line;
 // let start_col = state.column + buf_len as u16;
 // let end_line = start_line;
@@ -157,7 +157,7 @@ pub fn canonical_string_literal<'a>(_arena: &Bump, _raw: &'a str, _region: Regio
 // state: &State<'a>,
 // buf_len: usize,
 // hex_str_len: usize,
-// ) -> Loc<V> {
+// ) -> Located<V> {
 // let start_line = state.line;
 // // +1 due to the `"` which precedes buf.
 // let start_col = state.column + buf_len as u16 + 1;

@@ -55,11 +55,16 @@ pub enum Attribute {
     HighlightStart { highlight_start: HighlightStart },
     HighlightEnd { highlight_end: HighlightEnd },
 
-    UnderlineStart { underline_start: UnderlineStart },
-    UnderlineEnd { underline_end: UnderlineEnd },
+    Underline { underline_spec: UnderlineSpec },
 }
 
 #[derive(Debug)]
+pub enum UnderlineSpec {
+    Partial { start: usize, end: usize },
+    Full,
+}
+
+#[derive(Debug, Default)]
 pub struct Attributes {
     pub all: Vec<Attribute>,
 }
@@ -115,11 +120,5 @@ impl Attributes {
         ensure!(old_len != new_len, CaretNotFound { node_id });
 
         Ok(())
-    }
-}
-
-impl Default for Attributes {
-    fn default() -> Self {
-        Attributes { all: Vec::new() }
     }
 }

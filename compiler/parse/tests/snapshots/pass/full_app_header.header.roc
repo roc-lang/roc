@@ -1,4 +1,4 @@
 app "quicksort"
-    packages { base: "./platform" }
+    packages { pf: "./platform" }
     imports [ foo.Bar.Baz ]
-    provides [ quicksort ] to base
+    provides [ quicksort ] to pf

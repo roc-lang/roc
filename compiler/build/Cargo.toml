@@ -19,11 +19,12 @@ roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_load = { path = "../load" }
+roc_target = { path = "../roc_target" }
 roc_gen_llvm = { path = "../gen_llvm", optional = true }
 roc_gen_wasm = { path = "../gen_wasm", optional = true }
 roc_gen_dev = { path = "../gen_dev", default-features = false }
 roc_reporting = { path = "../../reporting" }
-roc_std = { path = "../../roc_std" }
+roc_std = { path = "../../roc_std", default-features = false }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 libloading = "0.7.1"
 tempfile = "3.2.0"
@@ -34,7 +35,6 @@ target-lexicon = "0.12.2"
 serde_json = "1.0.69"
 
 [features]
-default = ["llvm", "target-aarch64", "target-x86_64", "target-wasm32"]
 target-arm = []
 target-aarch64 = ["roc_gen_dev/target-aarch64"]
 target-x86 = []

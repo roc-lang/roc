@@ -13,12 +13,13 @@
 // use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 // use crate::procedure::References;
 use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
+use roc_error_macros::todo_opaques;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
-use roc_parse::ast;
+use roc_parse::ast::{self, TypeHeader};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -96,29 +97,25 @@ impl ShallowClone for Def {
 pub enum PendingDef<'a> {
     /// A standalone annotation with no body
     AnnotationOnly(
-        &'a Located<ast::Pattern<'a>>,
+        &'a Loc<ast::Pattern<'a>>,
         PatternId,
-        &'a Located<ast::TypeAnnotation<'a>>,
+        &'a Loc<ast::TypeAnnotation<'a>>,
     ),
     /// A body with no type annotation
-    Body(
-        &'a Located<ast::Pattern<'a>>,
-        PatternId,
-        &'a Located<ast::Expr<'a>>,
-    ),
+    Body(&'a Loc<ast::Pattern<'a>>, PatternId, &'a Loc<ast::Expr<'a>>),
     /// A body with a type annotation
     TypedBody(
-        &'a Located<ast::Pattern<'a>>,
+        &'a Loc<ast::Pattern<'a>>,
         PatternId,
-        &'a Located<ast::TypeAnnotation<'a>>,
-        &'a Located<ast::Expr<'a>>,
+        &'a Loc<ast::TypeAnnotation<'a>>,
+        &'a Loc<ast::Expr<'a>>,
     ),
 
     /// A type alias, e.g. `Ints : List Int`
     Alias {
-        name: Located<Symbol>,
-        vars: Vec<Located<Lowercase>>,
-        ann: &'a Located<ast::TypeAnnotation<'a>>,
+        name: Loc<Symbol>,
+        vars: Vec<Loc<Lowercase>>,
+        ann: &'a Loc<ast::TypeAnnotation<'a>>,
     },
 
     /// An invalid alias, that is ignored in the rest of the pipeline
@@ -202,7 +199,10 @@ fn to_pending_def<'a>(
             }
         }
 
-        roc_parse::ast::Def::Alias { name, vars, ann } => {
+        roc_parse::ast::Def::Alias {
+            header: TypeHeader { name, vars },
+            ann,
+        } => {
             let region = Region::span_across(&name.region, &ann.region);
 
             match scope.introduce(
@@ -212,7 +212,7 @@ fn to_pending_def<'a>(
                 region,
             ) {
                 Ok(symbol) => {
-                    let mut can_rigids: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
+                    let mut can_rigids: Vec<Loc<Lowercase>> = Vec::with_capacity(vars.len());
 
                     for loc_var in vars.iter() {
                         match loc_var.value {
@@ -220,7 +220,7 @@ fn to_pending_def<'a>(
                                 if name.chars().next().unwrap().is_lowercase() =>
                             {
                                 let lowercase = Lowercase::from(name);
-                                can_rigids.push(Located {
+                                can_rigids.push(Loc {
                                     value: lowercase,
                                     region: loc_var.region,
                                 });
@@ -240,7 +240,7 @@ fn to_pending_def<'a>(
                     Some((
                         Output::default(),
                         PendingDef::Alias {
-                            name: Located {
+                            name: Loc {
                                 region: name.region,
                                 value: symbol,
                             },
@@ -261,6 +261,8 @@ fn to_pending_def<'a>(
             }
         }
 
+        Opaque { .. } => todo_opaques!(),
+
         Expect(_) => todo!(),
 
         SpaceBefore(sub_def, _) | SpaceAfter(sub_def, _) => {
@@ -273,9 +275,9 @@ fn to_pending_def<'a>(
 
 fn pending_typed_body<'a>(
     env: &mut Env<'a>,
-    loc_pattern: &'a Located<ast::Pattern<'a>>,
-    loc_ann: &'a Located<ast::TypeAnnotation<'a>>,
-    loc_expr: &'a Located<ast::Expr<'a>>,
+    loc_pattern: &'a Loc<ast::Pattern<'a>>,
+    loc_ann: &'a Loc<ast::TypeAnnotation<'a>>,
+    loc_expr: &'a Loc<ast::Expr<'a>>,
     scope: &mut Scope,
     pattern_type: PatternType,
 ) -> (Output, PendingDef<'a>) {
@@ -297,9 +299,9 @@ fn pending_typed_body<'a>(
 fn from_pending_alias<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    name: Located<Symbol>,
-    vars: Vec<Located<Lowercase>>,
-    ann: &'a Located<ast::TypeAnnotation<'a>>,
+    name: Loc<Symbol>,
+    vars: Vec<Loc<Lowercase>>,
+    ann: &'a Loc<ast::TypeAnnotation<'a>>,
     mut output: Output,
 ) -> Output {
     let symbol = name.value;
@@ -322,7 +324,7 @@ fn from_pending_alias<'a>(
             for loc_lowercase in vars {
                 if !named_rigids.contains_key(&loc_lowercase.value) {
                     env.problem(Problem::PhantomTypeArgument {
-                        alias: symbol,
+                        typ: symbol,
                         variable_region: loc_lowercase.region,
                         variable_name: loc_lowercase.value.clone(),
                     });
@@ -512,7 +514,7 @@ fn canonicalize_pending_def<'a>(
                             // remove its generated name from the closure map.
                             let references =
                                 env.closures.remove(&closure_symbol).unwrap_or_else(|| {
-                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures) 
+                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures)
                             });
 
                             // TODO should we re-insert this function into env.closures?
@@ -681,7 +683,7 @@ fn canonicalize_pending_def<'a>(
                     // remove its generated name from the closure map.
                     let references =
                         env.closures.remove(&closure_symbol).unwrap_or_else(|| {
-                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures) 
+                            panic!( r"Tried to remove symbol {:?} from procedures, but it was not found: {:?}", closure_symbol, env.closures)
                         });
 
                     // TODO should we re-insert this function into env.closures?
@@ -787,7 +789,7 @@ pub fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
     original_scope: &Scope,
-    loc_defs: &'a [&'a Located<ast::Def<'a>>],
+    loc_defs: &'a [&'a Loc<ast::Def<'a>>],
     pattern_type: PatternType,
 ) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
@@ -1185,7 +1187,7 @@ pub fn sort_can_defs(
                                 symbol, refs_by_symbol
                             ),
                             Some((region, _)) => {
-                                loc_symbols.push(Located::at(*region, symbol));
+                                loc_symbols.push(Loc::at(*region, symbol));
                             }
                         }
                     }

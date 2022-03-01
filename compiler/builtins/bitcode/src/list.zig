@@ -36,7 +36,7 @@ pub const RocList = extern struct {
         }
 
         // otherwise, check if the refcount is one
-        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.bytes));
+        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.bytes));
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
@@ -210,6 +210,7 @@ pub fn listMap(
     }
 }
 
+// List.mapWithIndex : List before, (before, Nat -> after) -> List after
 pub fn listMapWithIndex(
     list: RocList,
     caller: Caller2,
@@ -231,7 +232,8 @@ pub fn listMapWithIndex(
         }
 
         while (i < size) : (i += 1) {
-            caller(data, @ptrCast(?[*]u8, &i), source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
+            // before, Nat -> after
+            caller(data, source_ptr + (i * old_element_width), @ptrCast(?[*]u8, &i), target_ptr + (i * new_element_width));
         }
 
         return output;
@@ -550,7 +552,8 @@ pub fn listKeepResult(
         var output = RocList.allocate(alignment, list.len(), list.len() * after_width);
         const target_ptr = output.bytes orelse unreachable;
 
-        var temporary = @ptrCast([*]u8, utils.alloc(result_width, alignment));
+        // TODO handle alloc failing!
+        var temporary = utils.alloc(result_width, alignment) orelse unreachable;
 
         if (data_is_owned) {
             inc_n_data(data, size);
@@ -614,7 +617,8 @@ pub fn listWalk(
         inc_n_data(data, list.len());
     }
 
-    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment);
+    // TODO handle alloc failing!
+    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment) orelse unreachable;
     var b1 = output orelse unreachable;
     var b2 = bytes_ptr;
 
@@ -660,7 +664,8 @@ pub fn listWalkBackwards(
         inc_n_data(data, list.len());
     }
 
-    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment);
+    // TODO handle alloc failing!
+    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment) orelse unreachable;
     var b1 = output orelse unreachable;
     var b2 = bytes_ptr;
 
@@ -708,7 +713,8 @@ pub fn listWalkUntil(
         return;
     }
 
-    const bytes_ptr: [*]u8 = utils.alloc(continue_stop_width, alignment);
+    // TODO handle alloc failing!
+    const bytes_ptr: [*]u8 = utils.alloc(continue_stop_width, alignment) orelse unreachable;
 
     // NOTE: assumes data bytes are the first bytes in a tag
     @memcpy(bytes_ptr, accum orelse unreachable, accum_width);
@@ -1282,7 +1288,7 @@ pub fn listSet(
     // `if inBounds then LowLevelListGet input index item else input`
     // so we don't do a bounds check here. Hence, the list is also non-empty,
     // because inserting into an empty list is always out of bounds
-    const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, bytes));
+    const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), bytes));
 
     if ((ptr - 1)[0] == utils.REFCOUNT_ONE) {
         return listSetInPlaceHelp(bytes, index, element, element_width, dec);

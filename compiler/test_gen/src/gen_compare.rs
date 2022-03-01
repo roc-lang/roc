@@ -146,14 +146,40 @@ fn neq_bool_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_record() {
     assert_evals_to!("{} == {}", true, bool);
     assert_evals_to!("{} != {}", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn record() {
+    assert_evals_to!(
+        "{ x: 123, y: \"Hello\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        "{ x: 234, y: \"Hello\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
+        false,
+        bool
+    );
+    assert_evals_to!(
+        "{ x: 123, y: \"World\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
+        false,
+        bool
+    );
+    assert_evals_to!(
+        "{ x: 123, y: \"Hello\", z: 1.11 } == { x: 123, y: \"Hello\", z: 3.14 }",
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn unit() {
     assert_evals_to!("Unit == Unit", true, bool);
     assert_evals_to!("Unit != Unit", false, bool);
@@ -167,7 +193,7 @@ fn newtype() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn small_str() {
     assert_evals_to!("\"aaa\" == \"aaa\"", true, bool);
     assert_evals_to!("\"aaa\" == \"bbb\"", false, bool);
@@ -175,7 +201,7 @@ fn small_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn large_str() {
     assert_evals_to!(
         indoc!(
@@ -205,7 +231,7 @@ fn large_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_result_tag_true() {
     assert_evals_to!(
         indoc!(
@@ -225,7 +251,7 @@ fn eq_result_tag_true() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_result_tag_false() {
     assert_evals_to!(
         indoc!(
@@ -245,7 +271,7 @@ fn eq_result_tag_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_expr() {
     assert_evals_to!(
         indoc!(
@@ -267,7 +293,7 @@ fn eq_expr() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_linked_list() {
     assert_evals_to!(
         indoc!(
@@ -325,7 +351,7 @@ fn eq_linked_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_linked_list_false() {
     assert_evals_to!(
         indoc!(
@@ -347,7 +373,40 @@ fn eq_linked_list_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-wasm"))]
+fn eq_linked_list_long() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                prependOnes = \n, tail ->
+                    if n == 0 then
+                        tail
+                    else
+                        prependOnes (n-1) (Cons 1 tail)
+
+                main =
+                    n = 100_000
+
+                    x : LinkedList I64
+                    x = prependOnes n (Cons 999 Nil)
+
+                    y : LinkedList I64
+                    y = prependOnes n (Cons 123 Nil)
+
+                    y == x
+                "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_nullable_expr() {
     assert_evals_to!(
         indoc!(
@@ -369,18 +428,19 @@ fn eq_nullable_expr() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+
 fn eq_rosetree() {
     assert_evals_to!(
         indoc!(
             r#"
-                Rose a : [ Rose (List (Rose a)) ]
+                Rose a : [ Rose a (List (Rose a)) ]
 
                 x : Rose I64
-                x = Rose []
+                x = Rose 0 []
 
                 y : Rose I64
-                y = Rose []
+                y = Rose 0 []
 
                 x == y
                 "#
@@ -392,15 +452,45 @@ fn eq_rosetree() {
     assert_evals_to!(
         indoc!(
             r#"
-                Rose a : [ Rose (List (Rose a)) ]
+                Rose a : [ Rose a (List (Rose a)) ]
 
                 x : Rose I64
-                x = Rose []
+                x = Rose 0 []
 
                 y : Rose I64
-                y = Rose []
+                y = Rose 0 []
 
                 x != y
+                "#
+        ),
+        false,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Rose a : [ Rose a (List (Rose a)) ]
+
+                a1 : Rose I64
+                a1 = Rose 999 []
+
+                a2 : Rose I64
+                a2 = Rose 0 [a1, a1]
+
+                a3 : Rose I64
+                a3 = Rose 0 [a2, a2, a2]
+
+                b1 : Rose I64
+                b1 = Rose 111 []
+
+                b2 : Rose I64
+                b2 = Rose 0 [a1, b1]
+
+                b3 : Rose I64
+                b3 = Rose 0 [a2, a2, b2]
+
+                a3 == b3
                 "#
         ),
         false,
@@ -409,7 +499,49 @@ fn eq_rosetree() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-wasm"))]
+fn eq_different_rosetrees() {
+    // Requires two different equality procedures for `List (Rose I64)` and `List (Rose Str)`
+    // even though both appear in the mono Layout as `List(RecursivePointer)`
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Rose a : [ Rose a (List (Rose a)) ]
+
+                a1 : Rose I64
+                a1 = Rose 999 []
+                a2 : Rose I64
+                a2 = Rose 0 [a1]
+
+                b1 : Rose I64
+                b1 = Rose 999 []
+                b2 : Rose I64
+                b2 = Rose 0 [b1]
+
+                ab = a2 == b2
+
+                c1 : Rose Str
+                c1 = Rose "hello" []
+                c2 : Rose Str
+                c2 = Rose "" [c1]
+
+                d1 : Rose Str
+                d1 = Rose "hello" []
+                d2 : Rose Str
+                d2 = Rose "" [d1]
+
+                cd = c2 == d2
+
+                ab && cd
+        "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn rosetree_with_tag() {
     // currently stack overflows in type checking
@@ -419,10 +551,10 @@ fn rosetree_with_tag() {
             r#"
                 Rose a : [ Rose (Result (List (Rose a)) I64) ]
 
-                x : Rose I64 
+                x : Rose I64
                 x = (Rose (Ok []))
 
-                y : Rose I64 
+                y : Rose I64
                 y = (Rose (Ok []))
 
                 x == y
@@ -434,49 +566,49 @@ fn rosetree_with_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_eq_empty() {
     assert_evals_to!("[] == []", true, bool);
     assert_evals_to!("[] != []", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_eq_by_length() {
     assert_evals_to!("[1] == []", false, bool);
     assert_evals_to!("[] == [1]", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_eq_compare_pointwise() {
     assert_evals_to!("[1] == [1]", true, bool);
     assert_evals_to!("[2] == [1]", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_eq_nested() {
     assert_evals_to!("[[1]] == [[1]]", true, bool);
     assert_evals_to!("[[2]] == [[1]]", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_neq_compare_pointwise() {
     assert_evals_to!("[1] != [1]", false, bool);
     assert_evals_to!("[2] != [1]", true, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_neq_nested() {
     assert_evals_to!("[[1]] != [[1]]", false, bool);
     assert_evals_to!("[[2]] != [[1]]", true, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn compare_union_same_content() {
     assert_evals_to!(
         indoc!(
@@ -498,17 +630,17 @@ fn compare_union_same_content() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn compare_recursive_union_same_content() {
     assert_evals_to!(
         indoc!(
             r#"
                 Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64 ]
 
-                v1 : Expr 
+                v1 : Expr
                 v1 = Val1 42
 
-                v2 : Expr 
+                v2 : Expr
                 v2 = Val2 42
 
                 v1 == v2
@@ -520,17 +652,17 @@ fn compare_recursive_union_same_content() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn compare_nullable_recursive_union_same_content() {
     assert_evals_to!(
         indoc!(
             r#"
                 Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64, Empty ]
 
-                v1 : Expr 
+                v1 : Expr
                 v1 = Val1 42
 
-                v2 : Expr 
+                v2 : Expr
                 v2 = Val2 42
 
                 v1 == v2

@@ -7,6 +7,7 @@ edition = "2018"
 
 [dependencies]
 roc_collections = { path = "../collections" }
+roc_error_macros = { path = "../../error_macros" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }

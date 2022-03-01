@@ -17,6 +17,8 @@ roc_problem = { path = "../compiler/problem" }
 roc_types = { path = "../compiler/types" }
 roc_unify = { path = "../compiler/unify"}
 roc_load = { path = "../compiler/load" }
+roc_target = { path = "../compiler/roc_target" }
+roc_error_macros = { path = "../error_macros" }
 arrayvec = "0.7.2"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 libc = "0.2.106"

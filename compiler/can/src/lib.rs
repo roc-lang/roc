@@ -6,6 +6,7 @@ pub mod builtins;
 pub mod constraint;
 pub mod constraint_soa;
 pub mod def;
+pub mod effect_module;
 pub mod env;
 pub mod expected;
 pub mod expr;

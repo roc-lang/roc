@@ -1,10 +1,10 @@
 use crate::annotation::{Formattable, Newlines, Parens};
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt};
-use bumpalo::collections::String;
+use crate::Buf;
 use roc_parse::ast::{Base, Pattern};
 
-pub fn fmt_pattern<'a>(
-    buf: &mut String<'a>,
+pub fn fmt_pattern<'a, 'buf>(
+    buf: &mut Buf<'buf>,
     pattern: &'a Pattern<'a>,
     indent: u16,
     parens: Parens,
@@ -12,7 +12,7 @@ pub fn fmt_pattern<'a>(
     pattern.format_with_options(buf, parens, Newlines::No, indent);
 }
 
-impl<'a> Formattable<'a> for Pattern<'a> {
+impl<'a> Formattable for Pattern<'a> {
     fn is_multiline(&self) -> bool {
         // Theory: a pattern should only be multiline when it contains a comment
         match self {
@@ -30,11 +30,13 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             Pattern::Identifier(_)
             | Pattern::GlobalTag(_)
             | Pattern::PrivateTag(_)
+            | Pattern::OpaqueRef(_)
             | Pattern::Apply(_, _)
-            | Pattern::NumLiteral(_)
+            | Pattern::NumLiteral(..)
             | Pattern::NonBase10Literal { .. }
-            | Pattern::FloatLiteral(_)
+            | Pattern::FloatLiteral(..)
             | Pattern::StrLiteral(_)
+            | Pattern::SingleQuote(_)
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
             | Pattern::MalformedIdent(_, _)
@@ -42,9 +44,9 @@ impl<'a> Formattable<'a> for Pattern<'a> {
         }
     }
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut String<'a>,
+        buf: &mut Buf<'buf>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -52,11 +54,16 @@ impl<'a> Formattable<'a> for Pattern<'a> {
         use self::Pattern::*;
 
         match self {
-            Identifier(string) => buf.push_str(string),
-            GlobalTag(name) | PrivateTag(name) => {
+            Identifier(string) => {
+                buf.indent(indent);
+                buf.push_str(string)
+            }
+            GlobalTag(name) | PrivateTag(name) | OpaqueRef(name) => {
+                buf.indent(indent);
                 buf.push_str(name);
             }
             Apply(loc_pattern, loc_arg_patterns) => {
+                buf.indent(indent);
                 // Sometimes, an Apply pattern needs parens around it.
                 // In particular when an Apply's argument is itself an Apply (> 0) arguments
                 let parens = !loc_arg_patterns.is_empty() && parens == Parens::InApply;
@@ -68,7 +75,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 loc_pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
 
                 for loc_arg in loc_arg_patterns.iter() {
-                    buf.push(' ');
+                    buf.spaces(1);
                     loc_arg.format_with_options(buf, Parens::InApply, Newlines::No, indent);
                 }
 
@@ -77,7 +84,9 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 }
             }
             RecordDestructure(loc_patterns) => {
-                buf.push_str("{ ");
+                buf.indent(indent);
+                buf.push_str("{");
+                buf.spaces(1);
 
                 let mut it = loc_patterns.iter().peekable();
 
@@ -85,7 +94,8 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                     loc_pattern.format(buf, indent);
 
                     if it.peek().is_some() {
-                        buf.push_str(", ");
+                        buf.push_str(",");
+                        buf.spaces(1);
                     }
                 }
 
@@ -93,24 +103,32 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             }
 
             RequiredField(name, loc_pattern) => {
+                buf.indent(indent);
                 buf.push_str(name);
-                buf.push_str(": ");
+                buf.push_str(":");
+                buf.spaces(1);
                 loc_pattern.format(buf, indent);
             }
 
             OptionalField(name, loc_pattern) => {
+                buf.indent(indent);
                 buf.push_str(name);
-                buf.push_str(" ? ");
+                buf.push_str(" ?");
+                buf.spaces(1);
                 loc_pattern.format(buf, indent);
             }
 
-            NumLiteral(string) => buf.push_str(string),
-            NonBase10Literal {
+            &NumLiteral(string) => {
+                buf.indent(indent);
+                buf.push_str(string);
+            }
+            &NonBase10Literal {
                 base,
                 string,
                 is_negative,
             } => {
-                if *is_negative {
+                buf.indent(indent);
+                if is_negative {
                     buf.push('-');
                 }
 
@@ -123,11 +141,20 @@ impl<'a> Formattable<'a> for Pattern<'a> {
 
                 buf.push_str(string);
             }
-            FloatLiteral(string) => buf.push_str(string),
+            &FloatLiteral(string) => {
+                buf.indent(indent);
+                buf.push_str(string);
+            }
             StrLiteral(literal) => {
                 todo!("Format string literal: {:?}", literal);
             }
+            SingleQuote(string) => {
+                buf.push('\'');
+                buf.push_str(string);
+                buf.push('\'');
+            }
             Underscore(name) => {
+                buf.indent(indent);
                 buf.push('_');
                 buf.push_str(name);
             }
@@ -152,8 +179,12 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             }
 
             // Malformed
-            Malformed(string) | MalformedIdent(string, _) => buf.push_str(string),
+            Malformed(string) | MalformedIdent(string, _) => {
+                buf.indent(indent);
+                buf.push_str(string);
+            }
             QualifiedIdentifier { module_name, ident } => {
+                buf.indent(indent);
                 if !module_name.is_empty() {
                     buf.push_str(module_name);
                     buf.push('.');

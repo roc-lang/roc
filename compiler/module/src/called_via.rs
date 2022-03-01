@@ -45,10 +45,12 @@ pub enum BinOp {
     GreaterThanOrEq,
     And,
     Or,
-    Pizza, // lowest precedence
+    Pizza,
     Assignment,
-    HasType,
+    IsAliasType,
+    IsOpaqueType,
     Backpassing,
+    // lowest precedence
 }
 
 impl BinOp {
@@ -58,7 +60,7 @@ impl BinOp {
             Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan => 1,
             DoubleSlash | DoublePercent | Equals | NotEquals | LessThanOrEq | GreaterThanOrEq
             | And | Or | Pizza => 2,
-            Assignment | HasType | Backpassing => unreachable!(),
+            Assignment | IsAliasType | IsOpaqueType | Backpassing => unreachable!(),
         }
     }
 }
@@ -102,7 +104,7 @@ impl BinOp {
             Equals | NotEquals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => {
                 NonAssociative
             }
-            Assignment | HasType | Backpassing => unreachable!(),
+            Assignment | IsAliasType | IsOpaqueType | Backpassing => unreachable!(),
         }
     }
 
@@ -115,7 +117,7 @@ impl BinOp {
             And => 3,
             Or => 2,
             Pizza => 1,
-            Assignment | HasType | Backpassing => unreachable!(),
+            Assignment | IsAliasType | IsOpaqueType | Backpassing => unreachable!(),
         }
     }
 }
@@ -153,7 +155,8 @@ impl std::fmt::Display for BinOp {
             Or => "||",
             Pizza => "|>",
             Assignment => "=",
-            HasType => ":",
+            IsAliasType => ":",
+            IsOpaqueType => ":=",
             Backpassing => "<-",
         };
 

@@ -216,7 +216,7 @@ pub const RocDict = extern struct {
         }
 
         // otherwise, check if the refcount is one
-        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.dict_bytes));
+        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.dict_bytes));
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
@@ -750,7 +750,8 @@ pub fn dictWalk(
     const alignment_u32 = alignment.toU32();
     // allocate space to write the result of the stepper into
     // experimentally aliasing the accum and output pointers is not a good idea
-    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment_u32);
+    // TODO handle alloc failing!
+    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment_u32) orelse unreachable;
     var b1 = output orelse unreachable;
     var b2 = bytes_ptr;
 

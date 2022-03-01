@@ -1,17 +1,21 @@
+use bumpalo::Bump;
 use roc_can::constraint::Constraint::{self, *};
+use roc_can::constraint::PresenceConstraint;
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
     AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
     SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
-use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory};
-use roc_unify::unify::{unify, Unified::*};
+use roc_types::types::{
+    gather_fields_unsorted_iter, AliasKind, Category, ErrorType, PatternCategory,
+};
+use roc_unify::unify::{unify, Mode, Unified::*};
 use std::collections::hash_map::Entry;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
@@ -75,8 +79,37 @@ pub enum TypeError {
 
 #[derive(Clone, Debug, Default)]
 pub struct Env {
-    pub vars_by_symbol: MutMap<Symbol, Variable>,
-    pub aliases: MutMap<Symbol, Alias>,
+    symbols: Vec<Symbol>,
+    variables: Vec<Variable>,
+}
+
+impl Env {
+    pub fn vars_by_symbol(&self) -> MutMap<Symbol, Variable> {
+        let it1 = self.symbols.iter().copied();
+        let it2 = self.variables.iter().copied();
+
+        it1.zip(it2).collect()
+    }
+
+    fn get_var_by_symbol(&self, symbol: &Symbol) -> Option<Variable> {
+        self.symbols
+            .iter()
+            .position(|s| s == symbol)
+            .map(|index| self.variables[index])
+    }
+
+    fn insert_symbol_var_if_vacant(&mut self, symbol: Symbol, var: Variable) {
+        match self.symbols.iter().position(|s| *s == symbol) {
+            None => {
+                // symbol is not in vars_by_symbol yet; insert it
+                self.symbols.push(symbol);
+                self.variables.push(var);
+            }
+            Some(_) => {
+                // do nothing
+            }
+        }
+    }
 }
 
 const DEFAULT_POOLS: usize = 8;
@@ -160,7 +193,11 @@ pub fn run_in_place(
         mark: Mark::NONE.next(),
     };
     let rank = Rank::toplevel();
+
+    let arena = Bump::new();
+
     let state = solve(
+        &arena,
         env,
         state,
         rank,
@@ -174,10 +211,26 @@ pub fn run_in_place(
     state.env
 }
 
+enum After {
+    CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
+}
+
+enum Work<'a> {
+    Constraint {
+        env: &'a Env,
+        rank: Rank,
+        constraint: &'a Constraint,
+        after: Option<After>,
+    },
+    /// Something to be done after a constraint and all its dependencies are fully solved.
+    After(After),
+}
+
 #[allow(clippy::too_many_arguments)]
 fn solve(
+    arena: &Bump,
     env: &Env,
-    state: State,
+    mut state: State,
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<TypeError>,
@@ -185,446 +238,514 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
-    match constraint {
-        True => state,
-        SaveTheEnvironment => {
-            // NOTE deviation: elm only copies the env into the state on SaveTheEnvironment
-            let mut copy = state;
+    let mut stack = vec![Work::Constraint {
+        env,
+        rank,
+        constraint,
+        after: None,
+    }];
 
-            copy.env = env.clone();
-
-            copy
-        }
-        Eq(typ, expectation, category, region) => {
-            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-            let expected = type_to_var(
-                subs,
+    while let Some(work_item) = stack.pop() {
+        let (env, rank, constraint) = match work_item {
+            Work::After(After::CheckForInfiniteTypes(def_vars)) => {
+                for (symbol, loc_var) in def_vars.iter() {
+                    check_for_infinite_type(subs, problems, *symbol, *loc_var);
+                }
+                // No constraint to be solved
+                continue;
+            }
+            Work::Constraint {
+                env,
                 rank,
-                pools,
-                cached_aliases,
-                expectation.get_type_ref(),
-            );
-
-            match unify(subs, actual, expected) {
-                Success(vars) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    state
+                constraint,
+                after,
+            } => {
+                // Push the `after` on first so that we look at it immediately after finishing all
+                // the children of this constraint.
+                if let Some(after) = after {
+                    stack.push(Work::After(after));
                 }
-                Failure(vars, actual_type, expected_type) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    let problem = TypeError::BadExpr(
-                        *region,
-                        category.clone(),
-                        actual_type,
-                        expectation.clone().replace(expected_type),
-                    );
-
-                    problems.push(problem);
-
-                    state
-                }
-                BadType(vars, problem) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    problems.push(TypeError::BadType(problem));
-
-                    state
-                }
+                (env, rank, constraint)
             }
-        }
-        Store(source, target, _filename, _linenr) => {
-            // a special version of Eq that is used to store types in the AST.
-            // IT DOES NOT REPORT ERRORS!
-            let actual = type_to_var(subs, rank, pools, cached_aliases, source);
-            let target = *target;
+        };
 
-            match unify(subs, actual, target) {
-                Success(vars) => {
-                    introduce(subs, rank, pools, &vars);
+        state = match constraint {
+            True => state,
+            SaveTheEnvironment => {
+                // NOTE deviation: elm only copies the env into the state on SaveTheEnvironment
+                let mut copy = state;
 
-                    state
-                }
-                Failure(vars, _actual_type, _expected_type) => {
-                    introduce(subs, rank, pools, &vars);
+                copy.env = env.clone();
 
-                    // ERROR NOT REPORTED
-
-                    state
-                }
-                BadType(vars, _problem) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    // ERROR NOT REPORTED
-
-                    state
-                }
+                copy
             }
-        }
-        Lookup(symbol, expectation, region) => {
-            match env.vars_by_symbol.get(symbol) {
-                Some(var) => {
-                    // Deep copy the vars associated with this symbol before unifying them.
-                    // Otherwise, suppose we have this:
-                    //
-                    // identity = \a -> a
-                    //
-                    // x = identity 5
-                    //
-                    // When we call (identity 5), it's important that we not unify
-                    // on identity's original vars. If we do, the type of `identity` will be
-                    // mutated to be `Int -> Int` instead of `a -> `, which would be incorrect;
-                    // the type of `identity` is more general than that!
-                    //
-                    // Instead, we want to unify on a *copy* of its vars. If the copy unifies
-                    // successfully (in this case, to `Int -> Int`), we can use that to
-                    // infer the type of this lookup (in this case, `Int`) without ever
-                    // having mutated the original.
-                    //
-                    // If this Lookup is targeting a value in another module,
-                    // then we copy from that module's Subs into our own. If the value
-                    // is being looked up in this module, then we use our Subs as both
-                    // the source and destination.
-                    let actual = deep_copy_var(subs, rank, pools, *var);
-                    let expected = type_to_var(
-                        subs,
-                        rank,
-                        pools,
-                        cached_aliases,
-                        expectation.get_type_ref(),
-                    );
-                    match unify(subs, actual, expected) {
-                        Success(vars) => {
-                            introduce(subs, rank, pools, &vars);
-
-                            state
-                        }
-
-                        Failure(vars, actual_type, expected_type) => {
-                            introduce(subs, rank, pools, &vars);
-
-                            let problem = TypeError::BadExpr(
-                                *region,
-                                Category::Lookup(*symbol),
-                                actual_type,
-                                expectation.clone().replace(expected_type),
-                            );
-
-                            problems.push(problem);
-
-                            state
-                        }
-                        BadType(vars, problem) => {
-                            introduce(subs, rank, pools, &vars);
-
-                            problems.push(TypeError::BadType(problem));
-
-                            state
-                        }
-                    }
-                }
-                None => {
-                    problems.push(TypeError::UnexposedLookup(*symbol));
-
-                    state
-                }
-            }
-        }
-        And(sub_constraints) => {
-            let mut state = state;
-
-            for sub_constraint in sub_constraints.iter() {
-                state = solve(
-                    env,
-                    state,
+            Eq(typ, expectation, category, region) => {
+                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let expected = type_to_var(
+                    subs,
                     rank,
                     pools,
-                    problems,
                     cached_aliases,
-                    subs,
-                    sub_constraint,
+                    expectation.get_type_ref(),
                 );
-            }
 
-            state
-        }
-        Pattern(region, category, typ, expectation) => {
-            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-            let expected = type_to_var(
-                subs,
-                rank,
-                pools,
-                cached_aliases,
-                expectation.get_type_ref(),
-            );
+                match unify(subs, actual, expected, Mode::EQ) {
+                    Success(vars) => {
+                        introduce(subs, rank, pools, &vars);
 
-            match unify(subs, actual, expected) {
-                Success(vars) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    state
-                }
-                Failure(vars, actual_type, expected_type) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    let problem = TypeError::BadPattern(
-                        *region,
-                        category.clone(),
-                        actual_type,
-                        expectation.clone().replace(expected_type),
-                    );
-
-                    problems.push(problem);
-
-                    state
-                }
-                BadType(vars, problem) => {
-                    introduce(subs, rank, pools, &vars);
-
-                    problems.push(TypeError::BadType(problem));
-
-                    state
-                }
-            }
-        }
-        Let(let_con) => {
-            match &let_con.ret_constraint {
-                True if let_con.rigid_vars.is_empty() => {
-                    introduce(subs, rank, pools, &let_con.flex_vars);
-
-                    // If the return expression is guaranteed to solve,
-                    // solve the assignments themselves and move on.
-                    solve(
-                        env,
-                        state,
-                        rank,
-                        pools,
-                        problems,
-                        cached_aliases,
-                        subs,
-                        &let_con.defs_constraint,
-                    )
-                }
-                ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
-                    let state = solve(
-                        env,
-                        state,
-                        rank,
-                        pools,
-                        problems,
-                        cached_aliases,
-                        subs,
-                        &let_con.defs_constraint,
-                    );
-
-                    // Add a variable for each def to new_vars_by_env.
-                    let mut local_def_vars = LocalDefVarsVec::with_length(let_con.def_types.len());
-
-                    for (symbol, loc_type) in let_con.def_types.iter() {
-                        let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
-
-                        local_def_vars.push((
-                            *symbol,
-                            Located {
-                                value: var,
-                                region: loc_type.region,
-                            },
-                        ));
+                        state
                     }
+                    Failure(vars, actual_type, expected_type) => {
+                        introduce(subs, rank, pools, &vars);
 
-                    let mut new_env = env.clone();
-                    for (symbol, loc_var) in local_def_vars.iter() {
-                        match new_env.vars_by_symbol.entry(*symbol) {
-                            Entry::Occupied(_) => {
-                                // keep the existing value
+                        let problem = TypeError::BadExpr(
+                            *region,
+                            category.clone(),
+                            actual_type,
+                            expectation.clone().replace(expected_type),
+                        );
+
+                        problems.push(problem);
+
+                        state
+                    }
+                    BadType(vars, problem) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        problems.push(TypeError::BadType(problem));
+
+                        state
+                    }
+                }
+            }
+            Store(source, target, _filename, _linenr) => {
+                // a special version of Eq that is used to store types in the AST.
+                // IT DOES NOT REPORT ERRORS!
+                let actual = type_to_var(subs, rank, pools, cached_aliases, source);
+                let target = *target;
+
+                match unify(subs, actual, target, Mode::EQ) {
+                    Success(vars) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        state
+                    }
+                    Failure(vars, _actual_type, _expected_type) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        // ERROR NOT REPORTED
+
+                        state
+                    }
+                    BadType(vars, _) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        // ERROR NOT REPORTED
+
+                        state
+                    }
+                }
+            }
+            Lookup(symbol, expectation, region) => {
+                match env.get_var_by_symbol(symbol) {
+                    Some(var) => {
+                        // Deep copy the vars associated with this symbol before unifying them.
+                        // Otherwise, suppose we have this:
+                        //
+                        // identity = \a -> a
+                        //
+                        // x = identity 5
+                        //
+                        // When we call (identity 5), it's important that we not unify
+                        // on identity's original vars. If we do, the type of `identity` will be
+                        // mutated to be `Int -> Int` instead of `a -> `, which would be incorrect;
+                        // the type of `identity` is more general than that!
+                        //
+                        // Instead, we want to unify on a *copy* of its vars. If the copy unifies
+                        // successfully (in this case, to `Int -> Int`), we can use that to
+                        // infer the type of this lookup (in this case, `Int`) without ever
+                        // having mutated the original.
+                        //
+                        // If this Lookup is targeting a value in another module,
+                        // then we copy from that module's Subs into our own. If the value
+                        // is being looked up in this module, then we use our Subs as both
+                        // the source and destination.
+                        let actual = deep_copy_var(subs, rank, pools, var);
+                        let expected = type_to_var(
+                            subs,
+                            rank,
+                            pools,
+                            cached_aliases,
+                            expectation.get_type_ref(),
+                        );
+                        match unify(subs, actual, expected, Mode::EQ) {
+                            Success(vars) => {
+                                introduce(subs, rank, pools, &vars);
+
+                                state
                             }
-                            Entry::Vacant(vacant) => {
-                                vacant.insert(loc_var.value);
+
+                            Failure(vars, actual_type, expected_type) => {
+                                introduce(subs, rank, pools, &vars);
+
+                                let problem = TypeError::BadExpr(
+                                    *region,
+                                    Category::Lookup(*symbol),
+                                    actual_type,
+                                    expectation.clone().replace(expected_type),
+                                );
+
+                                problems.push(problem);
+
+                                state
+                            }
+                            BadType(vars, problem) => {
+                                introduce(subs, rank, pools, &vars);
+
+                                problems.push(TypeError::BadType(problem));
+
+                                state
                             }
                         }
                     }
+                    None => {
+                        problems.push(TypeError::UnexposedLookup(*symbol));
 
-                    let new_state = solve(
-                        &new_env,
-                        state,
-                        rank,
-                        pools,
-                        problems,
-                        cached_aliases,
-                        subs,
-                        ret_con,
-                    );
-
-                    for (symbol, loc_var) in local_def_vars.iter() {
-                        check_for_infinite_type(subs, problems, *symbol, *loc_var);
+                        state
                     }
-
-                    new_state
                 }
-                ret_con => {
-                    let rigid_vars = &let_con.rigid_vars;
-                    let flex_vars = &let_con.flex_vars;
-
-                    // work in the next pool to localize header
-                    let next_rank = rank.next();
-
-                    // introduce variables
-                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-                        subs.set_rank(var, next_rank);
-                    }
-
-                    // determine the next pool
-                    let next_pools;
-                    if next_rank.into_usize() < pools.len() {
-                        next_pools = pools
-                    } else {
-                        // we should be off by one at this point
-                        debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
-                        pools.extend_to(next_rank.into_usize());
-                        next_pools = pools;
-                    }
-
-                    let pool: &mut Vec<Variable> = next_pools.get_mut(next_rank);
-
-                    // Replace the contents of this pool with rigid_vars and flex_vars
-                    pool.clear();
-                    pool.reserve(rigid_vars.len() + flex_vars.len());
-                    pool.extend(rigid_vars.iter());
-                    pool.extend(flex_vars.iter());
-
-                    // run solver in next pool
-
-                    // Add a variable for each def to local_def_vars.
-                    let mut local_def_vars = LocalDefVarsVec::with_length(let_con.def_types.len());
-
-                    for (symbol, loc_type) in let_con.def_types.iter() {
-                        let def_type = &loc_type.value;
-
-                        let var =
-                            type_to_var(subs, next_rank, next_pools, cached_aliases, def_type);
-
-                        local_def_vars.push((
-                            *symbol,
-                            Located {
-                                value: var,
-                                region: loc_type.region,
-                            },
-                        ));
-                    }
-
-                    // Solve the assignments' constraints first.
-                    let State {
-                        env: saved_env,
-                        mark,
-                    } = solve(
+            }
+            And(sub_constraints) => {
+                for sub_constraint in sub_constraints.iter().rev() {
+                    stack.push(Work::Constraint {
                         env,
-                        state,
-                        next_rank,
-                        next_pools,
-                        problems,
-                        cached_aliases,
-                        subs,
-                        &let_con.defs_constraint,
-                    );
+                        rank,
+                        constraint: sub_constraint,
+                        after: None,
+                    })
+                }
 
-                    let young_mark = mark;
-                    let visit_mark = young_mark.next();
-                    let final_mark = visit_mark.next();
+                state
+            }
+            Pattern(region, category, typ, expectation)
+            | Present(typ, PresenceConstraint::Pattern(region, category, expectation)) => {
+                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let expected = type_to_var(
+                    subs,
+                    rank,
+                    pools,
+                    cached_aliases,
+                    expectation.get_type_ref(),
+                );
 
-                    debug_assert_eq!(
-                        {
-                            let offenders = next_pools
-                                .get(next_rank)
+                let mode = match constraint {
+                    Present(_, _) => Mode::PRESENT,
+                    _ => Mode::EQ,
+                };
+
+                match unify(subs, actual, expected, mode) {
+                    Success(vars) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        state
+                    }
+                    Failure(vars, actual_type, expected_type) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        let problem = TypeError::BadPattern(
+                            *region,
+                            category.clone(),
+                            actual_type,
+                            expectation.clone().replace(expected_type),
+                        );
+
+                        problems.push(problem);
+
+                        state
+                    }
+                    BadType(vars, problem) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        problems.push(TypeError::BadType(problem));
+
+                        state
+                    }
+                }
+            }
+            Let(let_con) => {
+                match &let_con.ret_constraint {
+                    True if let_con.rigid_vars.is_empty() => {
+                        introduce(subs, rank, pools, &let_con.flex_vars);
+
+                        // If the return expression is guaranteed to solve,
+                        // solve the assignments themselves and move on.
+                        stack.push(Work::Constraint {
+                            env,
+                            rank,
+                            constraint: &let_con.defs_constraint,
+                            after: None,
+                        });
+                        state
+                    }
+                    ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
+                        // TODO: make into `WorkItem` with `After`
+                        let state = solve(
+                            arena,
+                            env,
+                            state,
+                            rank,
+                            pools,
+                            problems,
+                            cached_aliases,
+                            subs,
+                            &let_con.defs_constraint,
+                        );
+
+                        // Add a variable for each def to new_vars_by_env.
+                        let mut local_def_vars =
+                            LocalDefVarsVec::with_length(let_con.def_types.len());
+
+                        for (symbol, loc_type) in let_con.def_types.iter() {
+                            let var =
+                                type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
+
+                            local_def_vars.push((
+                                *symbol,
+                                Loc {
+                                    value: var,
+                                    region: loc_type.region,
+                                },
+                            ));
+                        }
+
+                        let mut new_env = env.clone();
+                        for (symbol, loc_var) in local_def_vars.iter() {
+                            new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+                        }
+
+                        stack.push(Work::Constraint {
+                            env: arena.alloc(new_env),
+                            rank,
+                            constraint: ret_con,
+                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
+                        });
+
+                        state
+                    }
+                    ret_con => {
+                        let rigid_vars = &let_con.rigid_vars;
+                        let flex_vars = &let_con.flex_vars;
+
+                        // work in the next pool to localize header
+                        let next_rank = rank.next();
+
+                        // introduce variables
+                        for &var in rigid_vars.iter().chain(flex_vars.iter()) {
+                            subs.set_rank(var, next_rank);
+                        }
+
+                        // determine the next pool
+                        if next_rank.into_usize() < pools.len() {
+                            // Nothing to do, we already accounted for the next rank, no need to
+                            // adjust the pools
+                        } else {
+                            // we should be off by one at this point
+                            debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
+                            pools.extend_to(next_rank.into_usize());
+                        }
+
+                        let pool: &mut Vec<Variable> = pools.get_mut(next_rank);
+
+                        // Replace the contents of this pool with rigid_vars and flex_vars
+                        pool.clear();
+                        pool.reserve(rigid_vars.len() + flex_vars.len());
+                        pool.extend(rigid_vars.iter());
+                        pool.extend(flex_vars.iter());
+
+                        // run solver in next pool
+
+                        // Add a variable for each def to local_def_vars.
+                        let mut local_def_vars =
+                            LocalDefVarsVec::with_length(let_con.def_types.len());
+
+                        for (symbol, loc_type) in let_con.def_types.iter() {
+                            let def_type = &loc_type.value;
+
+                            let var = type_to_var(subs, next_rank, pools, cached_aliases, def_type);
+
+                            local_def_vars.push((
+                                *symbol,
+                                Loc {
+                                    value: var,
+                                    region: loc_type.region,
+                                },
+                            ));
+                        }
+
+                        // Solve the assignments' constraints first.
+                        // TODO: make into `WorkItem` with `After`
+                        let State {
+                            env: saved_env,
+                            mark,
+                        } = solve(
+                            arena,
+                            env,
+                            state,
+                            next_rank,
+                            pools,
+                            problems,
+                            cached_aliases,
+                            subs,
+                            &let_con.defs_constraint,
+                        );
+
+                        let young_mark = mark;
+                        let visit_mark = young_mark.next();
+                        let final_mark = visit_mark.next();
+
+                        debug_assert_eq!(
+                            {
+                                let offenders = pools
+                                    .get(next_rank)
+                                    .iter()
+                                    .filter(|var| {
+                                        let current_rank =
+                                            subs.get_rank(roc_types::subs::Variable::clone(var));
+
+                                        current_rank.into_usize() > next_rank.into_usize()
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let result = offenders.len();
+
+                                if result > 0 {
+                                    dbg!(&subs, &offenders, &let_con.def_types);
+                                }
+
+                                result
+                            },
+                            0
+                        );
+
+                        // pop pool
+                        generalize(subs, young_mark, visit_mark, next_rank, pools);
+
+                        pools.get_mut(next_rank).clear();
+
+                        // check that things went well
+                        debug_assert!({
+                            // NOTE the `subs.redundant` check is added for the uniqueness
+                            // inference, and does not come from elm. It's unclear whether this is
+                            // a bug with uniqueness inference (something is redundant that
+                            // shouldn't be) or that it just never came up in elm.
+                            let failing: Vec<_> = rigid_vars
                                 .iter()
-                                .filter(|var| {
-                                    let current_rank =
-                                        subs.get_rank(roc_types::subs::Variable::clone(var));
-
-                                    current_rank.into_usize() > next_rank.into_usize()
+                                .filter(|&var| {
+                                    !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE
                                 })
-                                .collect::<Vec<_>>();
+                                .collect();
 
-                            let result = offenders.len();
-
-                            if result > 0 {
-                                dbg!(&subs, &offenders, &let_con.def_types);
+                            if !failing.is_empty() {
+                                println!("Rigids {:?}", &rigid_vars);
+                                println!("Failing {:?}", failing);
                             }
 
-                            result
-                        },
-                        0
-                    );
+                            failing.is_empty()
+                        });
 
-                    // pop pool
-                    generalize(subs, young_mark, visit_mark, next_rank, next_pools);
-
-                    next_pools.get_mut(next_rank).clear();
-
-                    // check that things went well
-                    debug_assert!({
-                        // NOTE the `subs.redundant` check is added for the uniqueness
-                        // inference, and does not come from elm. It's unclear whether this is
-                        // a bug with uniqueness inference (something is redundant that
-                        // shouldn't be) or that it just never came up in elm.
-                        let failing: Vec<_> = rigid_vars
-                            .iter()
-                            .filter(|&var| {
-                                !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE
-                            })
-                            .collect();
-
-                        if !failing.is_empty() {
-                            println!("Rigids {:?}", &rigid_vars);
-                            println!("Failing {:?}", failing);
+                        let mut new_env = env.clone();
+                        for (symbol, loc_var) in local_def_vars.iter() {
+                            new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                         }
 
-                        failing.is_empty()
-                    });
+                        // Note that this vars_by_symbol is the one returned by the
+                        // previous call to solve()
+                        let state_for_ret_con = State {
+                            env: saved_env,
+                            mark: final_mark,
+                        };
 
-                    let mut new_env = env.clone();
-                    for (symbol, loc_var) in local_def_vars.iter() {
-                        match new_env.vars_by_symbol.entry(*symbol) {
-                            Entry::Occupied(_) => {
-                                // keep the existing value
-                            }
-                            Entry::Vacant(vacant) => {
-                                vacant.insert(loc_var.value);
-                            }
-                        }
+                        // Now solve the body, using the new vars_by_symbol which includes
+                        // the assignments' name-to-variable mappings.
+                        stack.push(Work::Constraint {
+                            env: arena.alloc(new_env),
+                            rank,
+                            constraint: ret_con,
+                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
+                        });
+
+                        state_for_ret_con
                     }
-
-                    // Note that this vars_by_symbol is the one returned by the
-                    // previous call to solve()
-                    let temp_state = State {
-                        env: saved_env,
-                        mark: final_mark,
-                    };
-
-                    // Now solve the body, using the new vars_by_symbol which includes
-                    // the assignments' name-to-variable mappings.
-                    let new_state = solve(
-                        &new_env,
-                        temp_state,
-                        rank,
-                        next_pools,
-                        problems,
-                        cached_aliases,
-                        subs,
-                        ret_con,
-                    );
-
-                    for (symbol, loc_var) in local_def_vars.iter() {
-                        check_for_infinite_type(subs, problems, *symbol, *loc_var);
-                    }
-
-                    new_state
                 }
             }
-        }
+            Present(typ, PresenceConstraint::IsOpen) => {
+                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let mut new_desc = subs.get(actual);
+                match new_desc.content {
+                    Content::Structure(FlatType::TagUnion(tags, _)) => {
+                        let new_ext = subs.fresh_unnamed_flex_var();
+                        let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
+                        new_desc.content = new_union;
+                        subs.set(actual, new_desc);
+                        state
+                    }
+                    _ => {
+                        // Today, an "open" constraint doesn't affect any types
+                        // other than tag unions. Recursive tag unions are constructed
+                        // at a later time (during occurs checks after tag unions are
+                        // resolved), so that's not handled here either.
+                        // NB: Handle record types here if we add presence constraints
+                        // to their type inference as well.
+                        state
+                    }
+                }
+            }
+            Present(
+                typ,
+                PresenceConstraint::IncludesTag(tag_name, tys, region, pattern_category),
+            ) => {
+                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let tag_ty = Type::TagUnion(
+                    vec![(tag_name.clone(), tys.clone())],
+                    Box::new(Type::EmptyTagUnion),
+                );
+                let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
+
+                match unify(subs, actual, includes, Mode::PRESENT) {
+                    Success(vars) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        state
+                    }
+                    Failure(vars, actual_type, expected_to_include_type) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        let problem = TypeError::BadPattern(
+                            *region,
+                            pattern_category.clone(),
+                            expected_to_include_type,
+                            PExpected::NoExpectation(actual_type),
+                        );
+                        problems.push(problem);
+
+                        state
+                    }
+                    BadType(vars, problem) => {
+                        introduce(subs, rank, pools, &vars);
+
+                        problems.push(TypeError::BadType(problem));
+
+                        state
+                    }
+                }
+            }
+        };
     }
+
+    state
 }
 
+#[derive(Debug)]
 enum LocalDefVarsVec<T> {
     Stack(arrayvec::ArrayVec<T, 32>),
     Heap(Vec<T>),
@@ -704,7 +825,14 @@ fn type_to_variable<'a>(
 
     match typ {
         Variable(var) => *var,
-        Apply(symbol, arguments) => {
+        RangedNumber(typ, vars) => {
+            let ty_var = type_to_variable(subs, rank, pools, arena, typ);
+            let vars = VariableSubsSlice::insert_into_subs(subs, vars.iter().copied());
+            let content = Content::RangedNumber(ty_var, vars);
+
+            register(subs, rank, pools, content)
+        }
+        Apply(symbol, arguments, _) => {
             let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
             for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
                 let var = type_to_variable(subs, rank, pools, arena, var_index);
@@ -764,7 +892,8 @@ fn type_to_variable<'a>(
             let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
 
             let (it, new_ext_var) =
-                gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var);
+                gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var)
+                    .expect("Something ended up weird in this record type");
 
             let it = it
                 .into_iter()
@@ -820,8 +949,11 @@ fn type_to_variable<'a>(
 
             let tag_union_var = register(subs, rank, pools, content);
 
-            subs.set_content(
+            register_with_known_var(
+                subs,
                 *rec_var,
+                rank,
+                pools,
                 Content::RecursionVar {
                     opt_name: None,
                     structure: tag_union_var,
@@ -836,26 +968,15 @@ fn type_to_variable<'a>(
             type_arguments,
             actual,
             lambda_set_variables,
+            kind,
         } => {
-            // the rank of these variables is NONE (encoded as 0 in practice)
-            // using them for other ranks causes issues
-            if rank.is_none() {
-                // TODO replace by arithmetic?
-                match *symbol {
-                    Symbol::NUM_I128 => return Variable::I128,
-                    Symbol::NUM_I64 => return Variable::I64,
-                    Symbol::NUM_I32 => return Variable::I32,
-                    Symbol::NUM_I16 => return Variable::I16,
-                    Symbol::NUM_I8 => return Variable::I8,
-
-                    Symbol::NUM_U128 => return Variable::U128,
-                    Symbol::NUM_U64 => return Variable::U64,
-                    Symbol::NUM_U32 => return Variable::U32,
-                    Symbol::NUM_U16 => return Variable::U16,
-                    Symbol::NUM_U8 => return Variable::U8,
-
-                    Symbol::NUM_NAT => return Variable::NAT,
-                    _ => {}
+            if let Some(reserved) = Variable::get_reserved(*symbol) {
+                if rank.is_none() {
+                    // reserved variables are stored with rank NONE
+                    return reserved;
+                } else {
+                    // for any other rank, we need to copy; it takes care of adjusting the rank
+                    return deep_copy_var(subs, rank, pools, reserved);
                 }
             }
 
@@ -868,8 +989,12 @@ fn type_to_variable<'a>(
                 lambda_set_variables,
             );
 
-            let alias_variable = type_to_variable(subs, rank, pools, arena, actual);
-            let content = Content::Alias(*symbol, alias_variables, alias_variable);
+            let alias_variable = if let Symbol::RESULT_RESULT = *symbol {
+                roc_result_to_var(subs, rank, pools, arena, actual)
+            } else {
+                type_to_variable(subs, rank, pools, arena, actual)
+            };
+            let content = Content::Alias(*symbol, alias_variables, alias_variable, *kind);
 
             register(subs, rank, pools, content)
         }
@@ -891,7 +1016,14 @@ fn type_to_variable<'a>(
             );
 
             let alias_variable = type_to_variable(subs, rank, pools, arena, alias_type);
-            let content = Content::Alias(*symbol, alias_variables, alias_variable);
+            // TODO(opaques): I think host-exposed aliases should always be structural
+            // (when does it make sense to give a host an opaque type?)
+            let content = Content::Alias(
+                *symbol,
+                alias_variables,
+                alias_variable,
+                AliasKind::Structural,
+            );
             let result = register(subs, rank, pools, content);
 
             // We only want to unify the actual_var with the alias once
@@ -938,6 +1070,52 @@ fn alias_to_var<'a>(
         variables_start: new_variables.start,
         type_variables_len: type_arguments.len() as _,
         all_variables_len: length as _,
+    }
+}
+
+fn roc_result_to_var<'a>(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    arena: &'a bumpalo::Bump,
+    result_type: &Type,
+) -> Variable {
+    match result_type {
+        Type::TagUnion(tags, ext) => {
+            debug_assert!(ext.is_empty_tag_union());
+            debug_assert!(tags.len() == 2);
+
+            if let [(err, err_args), (ok, ok_args)] = &tags[..] {
+                debug_assert_eq!(err, &subs.tag_names[0]);
+                debug_assert_eq!(ok, &subs.tag_names[1]);
+
+                if let ([err_type], [ok_type]) = (err_args.as_slice(), ok_args.as_slice()) {
+                    let err_var = type_to_variable(subs, rank, pools, arena, err_type);
+                    let ok_var = type_to_variable(subs, rank, pools, arena, ok_type);
+
+                    let start = subs.variables.len() as u32;
+                    let err_slice = SubsSlice::new(start, 1);
+                    let ok_slice = SubsSlice::new(start + 1, 1);
+
+                    subs.variables.push(err_var);
+                    subs.variables.push(ok_var);
+
+                    let variables = SubsSlice::new(subs.variable_slices.len() as _, 2);
+                    subs.variable_slices.push(err_slice);
+                    subs.variable_slices.push(ok_slice);
+
+                    let union_tags = UnionTags::from_slices(Subs::RESULT_TAG_NAMES, variables);
+                    let ext = Variable::EMPTY_TAG_UNION;
+
+                    let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
+
+                    return register(subs, rank, pools, content);
+                }
+            }
+
+            unreachable!("invalid arguments to Result.Result; canonicalization should catch this!")
+        }
+        _ => unreachable!("not a valid type inside a Result.Result alias"),
     }
 }
 
@@ -1183,50 +1361,17 @@ fn check_for_infinite_type(
     subs: &mut Subs,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
-    loc_var: Located<Variable>,
+    loc_var: Loc<Variable>,
 ) {
     let var = loc_var.value;
 
     while let Err((recursive, _chain)) = subs.occurs(var) {
         let description = subs.get(recursive);
-        let content = description.content;
 
         // try to make a tag union recursive, see if that helps
-        match content {
+        match description.content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                let rec_var = subs.fresh_unnamed_flex_var();
-                subs.set_rank(rec_var, description.rank);
-                subs.set_content(
-                    rec_var,
-                    Content::RecursionVar {
-                        opt_name: None,
-                        structure: recursive,
-                    },
-                );
-
-                let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-
-                let it = new_variable_slices.indices().zip(tags.iter_all());
-                for (variable_slice_index, (_, slice_index)) in it {
-                    let slice = subs[slice_index];
-
-                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
-                    for (target_index, var_index) in new_variables.indices().zip(slice) {
-                        let var = subs[var_index];
-                        subs.variables[target_index] =
-                            subs.explicit_substitute(recursive, rec_var, var);
-                    }
-
-                    subs.variable_slices[variable_slice_index] = new_variables;
-                }
-
-                let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
-
-                let new_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
-
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
-
-                subs.set_content(recursive, Content::Structure(flat_type));
+                subs.mark_tag_union_recursive(recursive, tags, ext_var);
             }
 
             _other => circular_error(subs, problems, symbol, &loc_var),
@@ -1238,7 +1383,7 @@ fn circular_error(
     subs: &mut Subs,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
-    loc_var: &Located<Variable>,
+    loc_var: &Loc<Variable>,
 ) {
     let var = loc_var.value;
     let (error_type, _) = subs.var_to_error_type(var);
@@ -1431,6 +1576,24 @@ fn adjust_rank_content(
 
                 TagUnion(tags, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    // For performance reasons, we only keep one representation of empty tag unions
+                    // in subs. That representation exists at rank 0, which we don't always want to
+                    // reflect the whole tag union as, because doing so may over-generalize free
+                    // type variables.
+                    // Normally this is not a problem because of the loop below that maximizes the
+                    // rank from nested types in the union. But suppose we have the simple tag
+                    // union
+                    //   [ Z ]{}
+                    // there are no nested types in the tags, and the empty tag union is at rank 0,
+                    // so we promote the tag union to rank 0. Now if we introduce the presence
+                    // constraint
+                    //   [ Z ]{} += [ S a ]
+                    // we'll wind up with [ Z, S a ]{}, but it will be at rank 0, and "a" will get
+                    // over-generalized. Really, the empty tag union should be introduced at
+                    // whatever current group rank we're at, and so that's how we encode it here.
+                    if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_none() {
+                        rank = group_rank;
+                    }
 
                     for (_, index) in tags.iter_all() {
                         let slice = subs[index];
@@ -1484,7 +1647,7 @@ fn adjust_rank_content(
             }
         }
 
-        Alias(_, args, real_var) => {
+        Alias(_, args, real_var, _) => {
             let mut rank = Rank::toplevel();
 
             for var_index in args.variables() {
@@ -1500,6 +1663,8 @@ fn adjust_rank_content(
 
             rank
         }
+
+        RangedNumber(typ, _) => adjust_rank(subs, young_mark, visit_mark, group_rank, *typ),
     }
 }
 
@@ -1627,13 +1792,18 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 
                 Erroneous(_) => (),
             },
-            Alias(_, args, var) => {
+            Alias(_, args, var, _) => {
                 let var = *var;
                 let args = *args;
 
                 stack.extend(var_slice!(args.variables()));
 
                 stack.push(var);
+            }
+            &RangedNumber(typ, vars) => {
+                stack.push(typ);
+
+                stack.extend(var_slice!(vars));
             }
         }
     }
@@ -1869,7 +2039,7 @@ fn deep_copy_var_help(
             copy
         }
 
-        Alias(symbol, arguments, real_type_var) => {
+        Alias(symbol, arguments, real_type_var, kind) => {
             let new_variables =
                 SubsSlice::reserve_into_subs(subs, arguments.all_variables_len as _);
             for (target_index, var_index) in (new_variables.indices()).zip(arguments.variables()) {
@@ -1885,7 +2055,24 @@ fn deep_copy_var_help(
 
             let new_real_type_var =
                 deep_copy_var_help(subs, max_rank, pools, visited, real_type_var);
-            let new_content = Alias(symbol, new_arguments, new_real_type_var);
+            let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
+
+            subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+
+        RangedNumber(typ, range_vars) => {
+            let new_type_var = deep_copy_var_help(subs, max_rank, pools, visited, typ);
+
+            let new_vars = SubsSlice::reserve_into_subs(subs, range_vars.len());
+            for (target_index, var_index) in (new_vars.indices()).zip(range_vars) {
+                let var = subs[var_index];
+                let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
+                subs.variables[target_index] = copy_var;
+            }
+
+            let new_content = RangedNumber(new_type_var, new_vars);
 
             subs.set(copy, make_descriptor(new_content));
 
@@ -1907,4 +2094,23 @@ fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) ->
     pools.get_mut(rank).push(var);
 
     var
+}
+
+fn register_with_known_var(
+    subs: &mut Subs,
+    var: Variable,
+    rank: Rank,
+    pools: &mut Pools,
+    content: Content,
+) {
+    let descriptor = Descriptor {
+        content,
+        rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
+
+    subs.set(var, descriptor);
+
+    pools.get_mut(rank).push(var);
 }

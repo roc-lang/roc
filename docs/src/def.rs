@@ -40,7 +40,7 @@ pub fn defs_to_html<'a>(
     let mut scope = lang::scope::Scope::new(env.home, env.pool, env.var_store);
     scope.fill_scope(&env, &mut interns.all_ident_ids)?;
 
-    let region = Region::new(0, 0, 0, 0);
+    let region = Region::zero();
 
     for def in defs.iter() {
         write_def_to_bump_str_html(&def_arena, &mut env, &mut scope, region, def, interns, buf)?;

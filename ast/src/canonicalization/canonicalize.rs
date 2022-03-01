@@ -1,6 +1,6 @@
 use roc_collections::all::MutMap;
 use roc_problem::can::Problem;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 
 use crate::{
@@ -38,7 +38,7 @@ enum FieldVar {
 pub(crate) fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    fields: &'a [Located<roc_parse::ast::AssignedField<'a, roc_parse::ast::Expr<'a>>>],
+    fields: &'a [Loc<roc_parse::ast::AssignedField<'a, roc_parse::ast::Expr<'a>>>],
 ) -> Result<(PoolVec<RecordField>, Output), CanonicalizeRecordProblem> {
     let mut can_fields: MutMap<&'a str, FieldVar> = MutMap::default();
     let mut output = Output::default();
@@ -124,6 +124,9 @@ enum CanonicalizeFieldProblem {
         field_region: Region,
     },
 }
+
+// TODO: the `value_output: Output` field takes _a lot_ of space!
+#[allow(clippy::large_enum_variant)]
 enum CanonicalField<'a> {
     LabelAndValue {
         label: &'a str,
@@ -136,6 +139,7 @@ enum CanonicalField<'a> {
         var: Variable,
     }, // TODO make ValidLabelOnly
 }
+
 fn canonicalize_field<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
@@ -150,12 +154,18 @@ fn canonicalize_field<'a>(
             let (loc_can_expr, output) =
                 expr_to_expr2(env, scope, &loc_expr.value, loc_expr.region);
 
-            Ok(CanonicalField::LabelAndValue {
-                label: label.value,
-                value_expr: loc_can_expr,
-                value_output: output,
-                var: field_var,
-            })
+            match loc_can_expr {
+                Expr2::RuntimeError() => Ok(CanonicalField::InvalidLabelOnly {
+                    label: label.value,
+                    var: field_var,
+                }),
+                _ => Ok(CanonicalField::LabelAndValue {
+                    label: label.value,
+                    value_expr: loc_can_expr,
+                    value_output: output,
+                    var: field_var,
+                }),
+            }
         }
 
         OptionalValue(label, _, loc_expr) => Err(CanonicalizeFieldProblem::InvalidOptionalValue {

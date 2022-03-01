@@ -1,7 +1,7 @@
 UnaryOp(
-    |L 0-0, C 1-4| Var {
+    @1-4 Var {
         module_name: "",
         ident: "foo",
     },
-    |L 0-0, C 0-1| Negate,
+    @0-1 Negate,
 )

@@ -40,6 +40,8 @@ pub struct Uppercase(IdentStr);
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct ForeignSymbol(IdentStr);
 
+pub type TagIdIntType = u16;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TagName {
     /// Global tags have no module, but tend to be short strings (since they're
@@ -59,7 +61,9 @@ pub enum TagName {
     Closure(Symbol),
 }
 
-static_assertions::assert_eq_size!([u8; 24], TagName);
+roc_error_macros::assert_sizeof_aarch64!(TagName, 24);
+roc_error_macros::assert_sizeof_wasm!(TagName, 16);
+roc_error_macros::assert_sizeof_default!(TagName, 24);
 
 impl TagName {
     pub fn as_ident_str(&self, interns: &Interns, home: ModuleId) -> IdentStr {

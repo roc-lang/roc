@@ -2,7 +2,7 @@ use crate::expr::Expr;
 use crate::pattern::Pattern;
 use roc_collections::all::ImSet;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -10,8 +10,8 @@ pub struct Procedure {
     pub name: Option<Box<str>>,
     pub is_self_tail_recursive: bool,
     pub definition: Region,
-    pub args: Vec<Located<Pattern>>,
-    pub body: Located<Expr>,
+    pub args: Vec<Loc<Pattern>>,
+    pub body: Loc<Expr>,
     pub references: References,
     pub var: Variable,
     pub ret_var: Variable,
@@ -20,8 +20,8 @@ pub struct Procedure {
 impl Procedure {
     pub fn new(
         definition: Region,
-        args: Vec<Located<Pattern>>,
-        body: Located<Expr>,
+        args: Vec<Loc<Pattern>>,
+        body: Loc<Expr>,
         references: References,
         var: Variable,
         ret_var: Variable,
@@ -46,7 +46,8 @@ impl Procedure {
 pub struct References {
     pub bound_symbols: ImSet<Symbol>,
     pub lookups: ImSet<Symbol>,
-    pub referenced_aliases: ImSet<Symbol>,
+    /// Aliases or opaque types referenced
+    pub referenced_type_defs: ImSet<Symbol>,
     pub calls: ImSet<Symbol>,
 }
 
@@ -59,7 +60,7 @@ impl References {
         self.lookups = self.lookups.union(other.lookups);
         self.calls = self.calls.union(other.calls);
         self.bound_symbols = self.bound_symbols.union(other.bound_symbols);
-        self.referenced_aliases = self.referenced_aliases.union(other.referenced_aliases);
+        self.referenced_type_defs = self.referenced_type_defs.union(other.referenced_type_defs);
 
         self
     }
@@ -68,7 +69,7 @@ impl References {
         self.lookups.extend(other.lookups);
         self.calls.extend(other.calls);
         self.bound_symbols.extend(other.bound_symbols);
-        self.referenced_aliases.extend(other.referenced_aliases);
+        self.referenced_type_defs.extend(other.referenced_type_defs);
     }
 
     pub fn has_lookup(&self, symbol: Symbol) -> bool {

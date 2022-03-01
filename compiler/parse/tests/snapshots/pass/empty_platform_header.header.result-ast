@@ -1,15 +1,14 @@
 Platform {
     header: PlatformHeader {
-        name: |L 0-0, C 9-23| PackageName {
-            account: "rtfeldman",
-            pkg: "blah",
-        },
+        name: @9-25 PackageName(
+            "rtfeldman/blah",
+        ),
         requires: PlatformRequires {
             rigids: [],
-            signature: |L 0-0, C 38-47| Entry {
-                ident: |L 0-0, C 38-42| "main",
+            signature: @40-49 TypedIdent {
+                ident: @40-44 "main",
                 spaces_before_colon: [],
-                ann: |L 0-0, C 45-47| Record {
+                ann: @47-49 Record {
                     fields: [],
                     ext: None,
                 },
@@ -19,14 +18,6 @@ Platform {
         packages: [],
         imports: [],
         provides: [],
-        effects: Effects {
-            spaces_before_effects_keyword: [],
-            spaces_after_effects_keyword: [],
-            spaces_after_type_name: [],
-            effect_shortname: "fx",
-            effect_type_name: "Blah",
-            entries: [],
-        },
         before_header: [],
         after_platform_keyword: [],
         before_requires: [],

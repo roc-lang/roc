@@ -47,6 +47,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [whitebox debug visualization](https://vimeo.com/483795097)
 * [Hest](https://ivanish.ca/hest-time-travel/) tool for making highly interactive simulations.
 * [replit](https://replit.com/) collaborative browser based IDE.
+* [paper](https://openreview.net/pdf?id=SJeqs6EFvB) on finding and fixing bugs automatically.
+* [specialized editors that can be embedded in main editor](https://elliot.website/editor/)
 * Say you have a failing test that used to work, it would be very valuable to see all code that was changed that was used only by that test.
 e.g. you have a test `calculate_sum_test` that only uses the function `add`, when the test fails you should be able to see a diff showing only what changed for the function `add`. It would also be great to have a diff of [expression values](https://homepages.cwi.nl/~storm/livelit/images/bret.png) Bret Victor style. An ambitious project would be to suggest or automatically try fixes based on these diffs.
 * I think it could be possible to create a minimal reproduction of a program / block of code / code used by a single test. So for a failing unit test I would expect it to extract imports, the platform, types and functions that are necessary to run only that unit test and put them in a standalone roc project. This would be useful for sharing bugs with library+application authors and colleagues, for profiling or debugging with all "clutter" removed.
@@ -56,6 +58,11 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * We previuously mentioned showing expression values next to the code. I think when debugging it would be valuable to focus more on these valuas/data. A possible way to do this would be to create scrollable view(without need to jump between files) of inputs and outputs of user defined functions. Clicking on a function could then show the code with the expression values side by side. Having a good overview of how the values change could make it easy to find where exactly things go wrong.
 - (Machine learning) algorithms to extract and show useful information from debug values.
 - Ability to mark e.g. a specific record field for tracking(filter out the noise) that is being repeatedly updated throughout the program.
+- Ability to collapse/fold debug output coming from specific line.
+- search bar to search through printed logs
+- Turn an error listed in the console into editable section of code for easy quick fixing.
+- Clickable backtrace of functions, user defined functions should be made extra visible.
+- VR debugging: render massive curved screen with rectangle showing code (and expression values) for every function in call stack.
 
 ### Cool regular editors
 
@@ -126,8 +133,12 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * show example of how to use library function Foo
 * open google/github/duckduckgo search for error...
 * show editor plugins for library X
+* commands to control log filtering
+* collaps all arms of when
+* "complex" filtered search:  search for all occurrences of `"#` but ignore all like `"#,`
+* color this debug print orange
+* remove unused imports
 
-    
 #### Inspiration
 
 * Voice control and eye tracking with [Talon](https://github.com/Gauteab/talon-tree-sitter-service)
@@ -141,17 +152,18 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
  * Show Roc cheat sheet on start-up.
  * Plugin that translates short pieces of code from another programming language to Roc. [Relevant research](https://www.youtube.com/watch?v=xTzFJIknh7E). Someone who only knows the R language could get started with Roc with less friction if they could quickly define a list R style (`lst <- c(1,2,3)`) and get it translated to Roc.
- * Being able to asses or ask the user for the amount of experience they have with Roc would be a valuable feature for recommending plugins, editor tips, recommending tutorials, automated error search (e.g searching common beginner errors first), ... .    
+ * Being able to asses or ask the user for the amount of experience they have with Roc would be a valuable feature for recommending plugins, editor tips, recommending tutorials, automated error search (e.g searching common beginner errors first), ... .
+* Adjust UI based on beginner/novice/expert?
 
 ### Productivity features
 
-* When refactoring; 
+* When refactoring;
     - Cutting and pasting code to a new file should automatically add imports to the new file and delete them from the old file.
     - Ability to link e.g. variable name in comments to actual variable name. Comment is automatically updated when variable name is changed.
     - When updating dependencies with breaking changes; show similar diffs from github projects that have successfully updated that dependency.
-    - AST backed renaming, changing variable/function/type name should change it all over the codebase.  
+    - AST backed renaming, changing variable/function/type name should change it all over the codebase.
 * Automatically create all "arms" when pattern matching after entering `when var is` based on the type.
-    - All `when ... is` should be updated if the type is changed, e.g. adding Indigo to the Color type should add an arm everywhere where `when color is` is used. 
+    - All `when ... is` should be updated if the type is changed, e.g. adding Indigo to the Color type should add an arm everywhere where `when color is` is used.
 * When a function is called like `foo(false)`, the name of the boolean argument should be shown automatically; `foo(`*is_active:*`false)`. This should be done for booleans and numbers.
 * Suggest automatically creating a function if the compiler says it does not exist.
 * Integrated search:
@@ -159,7 +171,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Show productivity/feature tips on startup. Show link to page with all tips. Allow not seeing tips next time.
 * Search friendly editor docs inside the editor. Offer to send search string to Roc maintainers when no results, or if no results were clicked.
 * File history timeline view. Show timeline with commits that changed this file, the number of lines added and deleted as well as which user made the changes. Arrow navigation should allow you to quickly view different versions of the file.
-* Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to appear, after which you click to apply the fix you want :( . You should be able to apply suggestions in rapid succession. e.g. if you copy some roc code from the internet you should be able to apply 5 import suggestions quickly. 
+* Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to appear, after which you click to apply the fix you want :( . You should be able to apply suggestions in rapid succession. e.g. if you copy some roc code from the internet you should be able to apply 5 import suggestions quickly.
 * Regex-like find and substitution based on plain english description and example (replacement). i.e. replace all `[` between double quotes with `{`. [Inspiration](https://alexmoltzau.medium.com/english-to-regex-thanks-to-gpt-3-13f03b68236e).
 * Show productivity tips based on behavior. i.e. if the user is scrolling through the error bar and clicking on the next error several times, show a tip with "go to next error" shortcut.
 * Command to "benchmark this function" or "benchmark this test" with flamegraph and execution time per line.
@@ -187,6 +199,18 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Feature to automatically minimize visibility(exposing values/functions/...) based on usage in tests. Suggested changes can be shown to the user for fine-grained control.
 * Locally record file/function navigation behavior to offer suggestions where to navigate next. With user permission, this navigation behavior can be shared with their team so that e.g. new members get offered useful suggestions on navigating to the next relevant file.
  * Intelligent search: "search this folder for <term>", "search all tests for <term>"
+* Show some kind of warning if path str in code does not exist locally.
+* repl on panic/error: ability to inspect all values and try executing some things at the location of the error.
+* show values in memory on panic/error
+* automatic clustering of (text) search results in groups by similarity
+* fill screen with little windows of clustered search results
+* clustering of examples similar to current code
+* ability to easily screenshot a subwindow -> create static duplicate of subwindow
+* Show references is a common editor feature, often I only want to see non-recursive references in the case of a recursive function.
+* ability to add error you were stuck on but have now solved to error database, to help others in the future.
+* For quick navigation and good overview: whole file should be shown as folded tree showing only top level defs. Hovering with mouse should allow you to show and traverse the branches, with a click to keep this view. See also ginkowriter.
+* clicking on any output should take you to the place in the code where that output was printed and/or calculated.
+* ability to edit printed output in such a way that the appropriate changes are made in the code that produced it. Example: edit json key in output-> code is changed to print this new key.
 
 #### Autocomplete
 
@@ -198,7 +222,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
    * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
 - Current autocomplete lacks flow, moving through suggestions with arrows is slow. Being able to code by weaving together autocomplete suggestions laid out in rows using eye tracking, that could flow.
 - It's possible that with strong static types, pure functions and a good search algorithm we can develop a more reliable autocomplete than one with machine learning.
-- When ranking autocomplete suggestions, take into account how new a function is. Newly created functions are likely to be used soon. 
+- When ranking autocomplete suggestions, take into account how new a function is. Newly created functions are likely to be used soon.
 
 #### Productivity Inspiration
 
@@ -212,6 +236,9 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [NextJournal](https://nextjournal.com/joe-loco/command-bar?token=DpU6ewNQnLhYtVkwhs9GeX) Discoverable commands and shortcuts.
 * [Code Ribbon](https://web.eecs.utk.edu/~azh/blog/coderibbon.html) fast navigation between files. Feature suggestion: top and down are filled with suggested files, whereas left and right are manually filled.
 * [Automatic data transformation based on examples](https://youtu.be/Ej91F1fpmEw). Feature suggestion: use in combination with voice commands: e.g. "only keep time from list of datetimes".
+* [Codesee](https://www.codesee.io/) code base visualization.
+* [Loopy](https://dl.acm.org/doi/10.1145/3485530?sid=SCITRUS) interactive program synthesis.
+* [bracket guides](https://mobile.twitter.com/elyktrix/status/1461380028609048576)
 
 ### Non-Code Related Inspiration
 
@@ -239,7 +266,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 
 ## Testing
-    
+
 * From Google Docs' comments, adding tests in a similar manner, where they exists in the same "document" but parallel to the code being written
     * Makes sense for unit tests, keeps the test close to the source
     * Doesn't necessarily make sense for integration or e2e testing
@@ -250,10 +277,13 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * Select a function to record.
     * Do a normal run, and save the input and output of the selected function.
     * Generate a unit test with that input-output pair
+* [vitest](https://twitter.com/antfu7/status/1468233216939245579) only run tests that could possibly have changed (because the code they test/use has changed)
+* Ability to show in sidebar if code is tested by a test. Clicking on the test in the sidebar should bring you to that test.
 
 ### Inspiration
 
 * [Haskell language server plugin](https://github.com/haskell/haskell-language-server/blob/master/plugins/hls-eval-plugin/README.md) evaluate code in comments, to test and document functions and to quickly evaluate small expressions.
+* [Hazel live test](https://mobile.twitter.com/disconcision/status/1459933500656730112)
 
 ## Documentation
 
@@ -265,6 +295,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Library should have cheat sheet with most used/important docs summarized.
 * With explicit user permission, anonymously track viewing statistics for documentation. Can be used to show most important documentation, report pain points to library authors.
 * Easy side-by-side docs for multiple versions of library.
+* ability to add questions and answers to library documentation
 
 ## Tutorials
 
@@ -277,6 +308,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 * Plugin to translate linux commands like curl to Roc code
 * Plugin to view diff between two texts
+* Plugin to present codebase to new developer or walk co-worker through a problem. Records sequence of filenames and line numbers.
 
 ### Inspiration
 
@@ -318,28 +350,28 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 Thoughts and ideas possibly taken from above inspirations or separate.
 
 * ACCESSIBILITY === EMPATHY
-   * Visual Imapirments 
+   * Visual Imapirments
       No Animation is most benign form of cognitive disabity but really important base line of people with tense nerve system.
       Insensitivity to certain or all colors.
       Need of highcontrast
-      Or Everything Magnified for me with no glasses. 
+      Or Everything Magnified for me with no glasses.
       Or Total blindness where we need to trough sound to communicate to the user
       Screen readers read trees of labeled elements. Each platform has different apis, but I think they are horrible. Just close your eyes and imagine listening to screen reader all day while you are using this majectic machines called computers.
       But blind people walk with a tool and they can react much better to sound/space relations than full on visal majority does. They are acute to sound as a spatial hint. And a hand for most of them is a very sensitive tool that can make sounds in space.
       Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a acoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
-      
+
       On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engineer about it, but imagine moving down, which can be voice triggered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
       - Related idea: Playing sounds in rapid succession for different expressions in your program might be a high throughput alternative to stepping through your code line by line. I'd bet you quickly learn what your program should sound like. The difference in throughput would be even larger for those who need to rely on voice transcription.
-      
+
    * Motor impariments
       [rant]BACKS OF CODERS ARE NOT HEALTHY! We need to change that![/neverstop]
       Too much mouse waving and sitting for too long is bad for humans.
-      Keyboard is basic accessability tool but 
-      Keyboard is also optional, some people have too shaky hands even for keyboard. 
+      Keyboard is basic accessability tool but
+      Keyboard is also optional, some people have too shaky hands even for keyboard.
       They rely on eye tracking to move mouse cursor arond.
       If we employ _some_ voice recognition functions we could make same interface as we could do for consoles where 4+2 buttons and directional pad would suffice.
       That is 10 phrases that need to be pulled trough as many possible translations so people don't have to pretend that they are from Maine or Texas so they get voice recognition to work. Believe me I was there with Apple's Siri :D That is why we have 10 phrases for movement and management and most basic syntax.
-      
+    * Builtin fonts that can be read more easily by those with dyslexia.
 
 * Nice backtraces that highlight important information
 * Ability to show import connection within project visually
@@ -358,3 +390,5 @@ Thoughts and ideas possibly taken from above inspirations or separate.
 * Code coverage visualization: allow to display code in different color when it is covered by test.
 * Make "maximal privacy version" of editor available for download, next to regular version. This version would not be capable of sharing any usage/user data.
 * Live code view with wasm editor. This saves bandwidth when pairing.
+* [Gingkowriter](https://gingkowriter.com/) structured writing app.
+* Performance improvement recommendation: show if code is eligible for tail call optimization or can do in place mutation.

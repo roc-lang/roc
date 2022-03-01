@@ -38,9 +38,22 @@ macro_rules! run_jit_function {
     }};
 
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr) => {{
+        run_jit_function!($lib, $main_fn_name, $ty, $transform, $errors, &[])
+    }};
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr, $expect_failures:expr) => {{
         use inkwell::context::Context;
+        use roc_builtins::bitcode;
         use roc_gen_llvm::run_roc::RocCallResult;
         use std::mem::MaybeUninit;
+
+        #[derive(Debug, Copy, Clone)]
+        #[repr(C)]
+        struct Failure {
+            start_line: u32,
+            end_line: u32,
+            start_col: u16,
+            end_col: u16,
+        }
 
         unsafe {
             let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<$ty>) -> ()> =
@@ -49,11 +62,50 @@ macro_rules! run_jit_function {
                     .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                     .expect("errored");
 
-            let mut result = MaybeUninit::uninit();
+            #[repr(C)]
+            struct Failures {
+                failures: *const Failure,
+                count: usize,
+            }
 
-            main(result.as_mut_ptr());
+            impl Drop for Failures {
+                fn drop(&mut self) {
+                    use std::alloc::{dealloc, Layout};
+                    use std::mem;
 
-            match result.assume_init().into() {
+                    unsafe {
+                        let layout = Layout::from_size_align_unchecked(
+                            mem::size_of::<Failure>(),
+                            mem::align_of::<Failure>(),
+                        );
+
+                        dealloc(self.failures as *mut u8, layout);
+                    }
+                }
+            }
+
+            let get_expect_failures: libloading::Symbol<unsafe extern "C" fn() -> Failures> = $lib
+                .get(bitcode::UTILS_GET_EXPECT_FAILURES.as_bytes())
+                .ok()
+                .ok_or(format!(
+                    "Unable to JIT compile `{}`",
+                    bitcode::UTILS_GET_EXPECT_FAILURES
+                ))
+                .expect("errored");
+            let mut main_result = MaybeUninit::uninit();
+
+            main(main_result.as_mut_ptr());
+            let failures = get_expect_failures();
+
+            if failures.count > 0 {
+                // TODO tell the user about the failures!
+                let failures =
+                    unsafe { core::slice::from_raw_parts(failures.failures, failures.count) };
+
+                panic!("Failed with {} failures. Failures: ", failures.len());
+            }
+
+            match main_result.assume_init().into() {
                 Ok(success) => {
                     // only if there are no exceptions thrown, check for errors
                     assert!($errors.is_empty(), "Encountered errors:\n{}", $errors);
@@ -95,7 +147,7 @@ macro_rules! run_jit_function_dynamic_type {
             let flag = *result;
 
             if flag == 0 {
-                $transform(result.add(std::mem::size_of::<RocCallResult<()>>()) as *const u8)
+                $transform(result.add(std::mem::size_of::<RocCallResult<()>>()) as usize)
             } else {
                 use std::ffi::CString;
                 use std::os::raw::c_char;

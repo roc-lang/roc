@@ -2,14 +2,14 @@
 
 use core::alloc::Layout;
 use core::ffi::c_void;
-use core::mem::MaybeUninit;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use libc;
 use roc_std::RocStr;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed"]
+    #[link_name = "roc__mainForHost_1_exposed_generic"]
     fn roc_main(output: *mut u8) -> ();
 
     #[link_name = "roc__mainForHost_size"]
@@ -91,7 +91,7 @@ pub extern "C" fn rust_main() -> i32 {
     0
 }
 
-unsafe extern "C" fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
+unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
     let size = size_Fx_result() as usize;
     let layout = Layout::array::<u8>(size).unwrap();
     let buffer = std::alloc::alloc(layout) as *mut u8;
@@ -115,17 +115,11 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
     let stdin = io::stdin();
     let line1 = stdin.lock().lines().next().unwrap().unwrap();
 
-    RocStr::from_slice(line1.as_bytes())
+    RocStr::from(line1.as_str())
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putLine(line: RocStr) -> () {
-    let bytes = line.as_slice();
-    let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) {
+    let string = line.as_str();
     println!("{}", string);
-
-    // don't mess with the refcount!
-    core::mem::forget(line);
-
-    ()
 }

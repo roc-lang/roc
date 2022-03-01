@@ -7,6 +7,13 @@ use std::path::Path;
 use std::process::Command;
 use std::str;
 
+fn zig_executable() -> String {
+    match std::env::var("ROC_ZIG") {
+        Ok(path) => path,
+        Err(_) => "zig".into(),
+    }
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -20,7 +27,8 @@ fn main() {
     }
 
     // "." is relative to where "build.rs" is
-    let build_script_dir_path = fs::canonicalize(Path::new(".")).unwrap();
+    // dunce can be removed once ziglang/zig#5109 is fixed
+    let build_script_dir_path = dunce::canonicalize(Path::new(".")).unwrap();
     let bitcode_path = build_script_dir_path.join("bitcode");
 
     // LLVM .bc FILES
@@ -89,14 +97,14 @@ fn generate_object_file(
 
     run_command(
         &bitcode_path,
-        "zig",
+        &zig_executable(),
         &["build", zig_object, "-Drelease=true"],
     );
 
     println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
 
-    // we store this .o file in rust's `target` folder
-    run_command(&bitcode_path, "mv", &[src_obj, dest_obj]);
+    // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
+    run_command(&bitcode_path, "cp", &[src_obj, dest_obj]);
 }
 
 fn generate_bc_file(
@@ -113,7 +121,7 @@ fn generate_bc_file(
 
     run_command(
         &bitcode_path,
-        "zig",
+        &zig_executable(),
         &["build", zig_object, "-Drelease=true"],
     );
 
@@ -177,26 +185,3 @@ fn get_zig_files(dir: &Path, cb: &dyn Fn(&Path)) -> io::Result<()> {
     }
     Ok(())
 }
-
-// fn get_zig_files(dir: &Path) -> io::Result<Vec<&Path>> {
-// let mut vec = Vec::new();
-// if dir.is_dir() {
-// for entry in fs::read_dir(dir)? {
-// let entry = entry?;
-// let path_buf = entry.path();
-// if path_buf.is_dir() {
-// match get_zig_files(&path_buf) {
-// Ok(sub_files) => vec = [vec, sub_files].concat(),
-// Err(_) => (),
-// };
-// } else {
-// let path = path_buf.as_path();
-// let path_ext = path.extension().unwrap();
-// if path_ext == "zig" {
-// vec.push(path.clone());
-// }
-// }
-// }
-// }
-// Ok(vec)
-// }

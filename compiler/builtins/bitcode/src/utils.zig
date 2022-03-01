@@ -18,14 +18,18 @@ extern fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void;
 // Signals to the host that the program has panicked
 extern fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void;
 
+// should work just like libc memcpy (we can't assume libc is present)
+extern fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
+
 comptime {
     const builtin = @import("builtin");
-    // During tetsts, use the testing allocators to satisfy these functions.
+    // During tests, use the testing allocators to satisfy these functions.
     if (builtin.is_test) {
         @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
         @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
         @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
+        @export(testing_roc_memcpy, .{ .name = "roc_memcpy", .linkage = .Strong });
     }
 }
 
@@ -53,8 +57,16 @@ fn testing_roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     @panic("Roc panicked");
 }
 
-pub fn alloc(size: usize, alignment: u32) [*]u8 {
-    return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ size, alignment }));
+fn testing_roc_memcpy(dest: *c_void, src: *c_void, bytes: usize) callconv(.C) ?*c_void {
+    const zig_dest = @ptrCast([*]u8, dest);
+    const zig_src = @ptrCast([*]u8, src);
+
+    @memcpy(zig_dest, zig_src, bytes);
+    return dest;
+}
+
+pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
+    return @ptrCast(?[*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ size, alignment }));
 }
 
 pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
@@ -68,6 +80,10 @@ pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
 // must export this explicitly because right now it is not used from zig code
 pub fn panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, alignment });
+}
+
+pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
+    @call(.{ .modifier = always_inline }, roc_memcpy, .{ dst, src, size });
 }
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
@@ -173,7 +189,8 @@ pub fn allocateWithRefcount(
 
     switch (alignment) {
         16 => {
-            var new_bytes: [*]align(16) u8 = @alignCast(16, alloc(length, alignment));
+            // TODO handle alloc failing!
+            var new_bytes: [*]align(16) u8 = @alignCast(16, alloc(length, alignment) orelse unreachable);
 
             var as_usize_array = @ptrCast([*]usize, new_bytes);
             as_usize_array[0] = 0;
@@ -185,7 +202,8 @@ pub fn allocateWithRefcount(
             return first_slot;
         },
         8 => {
-            var raw = alloc(length, alignment);
+            // TODO handle alloc failing!
+            var raw = alloc(length, alignment) orelse unreachable;
             var new_bytes: [*]align(8) u8 = @alignCast(8, raw);
 
             var as_isize_array = @ptrCast([*]isize, new_bytes);
@@ -197,7 +215,8 @@ pub fn allocateWithRefcount(
             return first_slot;
         },
         4 => {
-            var raw = alloc(length, alignment);
+            // TODO handle alloc failing!
+            var raw = alloc(length, alignment) orelse unreachable;
             var new_bytes: [*]align(@alignOf(isize)) u8 = @alignCast(@alignOf(isize), raw);
 
             var as_isize_array = @ptrCast([*]isize, new_bytes);
@@ -216,6 +235,11 @@ pub fn allocateWithRefcount(
         },
     }
 }
+
+pub const CSlice = extern struct {
+    pointer: *c_void,
+    len: usize,
+};
 
 pub fn unsafeReallocate(
     source_ptr: [*]u8,
@@ -247,7 +271,7 @@ pub const RocResult = extern struct {
         // - the tag is the first field
         // - the tag is usize bytes wide
         // - Ok has tag_id 1, because Err < Ok
-        const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, self.bytes));
+        const usizes: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.bytes));
 
         return usizes[0] == 1;
     }

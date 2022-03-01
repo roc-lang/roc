@@ -1,33 +1,33 @@
 Defs(
     [
-        |L 0-0, C 0-30| Annotation(
-            |L 0-0, C 0-7| Identifier(
+        @0-30 Annotation(
+            @0-7 Identifier(
                 "doStuff",
             ),
-            |L 0-0, C 20-30| Function(
+            @20-30 Function(
                 [
-                    |L 0-0, C 10-16| Apply(
+                    @10-16 Apply(
                         "",
                         "UserId",
                         [],
                     ),
                 ],
-                |L 0-0, C 20-30| Apply(
+                @20-30 Apply(
                     "",
                     "Task",
                     [
-                        |L 0-0, C 25-28| Apply(
+                        @25-28 Apply(
                             "",
                             "Str",
                             [],
                         ),
-                        |L 0-0, C 29-30| Inferred,
+                        @29-30 Inferred,
                     ],
                 ),
             ),
         ),
     ],
-    |L 1-1, C 0-2| SpaceBefore(
+    @31-33 SpaceBefore(
         Num(
             "42",
         ),

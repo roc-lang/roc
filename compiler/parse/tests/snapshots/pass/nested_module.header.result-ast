@@ -1,6 +1,6 @@
 Interface {
     header: InterfaceHeader {
-        name: |L 0-0, C 10-21| ModuleName(
+        name: @10-21 ModuleName(
             "Foo.Bar.Baz",
         ),
         exposes: [],

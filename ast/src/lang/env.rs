@@ -4,11 +4,12 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::VarStore;
 
 use super::core::def::def::References;
 
+/// TODO document
 #[derive(Debug)]
 pub struct Env<'a> {
     pub home: ModuleId,
@@ -123,7 +124,7 @@ impl<'a> Env<'a> {
                             Ok(symbol)
                         }
                         None => Err(RuntimeError::LookupNotInScope(
-                            Located {
+                            Loc {
                                 value: ident,
                                 region,
                             },
@@ -159,12 +160,17 @@ impl<'a> Env<'a> {
                                 })
                             }
                         },
-                        None => {
-                            panic!(
-                                "Module {} exists, but is not recorded in dep_idents",
-                                module_name
-                            )
-                        }
+                        None => Err(RuntimeError::ModuleNotImported {
+                            module_name,
+                            imported_modules: self
+                                .dep_idents
+                                .keys()
+                                .filter_map(|module_id| self.module_ids.get_name(*module_id))
+                                .map(|module_name| module_name.as_ref().into())
+                                .collect(),
+                            region,
+                            module_exists: true,
+                        }),
                     }
                 }
             }
@@ -176,6 +182,7 @@ impl<'a> Env<'a> {
                     .map(|string| string.as_ref().into())
                     .collect(),
                 region,
+                module_exists: false,
             }),
         }
     }
