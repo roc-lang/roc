@@ -1,20 +1,14 @@
-use std::{io::Write, process};
+use tts::{Backends, Tts};
 
 pub fn speak(text: &str) {
-    let mut festival_child = process::Command::new("festival")
-        .arg("--pipe")
-        .stdin(process::Stdio::piped())
-        .spawn()
-        .expect("failed to spawn festival");
+    let backend = Backends::SpeechDispatcher;
 
-    festival_child
-        .stdin
-        .as_mut()
-        .expect("failed to acquire festival's stdin")
-        .write_all(format!(r#"(SayText "{}")"#, text).as_bytes())
-        .expect("failed to write to festival's stdin");
+    let mut tts = Tts::new(backend).expect("Failed to initialize TTS");
 
-    println!(r#"Speaking "{}"..."#, text);
+    let utterance = tts
+        .speak(text, false)
+        .expect(&format!(r#"Failed to speak "{}""#, text));
 
-    festival_child.wait().expect("failed to wait for festival");
+    // TODO: this will be changed to be async
+    std::thread::sleep(std::time::Duration::from_secs(5));
 }
