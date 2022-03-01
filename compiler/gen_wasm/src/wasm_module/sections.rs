@@ -1205,7 +1205,7 @@ impl<'a> Serialize for NameSection<'a> {
 
 impl<'a> Debug for NameSection<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NameSection\n")?;
+        writeln!(f, "NameSection")?;
 
         // We want to display index->name because it matches the binary format and looks nicer.
         // But our hashmap is name->index because that's what code gen wants to look up.
@@ -1217,7 +1217,7 @@ impl<'a> Debug for NameSection<'a> {
 
         for (index, name) in by_index.iter() {
             let name_str = unsafe { std::str::from_utf8_unchecked(name) };
-            write!(f, "  {:4}: {}\n", index, name_str)?;
+            writeln!(f, "  {:4}: {}", index, name_str)?;
         }
 
         Ok(())
