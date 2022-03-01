@@ -25,7 +25,7 @@ pub fn parse_from_string<'a>(
 ) -> ASTResult<AST> {
     let blank_line_indx = code_str
         .find("\n\n")
-        .expect("I was expecting a double newline to split header and rest of code.");
+        .expect("I was expecting two newline chars to split header and rest of code.");
 
     let header_str = &code_str[0..blank_line_indx];
     let tail_str = &code_str[blank_line_indx..];

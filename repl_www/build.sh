@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-set -ex
+set -euxo pipefail
 
 if [[ ! -d repl_www ]]
 then
@@ -10,17 +10,19 @@ fi
 
 if ! which wasm-pack
 then
+    echo "Installing wasm-pack CLI"
     cargo install wasm-pack
 fi
 
-WWW_DIR="repl_www/build"
+# output directory is first argument or default
+WWW_DIR="${1:-repl_www/build}"
 mkdir -p $WWW_DIR
 cp repl_www/public/* $WWW_DIR
 
-# For debugging, pass the --profiling option, which enables optimizations + debug info
-# (We need optimizations to get rid of dead code that otherwise causes compile errors!)
-if [ -n "$REPL_DEBUG" ]
+# When debugging the REPL, use `REPL_DEBUG=1 repl_www/build.sh`
+if [ -n "${REPL_DEBUG:-}" ]
 then
+    # Leave out wasm-opt since it takes too long when debugging, and provide some debug options
     cargo build --target wasm32-unknown-unknown -p roc_repl_wasm --release
     wasm-bindgen --target web --keep-debug target/wasm32-unknown-unknown/release/roc_repl_wasm.wasm --out-dir repl_wasm/pkg/
 else

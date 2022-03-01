@@ -48,7 +48,7 @@ mod test_roc_std {
 
     #[test]
     fn roc_str_single_char() {
-        let actual = roc_str_byte_representation(&RocStr::from_slice(b"a"));
+        let actual = roc_str_byte_representation(&RocStr::from("a"));
 
         let mut expected = [0u8; RocStr::SIZE];
         expected[0] = b'a';
@@ -59,12 +59,12 @@ mod test_roc_std {
 
     #[test]
     fn roc_str_max_small_string() {
-        let bytes: Vec<_> = std::iter::repeat(b'a').take(RocStr::SIZE - 1).collect();
-        let actual = roc_str_byte_representation(&RocStr::from_slice(&bytes));
+        let s = str::repeat("a", RocStr::SIZE - 1);
+        let actual = roc_str_byte_representation(&RocStr::from(s.as_str()));
 
         let mut expected = [0u8; RocStr::SIZE];
-        expected[..RocStr::SIZE - 1].copy_from_slice(&bytes);
-        expected[RocStr::SIZE - 1] = RocStr::MASK | bytes.len() as u8;
+        expected[..RocStr::SIZE - 1].copy_from_slice(s.as_bytes());
+        expected[RocStr::SIZE - 1] = RocStr::MASK | s.len() as u8;
 
         assert_eq!(actual, expected);
     }

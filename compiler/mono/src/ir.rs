@@ -1,6 +1,5 @@
 #![allow(clippy::manual_map)]
 
-use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
     RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
@@ -10,7 +9,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
-use roc_error_macros::todo_opaques;
+use roc_exhaustive::{Ctor, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -44,8 +43,8 @@ roc_error_macros::assert_sizeof_aarch64!(CallType, 5 * 8);
 
 roc_error_macros::assert_sizeof_wasm!(Literal, 24);
 roc_error_macros::assert_sizeof_wasm!(Expr, 56);
-roc_error_macros::assert_sizeof_wasm!(Stmt, 96);
-roc_error_macros::assert_sizeof_wasm!(ProcLayout, 24);
+roc_error_macros::assert_sizeof_wasm!(Stmt, 120);
+roc_error_macros::assert_sizeof_wasm!(ProcLayout, 32);
 roc_error_macros::assert_sizeof_wasm!(Call, 40);
 roc_error_macros::assert_sizeof_wasm!(CallType, 32);
 
@@ -90,12 +89,13 @@ macro_rules! return_on_layout_error_help {
 pub enum OptLevel {
     Development,
     Normal,
+    Size,
     Optimize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MonoProblem {
-    PatternProblem(crate::exhaustive::Error),
+    PatternProblem(roc_exhaustive::Error),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1895,7 +1895,7 @@ fn patterns_to_when<'a>(
     // see https://github.com/rtfeldman/roc/issues/786
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
     for (pattern_var, pattern) in patterns.into_iter() {
-        let context = crate::exhaustive::Context::BadArg;
+        let context = roc_exhaustive::Context::BadArg;
         let mono_pattern = match from_can_pattern(env, layout_cache, &pattern.value) {
             Ok((pat, _assignments)) => {
                 // Don't apply any assignments (e.g. to initialize optional variables) yet.
@@ -1921,7 +1921,7 @@ fn patterns_to_when<'a>(
             pattern.region,
             &[(
                 Loc::at(pattern.region, mono_pattern),
-                crate::exhaustive::Guard::NoGuard,
+                roc_exhaustive::Guard::NoGuard,
             )],
             context,
         ) {
@@ -2020,7 +2020,7 @@ fn pattern_to_when<'a>(
             (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
         }
 
-        AppliedTag { .. } | RecordDestructure { .. } => {
+        AppliedTag { .. } | RecordDestructure { .. } | UnwrappedOpaque { .. } => {
             let symbol = env.unique_symbol();
 
             let wrapped_body = When {
@@ -2038,9 +2038,11 @@ fn pattern_to_when<'a>(
             (symbol, Loc::at_zero(wrapped_body))
         }
 
-        UnwrappedOpaque { .. } => todo_opaques!(),
-
-        IntLiteral(..) | NumLiteral(..) | FloatLiteral(..) | StrLiteral(_) => {
+        IntLiteral(..)
+        | NumLiteral(..)
+        | FloatLiteral(..)
+        | StrLiteral(..)
+        | roc_can::pattern::Pattern::SingleQuote(..) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -3146,6 +3148,13 @@ pub fn with_hole<'a>(
             hole,
         ),
 
+        SingleQuote(character) => Stmt::Let(
+            assigned,
+            Expr::Literal(Literal::Int(character as _)),
+            Layout::int_width(IntWidth::I32),
+            hole,
+        ),
+
         Num(var, num_str, num, _bound) => {
             // first figure out what kind of number this is
             match num_argument_to_int_or_float(env.subs, env.target_info, var, false) {
@@ -3270,12 +3279,12 @@ pub fn with_hole<'a>(
                         }
                     };
 
-                let context = crate::exhaustive::Context::BadDestruct;
+                let context = roc_exhaustive::Context::BadDestruct;
                 match crate::exhaustive::check(
                     def.loc_pattern.region,
                     &[(
                         Loc::at(def.loc_pattern.region, mono_pattern.clone()),
-                        crate::exhaustive::Guard::NoGuard,
+                        roc_exhaustive::Guard::NoGuard,
                     )],
                     context,
                 ) {
@@ -3422,7 +3431,18 @@ pub fn with_hole<'a>(
             }
         }
 
-        OpaqueRef { .. } => todo_opaques!(),
+        OpaqueRef { argument, .. } => {
+            let (arg_var, loc_arg_expr) = *argument;
+            with_hole(
+                env,
+                loc_arg_expr.value,
+                arg_var,
+                procs,
+                layout_cache,
+                assigned,
+                hole,
+            )
+        }
 
         Record {
             record_var,
@@ -5599,12 +5619,12 @@ pub fn from_can<'a>(
                     hole,
                 )
             } else {
-                let context = crate::exhaustive::Context::BadDestruct;
+                let context = roc_exhaustive::Context::BadDestruct;
                 match crate::exhaustive::check(
                     def.loc_pattern.region,
                     &[(
                         Loc::at(def.loc_pattern.region, mono_pattern.clone()),
-                        crate::exhaustive::Guard::NoGuard,
+                        roc_exhaustive::Guard::NoGuard,
                     )],
                     context,
                 ) {
@@ -5730,11 +5750,11 @@ fn to_opt_branches<'a>(
     // NOTE exhaustiveness is checked after the construction of all the branches
     // In contrast to elm (currently), we still do codegen even if a pattern is non-exhaustive.
     // So we not only report exhaustiveness errors, but also correct them
-    let context = crate::exhaustive::Context::BadCase;
+    let context = roc_exhaustive::Context::BadCase;
     match crate::exhaustive::check(region, &loc_branches, context) {
         Ok(_) => {}
         Err(errors) => {
-            use crate::exhaustive::Error::*;
+            use roc_exhaustive::Error::*;
             let mut is_not_exhaustive = false;
             let mut overlapping_branches = std::vec::Vec::new();
 
@@ -6298,6 +6318,10 @@ fn store_pattern_help<'a>(
                 stmt,
             );
         }
+        OpaqueUnwrap { argument, .. } => {
+            return store_pattern_help(env, procs, layout_cache, &argument.0, outer_symbol, stmt);
+        }
+
         RecordDestructure(destructs, [_single_field]) => {
             for destruct in destructs {
                 match &destruct.typ {
@@ -7225,7 +7249,8 @@ fn call_by_name_help<'a>(
         } else {
             debug_assert!(
                 !field_symbols.is_empty(),
-                "should be in the list of imported_module_thunks"
+                "{} should be in the list of imported_module_thunks",
+                proc_name
             );
 
             debug_assert_eq!(
@@ -7632,12 +7657,12 @@ pub enum Pattern<'a> {
     BitLiteral {
         value: bool,
         tag_name: TagName,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
     },
     EnumLiteral {
         tag_id: u8,
         tag_name: TagName,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
     },
     StrLiteral(Box<str>),
 
@@ -7651,7 +7676,11 @@ pub enum Pattern<'a> {
         tag_id: TagIdIntType,
         arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
         layout: UnionLayout<'a>,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
+    },
+    OpaqueUnwrap {
+        opaque: Symbol,
+        argument: Box<(Pattern<'a>, Layout<'a>)>,
     },
 }
 
@@ -7744,6 +7773,7 @@ fn from_can_pattern_help<'a>(
             }
         }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
+        SingleQuote(c) => Ok(Pattern::IntLiteral(*c as _, IntWidth::I32)),
         Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
@@ -7787,8 +7817,8 @@ fn from_can_pattern_help<'a>(
             arguments,
             ..
         } => {
-            use crate::exhaustive::Union;
             use crate::layout::UnionVariant::*;
+            use roc_exhaustive::Union;
 
             let res_variant =
                 crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.target_info)
@@ -7853,7 +7883,7 @@ fn from_can_pattern_help<'a>(
                         })
                     }
 
-                    let union = crate::exhaustive::Union {
+                    let union = roc_exhaustive::Union {
                         render_as: RenderAs::Tag,
                         alternatives: ctors,
                     };
@@ -7944,7 +7974,7 @@ fn from_can_pattern_help<'a>(
                                 })
                             }
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -7996,7 +8026,7 @@ fn from_can_pattern_help<'a>(
                                 })
                             }
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -8039,7 +8069,7 @@ fn from_can_pattern_help<'a>(
                                 arity: fields.len(),
                             });
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -8109,7 +8139,7 @@ fn from_can_pattern_help<'a>(
                                 });
                             }
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -8164,7 +8194,7 @@ fn from_can_pattern_help<'a>(
                                 arity: other_fields.len() - 1,
                             });
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -8205,7 +8235,20 @@ fn from_can_pattern_help<'a>(
             Ok(result)
         }
 
-        UnwrappedOpaque { .. } => todo_opaques!(),
+        UnwrappedOpaque {
+            opaque, argument, ..
+        } => {
+            let (arg_var, loc_arg_pattern) = &(**argument);
+            let arg_layout = layout_cache
+                .from_var(env.arena, *arg_var, env.subs)
+                .unwrap();
+            let mono_arg_pattern =
+                from_can_pattern_help(env, layout_cache, &loc_arg_pattern.value, assignments)?;
+            Ok(Pattern::OpaqueUnwrap {
+                opaque: *opaque,
+                argument: Box::new((mono_arg_pattern, arg_layout)),
+            })
+        }
 
         RecordDestructure {
             whole_var,
@@ -8376,7 +8419,7 @@ pub fn num_argument_to_int_or_float(
         }
         Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::Int(IntWidth::I64), // We default (Num *) to I64
 
-        Content::Alias(Symbol::NUM_INTEGER, args, _) => {
+        Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
@@ -8384,7 +8427,7 @@ pub fn num_argument_to_int_or_float(
             num_argument_to_int_or_float(subs, target_info, var, false)
         }
 
-        other @ Content::Alias(symbol, args, _) => {
+        other @ Content::Alias(symbol, args, _, _) => {
             if let Some(int_width) = IntWidth::try_from_symbol(*symbol) {
                 return IntOrFloat::Int(int_width);
             }

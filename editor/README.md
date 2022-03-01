@@ -43,7 +43,7 @@ From roc to render:
 - `ed_model` also contains an `EdModule`, which holds the parsed abstract syntax tree (AST).
 - In the `init_model` function:
     + The AST is converted into a tree of `MarkupNode`. The different types of `MarkupNode` are similar to the elements/nodes in HTML. A line of roc code is represented as a nested `MarkupNode` containing mostly text `MarkupNode`s. The line `foo = "bar"` is represented as
-    three text `MarkupNode` representing `foo`, ` = ` and `bar`. Multiple lines of roc code are represented as nested `MarkupNode` that contain other nested `MarkupNode`.
+    three text `MarkupNode`; representing `foo`, ` = ` and `bar`. Multiple lines of roc code are represented as nested `MarkupNode` that contain other nested `MarkupNode`.
     + `CodeLines` holds a `Vec` of `String`, each line of code is a `String`. When saving the file, the content of `CodeLines` is written to disk.
     + `GridNodeMap` maps every position of a char of roc code to a `MarkNodeId`, for easy interaction with the caret.
 - Back in `editor/src/editor/main.rs` we convert the `EdModel` to `RenderedWgpu` by calling `model_to_wgpu`.

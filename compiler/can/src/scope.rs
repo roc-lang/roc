@@ -110,7 +110,7 @@ impl Scope {
         &self,
         opaque_ref: &str,
         lookup_region: Region,
-    ) -> Result<Symbol, RuntimeError> {
+    ) -> Result<(Symbol, &Alias), RuntimeError> {
         debug_assert!(opaque_ref.starts_with('$'));
         let opaque = opaque_ref[1..].into();
 
@@ -139,7 +139,7 @@ impl Scope {
                             Some(alias.header_region()),
                         )),
                         // All is good
-                        AliasKind::Opaque => Ok(*symbol),
+                        AliasKind::Opaque => Ok((*symbol, alias)),
                     },
                 }
             }

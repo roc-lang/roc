@@ -1,18 +1,21 @@
 #![crate_type = "lib"]
 #![no_std]
-use core::convert::From;
 use core::ffi::c_void;
 use core::fmt;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 
+mod rc;
 mod roc_list;
 mod roc_str;
+mod storage;
 
+pub use rc::ReferenceCount;
 pub use roc_list::RocList;
 pub use roc_str::RocStr;
 
 // A list of C functions that are being imported
+#[cfg(feature = "platform")]
 extern "C" {
     pub fn roc_alloc(size: usize, alignment: u32) -> *mut c_void;
     pub fn roc_realloc(
@@ -24,7 +27,29 @@ extern "C" {
     pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
 }
 
-const REFCOUNT_1: isize = isize::MIN;
+/// # Safety
+/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+#[cfg(not(feature = "platform"))]
+pub unsafe extern "C" fn roc_alloc(_size: usize, _alignment: u32) -> *mut c_void {
+    unimplemented!("It is not valid to call roc alloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
+}
+/// # Safety
+/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+#[cfg(not(feature = "platform"))]
+pub unsafe extern "C" fn roc_realloc(
+    _ptr: *mut c_void,
+    _new_size: usize,
+    _old_size: usize,
+    _alignment: u32,
+) -> *mut c_void {
+    unimplemented!("It is not valid to call roc realloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
+}
+/// # Safety
+/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+#[cfg(not(feature = "platform"))]
+pub unsafe extern "C" fn roc_dealloc(_ptr: *mut c_void, _alignment: u32) {
+    unimplemented!("It is not valid to call roc dealloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
+}
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,13 +57,6 @@ pub enum RocOrder {
     Eq = 0,
     Gt = 1,
     Lt = 2,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum Storage {
-    ReadOnly,
-    Refcounted(isize),
-    Capacity(usize),
 }
 
 /// Like a Rust `Result`, but following Roc's ABI instead of Rust's.
