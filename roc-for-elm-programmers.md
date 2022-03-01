@@ -183,12 +183,11 @@ is zero-configuration like `elm-format`) formats multi-line record literals (and
 record types) with a comma at the end of each line, like so:
 
 ```elm
-user =
-    {
-        firstName: "Sam",
-        lastName: "Sample",
-        email: "sam@example.com",
-    }
+user = {
+    firstName: "Sam",
+    lastName: "Sample",
+    email: "sam@example.com",
+}
 ```
 
 This is easy to read and leads to tidy version control diffs; no matter how
@@ -456,25 +455,22 @@ The key is that each of the error types is a type alias for a Roc *tag union*.
 Here's how those look:
 
 ```elm
-Http.Err a :
-    [
-        PageNotFound,
-        Timeout,
-        BadPayload Str,
-    ]a
+Http.Err a : [
+    PageNotFound,
+    Timeout,
+    BadPayload Str,
+]a
 
-File.ReadErr a :
-    [
-        FileNotFound,
-        Corrupted,
-        BadFormat,
-    ]a
+File.ReadErr a : [
+    FileNotFound,
+    Corrupted,
+    BadFormat,
+]a
 
-File.WriteErr a :
-    [
-        FileNotFound,
-        DiskFull,
-    ]a
+File.WriteErr a : [
+    FileNotFound,
+    DiskFull,
+]a
 ```
 
 For a side-by-side comparison, here's how we would implement something similar in Elm:
