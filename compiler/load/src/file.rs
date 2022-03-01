@@ -502,7 +502,7 @@ enum Msg<'a> {
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
-        exposed_vars_by_symbol: MutMap<Symbol, Variable>,
+        exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
         exposed_values: Vec<Symbol>,
         dep_idents: MutMap<ModuleId, IdentIds>,
@@ -2131,7 +2131,7 @@ fn finish(
     solved: Solved<Subs>,
     exposed_values: Vec<Symbol>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
-    exposed_vars_by_symbol: MutMap<Symbol, Variable>,
+    exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     dep_idents: MutMap<ModuleId, IdentIds>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
@@ -3104,8 +3104,10 @@ fn run_solve<'a>(
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(rigid_variables, constraint, var_store);
 
-    let mut exposed_vars_by_symbol: MutMap<Symbol, Variable> = solved_env.vars_by_symbol();
-    exposed_vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));
+    let exposed_vars_by_symbol: Vec<_> = solved_env
+        .vars_by_symbol()
+        .filter(|(k, _)| exposed_symbols.contains(k))
+        .collect();
 
     let solved_types = roc_solve::module::make_solved_types(&solved_subs, &exposed_vars_by_symbol);
 

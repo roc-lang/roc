@@ -84,11 +84,11 @@ pub struct Env {
 }
 
 impl Env {
-    pub fn vars_by_symbol(&self) -> MutMap<Symbol, Variable> {
+    pub fn vars_by_symbol(&self) -> impl Iterator<Item = (Symbol, Variable)> + '_ {
         let it1 = self.symbols.iter().copied();
         let it2 = self.variables.iter().copied();
 
-        it1.zip(it2).collect()
+        it1.zip(it2)
     }
 
     fn get_var_by_symbol(&self, symbol: &Symbol) -> Option<Variable> {
