@@ -336,7 +336,7 @@ trait Backend<'a> {
                 ..
             } => {
                 self.load_literal_symbols(arguments);
-                self.tag(sym, &arguments, tag_layout, *tag_id);
+                self.tag(sym, arguments, tag_layout, *tag_id);
             }
             x => todo!("the expression, {:?}", x),
         }

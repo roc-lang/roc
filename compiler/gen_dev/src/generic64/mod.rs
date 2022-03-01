@@ -558,17 +558,18 @@ impl<
             .load_to_general_reg(&mut self.buf, cond_symbol);
 
         let mut base_storage = self.storage_manager.clone();
+        let mut max_branch_stack_size = 0;
         let mut ret_jumps = bumpalo::vec![in self.env.arena];
         let mut tmp = bumpalo::vec![in self.env.arena];
         for (val, _branch_info, stmt) in branches.iter() {
-            // TODO: look inot branch info and if it matters here.
+            // TODO: look into branch info and if it matters here.
             tmp.clear();
-            // Create jump to next branch if not cond_sym not equal to value.
+            // Create jump to next branch if cond_sym not equal to value.
             // Since we don't know the offset yet, set it to 0 and overwrite later.
             let jne_location = self.buf.len();
             let start_offset = ASM::jne_reg64_imm64_imm32(&mut self.buf, cond_reg, *val, 0);
 
-            // Build all statements in this branch.
+            // Build all statements in this branch. Using storage as from before any branch.
             self.storage_manager = base_storage.clone();
             self.build_stmt(stmt, ret_layout);
 
@@ -586,10 +587,14 @@ impl<
                 self.buf[jne_location + i] = *byte;
             }
 
-            base_storage.update_stack_size(self.storage_manager.stack_size());
+            // Update important storage information to avoid overwrites.
+            max_branch_stack_size =
+                std::cmp::max(max_branch_stack_size, self.storage_manager.stack_size());
             base_storage.update_fn_call_stack_size(self.storage_manager.fn_call_stack_size());
         }
         self.storage_manager = base_storage;
+        self.storage_manager
+            .update_stack_size(max_branch_stack_size);
         let (_branch_info, stmt) = default_branch;
         self.build_stmt(stmt, ret_layout);
 
@@ -613,7 +618,7 @@ impl<
         remainder: &'a Stmt<'a>,
         ret_layout: &Layout<'a>,
     ) {
-        // Free everything to the stack to make sure they don't get messed with in the branch.
+        // Free everything to the stack to make sure they don't get messed up when looping back to this point.
         // TODO: look into a nicer solution.
         self.storage_manager.free_all_to_stack(&mut self.buf);
 
@@ -625,7 +630,6 @@ impl<
         self.join_map.insert(*id, bumpalo::vec![in self.env.arena]);
 
         // Build remainder of function first. It is what gets run and jumps to join.
-        // self.storage_manager = base_storage;
         self.build_stmt(remainder, ret_layout);
 
         let join_location = self.buf.len() as u64;
@@ -959,7 +963,7 @@ impl<
         let list_alignment = list_layout.alignment_bytes(self.storage_manager.target_info());
         self.load_literal(
             &Symbol::DEV_TMP,
-            &u32_layout,
+            u32_layout,
             &Literal::Int(list_alignment as i128),
         );
 
@@ -978,13 +982,13 @@ impl<
         let elem_stack_size = elem_layout.stack_size(self.storage_manager.target_info());
         self.load_literal(
             &Symbol::DEV_TMP3,
-            &u64_layout,
+            u64_layout,
             &Literal::Int(elem_stack_size as i128),
         );
 
         // Setup the return location.
         let base_offset = self.storage_manager.claim_stack_area(
-            &dst,
+            dst,
             ret_layout.stack_size(self.storage_manager.target_info()),
         );
 

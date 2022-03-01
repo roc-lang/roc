@@ -440,7 +440,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             }
             _ => {
                 // This is a large type returned via the arg pointer.
-                storage_manager.copy_symbol_to_arg_pionter(buf, sym, layout);
+                storage_manager.copy_symbol_to_arg_pointer(buf, sym, layout);
                 // Also set the return reg to the arg pointer.
                 storage_manager.load_to_specified_general_reg(
                     buf,
@@ -1599,7 +1599,7 @@ fn movsd_freg64_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset:
     buf.extend(&offset.to_le_bytes());
 }
 
-/// `MOVSD r/m64,xmm1` -> Move xmm1 to r/m64. where m64 references the base pionter.
+/// `MOVSD r/m64,xmm1` -> Move xmm1 to r/m64. where m64 references the base pointer.
 #[inline(always)]
 fn movsd_base64_offset32_freg64(
     buf: &mut Vec<'_, u8>,
@@ -1622,7 +1622,7 @@ fn movsd_base64_offset32_freg64(
     buf.extend(&offset.to_le_bytes());
 }
 
-/// `MOVSD xmm1,r/m64` -> Move r/m64 to xmm1. where m64 references the base pionter.
+/// `MOVSD xmm1,r/m64` -> Move r/m64 to xmm1. where m64 references the base pointer.
 #[inline(always)]
 fn movsd_freg64_base64_offset32(
     buf: &mut Vec<'_, u8>,
