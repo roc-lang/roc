@@ -1,0 +1,50 @@
+[
+    @0-53 SpaceAfter(
+        SpaceBefore(
+            Opaque {
+                header: TypeHeader {
+                    name: @0-10 "Bookmark",
+                    vars: [
+                        @9-10 Identifier(
+                            "a",
+                        ),
+                    ],
+                },
+                typ: @14-53 Record {
+                    fields: [
+                        @16-28 RequiredValue(
+                            @16-23 "chapter",
+                            [],
+                            @25-28 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                        ),
+                        @30-41 RequiredValue(
+                            @30-36 "stanza",
+                            [],
+                            @38-41 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                        ),
+                        @43-51 RequiredValue(
+                            @43-48 "notes",
+                            [],
+                            @50-51 BoundVariable(
+                                "a",
+                            ),
+                        ),
+                    ],
+                    ext: None,
+                },
+            },
+            [],
+        ),
+        [
+            Newline,
+        ],
+    ),
+]

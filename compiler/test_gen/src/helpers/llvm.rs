@@ -1,16 +1,12 @@
-use crate::helpers::from_wasm32_memory::FromWasm32Memory;
+use crate::helpers::from_wasmer_memory::FromWasmerMemory;
 use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
-use roc_can::builtins::builtin_defs_map;
-use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
-use roc_module::symbol::Symbol;
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
-use roc_types::subs::VarStore;
 use target_lexicon::Triple;
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -24,9 +20,6 @@ fn promote_expr_to_module(src: &str) -> String {
     }
 
     buffer
-}
-pub fn test_builtin_defs(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
-    builtin_defs_map(symbol, var_store)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -42,6 +35,8 @@ fn create_llvm_module<'a>(
 ) -> (&'static str, String, &'a Module<'a>) {
     use std::path::{Path, PathBuf};
 
+    let target_info = roc_target::TargetInfo::from(target);
+
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -56,8 +51,6 @@ fn create_llvm_module<'a>(
         module_src = &temp;
     }
 
-    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-
     let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
@@ -66,8 +59,7 @@ fn create_llvm_module<'a>(
         stdlib,
         src_dir,
         exposed_types,
-        ptr_bytes,
-        test_builtin_defs,
+        target_info,
     );
 
     let mut loaded = match loaded {
@@ -192,7 +184,11 @@ fn create_llvm_module<'a>(
     for function in FunctionIterator::from_module(module) {
         let name = function.get_name().to_str().unwrap();
         if name.starts_with("roc_builtins") {
-            function.set_linkage(Linkage::Internal);
+            if name.starts_with("roc_builtins.expect") {
+                function.set_linkage(Linkage::External);
+            } else {
+                function.set_linkage(Linkage::Internal);
+            }
         }
 
         if name.starts_with("roc_builtins.dict") {
@@ -213,7 +209,7 @@ fn create_llvm_module<'a>(
         context,
         interns,
         module,
-        ptr_bytes,
+        target_info,
         is_gen_test,
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
@@ -464,7 +460,7 @@ fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
 #[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
 where
-    T: FromWasm32Memory,
+    T: FromWasmerMemory,
 {
     let arena = bumpalo::Bump::new();
     let context = inkwell::context::Context::create();
@@ -493,12 +489,9 @@ where
     match test_wrapper.call(&[]) {
         Err(e) => Err(format!("call to `test_wrapper`: {:?}", e)),
         Ok(result) => {
-            let address = match result[0] {
-                wasmer::Value::I32(a) => a,
-                _ => panic!(),
-            };
+            let address = result[0].unwrap_i32();
 
-            let output = <T as crate::helpers::llvm::FromWasm32Memory>::decode(
+            let output = <T as crate::helpers::llvm::FromWasmerMemory>::decode(
                 memory,
                 // skip the RocCallResult tag id
                 address as u32 + 8,
@@ -601,6 +594,46 @@ macro_rules! assert_evals_to {
     };
 }
 
+#[allow(unused_macros)]
+macro_rules! assert_expect_failed {
+    ($src:expr, $expected:expr, $ty:ty) => {
+        use bumpalo::Bump;
+        use inkwell::context::Context;
+        use roc_gen_llvm::run_jit_function;
+
+        let arena = Bump::new();
+        let context = Context::create();
+
+        // NOTE the stdlib must be in the arena; just taking a reference will segfault
+        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
+
+        let is_gen_test = true;
+        let (main_fn_name, errors, lib) =
+            $crate::helpers::llvm::helper(&arena, $src, stdlib, is_gen_test, false, &context);
+
+        let transform = |success| {
+            let expected = $expected;
+            assert_eq!(&success, &expected, "LLVM test failed");
+        };
+
+        run_jit_function!(lib, main_fn_name, $ty, transform, errors)
+    };
+
+    ($src:expr, $expected:expr, $ty:ty) => {
+        $crate::helpers::llvm::assert_llvm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $crate::helpers::llvm::identity,
+            false
+        );
+    };
+
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+    };
+}
+
 macro_rules! expect_runtime_error_panic {
     ($src:expr) => {{
         #[cfg(feature = "wasm-cli-run")]
@@ -650,6 +683,8 @@ macro_rules! assert_non_opt_evals_to {
 
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
+#[allow(unused_imports)]
+pub(crate) use assert_expect_failed;
 #[allow(unused_imports)]
 pub(crate) use assert_llvm_evals_to;
 #[allow(unused_imports)]

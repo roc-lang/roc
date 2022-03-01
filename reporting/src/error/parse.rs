@@ -1,4 +1,4 @@
-use roc_parse::parser::{FileError, SyntaxError};
+use roc_parse::parser::{ENumber, FileError, SyntaxError};
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
 
@@ -109,7 +109,6 @@ fn to_syntax_report<'a>(
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I expected to reach the end of the file, but got stuck here:"),
                 alloc.region(region),
-                alloc.concat(vec![alloc.reflow("no hints")]),
             ]);
 
             Report {
@@ -517,7 +516,29 @@ fn to_expr_report<'a>(
             }
         }
 
+        EExpr::Record(_erecord, pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing an record, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat(vec![alloc.reflow("TODO provide more context.")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "RECORD PARSE PROBLEM".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
         EExpr::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
+
+        &EExpr::Number(ENumber::End, pos) => {
+            to_malformed_number_literal_report(alloc, lines, filename, pos)
+        }
 
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
@@ -1554,6 +1575,9 @@ fn to_pattern_report<'a>(
         EPattern::PInParens(inparens, pos) => {
             to_pattern_in_parens_report(alloc, lines, filename, inparens, *pos)
         }
+        &EPattern::NumLiteral(ENumber::End, pos) => {
+            to_malformed_number_literal_report(alloc, lines, filename, pos)
+        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -1944,6 +1968,28 @@ fn to_pattern_in_parens_report<'a>(
         }
 
         PInParens::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+    }
+}
+
+fn to_malformed_number_literal_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    start: Position,
+) -> Report<'a> {
+    let surroundings = Region::new(start, start);
+    let region = LineColumnRegion::from_pos(lines.convert_pos(start));
+
+    let doc = alloc.stack(vec![
+        alloc.reflow(r"This number literal is malformed:"),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "INVALID NUMBER LITERAL".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 
@@ -2980,8 +3026,6 @@ fn to_header_report<'a>(
             to_packages_report(alloc, lines, filename, packages, *pos)
         }
 
-        EHeader::Effects(effects, pos) => to_effects_report(alloc, lines, filename, effects, *pos),
-
         EHeader::IndentStart(pos) => {
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
@@ -3097,6 +3141,96 @@ fn to_header_report<'a>(
         }
 
         EHeader::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
+        EHeader::Generates(_, pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting a type name next, like "),
+                    alloc.parser_suggestion("Effect"),
+                    alloc.reflow(". Type names must start with an uppercase letter."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD GENERATED TYPE NAME".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        EHeader::GeneratesWith(generates_with, pos) => {
+            to_generates_with_report(alloc, lines, filename, generates_with, *pos)
+        }
+    }
+}
+
+fn to_generates_with_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EGeneratesWith,
+    start: Position,
+) -> Report<'a> {
+    use roc_parse::parser::EGeneratesWith;
+
+    match *parse_problem {
+        EGeneratesWith::ListEnd(pos) | // TODO: give this its own error message
+        EGeneratesWith::Identifier(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack(vec![
+                alloc
+                    .reflow(r"I am partway through parsing a provides list, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat(vec![alloc.reflow(
+                    "I was expecting a type name, value name or function name next, like",
+                )]),
+                alloc
+                    .parser_suggestion("provides [ Animal, default, tame ]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD GENERATES".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        EGeneratesWith::With(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting the "),
+                    alloc.keyword("with"),
+                    alloc.reflow(" keyword next, like "),
+                ]),
+                alloc
+                    .parser_suggestion("with [ after, map ]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD GENERATES".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        EGeneratesWith::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+
+        _ => todo!("unhandled parse error {:?}", parse_problem),
     }
 }
 
@@ -3182,7 +3316,7 @@ fn to_exposes_report<'a>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             let doc = alloc.stack(vec![
-                alloc.reflow(r"I am partway through parsing a exposes list, but I got stuck here:"),
+                alloc.reflow(r"I am partway through parsing an `exposes` list, but I got stuck here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat(vec![alloc.reflow(
                     "I was expecting a type name, value name or function name next, like",
@@ -3227,7 +3361,7 @@ fn to_exposes_report<'a>(
 
         EExposes::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
-        _ => todo!("unhandled parse error {:?}", parse_problem),
+        _ => todo!("unhandled `exposes` parsing error {:?}", parse_problem),
     }
 }
 
@@ -3410,6 +3544,35 @@ fn to_requires_report<'a>(
             }
         }
 
+        ERequires::Open(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting a list of type names like "),
+                    alloc.keyword("{}"),
+                    alloc.reflow(" or "),
+                    alloc.keyword("{ Model }"),
+                    alloc.reflow(" next. A full "),
+                    alloc.keyword("requires"),
+                    alloc.reflow(" definition looks like"),
+                ]),
+                alloc
+                    .parser_suggestion("requires { Model, Msg } {main : Effect {}}")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD REQUIRES".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
 }
@@ -3448,45 +3611,6 @@ fn to_packages_report<'a>(
         }
 
         EPackages::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
-
-        _ => todo!("unhandled parse error {:?}", parse_problem),
-    }
-}
-
-fn to_effects_report<'a>(
-    alloc: &'a RocDocAllocator<'a>,
-    lines: &LineInfo,
-    filename: PathBuf,
-    parse_problem: &roc_parse::parser::EEffects,
-    start: Position,
-) -> Report<'a> {
-    use roc_parse::parser::EEffects;
-
-    match *parse_problem {
-        EEffects::Effects(pos) => {
-            let surroundings = Region::new(start, pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-            let doc = alloc.stack(vec![
-                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat(vec![
-                    alloc.reflow("I am expecting the "),
-                    alloc.keyword("effects"),
-                    alloc.reflow(" keyword next, like "),
-                ]),
-                alloc.parser_suggestion("effects {}").indent(4),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "MISSING PACKAGES".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-
-        EEffects::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }

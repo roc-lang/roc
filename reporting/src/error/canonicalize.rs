@@ -16,7 +16,8 @@ const UNUSED_DEF: &str = "UNUSED DEFINITION";
 const UNUSED_IMPORT: &str = "UNUSED IMPORT";
 const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
-const MISSING_DEFINITION: &str = "MISSING_DEFINITION";
+const MISSING_DEFINITION: &str = "MISSING DEFINITION";
+const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
 const DUPLICATE_FIELD_NAME: &str = "DUPLICATE FIELD NAME";
 const DUPLICATE_TAG_NAME: &str = "DUPLICATE TAG NAME";
 const INVALID_UNICODE: &str = "INVALID UNICODE";
@@ -24,6 +25,14 @@ const CIRCULAR_DEF: &str = "CIRCULAR DEFINITION";
 const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const VALUE_NOT_EXPOSED: &str = "NOT EXPOSED";
 const MODULE_NOT_IMPORTED: &str = "MODULE NOT IMPORTED";
+const NESTED_DATATYPE: &str = "NESTED DATATYPE";
+const CONFLICTING_NUMBER_SUFFIX: &str = "CONFLICTING NUMBER SUFFIX";
+const NUMBER_OVERFLOWS_SUFFIX: &str = "NUMBER OVERFLOWS SUFFIX";
+const NUMBER_UNDERFLOWS_SUFFIX: &str = "NUMBER UNDERFLOWS SUFFIX";
+const OPAQUE_NOT_DEFINED: &str = "OPAQUE TYPE NOT DEFINED";
+const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE TYPE DECLARED OUTSIDE SCOPE";
+const OPAQUE_NOT_APPLIED: &str = "OPAQUE TYPE NOT APPLIED";
+const OPAQUE_OVER_APPLIED: &str = "OPAQUE TYPE APPLIED TO TOO MANY ARGS";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -86,6 +95,21 @@ pub fn can_problem<'b>(
             ]);
 
             title = MISSING_DEFINITION.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::UnknownGeneratesWith(loc_ident) => {
+            doc = alloc.stack(vec![
+                alloc
+                    .reflow("I don't know how to generate the ")
+                    .append(alloc.ident(loc_ident.value))
+                    .append(alloc.reflow(" function.")),
+                alloc.region(lines.convert_region(loc_ident.region)),
+                alloc
+                    .reflow("Only specific functions like `after` and `map` can be generated.")
+                    .append(alloc.reflow("Learn more about hosted modules at TODO.")),
+            ]);
+
+            title = UNKNOWN_GENERATES_WITH.to_string();
             severity = Severity::RuntimeError;
         }
         Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
@@ -201,7 +225,7 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
         Problem::PhantomTypeArgument {
-            alias,
+            typ: alias,
             variable_region,
             variable_name,
         } => {
@@ -366,11 +390,14 @@ pub fn can_problem<'b>(
             title = NAMING_PROBLEM.to_string();
             severity = Severity::RuntimeError;
         }
-        Problem::InvalidAliasRigid { alias_name, region } => {
+        Problem::InvalidAliasRigid {
+            alias_name: type_name,
+            region,
+        } => {
             doc = alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.reflow("This pattern in the definition of "),
-                    alloc.symbol_unqualified(alias_name),
+                    alloc.symbol_unqualified(type_name),
                     alloc.reflow(" is not what I expect:"),
                 ]),
                 alloc.region(lines.convert_region(region)),
@@ -435,6 +462,34 @@ pub fn can_problem<'b>(
 
             doc = answer.0;
             title = answer.1.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::NestedDatatype {
+            alias,
+            def_region,
+            differing_recursion_region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" is a nested datatype. Here is one recursive usage of it:"),
+                ]),
+                alloc.region(lines.convert_region(differing_recursion_region)),
+                alloc.concat(vec![
+                    alloc.reflow("But recursive usages of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" must match its definition:"),
+                ]),
+                alloc.region(lines.convert_region(def_region)),
+                alloc.reflow("Nested datatypes are not supported in Roc."),
+                alloc.concat(vec![
+                    alloc.hint("Consider rewriting the definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.text(" to use the recursive type with the same arguments."),
+                ]),
+            ]);
+
+            title = NESTED_DATATYPE.to_string();
             severity = Severity::RuntimeError;
         }
     };
@@ -583,8 +638,13 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
 
-        BadPrivateTag(pos) => {
+        BadPrivateTag(pos) | BadOpaqueRef(pos) => {
             use BadIdentNext::*;
+            let kind = if matches!(bad_ident, BadPrivateTag(..)) {
+                "a private tag"
+            } else {
+                "an opaque reference"
+            };
             match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
                 LowercaseAccess(width) => {
                     let region = Region::new(pos, pos.bump_column(width));
@@ -595,7 +655,9 @@ fn to_bad_ident_expr_report<'b>(
                             lines.convert_region(region),
                         ),
                         alloc.concat(vec![
-                            alloc.reflow(r"It looks like a record field access on a private tag.")
+                            alloc.reflow(r"It looks like a record field access on "),
+                            alloc.reflow(kind),
+                            alloc.text("."),
                         ]),
                     ])
                 }
@@ -608,9 +670,9 @@ fn to_bad_ident_expr_report<'b>(
                             lines.convert_region(region),
                         ),
                         alloc.concat(vec![
-                            alloc.reflow(
-                                r"Looks like a private tag is treated like a module name. ",
-                            ),
+                            alloc.reflow(r"Looks like "),
+                            alloc.reflow(kind),
+                            alloc.reflow(" is treated like a module name. "),
                             alloc.reflow(r"Maybe you wanted a qualified name, like "),
                             alloc.parser_suggestion("Json.Decode.string"),
                             alloc.text("?"),
@@ -621,7 +683,11 @@ fn to_bad_ident_expr_report<'b>(
                     let region =
                         Region::new(surroundings.start().bump_column(1), pos.bump_column(1));
                     alloc.stack(vec![
-                        alloc.reflow("I am trying to parse a private tag here:"),
+                        alloc.concat(vec![
+                            alloc.reflow("I am trying to parse "),
+                            alloc.reflow(kind),
+                            alloc.reflow(" here:"),
+                        ]),
                         alloc.region_with_subregion(
                             lines.convert_region(surroundings),
                             lines.convert_region(region),
@@ -881,13 +947,17 @@ fn pretty_runtime_error<'b>(
                 }
                 Unknown => " ",
                 QualifiedIdentifier => " qualified ",
+                EmptySingleQuote => " empty character literal ",
+                MultipleCharsInSingleQuote => " overfull literal ",
             };
 
             let tip = match problem {
                 MalformedInt | MalformedFloat | MalformedBase(_) => alloc
                     .tip()
                     .append(alloc.reflow("Learn more about number literals at TODO")),
-                Unknown | BadIdent(_) => alloc.nil(),
+                EmptySingleQuote | MultipleCharsInSingleQuote | Unknown | BadIdent(_) => {
+                    alloc.nil()
+                }
                 QualifiedIdentifier => alloc.tip().append(
                     alloc.reflow("In patterns, only private and global tags can be qualified"),
                 ),
@@ -951,8 +1021,16 @@ fn pretty_runtime_error<'b>(
             module_name,
             imported_modules,
             region,
+            module_exists,
         } => {
-            doc = module_not_found(alloc, lines, region, &module_name, imported_modules);
+            doc = module_not_found(
+                alloc,
+                lines,
+                region,
+                &module_name,
+                imported_modules,
+                module_exists,
+            );
 
             title = MODULE_NOT_IMPORTED;
         }
@@ -1026,12 +1104,22 @@ fn pretty_runtime_error<'b>(
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat(vec![
-                    alloc.reflow("Floating point literals can only contain the digits 0-9, or use scientific notation 10e4"),
+                    alloc.reflow("Floating point literals can only contain the digits 0-9, or use scientific notation 10e4, or have a float suffix."),
                 ]),
                 tip,
             ]);
 
             title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::InvalidFloat(FloatErrorKind::IntSuffix, region, _raw_str) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This number literal is a float, but it has an integer suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+            ]);
+
+            title = CONFLICTING_NUMBER_SUFFIX;
         }
         RuntimeError::InvalidInt(error @ IntErrorKind::InvalidDigit, base, region, _raw_str)
         | RuntimeError::InvalidInt(error @ IntErrorKind::Empty, base, region, _raw_str) => {
@@ -1087,7 +1175,7 @@ fn pretty_runtime_error<'b>(
                     alloc.text(plurals),
                     contains,
                     alloc.text(charset),
-                    alloc.text("."),
+                    alloc.text(", or have an integer suffix."),
                 ]),
                 tip,
             ]);
@@ -1096,10 +1184,28 @@ fn pretty_runtime_error<'b>(
         }
         RuntimeError::InvalidInt(error_kind @ IntErrorKind::Underflow, _base, region, _raw_str)
         | RuntimeError::InvalidInt(error_kind @ IntErrorKind::Overflow, _base, region, _raw_str) => {
-            let big_or_small = if let IntErrorKind::Underflow = error_kind {
-                "small"
+            let (big_or_small, info) = if let IntErrorKind::Underflow = error_kind {
+                (
+                    "small",
+                    alloc.concat(vec![
+                        alloc.reflow(
+                            "The smallest number representable in Roc is the minimum I128 value, ",
+                        ),
+                        alloc.int_literal(i128::MIN),
+                        alloc.text("."),
+                    ]),
+                )
             } else {
-                "big"
+                (
+                    "big",
+                    alloc.concat(vec![
+                        alloc.reflow(
+                            "The largest number representable in Roc is the maximum U128 value, ",
+                        ),
+                        alloc.int_literal(u128::MAX),
+                        alloc.text("."),
+                    ]),
+                )
             };
 
             let tip = alloc
@@ -1113,11 +1219,71 @@ fn pretty_runtime_error<'b>(
                     alloc.reflow(":"),
                 ]),
                 alloc.region(lines.convert_region(region)),
-                alloc.reflow("Roc uses signed 64-bit integers, allowing values between −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807."),
+                info,
                 tip,
             ]);
 
             title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::InvalidInt(IntErrorKind::FloatSuffix, _base, region, _raw_str) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This number literal is an integer, but it has a float suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+            ]);
+
+            title = CONFLICTING_NUMBER_SUFFIX;
+        }
+        RuntimeError::InvalidInt(
+            IntErrorKind::OverflowsSuffix {
+                suffix_type,
+                max_value,
+            },
+            _base,
+            region,
+            _raw_str,
+        ) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This integer literal overflows the type indicated by its suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+                alloc.tip().append(alloc.concat(vec![
+                    alloc.reflow("The suffix indicates this integer is a "),
+                    alloc.type_str(suffix_type),
+                    alloc.reflow(", whose maximum value is "),
+                    alloc.int_literal(max_value),
+                    alloc.reflow("."),
+                ])),
+            ]);
+
+            title = NUMBER_OVERFLOWS_SUFFIX;
+        }
+        RuntimeError::InvalidInt(
+            IntErrorKind::UnderflowsSuffix {
+                suffix_type,
+                min_value,
+            },
+            _base,
+            region,
+            _raw_str,
+        ) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This integer literal underflows the type indicated by its suffix:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+                alloc.tip().append(alloc.concat(vec![
+                    alloc.reflow("The suffix indicates this integer is a "),
+                    alloc.type_str(suffix_type),
+                    alloc.reflow(", whose minimum value is "),
+                    alloc.int_literal(min_value),
+                    alloc.reflow("."),
+                ])),
+            ]);
+
+            title = NUMBER_UNDERFLOWS_SUFFIX;
         }
         RuntimeError::InvalidOptionalValue {
             field_name,
@@ -1180,6 +1346,126 @@ fn pretty_runtime_error<'b>(
                 )]);
 
             title = MISSING_DEFINITION;
+        }
+        RuntimeError::EmptySingleQuote(region) => {
+            let tip = alloc
+                .tip()
+                .append(alloc.reflow("Learn more about character literals at TODO"));
+
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow("This character literal is empty.")]),
+                alloc.region(lines.convert_region(region)),
+                tip,
+            ]);
+
+            title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::MultipleCharsInSingleQuote(region) => {
+            let tip = alloc
+                .tip()
+                .append(alloc.reflow("Learn more about character literals at TODO"));
+
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This character literal contains more than one code point.")
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat(vec![
+                    alloc.reflow("Character literals can only contain one code point.")
+                ]),
+                tip,
+            ]);
+
+            title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::OpaqueNotDefined {
+            usage:
+                Loc {
+                    region: used_region,
+                    value: opaque,
+                },
+            opaques_in_scope,
+            opt_defined_alias,
+        } => {
+            let mut suggestions = suggest::sort(
+                opaque.as_inline_str().as_str(),
+                opaques_in_scope.iter().map(|v| v.as_ref()).collect(),
+            );
+            suggestions.truncate(4);
+
+            let details = if suggestions.is_empty() {
+                alloc.note("It looks like there are no opaque types declared in this scope yet!")
+            } else {
+                let qualified_suggestions =
+                    suggestions.into_iter().map(|v| alloc.string(v.to_string()));
+                alloc.stack(vec![
+                    alloc
+                        .tip()
+                        .append(alloc.reflow("Did you mean one of these opaque types?")),
+                    alloc.vcat(qualified_suggestions).indent(4),
+                ])
+            };
+
+            let mut stack = vec![
+                alloc.concat(vec![
+                    alloc.reflow("The opaque type "),
+                    alloc.type_str(opaque.as_inline_str().as_str()),
+                    alloc.reflow(" referenced here is not defined:"),
+                ]),
+                alloc.region(lines.convert_region(used_region)),
+            ];
+
+            if let Some(defined_alias_region) = opt_defined_alias {
+                stack.push(alloc.stack(vec![
+                    alloc.note("There is an alias of the same name:"),
+                    alloc.region(lines.convert_region(defined_alias_region)),
+                ]));
+            }
+
+            stack.push(details);
+
+            doc = alloc.stack(stack);
+
+            title = OPAQUE_NOT_DEFINED;
+        }
+        RuntimeError::OpaqueOutsideScope {
+            opaque,
+            referenced_region,
+            imported_region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The unwrapped opaque type "),
+                    alloc.type_str(opaque.as_inline_str().as_str()),
+                    alloc.reflow(" referenced here:"),
+                ]),
+                alloc.region(lines.convert_region(referenced_region)),
+                alloc.reflow("is imported from another module:"),
+                alloc.region(lines.convert_region(imported_region)),
+                alloc.note(
+                    "Opaque types can only be wrapped and unwrapped in the module they are defined in!",
+                ),
+            ]);
+
+            title = OPAQUE_DECLARED_OUTSIDE_SCOPE;
+        }
+        RuntimeError::OpaqueNotApplied(loc_ident) => {
+            doc = alloc.stack(vec![
+                alloc.reflow("This opaque type is not applied to an argument:"),
+                alloc.region(lines.convert_region(loc_ident.region)),
+                alloc.note("Opaque types always wrap exactly one argument!"),
+            ]);
+
+            title = OPAQUE_NOT_APPLIED;
+        }
+        RuntimeError::OpaqueAppliedToMultipleArgs(region) => {
+            doc = alloc.stack(vec![
+                alloc.reflow("This opaque type is applied to multiple arguments:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.note("Opaque types always wrap exactly one argument!"),
+            ]);
+
+            title = OPAQUE_OVER_APPLIED;
         }
     }
 
@@ -1278,34 +1564,39 @@ fn not_found<'b>(
     ])
 }
 
+/// Generate a message informing the user that a module was referenced, but not found
+///
+/// See [`roc_problem::can::ModuleNotImported`]
 fn module_not_found<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     region: roc_region::all::Region,
     name: &ModuleName,
     options: MutSet<Box<str>>,
+    module_exists: bool,
 ) -> RocDocBuilder<'b> {
-    let mut suggestions =
-        suggest::sort(name.as_str(), options.iter().map(|v| v.as_ref()).collect());
-    suggestions.truncate(4);
+    // If the module exists, sugguest that the user import it
+    let details = if module_exists {
+        // TODO:  Maybe give an example of how to do that
+        alloc.reflow("Did you mean to import it?")
+    } else {
+        // If the module might not exist, sugguest that it's a typo
+        let mut suggestions =
+            suggest::sort(name.as_str(), options.iter().map(|v| v.as_ref()).collect());
+        suggestions.truncate(4);
 
-    let default_no = alloc.concat(vec![
-        alloc.reflow("Is there an "),
-        alloc.keyword("import"),
-        alloc.reflow(" or "),
-        alloc.keyword("exposing"),
-        alloc.reflow(" missing up-top"),
-    ]);
-
-    let default_yes = alloc
-        .reflow("Is there an import missing? Perhaps there is a typo. Did you mean one of these?");
-
-    let to_details = |no_suggestion_details, yes_suggestion_details| {
         if suggestions.is_empty() {
-            no_suggestion_details
+            // We don't have any recommended spelling corrections
+            alloc.concat(vec![
+                alloc.reflow("Is there an "),
+                alloc.keyword("import"),
+                alloc.reflow(" or "),
+                alloc.keyword("exposing"),
+                alloc.reflow(" missing up-top"),
+            ])
         } else {
             alloc.stack(vec![
-                yes_suggestion_details,
+                alloc.reflow("Is there an import missing? Perhaps there is a typo. Did you mean one of these?"),
                 alloc
                     .vcat(suggestions.into_iter().map(|v| alloc.string(v.to_string())))
                     .indent(4),
@@ -1320,6 +1611,6 @@ fn module_not_found<'b>(
             alloc.reflow("` module is not imported:"),
         ]),
         alloc.region(lines.convert_region(region)),
-        to_details(default_no, default_yes),
+        details,
     ])
 }

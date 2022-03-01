@@ -5,7 +5,7 @@
 # https://docs.netlify.com/routing/headers/#syntax-for-the-netlify-configuration-file
 [build]
   publish = "build/"
-  command = "bash build.sh"
+  command = "bash netlify.sh"
 
 [[headers]]
   for = "/*"

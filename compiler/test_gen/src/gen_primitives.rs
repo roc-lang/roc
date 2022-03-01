@@ -1,6 +1,8 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 #[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::assert_expect_failed;
+#[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_llvm_evals_to;
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_non_opt_evals_to;
@@ -8,12 +10,16 @@ use crate::helpers::llvm::assert_non_opt_evals_to;
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
 // #[cfg(feature = "gen-dev")]
+// use crate::helpers::dev::assert_expect_failed;
+// #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to as assert_llvm_evals_to;
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to as assert_non_opt_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
+// #[cfg(feature = "gen-wasm")]
+// use crate::helpers::dev::assert_expect_failed;
 // #[cfg(feature = "gen-wasm")]
 // use crate::helpers::wasm::assert_evals_to as assert_llvm_evals_to;
 // #[cfg(feature = "gen-wasm")]
@@ -1462,7 +1468,7 @@ fn rbtree_insert() {
                 show (insert 0 {} Empty)
             "#
         ),
-        RocStr::from_slice("Node".as_bytes()),
+        RocStr::from("Node"),
         RocStr
     );
 }
@@ -1529,7 +1535,7 @@ fn rbtree_layout_issue() {
             main = show (balance Red zero zero Empty)
             "#
         ),
-        RocStr::from_slice("Empty".as_bytes()),
+        RocStr::from("Empty"),
         RocStr
     );
 }
@@ -1583,7 +1589,7 @@ fn rbtree_balance_mono_problem() {
             main = show (balance Red 0 0 Empty Empty)
             "#
         ),
-        RocStr::from_slice("Empty".as_bytes()),
+        RocStr::from("Empty"),
         RocStr
     );
 }
@@ -2376,7 +2382,7 @@ fn build_then_apply_closure() {
                 (\_ -> x) {}
             "#
         ),
-        RocStr::from_slice(b"long string that is malloced"),
+        RocStr::from("long string that is malloced"),
         RocStr
     );
 }
@@ -2485,9 +2491,9 @@ fn call_invalid_layout() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = "An expectation failed!")]
+#[should_panic(expected = "Failed with 1 failures. Failures: ")]
 fn expect_fail() {
-    assert_evals_to!(
+    assert_expect_failed!(
         indoc!(
             r#"
             expect 1 == 2
@@ -2550,7 +2556,7 @@ fn module_thunk_is_function() {
                 helper = Str.concat
             "#
         ),
-        RocStr::from_slice(b"foobar"),
+        RocStr::from("foobar"),
         RocStr
     );
 }
@@ -2574,7 +2580,7 @@ fn hit_unresolved_type_variable() {
                     \input -> input
             "#
         ),
-        RocStr::from_slice(b"B"),
+        RocStr::from("B"),
         RocStr
     );
 }
@@ -2642,7 +2648,7 @@ fn mirror_llvm_alignment_padding() {
 
             "#
         ),
-        RocStr::from_slice(b"pass\npass"),
+        RocStr::from("pass\npass"),
         RocStr
     );
 }
@@ -2905,7 +2911,7 @@ fn mix_function_and_closure() {
                     (if 1 == 1 then foo else (bar "nope nope nope")) "hello world"
             "#
         ),
-        RocStr::from_slice(b"hello world"),
+        RocStr::from("hello world"),
         RocStr
     );
 }
@@ -2930,7 +2936,7 @@ fn mix_function_and_closure_level_of_indirection() {
                     f "hello world"
             "#
         ),
-        RocStr::from_slice(b"hello world"),
+        RocStr::from("hello world"),
         RocStr
     );
 }
@@ -3006,7 +3012,7 @@ fn do_pass_bool_byte_closure_layout() {
             main = [test1, test2, test3, test4] |> Str.joinWith ", "
        "#
         ),
-        RocStr::from_slice(b"PASS, PASS, PASS, PASS"),
+        RocStr::from("PASS, PASS, PASS, PASS"),
         RocStr
     );
 }
@@ -3031,7 +3037,7 @@ fn nested_rigid_list() {
                         _ -> "hello world"
             "#
         ),
-        RocStr::from_slice(b"hello world"),
+        RocStr::from("hello world"),
         RocStr
     );
 }
@@ -3058,7 +3064,7 @@ fn nested_rigid_alias() {
                         _ -> "hello world"
             "#
         ),
-        RocStr::from_slice(b"hello world"),
+        RocStr::from("hello world"),
         RocStr
     );
 }
@@ -3083,7 +3089,7 @@ fn nested_rigid_tag_union() {
                         _ -> "hello world"
             "#
         ),
-        RocStr::from_slice(b"hello world"),
+        RocStr::from("hello world"),
         RocStr
     );
 }
@@ -3111,7 +3117,7 @@ fn call_that_needs_closure_parameter() {
             runTest manyAuxTest
             "#
         ),
-        RocStr::from_slice(b"FAIL"),
+        RocStr::from("FAIL"),
         RocStr
     );
 }
@@ -3132,7 +3138,7 @@ fn alias_defined_out_of_order() {
 
             "#
         ),
-        RocStr::from_slice(b"foo"),
+        RocStr::from("foo"),
         RocStr
     );
 }
@@ -3178,7 +3184,49 @@ fn recursively_build_effect() {
                             e2 {}
             "#
         ),
-        RocStr::from_slice(b"Hello, World!"),
+        RocStr::from("Hello, World!"),
         RocStr
     );
+}
+
+#[test]
+#[ignore = "TODO; currently generates bad code because `a` isn't specialized inside the closure."]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymophic_expression_captured_inside_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            asU8 : U8 -> U8
+            asU8 = \_ -> 30
+
+            main =
+                a = 15
+                f = \{} ->
+                    asU8 a
+
+                f {}
+            "#
+        ),
+        30,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2322() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            double = \x -> x * 2
+            doubleBind = \x -> (\_ -> double x)
+            doubleThree = doubleBind 3
+            doubleThree {}
+            "#
+        ),
+        6,
+        i64
+    )
 }

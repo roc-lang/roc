@@ -1,15 +1,16 @@
+use bitflags::bitflags;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
-    AliasVariables, Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, RecordFields, Subs,
-    SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
+    RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
-use roc_types::types::{ErrorType, Mismatch, RecordField};
+use roc_types::types::{AliasKind, ErrorType, Mismatch, RecordField};
 
 macro_rules! mismatch {
     () => {{
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
             println!(
                 "Mismatch in {} Line {} Column {}",
                 file!(),
@@ -21,7 +22,7 @@ macro_rules! mismatch {
         vec![Mismatch::TypeMismatch]
     }};
     ($msg:expr) => {{
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
             println!(
                 "Mismatch in {} Line {} Column {}",
                 file!(),
@@ -39,7 +40,7 @@ macro_rules! mismatch {
         mismatch!($msg)
     }};
     ($msg:expr, $($arg:tt)*) => {{
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
             println!(
                 "Mismatch in {} Line {} Column {}",
                 file!(),
@@ -56,17 +57,41 @@ macro_rules! mismatch {
 
 type Pool = Vec<Variable>;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum Mode {
-    /// Instructs the unifier to solve two types for equality.
-    ///
-    /// For example, { n : Str }a ~ { n: Str, m : Str } will solve "a" to "{ m : Str }".
-    Eq,
-    /// Instructs the unifier to treat the right-hand-side of a constraint as
-    /// present in the left-hand-side, rather than strictly equal.
-    ///
-    /// For example, t1 += [A Str] says we should "add" the tag "A Str" to the type of "t1".
-    Present,
+bitflags! {
+    pub struct Mode : u8 {
+        /// Instructs the unifier to solve two types for equality.
+        ///
+        /// For example, { n : Str }a ~ { n: Str, m : Str } will solve "a" to "{ m : Str }".
+        const EQ = 1 << 0;
+        /// Instructs the unifier to treat the right-hand-side of a constraint as
+        /// present in the left-hand-side, rather than strictly equal.
+        ///
+        /// For example, t1 += [A Str] says we should "add" the tag "A Str" to the type of "t1".
+        const PRESENT = 1 << 1;
+        /// Instructs the unifier to treat rigids exactly like flex vars.
+        /// Usually rigids can only unify with flex vars, because rigids are named and bound
+        /// explicitly.
+        /// However, when checking type ranges, as we do for `RangedNumber` types, we must loosen
+        /// this restriction because otherwise an admissible range will appear inadmissible.
+        /// For example, Int * is in the range <I8, U8, ...>.
+        const RIGID_AS_FLEX = 1 << 2;
+    }
+}
+
+impl Mode {
+    fn is_eq(&self) -> bool {
+        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
+        self.contains(Mode::EQ)
+    }
+
+    fn is_present(&self) -> bool {
+        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
+        self.contains(Mode::PRESENT)
+    }
+
+    fn as_eq(self) -> Self {
+        (self - Mode::PRESENT) | Mode::EQ
+    }
 }
 
 #[derive(Debug)]
@@ -95,8 +120,14 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Uni
     if mismatches.is_empty() {
         Unified::Success(vars)
     } else {
-        let (type1, mut problems) = subs.var_to_error_type(var1);
-        let (type2, problems2) = subs.var_to_error_type(var2);
+        let error_context = if mismatches.contains(&Mismatch::TypeNotInRange) {
+            ErrorTypeContext::ExpandRanges
+        } else {
+            ErrorTypeContext::None
+        };
+
+        let (type1, mut problems) = subs.var_to_error_type_contextual(var1, error_context);
+        let (type2, problems2) = subs.var_to_error_type_contextual(var2, error_context);
 
         problems.extend(problems2);
 
@@ -174,12 +205,87 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
         }
-        Alias(symbol, args, real_var) => unify_alias(subs, pool, &ctx, *symbol, *args, *real_var),
+        Alias(symbol, args, real_var, kind) => {
+            unify_alias(subs, pool, &ctx, *symbol, *args, *real_var, *kind)
+        }
+        &RangedNumber(typ, range_vars) => unify_ranged_number(subs, pool, &ctx, typ, range_vars),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
         }
     }
+}
+
+#[inline(always)]
+fn unify_ranged_number(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    ctx: &Context,
+    real_var: Variable,
+    range_vars: VariableSubsSlice,
+) -> Outcome {
+    let other_content = &ctx.second_desc.content;
+
+    let outcome = match other_content {
+        FlexVar(_) => {
+            // Ranged number wins
+            merge(subs, ctx, RangedNumber(real_var, range_vars))
+        }
+        RecursionVar { .. } | RigidVar(..) | Alias(..) | Structure(..) => {
+            unify_pool(subs, pool, real_var, ctx.second, ctx.mode)
+        }
+        &RangedNumber(other_real_var, other_range_vars) => {
+            let outcome = unify_pool(subs, pool, real_var, other_real_var, ctx.mode);
+            if outcome.is_empty() {
+                check_valid_range(subs, pool, ctx.first, other_range_vars, ctx.mode)
+            } else {
+                outcome
+            }
+            // TODO: We should probably check that "range_vars" and "other_range_vars" intersect
+        }
+        Error => merge(subs, ctx, Error),
+    };
+
+    if !outcome.is_empty() {
+        return outcome;
+    }
+
+    check_valid_range(subs, pool, ctx.second, range_vars, ctx.mode)
+}
+
+fn check_valid_range(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    var: Variable,
+    range: VariableSubsSlice,
+    mode: Mode,
+) -> Outcome {
+    let slice = subs
+        .get_subs_slice(range)
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+
+    let mut it = slice.iter().peekable();
+    while let Some(&possible_var) = it.next() {
+        let snapshot = subs.snapshot();
+        let old_pool = pool.clone();
+        let outcome = unify_pool(subs, pool, var, possible_var, mode | Mode::RIGID_AS_FLEX);
+        if outcome.is_empty() {
+            // Okay, we matched some type in the range.
+            subs.rollback_to(snapshot);
+            *pool = old_pool;
+            return vec![];
+        } else if it.peek().is_some() {
+            // We failed to match something in the range, but there are still things we can try.
+            subs.rollback_to(snapshot);
+            *pool = old_pool;
+        } else {
+            subs.commit_snapshot(snapshot);
+        }
+    }
+
+    return vec![Mismatch::TypeNotInRange];
 }
 
 #[inline(always)]
@@ -190,17 +296,26 @@ fn unify_alias(
     symbol: Symbol,
     args: AliasVariables,
     real_var: Variable,
+    kind: AliasKind,
 ) -> Outcome {
     let other_content = &ctx.second_desc.content;
+
+    let either_is_opaque =
+        kind == AliasKind::Opaque || matches!(other_content, Alias(_, _, _, AliasKind::Opaque));
 
     match other_content {
         FlexVar(_) => {
             // Alias wins
-            merge(subs, ctx, Alias(symbol, args, real_var))
+            merge(subs, ctx, Alias(symbol, args, real_var, kind))
         }
-        RecursionVar { structure, .. } => unify_pool(subs, pool, real_var, *structure, ctx.mode),
+        RecursionVar { structure, .. } if !either_is_opaque => {
+            unify_pool(subs, pool, real_var, *structure, ctx.mode)
+        }
         RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
-        Alias(other_symbol, other_args, other_real_var) => {
+        Alias(other_symbol, other_args, other_real_var, _)
+            // Opaques types are only equal if the opaque symbols are equal!
+            if !either_is_opaque || symbol == *other_symbol =>
+        {
             if symbol == *other_symbol {
                 if args.len() == other_args.len() {
                     let mut problems = Vec::new();
@@ -230,8 +345,21 @@ fn unify_alias(
                 unify_pool(subs, pool, real_var, *other_real_var, ctx.mode)
             }
         }
-        Structure(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        Structure(_) if !either_is_opaque => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        RangedNumber(other_real_var, other_range_vars) if !either_is_opaque => {
+            let outcome = unify_pool(subs, pool, real_var, *other_real_var, ctx.mode);
+            if outcome.is_empty() {
+                check_valid_range(subs, pool, real_var, *other_range_vars, ctx.mode)
+            } else {
+                outcome
+            }
+        }
         Error => merge(subs, ctx, Error),
+        other => {
+            // The type on the left is an alias, but the one on the right is not!
+            debug_assert!(either_is_opaque);
+            mismatch!("Cannot unify opaque {:?} with {:?}", symbol, other)
+        }
     }
 }
 
@@ -250,14 +378,14 @@ fn unify_structure(
 
             // And if we see a flex variable on the right hand side of a presence
             // constraint, we know we need to open up the structure we're trying to unify with.
-            match (ctx.mode, flat_type) {
-                (Mode::Present, FlatType::TagUnion(tags, _ext)) => {
+            match (ctx.mode.is_present(), flat_type) {
+                (true, FlatType::TagUnion(tags, _ext)) => {
                     let new_ext = subs.fresh_unnamed_flex_var();
                     let mut new_desc = ctx.first_desc.clone();
                     new_desc.content = Structure(FlatType::TagUnion(*tags, new_ext));
                     subs.set(ctx.first, new_desc);
                 }
-                (Mode::Present, FlatType::FunctionOrTagUnion(tn, sym, _ext)) => {
+                (true, FlatType::FunctionOrTagUnion(tn, sym, _ext)) => {
                     let new_ext = subs.fresh_unnamed_flex_var();
                     let mut new_desc = ctx.first_desc.clone();
                     new_desc.content = Structure(FlatType::FunctionOrTagUnion(*tn, *sym, new_ext));
@@ -285,17 +413,39 @@ fn unify_structure(
                 // unify the structure with this unrecursive tag union
                 unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
             }
-            _ => todo!("rec structure {:?}", &flat_type),
+            // Only tag unions can be recursive; everything else is an error.
+            _ => mismatch!(
+                "trying to unify {:?} with recursive type var {:?}",
+                &flat_type,
+                structure
+            ),
         },
 
         Structure(ref other_flat_type) => {
             // Unify the two flat types
             unify_flat_type(subs, pool, ctx, flat_type, other_flat_type)
         }
-        Alias(_, _, real_var) => {
-            // NB: not treating this as a presence constraint seems pivotal! I
-            // can't quite figure out why, but it doesn't seem to impact other types.
-            unify_pool(subs, pool, ctx.first, *real_var, Mode::Eq)
+        Alias(sym, _, real_var, kind) => match kind {
+            AliasKind::Structural => {
+                // NB: not treating this as a presence constraint seems pivotal! I
+                // can't quite figure out why, but it doesn't seem to impact other types.
+                unify_pool(subs, pool, ctx.first, *real_var, ctx.mode.as_eq())
+            }
+            AliasKind::Opaque => {
+                mismatch!(
+                    "Cannot unify structure {:?} with opaque {:?}",
+                    &flat_type,
+                    sym
+                )
+            }
+        },
+        RangedNumber(other_real_var, other_range_vars) => {
+            let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
+            if outcome.is_empty() {
+                check_valid_range(subs, pool, ctx.first, *other_range_vars, ctx.mode)
+            } else {
+                outcome
+            }
         }
         Error => merge(subs, ctx, Error),
     }
@@ -669,8 +819,8 @@ fn unify_tag_union_new(
 
     let shared_tags = separate.in_both;
 
-    if let (Mode::Present, Content::Structure(FlatType::EmptyTagUnion)) =
-        (ctx.mode, subs.get(ext1).content)
+    if let (true, Content::Structure(FlatType::EmptyTagUnion)) =
+        (ctx.mode.is_present(), subs.get(ext1).content)
     {
         if !separate.only_in_2.is_empty() {
             // Create a new extension variable that we'll fill in with the
@@ -699,7 +849,7 @@ fn unify_tag_union_new(
 
     if separate.only_in_1.is_empty() {
         if separate.only_in_2.is_empty() {
-            let ext_problems = if ctx.mode == Mode::Eq {
+            let ext_problems = if ctx.mode.is_eq() {
                 unify_pool(subs, pool, ext1, ext2, ctx.mode)
             } else {
                 // In a presence context, we don't care about ext2 being equal to ext1
@@ -753,7 +903,7 @@ fn unify_tag_union_new(
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
 
         // In a presence context, we don't care about ext2 being equal to tags1
-        if ctx.mode == Mode::Eq {
+        if ctx.mode.is_eq() {
             let ext_problems = unify_pool(subs, pool, sub_record, ext2, ctx.mode);
 
             if !ext_problems.is_empty() {
@@ -776,7 +926,7 @@ fn unify_tag_union_new(
         let unique_tags1 = UnionTags::insert_slices_into_subs(subs, separate.only_in_1);
         let unique_tags2 = UnionTags::insert_slices_into_subs(subs, separate.only_in_2);
 
-        let ext_content = if ctx.mode == Mode::Present {
+        let ext_content = if ctx.mode.is_present() {
             Content::Structure(FlatType::EmptyTagUnion)
         } else {
             Content::FlexVar(None)
@@ -810,7 +960,7 @@ fn unify_tag_union_new(
             return ext1_problems;
         }
 
-        if ctx.mode == Mode::Eq {
+        if ctx.mode.is_eq() {
             let ext2_problems = unify_pool(subs, pool, sub1, ext2, ctx.mode);
             if !ext2_problems.is_empty() {
                 subs.rollback_to(snapshot);
@@ -824,6 +974,7 @@ fn unify_tag_union_new(
     }
 }
 
+#[derive(Debug)]
 enum OtherTags2 {
     Empty,
     Union(
@@ -994,17 +1145,6 @@ fn unify_shared_tags_merge_new(
     };
 
     merge(subs, ctx, Structure(flat_type))
-}
-
-/// Is the given variable a structure. Does not consider Attr itself a structure, and instead looks
-/// into it.
-#[allow(dead_code)]
-fn is_structure(var: Variable, subs: &mut Subs) -> bool {
-    match subs.get_content_without_compacting(var) {
-        Content::Alias(_, _, actual) => is_structure(*actual, subs),
-        Content::Structure(_) => true,
-        _ => false,
-    }
 }
 
 #[inline(always)]
@@ -1204,7 +1344,7 @@ fn unify_zip_slices(
         let l_var = subs[l_index];
         let r_var = subs[r_index];
 
-        problems.extend(unify_pool(subs, pool, l_var, r_var, Mode::Eq));
+        problems.extend(unify_pool(subs, pool, l_var, r_var, Mode::EQ));
     }
 
     problems
@@ -1217,10 +1357,15 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
             // If the other is flex, rigid wins!
             merge(subs, ctx, RigidVar(name.clone()))
         }
-        RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _) => {
-            // Type mismatch! Rigid can only unify with flex, even if the
-            // rigid names are the same.
-            mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
+        RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _, _) | RangedNumber(..) => {
+            if !ctx.mode.contains(Mode::RIGID_AS_FLEX) {
+                // Type mismatch! Rigid can only unify with flex, even if the
+                // rigid names are the same.
+                mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
+            } else {
+                // We are treating rigid vars as flex vars; admit this
+                merge(subs, ctx, other.clone())
+            }
         }
         Error => {
             // Error propagates.
@@ -1242,7 +1387,12 @@ fn unify_flex(
             merge(subs, ctx, FlexVar(opt_name.clone()))
         }
 
-        FlexVar(Some(_)) | RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _) => {
+        FlexVar(Some(_))
+        | RigidVar(_)
+        | RecursionVar { .. }
+        | Structure(_)
+        | Alias(_, _, _, _)
+        | RangedNumber(..) => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)
@@ -1295,11 +1445,25 @@ fn unify_recursion(
             },
         ),
 
-        Alias(_, _, actual) => {
+        Alias(opaque, _, _, AliasKind::Opaque) => {
+            mismatch!(
+                "RecursionVar {:?} cannot be equal to opaque {:?}",
+                ctx.first,
+                opaque
+            )
+        }
+
+        Alias(_, _, actual, _) => {
             // look at the type the alias stands for
 
             unify_pool(subs, pool, ctx.first, *actual, ctx.mode)
         }
+
+        RangedNumber(..) => mismatch!(
+            "RecursionVar {:?} with ranged number {:?}",
+            ctx.first,
+            &other
+        ),
 
         Error => merge(subs, ctx, Error),
     }

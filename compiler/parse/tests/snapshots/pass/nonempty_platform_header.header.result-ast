@@ -5,15 +5,14 @@ Platform {
         ),
         requires: PlatformRequires {
             rigids: [
-                @36-48 PlatformRigid {
-                    rigid: "model",
-                    alias: "Model",
-                },
+                @36-41 UppercaseIdent(
+                    "Model",
+                ),
             ],
-            signature: @52-61 TypedIdent {
-                ident: @52-56 "main",
+            signature: @45-54 TypedIdent {
+                ident: @45-49 "main",
                 spaces_before_colon: [],
-                ann: @59-61 Record {
+                ann: @52-54 Record {
                     fields: [],
                     ext: None,
                 },
@@ -21,30 +20,20 @@ Platform {
         },
         exposes: [],
         packages: [
-            @94-106 PackageEntry {
+            @87-99 PackageEntry {
                 shorthand: "foo",
                 spaces_after_shorthand: [],
-                package_name: @99-106 PackageName(
+                package_name: @92-99 PackageName(
                     "./foo",
                 ),
             },
         ],
         imports: [],
         provides: [
-            @139-150 ExposedName(
+            @132-143 ExposedName(
                 "mainForHost",
             ),
         ],
-        effects: Effects {
-            spaces_before_effects_keyword: [
-                Newline,
-            ],
-            spaces_after_effects_keyword: [],
-            spaces_after_type_name: [],
-            effect_shortname: "fx",
-            effect_type_name: "Effect",
-            entries: [],
-        },
         before_header: [],
         after_platform_keyword: [],
         before_requires: [

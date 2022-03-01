@@ -1,29 +1,73 @@
 use std::path::PathBuf;
 
+use crate::FormatMode;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_def;
 use roc_fmt::module::fmt_module;
 use roc_fmt::Buf;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::ast::{
-    AliasHeader, AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag,
-    TypeAnnotation, WhenBranch,
+    AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation,
+    TypeHeader, WhenBranch,
 };
 use roc_parse::header::{
-    AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
+    PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
 };
 use roc_parse::{
     ast::{Def, Module},
+    ident::UppercaseIdent,
     module::{self, module_defs},
     parser::{Parser, SyntaxError},
     state::State,
 };
 use roc_region::all::{Loc, Region};
-use roc_reporting::{internal_error, user_error};
 
-pub fn format(files: std::vec::Vec<PathBuf>) {
+fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> {
+    let mut to_flatten = files;
+    let mut files = vec![];
+
+    while let Some(path) = to_flatten.pop() {
+        if path.is_dir() {
+            match path.read_dir() {
+                Ok(directory) => {
+                    for item in directory {
+                        match item {
+                            Ok(file) => {
+                                let file_path = file.path();
+                                if file_path.is_dir() {
+                                    to_flatten.push(file_path);
+                                } else if file_path.ends_with(".roc") {
+                                    files.push(file_path);
+                                }
+                            }
+
+                            Err(error) => internal_error!(
+                                "There was an error while trying to read a file from a directory: {:?}",
+                                error
+                            ),
+                        }
+                    }
+                }
+
+                Err(error) => internal_error!(
+                    "There was an error while trying to read the contents of a directory: {:?}",
+                    error
+                ),
+            }
+        } else {
+            files.push(path)
+        }
+    }
+
+    files
+}
+
+pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
+    let files = flatten_directories(files);
+
     for file in files {
         let arena = Bump::new();
 
@@ -98,9 +142,22 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
                 unstable_2_file.display());
         }
 
-        // If all the checks above passed, actually write out the new file.
-        std::fs::write(&file, buf.as_str()).unwrap();
+        match mode {
+            FormatMode::CheckOnly => {
+                // If we notice that this file needs to be formatted, return early
+                if buf.as_str() != src {
+                    return Err("One or more files need to be reformatted.".to_string());
+                }
+            }
+
+            FormatMode::Format => {
+                // If all the checks above passed, actually write out the new file.
+                std::fs::write(&file, buf.as_str()).unwrap();
+            }
+        }
     }
+
+    Ok(())
 }
 
 #[derive(Debug, PartialEq)]
@@ -176,6 +233,7 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     packages: header.packages.remove_spaces(arena),
                     imports: header.imports.remove_spaces(arena),
                     provides: header.provides.remove_spaces(arena),
+                    provides_types: header.provides_types.map(|ts| ts.remove_spaces(arena)),
                     to: header.to.remove_spaces(arena),
                     before_header: &[],
                     after_app_keyword: &[],
@@ -197,14 +255,6 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     packages: header.packages.remove_spaces(arena),
                     imports: header.imports.remove_spaces(arena),
                     provides: header.provides.remove_spaces(arena),
-                    effects: Effects {
-                        spaces_before_effects_keyword: &[],
-                        spaces_after_effects_keyword: &[],
-                        spaces_after_type_name: &[],
-                        effect_shortname: header.effects.effect_shortname.remove_spaces(arena),
-                        effect_type_name: header.effects.effect_type_name.remove_spaces(arena),
-                        entries: header.effects.entries.remove_spaces(arena),
-                    },
                     before_header: &[],
                     after_platform_keyword: &[],
                     before_requires: &[],
@@ -217,6 +267,25 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     after_imports: &[],
                     before_provides: &[],
                     after_provides: &[],
+                },
+            },
+            Module::Hosted { header } => Module::Hosted {
+                header: HostedHeader {
+                    name: header.name.remove_spaces(arena),
+                    exposes: header.exposes.remove_spaces(arena),
+                    imports: header.imports.remove_spaces(arena),
+                    generates: header.generates.remove_spaces(arena),
+                    generates_with: header.generates_with.remove_spaces(arena),
+                    before_header: &[],
+                    after_hosted_keyword: &[],
+                    before_exposes: &[],
+                    after_exposes: &[],
+                    before_imports: &[],
+                    after_imports: &[],
+                    before_generates: &[],
+                    after_generates: &[],
+                    before_with: &[],
+                    after_with: &[],
                 },
             },
         }
@@ -285,7 +354,7 @@ impl<'a> RemoveSpaces<'a> for PlatformRequires<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for PlatformRigid<'a> {
+impl<'a> RemoveSpaces<'a> for UppercaseIdent<'a> {
     fn remove_spaces(&self, _arena: &'a Bump) -> Self {
         *self
     }
@@ -375,14 +444,24 @@ impl<'a> RemoveSpaces<'a> for Def<'a> {
                 Def::Annotation(a.remove_spaces(arena), b.remove_spaces(arena))
             }
             Def::Alias {
-                header: AliasHeader { name, vars },
+                header: TypeHeader { name, vars },
                 ann,
             } => Def::Alias {
-                header: AliasHeader {
+                header: TypeHeader {
                     name: name.remove_spaces(arena),
                     vars: vars.remove_spaces(arena),
                 },
                 ann: ann.remove_spaces(arena),
+            },
+            Def::Opaque {
+                header: TypeHeader { name, vars },
+                typ,
+            } => Def::Opaque {
+                header: TypeHeader {
+                    name: name.remove_spaces(arena),
+                    vars: vars.remove_spaces(arena),
+                },
+                typ: typ.remove_spaces(arena),
             },
             Def::Body(a, b) => Def::Body(
                 arena.alloc(a.remove_spaces(arena)),
@@ -487,6 +566,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::GlobalTag(a) => Expr::GlobalTag(a),
             Expr::PrivateTag(a) => Expr::PrivateTag(a),
+            Expr::OpaqueRef(a) => Expr::OpaqueRef(a),
             Expr::Closure(a, b) => Expr::Closure(
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),
@@ -527,6 +607,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
+            Expr::SingleQuote(a) => Expr::Num(a),
         }
     }
 }
@@ -537,6 +618,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::Identifier(a) => Pattern::Identifier(a),
             Pattern::GlobalTag(a) => Pattern::GlobalTag(a),
             Pattern::PrivateTag(a) => Pattern::PrivateTag(a),
+            Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
             Pattern::Apply(a, b) => Pattern::Apply(
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),
@@ -568,6 +650,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             }
             Pattern::SpaceBefore(a, _) => a.remove_spaces(arena),
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
+            Pattern::SingleQuote(a) => Pattern::NumLiteral(a),
         }
     }
 }

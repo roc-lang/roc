@@ -183,12 +183,11 @@ is zero-configuration like `elm-format`) formats multi-line record literals (and
 record types) with a comma at the end of each line, like so:
 
 ```elm
-user =
-    {
-        firstName: "Sam",
-        lastName: "Sample",
-        email: "sam@example.com",
-    }
+user = {
+    firstName: "Sam",
+    lastName: "Sample",
+    email: "sam@example.com",
+}
 ```
 
 This is easy to read and leads to tidy version control diffs; no matter how
@@ -456,25 +455,22 @@ The key is that each of the error types is a type alias for a Roc *tag union*.
 Here's how those look:
 
 ```elm
-Http.Err a :
-    [
-        PageNotFound,
-        Timeout,
-        BadPayload Str,
-    ]a
+Http.Err a : [
+    PageNotFound,
+    Timeout,
+    BadPayload Str,
+]a
 
-File.ReadErr a :
-    [
-        FileNotFound,
-        Corrupted,
-        BadFormat,
-    ]a
+File.ReadErr a : [
+    FileNotFound,
+    Corrupted,
+    BadFormat,
+]a
 
-File.WriteErr a :
-    [
-        FileNotFound,
-        DiskFull,
-    ]a
+File.WriteErr a : [
+    FileNotFound,
+    DiskFull,
+]a
 ```
 
 For a side-by-side comparison, here's how we would implement something similar in Elm:
@@ -757,86 +753,6 @@ Like Elm, Roc does not allow shadowing.
 Elm does permit overriding open imports - e.g. if you have
 `import Foo exposing (bar)`, or `import Foo exposing (..)`, you can still define
 `bar = ...` in the module. Roc treats this as shadowing and does not allow it.
-
-## Function equality
-
-In Elm, if you write `(\val -> val) == (\val -> val)`, you currently get a runtime exception
-which links to [the `==` docs](https://package.elm-lang.org/packages/elm/core/latest/Basics#==),
-which explain why this is the current behavior and what the better version will look like.
-
-> OCaml also has the "runtime exception if you compare functions for structural equality"
-> behavior, but unlike Elm, in OCaml this appears to be the long-term design.
-
-In Roc, function equality is a compile error, tracked explicitly in the type system.
-Here's the type of Roc's equality function:
-
-```elm
-'val, 'val -> Bool
-```
-
-Whenever a named type variable in Roc has a `'` at the beginning, that means
-it is a *functionless* type - a type which cannot involve functions.
-If there are any functions in that type, you get a type mismatch. This is true
-whether `val` itself is a function, or if it's a type that wraps a function,
-like `{ predicate: (Str -> Bool) }` or `List (Bool -> Bool)`.
-
-So if you write `(\a -> a) == (\a -> a)` in Roc, you'll get a type mismatch.
-If you wrap both sides of that `==` in a record or list, you'll still get a
-type mismatch.
-
-If a named type variable has a `'` anywhere in a given type, then it must have a `'`
-everywhere in that type. So it would be an error to have a type like `x, 'x -> Bool`
-because `x` has a `'` in one place but not everywhere.
-
-## Standard Data Structures
-
-Elm has `List`, `Array`, `Set`, and `Dict` in the standard library.
-
-Roc has all of these except `Array`, and there are some differences in how they work:
-
-* `List` in Roc uses the term "list" the way Python does: to mean an ordered sequence of elements. Roc's `List` is more like an array, in that all the elements are sequential in memory and can be accessed in constant time. It still uses the `[` `]` syntax for list literals. Also there is no `::` operator because "cons" is not an efficient operation on an array like it is in a linked list.
-* `Set` in Roc is like `Set` in Elm: it's shorthand for a `Dict` with keys but no value, and it has a slightly different API.
-* `Dict` in Roc is like `Dict` in Elm, except it's backed by hashing rather than ordering. Roc silently computes hash values for any value that can be used with `==`, so instead of a `comparable` constraint on `Set` elements and `Dict` keys, in Roc they instead have the *functionless* constraint indicated with a `'`.
-
-Roc also has a literal syntax for dictionaries and sets. Here's how to write a `Dict` literal:
-
-```elm
-{: "Sam" => True, "Ali" => False, firstName => False :}
-```
-
-This expression has the type `Dict Str Bool`, and the `firstName` variable would
-necessarily be a `Str` as well.
-
-The `Dict` literal syntax is for two reasons. First, Roc doesn't have tuples;
-without tuples, initializing the above `Dict` would involve an API that looked
-something like one of these:
-
-```elm
-Dict.fromList [ { k: "Sam", v: True }, { k: "Ali", v: False }, { k: firstName, v: False } ]
-
-Dict.fromList [ KV "Sam" True, KV "Ali" False KV firstName False
-```
-
-This works, but is not nearly as nice to read.
-
-Additionally, `Dict` literals can compile directly to efficient initialization code
-without needing to (hopefully be able to) optimize away the intermediate
-`List` involved in  `fromList`.
-
-`{::}` is an empty `Dict`.
-
-You can write a `Set` literal like this:
-
-```elm
-[: "Sam", "Ali", firstName :]
-```
-
-The `Set` literal syntax is partly for the initialization benefit, and also
-for symmetry with the `Dict` literal syntax.
-
-`[::]` is an empty `Set`.
-
-Roc does not have syntax for pattern matching on data structures - not even `[` `]` like Elm does.
 
 ## Operators
 
@@ -1267,7 +1183,7 @@ So Roc does not use `number`, but rather uses `Num` - which works more like `Lis
 Either way, you get `+` being able to work on both integers and floats!
 
 Separately, there's also `Int a`, which is a type alias for `Num (Integer a)`,
-and `Float a`, which is a type alias for `Num (Float a)`. These allow functions
+and `Float a`, which is a type alias for `Num (FloatingPoint a)`. These allow functions
 that can work on any integer or any float. For example,
 `Num.bitwiseAnd : Int a, Int a -> Int a`.
 
@@ -1317,51 +1233,6 @@ If you put these into a hypothetical Roc REPL, here's what you'd see:
 > 11 + 0x11
 28 : Int *
 ```
-
-## Phantom Types
-
-[Phantom types](https://medium.com/@ckoster22/advanced-types-in-elm-phantom-types-808044c5946d)
-exist in Elm but not in Roc. This is because phantom types can't be defined
-using type aliases (in fact, there is a custom error message in Elm if you
-try to do this), and Roc only has type aliases. However, in Roc, you can achieve
-the same API and runtime performance characteristics as if you had phantom types,
-by using *phantom values* instead.
-
-A phantom value is one which affects types, but which holds no information at runtime.
-As an example, let's say I wanted to define a [units library](https://package.elm-lang.org/packages/ianmackenzie/elm-units/latest/) -
-a classic example of phantom types. I could do that in Roc like this:
-
-```
-Quantity units data : [ Quantity units data ]
-
-km : Num a -> Quantity [ Km ] (Num a)
-km = \num ->
-    Quantity Km num
-
-cm : Num a -> Quantity [ Cm ] (Num a)
-cm = \num ->
-    Quantity Cm num
-
-mm : Num a -> Quantity [ Mm ] (Num a)
-mm = \num ->
-    Quantity Mm num
-
-add : Quantity u (Num a), Quantity u (Num a) -> Quantity u (Num a)
-add = \Quantity units a, Quantity _ b ->
-    Quantity units (a + b)
-```
-
-From a performance perspective, it's relevant here that `[ Km ]`, `[ Cm ]`, and `[ Mm ]`
-are all unions containing a single tag. That means they hold no information at runtime
-(they would always destructure to the same tag), which means they can be "unboxed" away -
-that is, discarded prior to code generation.
-
-During code generation, Roc treats `Quantity [ Km ] Int` as equivalent to `Quantity Int`.
-Then, because `Quantity Int` is an alias for `[ Quantity Int ]`, it will unbox again
-and reduce that all the way down to to `Int`.
-
-This means that, just like phantom *types*, phantom *values* affect type checking
-only, and have no runtime overhead. Rust has a related concept called [phantom data](https://doc.rust-lang.org/nomicon/phantom-data.html).
 
 ## Standard library
 

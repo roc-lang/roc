@@ -28,7 +28,7 @@ fn roc_list_construction() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_literal() {
-    assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!("[]", RocList::<i64>::from_slice(&[]), RocList<i64>);
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn bool_list_literal() {
                true : Bool
                true = True
 
-               List.repeat 23 true
+               List.repeat true 23
                "#
         ),
         RocList::from_slice(&[true; 23]),
@@ -112,7 +112,7 @@ fn bool_list_literal() {
                true : Bool
                true = True
 
-               List.repeat 23 { x: true, y: true }
+               List.repeat { x: true, y: true } 23
                "#
         ),
         RocList::from_slice(&[[true, true]; 23]),
@@ -125,7 +125,7 @@ fn bool_list_literal() {
                true : Bool
                true = True
 
-               List.repeat 23 { x: true, y: true, a: true, b: true, c: true, d : true, e: true, f: true }
+               List.repeat { x: true, y: true, a: true, b: true, c: true, d : true, e: true, f: true } 23
                "#
         ),
         RocList::from_slice(&[[true, true, true, true, true, true, true, true]; 23]),
@@ -136,7 +136,7 @@ fn bool_list_literal() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn variously_sized_list_literals() {
-    assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!("[]", RocList::<i64>::from_slice(&[]), RocList<i64>);
     assert_evals_to!("[1]", RocList::from_slice(&[1]), RocList<i64>);
     assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
     assert_evals_to!("[1, 2, 3]", RocList::from_slice(&[1, 2, 3]), RocList<i64>);
@@ -177,12 +177,12 @@ fn list_take_first() {
     );
     assert_evals_to!(
         "List.takeFirst [1, 2, 3] 0",
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
         "List.takeFirst [] 1",
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
@@ -202,10 +202,14 @@ fn list_take_last() {
     );
     assert_evals_to!(
         "List.takeLast [1, 2, 3] 0",
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
-    assert_evals_to!("List.takeLast [] 1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.takeLast [] 1",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
     assert_evals_to!(
         "List.takeLast [1,2] 5",
         RocList::from_slice(&[1, 2]),
@@ -233,17 +237,17 @@ fn list_sublist() {
     );
     assert_evals_to!(
         "List.sublist [1, 2, 3] { start: 3 , len: 2 } ",
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
         "List.sublist [] { start: 1 , len: 1 } ",
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
         "List.sublist [1, 2, 3] { start: 1 , len: 0 } ",
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
@@ -261,7 +265,7 @@ fn list_split() {
                list = List.split [1, 2, 3] 0
                list.before
             "#,
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
@@ -280,17 +284,26 @@ fn list_split() {
     );
     assert_evals_to!(
         "List.split [1, 2, 3] 3",
-        (RocList::from_slice(&[1, 2, 3]), RocList::from_slice(&[]),),
+        (
+            RocList::from_slice(&[1, 2, 3]),
+            RocList::<i64>::from_slice(&[]),
+        ),
         (RocList<i64>, RocList<i64>,)
     );
     assert_evals_to!(
         "List.split [1, 2, 3] 4",
-        (RocList::from_slice(&[1, 2, 3]), RocList::from_slice(&[]),),
+        (
+            RocList::from_slice(&[1, 2, 3]),
+            RocList::<i64>::from_slice(&[]),
+        ),
         (RocList<i64>, RocList<i64>,)
     );
     assert_evals_to!(
         "List.split [] 1",
-        (RocList::from_slice(&[]), RocList::from_slice(&[]),),
+        (
+            RocList::<i64>::from_slice(&[]),
+            RocList::<i64>::from_slice(&[]),
+        ),
         (RocList<i64>, RocList<i64>,)
     );
 }
@@ -302,8 +315,16 @@ fn list_drop() {
         RocList::from_slice(&[3]),
         RocList<i64>
     );
-    assert_evals_to!("List.drop [] 1", RocList::from_slice(&[]), RocList<i64>);
-    assert_evals_to!("List.drop [1,2] 5", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.drop [] 1",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.drop [1,2] 5",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
 }
 
 #[test]
@@ -319,8 +340,16 @@ fn list_drop_at() {
         RocList::from_slice(&[0, 0, 0]),
         RocList<i64>
     );
-    assert_evals_to!("List.dropAt [] 1", RocList::from_slice(&[]), RocList<i64>);
-    assert_evals_to!("List.dropAt [0] 0", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.dropAt [] 1",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.dropAt [0] 0",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
 }
 
 #[test]
@@ -341,7 +370,7 @@ fn list_intersperse() {
                     List.intersperse [] 1
                 "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
 }
@@ -380,7 +409,7 @@ fn list_drop_if_empty_list_of_int() {
             List.dropIf empty \_ -> True
             "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
 }
@@ -397,7 +426,7 @@ fn list_drop_if_empty_list() {
             List.dropIf [] alwaysTrue
             "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
 }
@@ -425,7 +454,7 @@ fn list_drop_if_always_true_for_non_empty_list() {
             List.dropIf [1,2,3,4,5,6,7,8] (\_ -> True)
             "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
 }
@@ -453,10 +482,7 @@ fn list_drop_if_string_eq() {
              List.dropIf ["x", "y", "x"] (\s -> s == "y")
              "#
         ),
-        RocList::from_slice(&[
-            RocStr::from_slice("x".as_bytes()),
-            RocStr::from_slice("x".as_bytes())
-        ]),
+        RocList::from_slice(&[RocStr::from("x"), RocStr::from("x")]),
         RocList<RocStr>
     );
 }
@@ -469,8 +495,16 @@ fn list_drop_last() {
         RocList::from_slice(&[1, 2]),
         RocList<i64>
     );
-    assert_evals_to!("List.dropLast []", RocList::from_slice(&[]), RocList<i64>);
-    assert_evals_to!("List.dropLast [0]", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.dropLast []",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.dropLast [0]",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
 }
 
 #[test]
@@ -503,14 +537,26 @@ fn list_drop_first() {
         RocList::from_slice(&[2, 3]),
         RocList<i64>
     );
-    assert_evals_to!("List.dropFirst []", RocList::from_slice(&[]), RocList<i64>);
-    assert_evals_to!("List.dropFirst [0]", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.dropFirst []",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.dropFirst [0]",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_swap() {
-    assert_evals_to!("List.swap [] 0 1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.swap [] 0 1",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
     assert_evals_to!(
         "List.swap [ 0 ] 1 2",
         RocList::from_slice(&[0]),
@@ -621,7 +667,7 @@ fn list_prepend() {
                 List.prepend init "bar"
             "#
         ),
-        RocList::from_slice(&[RocStr::from_slice(b"bar"), RocStr::from_slice(b"foo"),]),
+        RocList::from_slice(&[RocStr::from("bar"), RocStr::from("foo"),]),
         RocList<RocStr>
     );
 }
@@ -783,7 +829,7 @@ fn list_keep_if_empty_list_of_int() {
             List.keepIf empty \_ -> True
             "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
 }
@@ -802,7 +848,7 @@ fn list_keep_if_empty_list() {
             List.keepIf [] alwaysTrue
             "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
 }
@@ -842,7 +888,7 @@ fn list_keep_if_always_false_for_non_empty_list() {
             List.keepIf [1,2,3,4,5,6,7,8] alwaysFalse
             "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
 }
@@ -874,10 +920,7 @@ fn list_keep_if_str_is_hello() {
              List.keepIf ["x", "y", "x"] (\x -> x == "x")
              "#
         ),
-        RocList::from_slice(&[
-            RocStr::from_slice("x".as_bytes()),
-            RocStr::from_slice("x".as_bytes())
-        ]),
+        RocList::from_slice(&[RocStr::from("x"), RocStr::from("x")]),
         RocList<RocStr>
     );
 }
@@ -895,7 +938,7 @@ fn list_map_on_empty_list_with_int_layout() {
             List.map empty (\x -> x)
             "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
 }
@@ -1006,7 +1049,7 @@ fn list_map_all_inline() {
             List.map [] (\x -> x > 0)
             "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<bool>::from_slice(&[]),
         RocList<bool>
     );
 }
@@ -1060,7 +1103,7 @@ fn list_map4_different_length() {
                 (\a, b, c, d -> Str.concat a (Str.concat b (Str.concat c d)))
             "#
         ),
-        RocList::from_slice(&[RocStr::from_slice("hola".as_bytes()),]),
+        RocList::from_slice(&[RocStr::from("hola"),]),
         RocList<RocStr>
     );
 }
@@ -1092,7 +1135,7 @@ fn list_map3_different_length() {
                 (\a, b, c -> Str.concat a (Str.concat b c))
             "#
         ),
-        RocList::from_slice(&[RocStr::from_slice("abc".as_bytes()),]),
+        RocList::from_slice(&[RocStr::from("abc"),]),
         RocList<RocStr>
     );
 }
@@ -1124,7 +1167,7 @@ fn list_map2_different_lengths() {
                 (\a, b -> Str.concat a b)
             "#
         ),
-        RocList::from_slice(&[RocStr::from_slice("ab".as_bytes()),]),
+        RocList::from_slice(&[RocStr::from("ab"),]),
         RocList<RocStr>
     );
 }
@@ -1132,7 +1175,11 @@ fn list_map2_different_lengths() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_join_empty_list() {
-    assert_evals_to!("List.join []", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.join []",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
 }
 
 #[test]
@@ -1214,7 +1261,7 @@ fn list_join_defined_empty_list() {
 fn list_join_all_empty_lists() {
     assert_evals_to!(
         "List.join [ [], [], [] ]",
-        RocList::from_slice(&[]),
+        RocList::<f64>::from_slice(&[]),
         RocList<f64>
     );
 }
@@ -1240,19 +1287,19 @@ fn list_single() {
 #[cfg(any(feature = "gen-llvm"))]
 fn list_repeat() {
     assert_evals_to!(
-        "List.repeat 5 1",
+        "List.repeat 1 5",
         RocList::from_slice(&[1, 1, 1, 1, 1]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.repeat 4 2",
+        "List.repeat 2 4",
         RocList::from_slice(&[2, 2, 2, 2]),
         RocList<i64>
     );
 
     assert_evals_to!(
-        "List.repeat 2 []",
-        RocList::from_slice(&[RocList::default(), RocList::default()]),
+        "List.repeat [] 2",
+        RocList::from_slice(&[RocList::<i64>::default(), RocList::default()]),
         RocList<RocList<i64>>
     );
 
@@ -1263,15 +1310,15 @@ fn list_repeat() {
                 noStrs =
                     []
 
-                List.repeat 2 noStrs
+                List.repeat noStrs 2
             "#
         ),
-        RocList::from_slice(&[RocList::default(), RocList::default()]),
+        RocList::from_slice(&[RocList::<i64>::default(), RocList::default()]),
         RocList<RocList<i64>>
     );
 
     assert_evals_to!(
-        "List.repeat 15 4",
+        "List.repeat 4 15",
         RocList::from_slice(&[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]),
         RocList<i64>
     );
@@ -1306,7 +1353,7 @@ fn list_reverse_empty_list_of_int() {
                 List.reverse emptyList
             "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
 }
@@ -1314,7 +1361,11 @@ fn list_reverse_empty_list_of_int() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_reverse_empty_list() {
-    assert_evals_to!("List.reverse []", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.reverse []",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
 }
 
 #[test]
@@ -1334,7 +1385,7 @@ fn list_concat() {
                 List.concat firstList secondList
             "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
 }
@@ -1342,7 +1393,11 @@ fn list_concat() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_concat_two_empty_lists() {
-    assert_evals_to!("List.concat [] []", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.concat [] []",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
 }
 
 #[test]
@@ -1362,7 +1417,7 @@ fn list_concat_two_empty_lists_of_int() {
                 List.concat firstList secondList
             "#
         ),
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
 }
@@ -2363,7 +2418,7 @@ fn list_keep_errs() {
 #[cfg(any(feature = "gen-llvm"))]
 fn list_map_with_index() {
     assert_evals_to!(
-        "List.mapWithIndex [0,0,0] (\\index, x -> Num.intCast index + x)",
+        "List.mapWithIndex [0,0,0] (\\x, index -> Num.intCast index + x)",
         RocList::from_slice(&[0, 1, 2]),
         RocList<i64>
     );
@@ -2381,7 +2436,7 @@ fn cleanup_because_exception() {
             five : I64
             five = 5
 
-            five + Num.maxInt + 3 + (Num.intCast (List.len x))
+            five + Num.maxI64 + 3 + (Num.intCast (List.len x))
                "#
         ),
         9,
@@ -2392,7 +2447,11 @@ fn cleanup_because_exception() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_range() {
-    assert_evals_to!("List.range 0 -1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.range 0 -1",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
     assert_evals_to!("List.range 0 0", RocList::from_slice(&[0]), RocList<i64>);
     assert_evals_to!(
         "List.range 0 5",
@@ -2406,7 +2465,7 @@ fn list_range() {
 fn list_sort_with() {
     assert_evals_to!(
         "List.sortWith [] Num.compare",
-        RocList::from_slice(&[]),
+        RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
@@ -2416,6 +2475,36 @@ fn list_sort_with() {
     );
     assert_evals_to!(
         "List.sortWith [ 1,2,3,4] (\\a,b -> Num.compare b a)",
+        RocList::from_slice(&[4, 3, 2, 1]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_sort_asc() {
+    assert_evals_to!(
+        "List.sortAsc []",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.sortAsc [ 4,3,2,1 ]",
+        RocList::from_slice(&[1, 2, 3, 4]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_sort_desc() {
+    assert_evals_to!(
+        "List.sortDesc []",
+        RocList::<i64>::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.sortDesc [ 1,2,3,4 ]",
         RocList::from_slice(&[4, 3, 2, 1]),
         RocList<i64>
     );
@@ -2530,7 +2619,7 @@ fn empty_list_of_function_type() {
                 Err _ -> "bad!"
             "#
         ),
-        RocStr::from_slice(b"bar"),
+        RocStr::from("bar"),
         RocStr
     );
 }
@@ -2545,11 +2634,11 @@ fn list_join_map() {
             "#
         ),
         RocList::from_slice(&[
-            RocStr::from_slice("guava".as_bytes()),
-            RocStr::from_slice("apple".as_bytes()),
-            RocStr::from_slice("pear".as_bytes()),
-            RocStr::from_slice("bailey".as_bytes()),
-            RocStr::from_slice("cyrus".as_bytes()),
+            RocStr::from("guava"),
+            RocStr::from("apple"),
+            RocStr::from("pear"),
+            RocStr::from("bailey"),
+            RocStr::from("cyrus"),
         ]),
         RocList<RocStr>
     )
@@ -2580,7 +2669,7 @@ fn list_find() {
                 Err _ -> "not found"
             "#
         ),
-        RocStr::from_slice(b"bc"),
+        RocStr::from("bc"),
         RocStr
     );
 }
@@ -2596,7 +2685,7 @@ fn list_find_not_found() {
                 Err _ -> "not found"
             "#
         ),
-        RocStr::from_slice(b"not found"),
+        RocStr::from("not found"),
         RocStr
     );
 }
@@ -2612,7 +2701,7 @@ fn list_find_empty_typed_list() {
                 Err _ -> "not found"
             "#
         ),
-        RocStr::from_slice(b"not found"),
+        RocStr::from("not found"),
         RocStr
     );
 }
@@ -2630,4 +2719,23 @@ fn list_find_empty_layout() {
         0,
         i64
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_lists() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            l = [1, 2, 3]
+
+            f : List U8, List U16 -> Nat
+            f = \_, _ -> 18
+
+            f l l
+            "#
+        ),
+        18,
+        u64
+    )
 }

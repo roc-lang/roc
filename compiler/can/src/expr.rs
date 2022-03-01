@@ -1,10 +1,10 @@
-use crate::annotation::IntroducedVariables;
+use crate::annotation::{freshen_opaque_def, IntroducedVariables};
 use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
-    finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
-    int_expr_from_result, num_expr_from_result,
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
+    int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumericBound,
 };
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
@@ -19,8 +19,8 @@ use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::Alias;
-use std::fmt::Debug;
+use roc_types::types::{Alias, LambdaSet, Type};
+use std::fmt::{Debug, Display};
 use std::{char, u32};
 
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -47,17 +47,33 @@ impl Output {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum IntValue {
+    I128(i128),
+    U128(u128),
+}
+
+impl Display for IntValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntValue::I128(n) => Display::fmt(&n, f),
+            IntValue::U128(n) => Display::fmt(&n, f),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, Box<str>, i64),
+    Num(Variable, Box<str>, IntValue, NumericBound),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, Variable, Box<str>, i128),
-    Float(Variable, Variable, Box<str>, f64),
+    Int(Variable, Variable, Box<str>, IntValue, IntBound),
+    Float(Variable, Variable, Box<str>, f64, FloatBound),
     Str(Box<str>),
+    SingleQuote(char),
     List {
         elem_var: Variable,
         loc_elems: Vec<Loc<Expr>>,
@@ -157,6 +173,31 @@ pub enum Expr {
         arguments: Vec<(Variable, Loc<Expr>)>,
     },
 
+    /// A wrapping of an opaque type, like `$Age 21`
+    // TODO(opaques): $->@ above when opaques land
+    OpaqueRef {
+        opaque_var: Variable,
+        name: Symbol,
+        argument: Box<(Variable, Loc<Expr>)>,
+
+        // The following help us link this opaque reference to the type specified by its
+        // definition, which we then use during constraint generation. For example
+        // suppose we have
+        //
+        //   Id n := [ Id U64 n ]
+        //   @Id "sasha"
+        //
+        // Then `opaque` is "Id", `argument` is "sasha", but this is not enough for us to
+        // infer the type of the expression as "Id Str" - we need to link the specialized type of
+        // the variable "n".
+        // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
+        // for the expression from the opaque definition. `type_arguments` is something like
+        // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
+        specialized_def_type: Box<Type>,
+        type_arguments: Vec<(Lowercase, Type)>,
+        lambda_set_variables: Vec<LambdaSet>,
+    },
+
     // Test
     Expect(Box<Loc<Expr>>, Box<Loc<Expr>>),
 
@@ -208,20 +249,20 @@ pub fn canonicalize_expr<'a>(
     use Expr::*;
 
     let (expr, output) = match expr {
-        ast::Expr::Num(str) => {
+        &ast::Expr::Num(str) => {
             let answer = num_expr_from_result(
                 var_store,
-                finish_parsing_int(*str).map(|int| (*str, int)),
+                finish_parsing_num(str).map(|result| (str, result)),
                 region,
                 env,
             );
 
             (answer, Output::default())
         }
-        ast::Expr::Float(str) => {
+        &ast::Expr::Float(str) => {
             let answer = float_expr_from_result(
                 var_store,
-                finish_parsing_float(str).map(|f| (*str, f)),
+                finish_parsing_float(str).map(|(f, bound)| (str, f, bound)),
                 region,
                 env,
             );
@@ -303,6 +344,28 @@ pub fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
+
+        ast::Expr::SingleQuote(string) => {
+            let mut it = string.chars().peekable();
+            if let Some(char) = it.next() {
+                if it.peek().is_none() {
+                    (Expr::SingleQuote(char), Output::default())
+                } else {
+                    // multiple chars is found
+                    let error = roc_problem::can::RuntimeError::MultipleCharsInSingleQuote(region);
+                    let answer = Expr::RuntimeError(error);
+
+                    (answer, Output::default())
+                }
+            } else {
+                // no characters found
+                let error = roc_problem::can::RuntimeError::EmptySingleQuote(region);
+                let answer = Expr::RuntimeError(error);
+
+                (answer, Output::default())
+            }
+        }
+
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
                 (
@@ -345,92 +408,129 @@ pub fn canonicalize_expr<'a>(
             // (foo) bar baz
             let fn_region = loc_fn.region;
 
-            // Canonicalize the function expression and its arguments
-            let (fn_expr, mut output) =
-                canonicalize_expr(env, var_store, scope, fn_region, &loc_fn.value);
-
             // The function's return type
             let mut args = Vec::new();
-            let mut outputs = Vec::new();
+            let mut output = Output::default();
 
             for loc_arg in loc_args.iter() {
                 let (arg_expr, arg_out) =
                     canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
 
                 args.push((var_store.fresh(), arg_expr));
-                outputs.push(arg_out);
-            }
-
-            // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
-            output.tail_call = None;
-
-            for arg_out in outputs {
                 output.references = output.references.union(arg_out.references);
             }
 
-            let expr = match fn_expr.value {
-                Var(symbol) => {
-                    output.references.calls.insert(symbol);
+            if let ast::Expr::OpaqueRef(name) = loc_fn.value {
+                // We treat opaques specially, since an opaque can wrap exactly one argument.
 
-                    // we're tail-calling a symbol by name, check if it's the tail-callable symbol
-                    output.tail_call = match &env.tailcallable_symbol {
-                        Some(tc_sym) if *tc_sym == symbol => Some(symbol),
-                        Some(_) | None => None,
-                    };
+                debug_assert!(!args.is_empty());
 
-                    Call(
-                        Box::new((
-                            var_store.fresh(),
-                            fn_expr,
-                            var_store.fresh(),
-                            var_store.fresh(),
-                        )),
-                        args,
-                        *application_style,
-                    )
-                }
-                RuntimeError(_) => {
-                    // We can't call a runtime error; bail out by propagating it!
-                    return (fn_expr, output);
-                }
-                Tag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    ..
-                } => Tag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    arguments: args,
-                },
-                ZeroArgumentTag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    ..
-                } => Tag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    arguments: args,
-                },
-                _ => {
-                    // This could be something like ((if True then fn1 else fn2) arg1 arg2).
-                    Call(
-                        Box::new((
-                            var_store.fresh(),
-                            fn_expr,
-                            var_store.fresh(),
-                            var_store.fresh(),
-                        )),
-                        args,
-                        *application_style,
-                    )
-                }
-            };
+                if args.len() > 1 {
+                    let problem =
+                        roc_problem::can::RuntimeError::OpaqueAppliedToMultipleArgs(region);
+                    env.problem(Problem::RuntimeError(problem.clone()));
+                    (RuntimeError(problem), output)
+                } else {
+                    match scope.lookup_opaque_ref(name, loc_fn.region) {
+                        Err(runtime_error) => {
+                            env.problem(Problem::RuntimeError(runtime_error.clone()));
+                            (RuntimeError(runtime_error), output)
+                        }
+                        Ok((name, opaque_def)) => {
+                            let argument = Box::new(args.pop().unwrap());
+                            output.references.referenced_type_defs.insert(name);
+                            output.references.lookups.insert(name);
 
-            (expr, output)
+                            let (type_arguments, lambda_set_variables, specialized_def_type) =
+                                freshen_opaque_def(var_store, opaque_def);
+
+                            let opaque_ref = OpaqueRef {
+                                opaque_var: var_store.fresh(),
+                                name,
+                                argument,
+                                specialized_def_type: Box::new(specialized_def_type),
+                                type_arguments,
+                                lambda_set_variables,
+                            };
+
+                            (opaque_ref, output)
+                        }
+                    }
+                }
+            } else {
+                // Canonicalize the function expression and its arguments
+                let (fn_expr, fn_expr_output) =
+                    canonicalize_expr(env, var_store, scope, fn_region, &loc_fn.value);
+
+                output.union(fn_expr_output);
+
+                // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
+                output.tail_call = None;
+
+                let expr = match fn_expr.value {
+                    Var(symbol) => {
+                        output.references.calls.insert(symbol);
+
+                        // we're tail-calling a symbol by name, check if it's the tail-callable symbol
+                        output.tail_call = match &env.tailcallable_symbol {
+                            Some(tc_sym) if *tc_sym == symbol => Some(symbol),
+                            Some(_) | None => None,
+                        };
+
+                        Call(
+                            Box::new((
+                                var_store.fresh(),
+                                fn_expr,
+                                var_store.fresh(),
+                                var_store.fresh(),
+                            )),
+                            args,
+                            *application_style,
+                        )
+                    }
+                    RuntimeError(_) => {
+                        // We can't call a runtime error; bail out by propagating it!
+                        return (fn_expr, output);
+                    }
+                    Tag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        ..
+                    } => Tag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        arguments: args,
+                    },
+                    ZeroArgumentTag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        ..
+                    } => Tag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        arguments: args,
+                    },
+                    _ => {
+                        // This could be something like ((if True then fn1 else fn2) arg1 arg2).
+                        Call(
+                            Box::new((
+                                var_store.fresh(),
+                                fn_expr,
+                                var_store.fresh(),
+                                var_store.fresh(),
+                            )),
+                            args,
+                            *application_style,
+                        )
+                    }
+                };
+
+                (expr, output)
+            }
         }
         ast::Expr::Var { module_name, ident } => {
             canonicalize_lookup(env, scope, module_name, ident, region)
@@ -530,7 +630,7 @@ pub fn canonicalize_expr<'a>(
             output.union(new_output);
 
             // filter out aliases
-            captured_symbols.retain(|s| !output.references.referenced_aliases.contains(s));
+            captured_symbols.retain(|s| !output.references.referenced_type_defs.contains(s));
 
             // filter out functions that don't close over anything
             captured_symbols.retain(|s| !output.non_closures.contains(s));
@@ -681,6 +781,16 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
+        ast::Expr::OpaqueRef(opaque_ref) => {
+            // If we're here, the opaque reference is definitely not wrapping an argument - wrapped
+            // arguments are handled in the Apply branch.
+            let problem = roc_problem::can::RuntimeError::OpaqueNotApplied(Loc::at(
+                region,
+                (*opaque_ref).into(),
+            ));
+            env.problem(Problem::RuntimeError(problem.clone()));
+            (RuntimeError(problem), Output::default())
+        }
         ast::Expr::Expect(condition, continuation) => {
             let mut output = Output::default();
 
@@ -790,21 +900,21 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::NonBase10Int {
+        &ast::Expr::NonBase10Int {
             string,
             base,
             is_negative,
         } => {
             // the minus sign is added before parsing, to get correct overflow/underflow behavior
-            let answer = match finish_parsing_base(string, *base, *is_negative) {
-                Ok(int) => {
+            let answer = match finish_parsing_base(string, base, is_negative) {
+                Ok((int, bound)) => {
                     // Done in this kinda round about way with intermediate variables
                     // to keep borrowed values around and make this compile
                     let int_string = int.to_string();
                     let int_str = int_string.as_str();
-                    int_expr_from_result(var_store, Ok((int_str, int as i128)), region, *base, env)
+                    int_expr_from_result(var_store, Ok((int_str, int, bound)), region, base, env)
                 }
-                Err(e) => int_expr_from_result(var_store, Err(e), region, *base, env),
+                Err(e) => int_expr_from_result(var_store, Err(e), region, base, env),
             };
 
             (answer, Output::default())
@@ -1226,10 +1336,11 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
     match expr {
         // Num stores the `a` variable in `Num a`. Not the same as the variable
         // stored in Int and Float below, which is strictly for better error messages
-        other @ Num(_, _, _)
-        | other @ Int(_, _, _, _)
-        | other @ Float(_, _, _, _)
+        other @ Num(..)
+        | other @ Int(..)
+        | other @ Float(..)
         | other @ Str { .. }
+        | other @ SingleQuote(_)
         | other @ RuntimeError(_)
         | other @ EmptyRecord
         | other @ Accessor { .. }
@@ -1456,6 +1567,30 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 name,
                 arguments
             );
+        }
+
+        OpaqueRef {
+            opaque_var,
+            name,
+            argument,
+            specialized_def_type,
+            type_arguments,
+            lambda_set_variables,
+        } => {
+            let (var, loc_expr) = *argument;
+            let argument = Box::new((
+                var,
+                loc_expr.map_owned(|expr| inline_calls(var_store, scope, expr)),
+            ));
+
+            OpaqueRef {
+                opaque_var,
+                name,
+                argument,
+                specialized_def_type,
+                type_arguments,
+                lambda_set_variables,
+            }
         }
 
         ZeroArgumentTag {

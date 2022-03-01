@@ -1,6 +1,10 @@
+use crate::annotation::freshen_opaque_def;
 use crate::env::Env;
-use crate::expr::{canonicalize_expr, unescape_char, Expr, Output};
-use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
+use crate::num::{
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatBound, IntBound,
+    NumericBound, ParsedNumResult,
+};
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -9,6 +13,8 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::{LambdaSet, Type};
+
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 #[derive(Clone, Debug, PartialEq)]
@@ -20,19 +26,45 @@ pub enum Pattern {
         tag_name: TagName,
         arguments: Vec<(Variable, Loc<Pattern>)>,
     },
+    UnwrappedOpaque {
+        whole_var: Variable,
+        opaque: Symbol,
+        argument: Box<(Variable, Loc<Pattern>)>,
+
+        // The following help us link this opaque reference to the type specified by its
+        // definition, which we then use during constraint generation. For example
+        // suppose we have
+        //
+        //   Id n := [ Id U64 n ]
+        //   strToBool : Str -> Bool
+        //
+        //   f = \@Id who -> strToBool who
+        //
+        // Then `opaque` is "Id", `argument` is "who", but this is not enough for us to
+        // infer the type of the expression as "Id Str" - we need to link the specialized type of
+        // the variable "n".
+        // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
+        // for the expression from the opaque definition. `type_arguments` is something like
+        // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
+        specialized_def_type: Box<Type>,
+        type_arguments: Vec<(Lowercase, Type)>,
+        lambda_set_variables: Vec<LambdaSet>,
+    },
     RecordDestructure {
         whole_var: Variable,
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
     },
-    IntLiteral(Variable, Box<str>, i64),
-    NumLiteral(Variable, Box<str>, i64),
-    FloatLiteral(Variable, Box<str>, f64),
+    NumLiteral(Variable, Box<str>, IntValue, NumericBound),
+    IntLiteral(Variable, Variable, Box<str>, IntValue, IntBound),
+    FloatLiteral(Variable, Variable, Box<str>, f64, FloatBound),
     StrLiteral(Box<str>),
+    SingleQuote(char),
     Underscore,
 
     // Runtime Exceptions
-    Shadowed(Region, Loc<Ident>),
+    Shadowed(Region, Loc<Ident>, Symbol),
+    OpaqueNotInScope(Loc<Ident>),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
     // parse error patterns
@@ -65,7 +97,7 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
     use Pattern::*;
 
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             symbols.push(*symbol);
         }
 
@@ -73,6 +105,13 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
             for (_, nested) in arguments {
                 symbols_from_pattern_help(&nested.value, symbols);
             }
+        }
+        UnwrappedOpaque {
+            opaque, argument, ..
+        } => {
+            symbols.push(*opaque);
+            let (_, nested) = &**argument;
+            symbols_from_pattern_help(&nested.value, symbols);
         }
         RecordDestructure { destructs, .. } => {
             for destruct in destructs {
@@ -85,15 +124,15 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
             }
         }
 
-        NumLiteral(_, _, _)
-        | IntLiteral(_, _, _)
-        | FloatLiteral(_, _, _)
+        NumLiteral(..)
+        | IntLiteral(..)
+        | FloatLiteral(..)
         | StrLiteral(_)
+        | SingleQuote(_)
         | Underscore
         | MalformedPattern(_, _)
-        | UnsupportedPattern(_) => {}
-
-        Shadowed(_, _) => {}
+        | UnsupportedPattern(_)
+        | OpaqueNotInScope(..) => {}
     }
 }
 
@@ -121,13 +160,14 @@ pub fn canonicalize_pattern<'a>(
 
                 Pattern::Identifier(symbol)
             }
-            Err((original_region, shadow)) => {
+            Err((original_region, shadow, new_symbol)) => {
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                     original_region,
                     shadow: shadow.clone(),
                 }));
+                output.references.bound_symbols.insert(new_symbol);
 
-                Pattern::Shadowed(original_region, shadow)
+                Pattern::Shadowed(original_region, shadow, new_symbol)
             }
         },
         GlobalTag(name) => {
@@ -150,17 +190,15 @@ pub fn canonicalize_pattern<'a>(
                 arguments: vec![],
             }
         }
+        OpaqueRef(name) => {
+            // If this opaque ref had an argument, we would be in the "Apply" branch.
+            let loc_name = Loc::at(region, (*name).into());
+            env.problem(Problem::RuntimeError(RuntimeError::OpaqueNotApplied(
+                loc_name,
+            )));
+            Pattern::UnsupportedPattern(region)
+        }
         Apply(tag, patterns) => {
-            let tag_name = match tag.value {
-                GlobalTag(name) => TagName::Global(name.into()),
-                PrivateTag(name) => {
-                    let ident_id = env.ident_ids.get_or_insert(&name.into());
-
-                    TagName::Private(Symbol::new(env.home, ident_id))
-                }
-                _ => unreachable!("Other patterns cannot be applied"),
-            };
-
             let mut can_patterns = Vec::with_capacity(patterns.len());
             for loc_pattern in *patterns {
                 let (new_output, can_pattern) = canonicalize_pattern(
@@ -177,21 +215,80 @@ pub fn canonicalize_pattern<'a>(
                 can_patterns.push((var_store.fresh(), can_pattern));
             }
 
-            Pattern::AppliedTag {
-                whole_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                tag_name,
-                arguments: can_patterns,
+            match tag.value {
+                GlobalTag(name) => {
+                    let tag_name = TagName::Global(name.into());
+                    Pattern::AppliedTag {
+                        whole_var: var_store.fresh(),
+                        ext_var: var_store.fresh(),
+                        tag_name,
+                        arguments: can_patterns,
+                    }
+                }
+                PrivateTag(name) => {
+                    let ident_id = env.ident_ids.get_or_insert(&name.into());
+                    let tag_name = TagName::Private(Symbol::new(env.home, ident_id));
+
+                    Pattern::AppliedTag {
+                        whole_var: var_store.fresh(),
+                        ext_var: var_store.fresh(),
+                        tag_name,
+                        arguments: can_patterns,
+                    }
+                }
+
+                OpaqueRef(name) => match scope.lookup_opaque_ref(name, tag.region) {
+                    Ok((opaque, opaque_def)) => {
+                        debug_assert!(!can_patterns.is_empty());
+
+                        if can_patterns.len() > 1 {
+                            env.problem(Problem::RuntimeError(
+                                RuntimeError::OpaqueAppliedToMultipleArgs(region),
+                            ));
+
+                            Pattern::UnsupportedPattern(region)
+                        } else {
+                            let argument = Box::new(can_patterns.pop().unwrap());
+
+                            let (type_arguments, lambda_set_variables, specialized_def_type) =
+                                freshen_opaque_def(var_store, opaque_def);
+
+                            output.references.referenced_type_defs.insert(opaque);
+                            output.references.lookups.insert(opaque);
+
+                            Pattern::UnwrappedOpaque {
+                                whole_var: var_store.fresh(),
+                                opaque,
+                                argument,
+                                specialized_def_type: Box::new(specialized_def_type),
+                                type_arguments,
+                                lambda_set_variables,
+                            }
+                        }
+                    }
+                    Err(runtime_error) => {
+                        env.problem(Problem::RuntimeError(runtime_error));
+
+                        Pattern::OpaqueNotInScope(Loc::at(tag.region, name.into()))
+                    }
+                },
+                _ => unreachable!("Other patterns cannot be applied"),
             }
         }
 
-        FloatLiteral(str) => match pattern_type {
+        &FloatLiteral(str) => match pattern_type {
             WhenBranch => match finish_parsing_float(str) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(float) => Pattern::FloatLiteral(var_store.fresh(), (*str).into(), float),
+                Ok((float, bound)) => Pattern::FloatLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    float,
+                    bound,
+                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -201,32 +298,58 @@ pub fn canonicalize_pattern<'a>(
             TopLevelDef | DefExpr => bad_underscore(env, region),
         },
 
-        NumLiteral(str) => match pattern_type {
-            WhenBranch => match finish_parsing_int(str) {
+        &NumLiteral(str) => match pattern_type {
+            WhenBranch => match finish_parsing_num(str) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => Pattern::NumLiteral(var_store.fresh(), (*str).into(), int),
+                Ok(ParsedNumResult::UnknownNum(int, bound)) => {
+                    Pattern::NumLiteral(var_store.fresh(), (str).into(), int, bound)
+                }
+                Ok(ParsedNumResult::Int(int, bound)) => Pattern::IntLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    int,
+                    bound,
+                ),
+                Ok(ParsedNumResult::Float(float, bound)) => Pattern::FloatLiteral(
+                    var_store.fresh(),
+                    var_store.fresh(),
+                    (str).into(),
+                    float,
+                    bound,
+                ),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        NonBase10Literal {
+        &NonBase10Literal {
             string,
             base,
             is_negative,
         } => match pattern_type {
-            WhenBranch => match finish_parsing_base(string, *base, *is_negative) {
+            WhenBranch => match finish_parsing_base(string, base, is_negative) {
                 Err(_error) => {
-                    let problem = MalformedPatternProblem::MalformedBase(*base);
+                    let problem = MalformedPatternProblem::MalformedBase(base);
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => {
-                    let sign_str = if *is_negative { "-" } else { "" };
-                    let int_str = format!("{}{}", sign_str, int.to_string()).into_boxed_str();
-                    let i = if *is_negative { -int } else { int };
-                    Pattern::IntLiteral(var_store.fresh(), int_str, i)
+                Ok((IntValue::U128(_), _)) if is_negative => {
+                    // Can't negate a u128; that doesn't fit in any integer literal type we support.
+                    let problem = MalformedPatternProblem::MalformedInt;
+                    malformed_pattern(env, problem, region)
+                }
+                Ok((int, bound)) => {
+                    let sign_str = if is_negative { "-" } else { "" };
+                    let int_str = format!("{}{}", sign_str, int).into_boxed_str();
+                    let i = match int {
+                        // Safety: this is fine because I128::MAX = |I128::MIN| - 1
+                        IntValue::I128(n) if is_negative => IntValue::I128(-n),
+                        IntValue::I128(n) => IntValue::I128(n),
+                        IntValue::U128(_) => unreachable!(),
+                    };
+                    Pattern::IntLiteral(var_store.fresh(), var_store.fresh(), int_str, i, bound)
                 }
             },
             ptype => unsupported_pattern(env, ptype, region),
@@ -236,6 +359,23 @@ pub fn canonicalize_pattern<'a>(
             WhenBranch => flatten_str_literal(literal),
             ptype => unsupported_pattern(env, ptype, region),
         },
+
+        SingleQuote(string) => {
+            let mut it = string.chars().peekable();
+            if let Some(char) = it.next() {
+                if it.peek().is_none() {
+                    Pattern::SingleQuote(char)
+                } else {
+                    // multiple chars is found
+                    let problem = MalformedPatternProblem::MultipleCharsInSingleQuote;
+                    malformed_pattern(env, problem, region)
+                }
+            } else {
+                // no characters found
+                let problem = MalformedPatternProblem::EmptySingleQuote;
+                malformed_pattern(env, problem, region)
+            }
+        }
 
         SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
             return canonicalize_pattern(env, var_store, scope, pattern_type, sub_pattern, region)
@@ -268,7 +408,7 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow)) => {
+                            Err((original_region, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
@@ -278,7 +418,8 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                                opt_erroneous =
+                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
                             }
                         };
                     }
@@ -339,7 +480,7 @@ pub fn canonicalize_pattern<'a>(
                                     },
                                 });
                             }
-                            Err((original_region, shadow)) => {
+                            Err((original_region, shadow, new_symbol)) => {
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
@@ -349,7 +490,8 @@ pub fn canonicalize_pattern<'a>(
                                 // are, we're definitely shadowed and will
                                 // get a runtime exception as soon as we
                                 // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                                opt_erroneous =
+                                    Some(Pattern::Shadowed(original_region, shadow, new_symbol));
                             }
                         };
                     }
@@ -452,7 +594,7 @@ fn add_bindings_from_patterns(
     use Pattern::*;
 
     match pattern {
-        Identifier(symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
             answer.push((*symbol, *region));
         }
         AppliedTag {
@@ -463,6 +605,13 @@ fn add_bindings_from_patterns(
                 add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
             }
         }
+        UnwrappedOpaque {
+            argument, opaque, ..
+        } => {
+            let (_, loc_arg) = &**argument;
+            add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
+            answer.push((*opaque, *region));
+        }
         RecordDestructure { destructs, .. } => {
             for Loc {
                 region,
@@ -472,14 +621,15 @@ fn add_bindings_from_patterns(
                 answer.push((*symbol, *region));
             }
         }
-        NumLiteral(_, _, _)
-        | IntLiteral(_, _, _)
-        | FloatLiteral(_, _, _)
+        NumLiteral(..)
+        | IntLiteral(..)
+        | FloatLiteral(..)
         | StrLiteral(_)
+        | SingleQuote(_)
         | Underscore
-        | Shadowed(_, _)
         | MalformedPattern(_, _)
-        | UnsupportedPattern(_) => (),
+        | UnsupportedPattern(_)
+        | OpaqueNotInScope(..) => (),
     }
 }
 

@@ -1,5 +1,6 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
+use crate::parser::SpaceProblem;
 use crate::parser::{self, and, backtrackable, BadInputError, Parser, Progress::*};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -10,7 +11,6 @@ use roc_region::all::Position;
 pub fn space0_around_ee<'a, P, S, E>(
     parser: P,
     min_indent: u32,
-    space_problem: fn(BadInputError, Position) -> E,
     indent_before_problem: fn(Position) -> E,
     indent_after_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
@@ -19,15 +19,12 @@ where
     S: 'a,
     P: Parser<'a, Loc<S>, E>,
     P: 'a,
-    E: 'a,
+    E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
         and(
-            space0_e(min_indent, space_problem, indent_before_problem),
-            and(
-                parser,
-                space0_e(min_indent, space_problem, indent_after_problem),
-            ),
+            space0_e(min_indent, indent_before_problem),
+            and(parser, space0_e(min_indent, indent_after_problem)),
         ),
         spaces_around_help,
     )
@@ -36,7 +33,6 @@ where
 pub fn space0_before_optional_after<'a, P, S, E>(
     parser: P,
     min_indent: u32,
-    space_problem: fn(BadInputError, Position) -> E,
     indent_before_problem: fn(Position) -> E,
     indent_after_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
@@ -45,15 +41,15 @@ where
     S: 'a,
     P: Parser<'a, Loc<S>, E>,
     P: 'a,
-    E: 'a,
+    E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
         and(
-            space0_e(min_indent, space_problem, indent_before_problem),
+            space0_e(min_indent, indent_before_problem),
             and(
                 parser,
                 one_of![
-                    backtrackable(space0_e(min_indent, space_problem, indent_after_problem)),
+                    backtrackable(space0_e(min_indent, indent_after_problem)),
                     succeed!(&[] as &[_]),
                 ],
             ),
@@ -101,7 +97,6 @@ where
 pub fn space0_before_e<'a, P, S, E>(
     parser: P,
     min_indent: u32,
-    space_problem: fn(BadInputError, Position) -> E,
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
 where
@@ -109,10 +104,10 @@ where
     S: 'a,
     P: Parser<'a, Loc<S>, E>,
     P: 'a,
-    E: 'a,
+    E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and!(space0_e(min_indent, space_problem, indent_problem), parser),
+        and!(space0_e(min_indent, indent_problem), parser),
         |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
             if space_list.is_empty() {
                 loc_expr
@@ -128,7 +123,6 @@ where
 pub fn space0_after_e<'a, P, S, E>(
     parser: P,
     min_indent: u32,
-    space_problem: fn(BadInputError, Position) -> E,
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
 where
@@ -136,10 +130,10 @@ where
     S: 'a,
     P: Parser<'a, Loc<S>, E>,
     P: 'a,
-    E: 'a,
+    E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and!(parser, space0_e(min_indent, space_problem, indent_problem)),
+        and!(parser, space0_e(min_indent, indent_problem)),
         |arena: &'a Bump, (loc_expr, space_list): (Loc<S>, &'a [CommentOrNewline<'a>])| {
             if space_list.is_empty() {
                 loc_expr
@@ -170,23 +164,21 @@ where
 
 pub fn space0_e<'a, E>(
     min_indent: u32,
-    space_problem: fn(BadInputError, Position) -> E,
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
 where
-    E: 'a,
+    E: 'a + SpaceProblem,
 {
-    spaces_help_help(min_indent, space_problem, indent_problem)
+    spaces_help_help(min_indent, indent_problem)
 }
 
 #[inline(always)]
 fn spaces_help_help<'a, E>(
     min_indent: u32,
-    space_problem: fn(BadInputError, Position) -> E,
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
 where
-    E: 'a,
+    E: 'a + SpaceProblem,
 {
     use SpaceState::*;
 
@@ -195,7 +187,7 @@ where
         match eat_spaces(state.clone(), false, comments_and_newlines) {
             HasTab(state) => Err((
                 MadeProgress,
-                space_problem(BadInputError::HasTab, state.pos()),
+                E::space_problem(BadInputError::HasTab, state.pos()),
                 state,
             )),
             Good {

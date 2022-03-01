@@ -63,6 +63,50 @@ pub enum SyntaxError<'a> {
     Space(BadInputError),
     NotEndOfFile(Position),
 }
+pub trait SpaceProblem {
+    fn space_problem(e: BadInputError, pos: Position) -> Self;
+}
+
+macro_rules! impl_space_problem {
+    ($($name:ident $(< $lt:tt >)?),*) => {
+        $(
+            impl $(< $lt >)? SpaceProblem for $name $(< $lt >)? {
+                fn space_problem(e: BadInputError, pos: Position) -> Self {
+                    Self::Space(e, pos)
+                }
+            }
+        )*
+    };
+}
+
+impl_space_problem! {
+    EExpect<'a>,
+    EExposes,
+    EExpr<'a>,
+    EGenerates,
+    EGeneratesWith,
+    EHeader<'a>,
+    EIf<'a>,
+    EImports,
+    EInParens<'a>,
+    ELambda<'a>,
+    EList<'a>,
+    EPackageEntry<'a>,
+    EPackages<'a>,
+    EPattern<'a>,
+    EProvides<'a>,
+    ERecord<'a>,
+    ERequires<'a>,
+    EString<'a>,
+    EType<'a>,
+    ETypeInParens<'a>,
+    ETypeRecord<'a>,
+    ETypeTagUnion<'a>,
+    ETypedIdent<'a>,
+    EWhen<'a>,
+    PInParens<'a>,
+    PRecord<'a>
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EHeader<'a> {
@@ -71,7 +115,8 @@ pub enum EHeader<'a> {
     Imports(EImports, Position),
     Requires(ERequires<'a>, Position),
     Packages(EPackages<'a>, Position),
-    Effects(EEffects<'a>, Position),
+    Generates(EGenerates, Position),
+    GeneratesWith(EGeneratesWith, Position),
 
     Space(BadInputError, Position),
     Start(Position),
@@ -165,22 +210,6 @@ pub enum EPackageEntry<'a> {
     Space(BadInputError, Position),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EEffects<'a> {
-    Space(BadInputError, Position),
-    Effects(Position),
-    Open(Position),
-    IndentEffects(Position),
-    ListStart(Position),
-    ListEnd(Position),
-    IndentListStart(Position),
-    IndentListEnd(Position),
-    TypedIdent(ETypedIdent<'a>, Position),
-    ShorthandDot(Position),
-    Shorthand(Position),
-    TypeName(Position),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EImports {
     Open(Position),
@@ -200,6 +229,30 @@ pub enum EImports {
     IndentSetEnd(Position),
     SetStart(Position),
     SetEnd(Position),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EGenerates {
+    Open(Position),
+    Generates(Position),
+    IndentGenerates(Position),
+    Identifier(Position),
+    Space(BadInputError, Position),
+    IndentTypeStart(Position),
+    IndentTypeEnd(Position),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EGeneratesWith {
+    Open(Position),
+    With(Position),
+    IndentWith(Position),
+    IndentListStart(Position),
+    IndentListEnd(Position),
+    ListStart(Position),
+    ListEnd(Position),
+    Identifier(Position),
+    Space(BadInputError, Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,6 +355,7 @@ pub enum EExpr<'a> {
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
     Str(EString<'a>, Position),
+    SingleQuote(EString<'a>, Position),
     Number(ENumber, Position),
     List(EList<'a>, Position),
 
@@ -496,6 +550,8 @@ pub enum PInParens<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EType<'a> {
+    Space(BadInputError, Position),
+
     TRecord(ETypeRecord<'a>, Position),
     TTagUnion(ETypeTagUnion<'a>, Position),
     TInParens(ETypeInParens<'a>, Position),
@@ -507,7 +563,6 @@ pub enum EType<'a> {
     ///
     TStart(Position),
     TEnd(Position),
-    TSpace(BadInputError, Position),
     TFunctionArgument(Position),
     ///
     TIndentStart(Position),
@@ -656,9 +711,8 @@ where
         let cur_indent = INDENT.with(|i| *i.borrow());
 
         println!(
-            "@{:>5}:{:<5}: {}{:<50}",
-            state.line,
-            state.column,
+            "{:>5?}: {}{:<50}",
+            state.pos(),
             &indent_text[..cur_indent * 2],
             self.message
         );
@@ -673,9 +727,8 @@ where
         };
 
         println!(
-            "@{:>5}:{:<5}: {}{:<50} {:<15} {:?}",
-            state.line,
-            state.column,
+            "{:<5?}: {}{:<50} {:<15} {:?}",
+            state.pos(),
             &indent_text[..cur_indent * 2],
             self.message,
             format!("{:?}", progress),
@@ -1144,11 +1197,11 @@ macro_rules! collection {
 
 #[macro_export]
 macro_rules! collection_trailing_sep_e {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $open_problem:expr, $space_problem:expr, $indent_problem:expr, $space_before:expr) => {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $open_problem:expr, $indent_problem:expr, $space_before:expr) => {
         skip_first!(
             $opening_brace,
             |arena, state| {
-                let (_, spaces, state) = space0_e($min_indent, $space_problem, $indent_problem)
+                let (_, spaces, state) = space0_e($min_indent, $indent_problem)
                     .parse(arena, state)?;
 
                 let (_, (mut parsed_elems, mut final_comments), state) =
@@ -1158,12 +1211,15 @@ macro_rules! collection_trailing_sep_e {
                                         $crate::blankspace::space0_before_optional_after(
                                             $elem,
                                             $min_indent,
-                                            $space_problem,
                                             $indent_problem,
                                             $indent_problem
                                         )
                                     ),
-                                    $crate::blankspace::space0_e($min_indent, $space_problem, $indent_problem)
+                                    $crate::blankspace::space0_e(
+                                        // we use min_indent=0 because we want to parse incorrectly indented closing braces
+                                        // and later fix these up in the formatter.
+                                        0 /* min_indent */,
+                                        $indent_problem)
                                 ).parse(arena, state)?;
 
                 let (_,_, state) =
@@ -1346,21 +1402,6 @@ where
             Ok((MadeProgress, (), state))
         } else {
             Err((NoProgress, to_error(state.pos()), state))
-        }
-    }
-}
-
-pub fn check_indent<'a, TE, E>(min_indent: u32, to_problem: TE) -> impl Parser<'a, (), E>
-where
-    TE: Fn(Position) -> E,
-    E: 'a,
-{
-    move |_arena, state: State<'a>| {
-        dbg!(state.indent_column, min_indent);
-        if state.indent_column < min_indent {
-            Err((NoProgress, to_problem(state.pos()), state))
-        } else {
-            Ok((NoProgress, (), state))
         }
     }
 }

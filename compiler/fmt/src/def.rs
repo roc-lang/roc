@@ -2,7 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, INDENT};
 use crate::Buf;
-use roc_parse::ast::{AliasHeader, Def, Expr, Pattern};
+use roc_parse::ast::{Def, Expr, Pattern, TypeHeader};
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
@@ -12,6 +12,7 @@ impl<'a> Formattable for Def<'a> {
 
         match self {
             Alias { ann, .. } => ann.is_multiline(),
+            Opaque { typ, .. } => typ.is_multiline(),
             Annotation(loc_pattern, loc_annotation) => {
                 loc_pattern.is_multiline() || loc_annotation.is_multiline()
             }
@@ -46,7 +47,9 @@ impl<'a> Formattable for Def<'a> {
                         indent + INDENT,
                     );
                 } else {
-                    buf.push_str(" : ");
+                    buf.spaces(1);
+                    buf.push_str(":");
+                    buf.spaces(1);
                     loc_annotation.format_with_options(
                         buf,
                         Parens::NotNeeded,
@@ -56,8 +59,12 @@ impl<'a> Formattable for Def<'a> {
                 }
             }
             Alias {
-                header: AliasHeader { name, vars },
+                header: TypeHeader { name, vars },
                 ann,
+            }
+            | Opaque {
+                header: TypeHeader { name, vars },
+                typ: ann,
             } => {
                 buf.indent(indent);
                 buf.push_str(name.value);
@@ -67,7 +74,11 @@ impl<'a> Formattable for Def<'a> {
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
                 }
 
-                buf.push_str(" :");
+                buf.push_str(match self {
+                    Alias { .. } => " :",
+                    Opaque { .. } => " :=",
+                    _ => unreachable!(),
+                });
                 buf.spaces(1);
 
                 ann.format(buf, indent + INDENT)

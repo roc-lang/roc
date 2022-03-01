@@ -16,11 +16,7 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
 ) where
     <T as ExtractSpaces<'a>>::Item: Formattable,
 {
-    buf.indent(indent);
-    let is_multiline =
-        items.iter().any(|item| item.is_multiline()) || !items.final_comments().is_empty();
-
-    if is_multiline {
+    if items.is_multiline() {
         let braces_indent = indent;
         let item_indent = braces_indent + INDENT;
         if newline == Newlines::Yes {
@@ -52,9 +48,11 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
             item_indent,
         );
         buf.newline();
+        buf.indent(braces_indent);
     } else {
         // is_multiline == false
         // there is no comment to add
+        buf.indent(indent);
         buf.push(start);
         let mut iter = items.iter().peekable();
         while let Some(item) = iter.next() {
@@ -69,6 +67,6 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
             buf.spaces(1);
         }
     }
-    buf.indent(indent);
+
     buf.push(end);
 }

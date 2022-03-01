@@ -358,6 +358,66 @@ fn u8_hex_int_alias() {
 }
 
 #[test]
+fn character_literal() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = 'A'
+
+                    x
+                "#
+        ),
+        65,
+        u32
+    );
+}
+
+#[test]
+fn character_literal_back_slash() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = '\\'
+
+                    x
+                "#
+        ),
+        92,
+        u32
+    );
+}
+
+#[test]
+fn character_literal_single_quote() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = '\''
+
+                    x
+                "#
+        ),
+        39,
+        u32
+    );
+}
+
+#[test]
+fn character_literal_new_line() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = '\n'
+
+                    x
+                "#
+        ),
+        10,
+        u32
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dec_float_alias() {
     assert_evals_to!(
@@ -549,8 +609,8 @@ fn i64_abs() {
     assert_evals_to!("Num.abs 1", 1, i64);
     assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
     assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
-    assert_evals_to!("Num.abs Num.maxInt", i64::MAX, i64);
-    assert_evals_to!("Num.abs (Num.minInt + 1)", -(i64::MIN + 1), i64);
+    assert_evals_to!("Num.abs Num.maxI64", i64::MAX, i64);
+    assert_evals_to!("Num.abs (Num.minI64 + 1)", -(i64::MIN + 1), i64);
 }
 
 #[test]
@@ -562,7 +622,7 @@ fn abs_min_int_overflow() {
     assert_evals_to!(
         indoc!(
             r#"
-                Num.abs Num.minInt
+                Num.abs Num.minI64
                 "#
         ),
         0,
@@ -1231,7 +1291,7 @@ fn tail_call_elimination() {
 #[cfg(any(feature = "gen-dev"))]
 fn int_negate_dev() {
     // TODO
-    // dev backend yet to have `Num.maxInt` or `Num.minInt`.
+    // dev backend yet to have `Num.maxI64` or `Num.minI64`.
     // add the "gen-dev" feature to the test below after implementing them both.
     assert_evals_to!("Num.neg 123", -123, i64);
     assert_evals_to!("Num.neg -123", 123, i64);
@@ -1242,8 +1302,8 @@ fn int_negate_dev() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_negate() {
     assert_evals_to!("Num.neg 123", -123, i64);
-    assert_evals_to!("Num.neg Num.maxInt", -i64::MAX, i64);
-    assert_evals_to!("Num.neg (Num.minInt + 1)", i64::MAX, i64);
+    assert_evals_to!("Num.neg Num.maxI64", -i64::MAX, i64);
+    assert_evals_to!("Num.neg (Num.minI64 + 1)", i64::MAX, i64);
 }
 
 #[test]
@@ -1255,7 +1315,7 @@ fn neg_min_int_overflow() {
     assert_evals_to!(
         indoc!(
             r#"
-                Num.neg Num.minInt
+                Num.neg Num.minI64
                 "#
         ),
         0,
@@ -1544,34 +1604,6 @@ fn float_add_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn num_max_int() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.maxInt
-                "#
-        ),
-        i64::MAX,
-        i64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn num_min_int() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.minInt
-                "#
-        ),
-        i64::MIN,
-        i64
-    );
-}
-
-#[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
 fn int_sub_overflow() {
@@ -1633,7 +1665,7 @@ fn int_sub_checked() {
     assert_evals_to!(
         indoc!(
             r#"
-                when Num.subChecked Num.minInt 1 is
+                when Num.subChecked Num.minI64 1 is
                     Err Overflow -> -1
                     Ok v -> v
                 "#
@@ -1737,7 +1769,7 @@ fn int_mul_wrap() {
     assert_evals_to!(
         indoc!(
             r#"
-                Num.mulWrap Num.maxInt 2
+                Num.mulWrap Num.maxI64 2
                 "#
         ),
         -2,
@@ -1763,7 +1795,7 @@ fn int_mul_checked() {
     assert_evals_to!(
         indoc!(
             r#"
-                when Num.mulChecked Num.maxInt 2 is
+                when Num.mulChecked Num.maxI64 2 is
                     Err Overflow -> -1
                     Ok v -> v
                 "#
@@ -1831,6 +1863,20 @@ fn shift_right_zf_by() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_i128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minI128
+                "#
+        ),
+        i128::MIN,
+        i128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn max_i128() {
     assert_evals_to!(
         indoc!(
@@ -1841,6 +1887,431 @@ fn max_i128() {
         i128::MAX,
         i128
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minI64
+                "#
+        ),
+        i64::MIN,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxI64
+                "#
+        ),
+        i64::MAX,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minU64
+                "#
+        ),
+        u64::MIN,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxU64
+                "#
+        ),
+        u64::MAX,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_i32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minI32
+                "#
+        ),
+        i32::MIN,
+        i32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_i32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxI32
+                "#
+        ),
+        i32::MAX,
+        i32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minU32
+                "#
+        ),
+        u32::MIN,
+        u32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxU32
+                "#
+        ),
+        u32::MAX,
+        u32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_i16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minI16
+                "#
+        ),
+        i16::MIN,
+        i16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_i16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxI16
+                "#
+        ),
+        i16::MAX,
+        i16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_u16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minU16
+                "#
+        ),
+        u16::MIN,
+        u16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_u16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxU16
+                "#
+        ),
+        u16::MAX,
+        u16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minI8
+                "#
+        ),
+        i8::MIN,
+        i8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxI8
+                "#
+        ),
+        i8::MAX,
+        i8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_u8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.minU8
+                "#
+        ),
+        u8::MIN,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_u8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Num.maxU8
+                "#
+        ),
+        u8::MAX,
+        u8
+    );
+}
+
+macro_rules! to_int_tests {
+    ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr $(, [ $($support_gen:literal),* ])? )*))*) => {$($(
+        #[test]
+        #[cfg(any(feature = "gen-llvm", $($(feature = $support_gen)*)?))]
+        fn $test_name() {
+            let input = format!("{} {}", $fn, $input);
+            assert_evals_to!(&input, $output, $typ)
+        }
+    )*)*}
+}
+
+to_int_tests! {
+    "Num.toI8", i8, (
+        to_i8_same_width, "15u8", 15, ["gen-wasm"]
+        to_i8_truncate, "115i32", 115, ["gen-wasm"]
+        to_i8_truncate_wraps, "500i32", -12, ["gen-wasm"]
+    )
+    "Num.toI16", i16, (
+        to_i16_same_width, "15u16", 15, ["gen-wasm"]
+        to_i16_extend, "15i8", 15, ["gen-wasm"]
+        to_i16_truncate, "115i32", 115, ["gen-wasm"]
+        to_i16_truncate_wraps, "60000i32", -5536, ["gen-wasm"]
+    )
+    "Num.toI32", i32, (
+        to_i32_same_width, "15u32", 15, ["gen-wasm"]
+        to_i32_extend, "15i8", 15, ["gen-wasm"]
+        to_i32_truncate, "115i64", 115, ["gen-wasm"]
+        to_i32_truncate_wraps, "5000000000i64", 705032704, ["gen-wasm"]
+    )
+    "Num.toI64", i64, (
+        to_i64_same_width, "15u64", 15, ["gen-wasm"]
+        to_i64_extend, "15i8", 15, ["gen-wasm"]
+        to_i64_truncate, "115i128", 115
+        to_i64_truncate_wraps, "10_000_000_000_000_000_000i128", -8446744073709551616
+    )
+    "Num.toI128", i128, (
+        to_i128_same_width, "15u128", 15
+        to_i128_extend, "15i8", 15
+    )
+    "Num.toU8", u8, (
+        to_u8_same_width, "15i8", 15, ["gen-wasm"]
+        to_u8_truncate, "115i32", 115, ["gen-wasm"]
+        to_u8_truncate_wraps, "500i32", 244, ["gen-wasm"]
+    )
+    "Num.toU16", u16, (
+        to_u16_same_width, "15i16", 15, ["gen-wasm"]
+        to_u16_extend, "15i8", 15, ["gen-wasm"]
+        to_u16_truncate, "115i32", 115, ["gen-wasm"]
+        to_u16_truncate_wraps, "600000000i32", 17920, ["gen-wasm"]
+    )
+    "Num.toU32", u32, (
+        to_u32_same_width, "15i32", 15, ["gen-wasm"]
+        to_u32_extend, "15i8", 15, ["gen-wasm"]
+        to_u32_truncate, "115i64", 115, ["gen-wasm"]
+        to_u32_truncate_wraps, "5000000000000000000i64", 1156841472, ["gen-wasm"]
+    )
+    "Num.toU64", u64, (
+        to_u64_same_width, "15i64", 15, ["gen-wasm"]
+        to_u64_extend, "15i8", 15, ["gen-wasm"]
+        to_u64_truncate, "115i128", 115
+        to_u64_truncate_wraps, "10_000_000_000_000_000_000_000i128", 1864712049423024128
+    )
+    "Num.toU128", u128, (
+        to_u128_same_width, "15i128", 15
+        to_u128_extend, "15i8", 15
+    )
+}
+
+macro_rules! to_int_checked_tests {
+    ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr)*))*) => {$($(
+        #[test]
+        #[cfg(any(feature = "gen-llvm"))]
+        fn $test_name() {
+            let sentinel = 23;
+            // Some n = Ok n, None = OutOfBounds
+            let expected = match $output.into() {
+                None => sentinel,
+                Some(n) => {
+                    assert_ne!(n, sentinel);
+                    n
+                }
+            };
+            let input = format!("Result.withDefault ({} {}) {}", $fn, $input, sentinel);
+            assert_evals_to!(&input, expected, $typ)
+        }
+    )*)*}
+}
+
+to_int_checked_tests! {
+    "Num.toI8Checked", i8, (
+        to_i8_checked_same,                             "15i8",    15
+        to_i8_checked_same_width_unsigned_fits,         "15u8",    15
+        to_i8_checked_same_width_unsigned_oob,          "128u8",   None
+        to_i8_checked_larger_width_signed_fits_pos,     "15i16",   15
+        to_i8_checked_larger_width_signed_oob_pos,      "128i16",  None
+        to_i8_checked_larger_width_signed_fits_neg,     "-15i16",  -15
+        to_i8_checked_larger_width_signed_oob_neg,      "-129i16", None
+        to_i8_checked_larger_width_unsigned_fits_pos,   "15u16",   15
+        to_i8_checked_larger_width_unsigned_oob_pos,    "128u16",  None
+    )
+    "Num.toI16Checked", i16, (
+        to_i16_checked_smaller_width_pos,                "15i8",      15
+        to_i16_checked_smaller_width_neg,                "-15i8",     -15
+        to_i16_checked_same,                             "15i16",     15
+        to_i16_checked_same_width_unsigned_fits,         "15u16",     15
+        to_i16_checked_same_width_unsigned_oob,          "32768u16",  None
+        to_i16_checked_larger_width_signed_fits_pos,     "15i32",     15
+        to_i16_checked_larger_width_signed_oob_pos,      "32768i32",  None
+        to_i16_checked_larger_width_signed_fits_neg,     "-15i32",    -15
+        to_i16_checked_larger_width_signed_oob_neg,      "-32769i32", None
+        to_i16_checked_larger_width_unsigned_fits_pos,   "15u32",     15
+        to_i16_checked_larger_width_unsigned_oob_pos,    "32768u32",  None
+    )
+    "Num.toI32Checked", i32, (
+        to_i32_checked_smaller_width_pos,                "15i8",      15
+        to_i32_checked_smaller_width_neg,                "-15i8",     -15
+        to_i32_checked_same,                             "15i32",     15
+        to_i32_checked_same_width_unsigned_fits,         "15u32",     15
+        to_i32_checked_same_width_unsigned_oob,          "2147483648u32",  None
+        to_i32_checked_larger_width_signed_fits_pos,     "15i64",     15
+        to_i32_checked_larger_width_signed_oob_pos,      "2147483648i64",  None
+        to_i32_checked_larger_width_signed_fits_neg,     "-15i64",    -15
+        to_i32_checked_larger_width_signed_oob_neg,      "-2147483649i64", None
+        to_i32_checked_larger_width_unsigned_fits_pos,   "15u64",     15
+        to_i32_checked_larger_width_unsigned_oob_pos,    "2147483648u64",  None
+    )
+    "Num.toI64Checked", i64, (
+        to_i64_checked_smaller_width_pos,                "15i8",      15
+        to_i64_checked_smaller_width_neg,                "-15i8",     -15
+        to_i64_checked_same,                             "15i64",     15
+        to_i64_checked_same_width_unsigned_fits,         "15u64",     15
+        to_i64_checked_same_width_unsigned_oob,          "9223372036854775808u64",  None
+        to_i64_checked_larger_width_signed_fits_pos,     "15i128",     15
+        to_i64_checked_larger_width_signed_oob_pos,      "9223372036854775808i128",  None
+        to_i64_checked_larger_width_signed_fits_neg,     "-15i128",    -15
+        to_i64_checked_larger_width_signed_oob_neg,      "-9223372036854775809i128", None
+        to_i64_checked_larger_width_unsigned_fits_pos,   "15u128",     15
+        to_i64_checked_larger_width_unsigned_oob_pos,    "9223372036854775808u128",  None
+    )
+    "Num.toI128Checked", i128, (
+        to_i128_checked_smaller_width_pos,                "15i8",      15
+        to_i128_checked_smaller_width_neg,                "-15i8",     -15
+        to_i128_checked_same,                             "15i128",     15
+        to_i128_checked_same_width_unsigned_fits,         "15u128",     15
+        to_i128_checked_same_width_unsigned_oob,          "170141183460469231731687303715884105728u128",  None
+    )
+    "Num.toU8Checked", u8, (
+        to_u8_checked_same,                           "15u8",   15
+        to_u8_checked_same_width_signed_fits,         "15i8",   15
+        to_u8_checked_same_width_signed_oob,          "-1i8",   None
+        to_u8_checked_larger_width_signed_fits_pos,   "15i16",  15
+        to_u8_checked_larger_width_signed_oob_pos,    "256i16", None
+        to_u8_checked_larger_width_signed_oob_neg,    "-1i16",  None
+        to_u8_checked_larger_width_unsigned_fits_pos, "15u16",  15
+        to_u8_checked_larger_width_unsigned_oob_pos,  "256u16", None
+    )
+    "Num.toU16Checked", u16, (
+        to_u16_checked_smaller_width_pos,              "15i8",     15
+        to_u16_checked_smaller_width_neg_oob,          "-15i8",    None
+        to_u16_checked_same,                           "15u16",    15
+        to_u16_checked_same_width_signed_fits,         "15i16",    15
+        to_u16_checked_same_width_signed_oob,          "-1i16",    None
+        to_u16_checked_larger_width_signed_fits_pos,   "15i32",    15
+        to_u16_checked_larger_width_signed_oob_pos,    "65536i32", None
+        to_u16_checked_larger_width_signed_oob_neg,    "-1i32",    None
+        to_u16_checked_larger_width_unsigned_fits_pos, "15u32",    15
+        to_u16_checked_larger_width_unsigned_oob_pos,  "65536u32", None
+    )
+    "Num.toU32Checked", u32, (
+        to_u32_checked_smaller_width_pos,              "15i8",     15
+        to_u32_checked_smaller_width_neg_oob,          "-15i8",    None
+        to_u32_checked_same,                           "15u32",    15
+        to_u32_checked_same_width_signed_fits,         "15i32",    15
+        to_u32_checked_same_width_signed_oob,          "-1i32",    None
+        to_u32_checked_larger_width_signed_fits_pos,   "15i64",    15
+        to_u32_checked_larger_width_signed_oob_pos,    "4294967296i64", None
+        to_u32_checked_larger_width_signed_oob_neg,    "-1i64",    None
+        to_u32_checked_larger_width_unsigned_fits_pos, "15u64",    15
+        to_u32_checked_larger_width_unsigned_oob_pos,  "4294967296u64", None
+    )
+    "Num.toU64Checked", u64, (
+        to_u64_checked_smaller_width_pos,              "15i8",     15
+        to_u64_checked_smaller_width_neg_oob,          "-15i8",    None
+        to_u64_checked_same,                           "15u64",    15
+        to_u64_checked_same_width_signed_fits,         "15i64",    15
+        to_u64_checked_same_width_signed_oob,          "-1i64",    None
+        to_u64_checked_larger_width_signed_fits_pos,   "15i128",   15
+        to_u64_checked_larger_width_signed_oob_pos,    "18446744073709551616i128", None
+        to_u64_checked_larger_width_signed_oob_neg,    "-1i128",   None
+        to_u64_checked_larger_width_unsigned_fits_pos, "15u128",   15
+        to_u64_checked_larger_width_unsigned_oob_pos,  "18446744073709551616u128", None
+    )
+    "Num.toU128Checked", u128, (
+        to_u128_checked_smaller_width_pos,             "15i8",     15
+        to_u128_checked_smaller_width_neg_oob,         "-15i8",    None
+        to_u128_checked_same,                          "15u128",   15
+        to_u128_checked_same_width_signed_fits,        "15i128",   15
+        to_u128_checked_same_width_signed_oob,         "-1i128",   None
+    )
 }
 
 #[test]
@@ -2075,29 +2546,21 @@ fn when_on_i16() {
 fn num_to_str() {
     use roc_std::RocStr;
 
-    assert_evals_to!(
-        r#"Num.toStr 1234"#,
-        RocStr::from_slice("1234".as_bytes()),
-        RocStr
-    );
-    assert_evals_to!(r#"Num.toStr 0"#, RocStr::from_slice("0".as_bytes()), RocStr);
-    assert_evals_to!(
-        r#"Num.toStr -1"#,
-        RocStr::from_slice("-1".as_bytes()),
-        RocStr
-    );
+    assert_evals_to!(r#"Num.toStr 1234"#, RocStr::from("1234"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1"#, RocStr::from("-1"), RocStr);
 
     let max = format!("{}", i64::MAX);
     assert_evals_to!(
-        r#"Num.toStr Num.maxInt"#,
-        RocStr::from_slice(max.as_bytes()),
+        r#"Num.toStr Num.maxI64"#,
+        RocStr::from(max.as_str()),
         RocStr
     );
 
     let min = format!("{}", i64::MIN);
     assert_evals_to!(
-        r#"Num.toStr Num.minInt"#,
-        RocStr::from_slice(min.as_bytes()),
+        r#"Num.toStr Num.minI64"#,
+        RocStr::from(min.as_str()),
         RocStr
     );
 }
@@ -2189,5 +2652,132 @@ fn sub_saturated() {
         ),
         0,
         u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_ints() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = 100
+
+            f : U8, U32 -> Nat
+            f = \_, _ -> 18
+
+            f x x
+            "#
+        ),
+        18,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_floats() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = 100.0
+
+            f : F32, F64 -> Nat
+            f = \_, _ -> 18
+
+            f x x
+            "#
+        ),
+        18,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_ints_names_dont_conflict() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f : U8 -> Nat
+            f = \_ -> 9
+            x =
+                n = 100
+                f n
+
+            y =
+                n = 100
+                f n
+
+            x + y
+            "#
+        ),
+        18,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_ints_aliased() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                y = 100
+                w1 = y
+                w2 = y
+
+                f1 : U8, U32 -> U8
+                f1 = \_, _ -> 1
+
+                f2 : U32, U8 -> U8
+                f2 = \_, _ -> 2
+
+                f1 w1 w2 + f2 w1 w2
+            "#
+        ),
+        3,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_float_f32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            n : U8
+            n = 100
+
+            f : F32
+            f = Num.toFloat n
+            f
+            "#
+        ),
+        100.,
+        f32
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_float_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            n : U8
+            n = 100
+
+            f : F64
+            f = Num.toFloat n
+            f
+            "#
+        ),
+        100.,
+        f64
     )
 }

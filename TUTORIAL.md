@@ -6,6 +6,10 @@ and more!
 
 Enjoy!
 
+## Getting started
+
+Learn how to install roc on your machine [here](https://github.com/rtfeldman/roc#getting-started).
+
 ## Strings and Numbers
 
 Let’s start by getting acquainted with Roc’s Read Eval Print Loop, or REPL for
@@ -1546,14 +1550,14 @@ an open record or a closed record:
 ```coffee
 # Closed record
 fullName : { firstName : Str, lastName : Str } -> Str
-fullName = \user - >
+fullName = \user ->
     "\(user.firstName) \(user.lastName)"
 ```
 
 ```coffee
 # Open record (because of the `*`)
 fullName : { firstName : Str, lastName : Str }* -> Str
-fullName = \user - >
+fullName = \user ->
     "\(user.firstName) \(user.lastName)"
 ```
 
@@ -1619,12 +1623,11 @@ If you like, you can always annotate your functions as accepting open records. H
 always be the nicest choice. For example, let's say you have a `User` type alias, like so:
 
 ```coffee
-User :
-    {
-        email : Str,
-        firstName : Str,
-        lastName : Str,
-    }
+User : {
+    email : Str,
+    firstName : Str,
+    lastName : Str,
+}
 ```
 
 This defines `User` to be a closed record, which in practice is the most common way records named `User`
@@ -1657,12 +1660,11 @@ Since open records have a type variable (like `*` in `{ email : Str }*` or `a` i
 type variable to the `User` type alias:
 
 ```coffee
-User a :
-    {
-        email : Str,
-        firstName : Str,
-        lastName : Str,
-    }a
+User a : {
+    email : Str,
+    firstName : Str,
+    lastName : Str,
+}a
 ```
 
 Notice that the `a` type variable appears not only in `User a` but also in `}a` at the end of the

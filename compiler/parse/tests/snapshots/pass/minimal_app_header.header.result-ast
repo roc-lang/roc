@@ -6,6 +6,7 @@ App {
         packages: [],
         imports: [],
         provides: [],
+        provides_types: None,
         to: @30-38 NewPackage(
             PackageName(
                 "./blah",

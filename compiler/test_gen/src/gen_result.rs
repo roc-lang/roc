@@ -34,7 +34,7 @@ fn with_default() {
         indoc!(
             r#"
             result : Result I64 {}
-            result = Err {} 
+            result = Err {}
 
             Result.withDefault result 0
             "#
@@ -66,7 +66,7 @@ fn result_map() {
         indoc!(
             r#"
             result : Result I64 {}
-            result = Err {} 
+            result = Err {}
 
             result
                 |> Result.map (\x -> x + 1)
@@ -230,7 +230,7 @@ fn roc_result_ok() {
         indoc!(
             r#"
             result : Result I64 {}
-            result = Ok 42 
+            result = Ok 42
 
             result
             "#
@@ -246,13 +246,13 @@ fn roc_result_err() {
     assert_evals_to!(
         indoc!(
             r#"
-            result : Result I64 Str 
+            result : Result I64 Str
             result = Err "foo"
 
             result
             "#
         ),
-        RocResult::err(RocStr::from_slice(b"foo")),
+        RocResult::err(RocStr::from("foo")),
         RocResult<i64, RocStr>
     );
 }

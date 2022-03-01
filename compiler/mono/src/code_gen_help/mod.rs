@@ -1,9 +1,9 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_builtins::bitcode::IntWidth;
 use roc_module::ident::Ident;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_target::TargetInfo;
 
 use crate::ir::{
     Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
@@ -15,7 +15,7 @@ mod equality;
 mod refcount;
 
 const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
-const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
+const LAYOUT_UNIT: Layout = Layout::UNIT;
 
 const ARG_1: Symbol = Symbol::ARG_1;
 const ARG_2: Symbol = Symbol::ARG_2;
@@ -74,19 +74,19 @@ pub struct Context<'a> {
 pub struct CodeGenHelp<'a> {
     arena: &'a Bump,
     home: ModuleId,
-    ptr_size: u32,
+    target_info: TargetInfo,
     layout_isize: Layout<'a>,
     specializations: Vec<'a, Specialization<'a>>,
     debug_recursion_depth: usize,
 }
 
 impl<'a> CodeGenHelp<'a> {
-    pub fn new(arena: &'a Bump, intwidth_isize: IntWidth, home: ModuleId) -> Self {
+    pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
         CodeGenHelp {
             arena,
             home,
-            ptr_size: intwidth_isize.stack_size(),
-            layout_isize: Layout::Builtin(Builtin::Int(intwidth_isize)),
+            target_info,
+            layout_isize: Layout::usize(target_info),
             specializations: Vec::with_capacity_in(16, arena),
             debug_recursion_depth: 0,
         }
@@ -194,10 +194,11 @@ impl<'a> CodeGenHelp<'a> {
             let proc_name = self.find_or_create_proc(ident_ids, ctx, layout);
 
             let (ret_layout, arg_layouts): (&'a Layout<'a>, &'a [Layout<'a>]) = {
+                let arg = self.replace_rec_ptr(ctx, layout);
                 match ctx.op {
-                    Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([layout])),
-                    Inc => (&LAYOUT_UNIT, self.arena.alloc([layout, self.layout_isize])),
-                    Eq => (&LAYOUT_BOOL, self.arena.alloc([layout, layout])),
+                    Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([arg])),
+                    Inc => (&LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
+                    Eq => (&LAYOUT_BOOL, self.arena.alloc([arg, arg])),
                 }
             };
 
@@ -354,9 +355,15 @@ impl<'a> CodeGenHelp<'a> {
 
             Layout::Builtin(_) => layout,
 
-            Layout::Struct(fields) => {
-                let new_fields_iter = fields.iter().map(|f| self.replace_rec_ptr(ctx, *f));
-                Layout::Struct(self.arena.alloc_slice_fill_iter(new_fields_iter))
+            Layout::Struct {
+                field_layouts,
+                field_order_hash,
+            } => {
+                let new_fields_iter = field_layouts.iter().map(|f| self.replace_rec_ptr(ctx, *f));
+                Layout::Struct {
+                    field_layouts: self.arena.alloc_slice_fill_iter(new_fields_iter),
+                    field_order_hash,
+                }
             }
 
             Layout::Union(UnionLayout::NonRecursive(tags)) => {
@@ -462,7 +469,7 @@ fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
 
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_)) => true,
 
-        Layout::Struct(fields) => !fields.is_empty(),
+        Layout::Struct { field_layouts, .. } => !field_layouts.is_empty(),
 
         Layout::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
 

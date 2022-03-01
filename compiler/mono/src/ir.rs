@@ -1,6 +1,5 @@
 #![allow(clippy::manual_map)]
 
-use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
     RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
@@ -8,37 +7,53 @@ use crate::layout::{
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_can::expr::ClosureData;
+use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
+use roc_exhaustive::{Ctor, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
+use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
+pub fn pretty_print_ir_symbols() -> bool {
+    #[cfg(debug_assertions)]
+    if std::env::var("PRETTY_PRINT_IR_SYMBOLS") == Ok("1".into()) {
+        return true;
+    }
+    false
+}
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
 
 // i128 alignment is different on arm
-#[cfg(target_arch = "aarch64")]
-static_assertions::assert_eq_size!([u8; 4 * 8], Literal);
-#[cfg(not(target_arch = "aarch64"))]
-static_assertions::assert_eq_size!([u8; 3 * 8], Literal);
-static_assertions::assert_eq_size!([u8; 10 * 8], Expr);
-#[cfg(not(target_arch = "aarch64"))]
-static_assertions::assert_eq_size!([u8; 19 * 8], Stmt);
-#[cfg(target_arch = "aarch64")]
-static_assertions::assert_eq_size!([u8; 20 * 8], Stmt);
-static_assertions::assert_eq_size!([u8; 6 * 8], ProcLayout);
-static_assertions::assert_eq_size!([u8; 7 * 8], Call);
-static_assertions::assert_eq_size!([u8; 5 * 8], CallType);
+roc_error_macros::assert_sizeof_aarch64!(Literal, 4 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Expr, 10 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Stmt, 20 * 8);
+roc_error_macros::assert_sizeof_aarch64!(ProcLayout, 6 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Call, 7 * 8);
+roc_error_macros::assert_sizeof_aarch64!(CallType, 5 * 8);
+
+roc_error_macros::assert_sizeof_wasm!(Literal, 24);
+roc_error_macros::assert_sizeof_wasm!(Expr, 56);
+roc_error_macros::assert_sizeof_wasm!(Stmt, 120);
+roc_error_macros::assert_sizeof_wasm!(ProcLayout, 32);
+roc_error_macros::assert_sizeof_wasm!(Call, 40);
+roc_error_macros::assert_sizeof_wasm!(CallType, 32);
+
+roc_error_macros::assert_sizeof_default!(Literal, 3 * 8);
+roc_error_macros::assert_sizeof_default!(Expr, 10 * 8);
+roc_error_macros::assert_sizeof_default!(Stmt, 19 * 8);
+roc_error_macros::assert_sizeof_default!(ProcLayout, 6 * 8);
+roc_error_macros::assert_sizeof_default!(Call, 7 * 8);
+roc_error_macros::assert_sizeof_default!(CallType, 5 * 8);
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -74,12 +89,13 @@ macro_rules! return_on_layout_error_help {
 pub enum OptLevel {
     Development,
     Normal,
+    Size,
     Optimize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MonoProblem {
-    PatternProblem(crate::exhaustive::Error),
+    PatternProblem(roc_exhaustive::Error),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -201,6 +217,72 @@ impl<'a> PartialProc<'a> {
     }
 }
 
+#[derive(Clone, Debug)]
+enum PartialExprLink {
+    Aliases(Symbol),
+    Expr(roc_can::expr::Expr, Variable),
+}
+
+/// A table of symbols to polymorphic expressions. For example, in the program
+///
+///   n = 1
+///
+///   asU8 : U8 -> U8
+///   asU8 = \_ -> 1
+///
+///   asU32 : U32 -> U8
+///   asU32 = \_ -> 1
+///
+///   asU8 n + asU32 n
+///
+/// The expression bound by `n` doesn't have a definite layout until it is used
+/// at the call sites `asU8 n`, `asU32 n`.
+///
+/// Polymorphic *functions* are stored in `PartialProc`s, since functions are
+/// non longer first-class once we finish lowering to the IR.
+#[derive(Clone, Debug)]
+struct PartialExprs(BumpMap<Symbol, PartialExprLink>);
+
+impl PartialExprs {
+    fn new_in(arena: &Bump) -> Self {
+        Self(BumpMap::new_in(arena))
+    }
+
+    fn insert(&mut self, symbol: Symbol, expr: roc_can::expr::Expr, expr_var: Variable) {
+        self.0.insert(symbol, PartialExprLink::Expr(expr, expr_var));
+    }
+
+    fn insert_alias(&mut self, symbol: Symbol, aliases: Symbol) {
+        self.0.insert(symbol, PartialExprLink::Aliases(aliases));
+    }
+
+    fn contains(&self, symbol: Symbol) -> bool {
+        self.0.contains_key(&symbol)
+    }
+
+    fn get(&mut self, mut symbol: Symbol) -> Option<(&roc_can::expr::Expr, Variable)> {
+        // In practice the alias chain is very short
+        loop {
+            match self.0.get(&symbol) {
+                None => {
+                    return None;
+                }
+                Some(&PartialExprLink::Aliases(real_symbol)) => {
+                    symbol = real_symbol;
+                }
+                Some(PartialExprLink::Expr(expr, var)) => {
+                    return Some((expr, *var));
+                }
+            }
+        }
+    }
+
+    fn remove(&mut self, symbol: Symbol) {
+        debug_assert!(self.contains(symbol));
+        self.0.remove(&symbol);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CapturedSymbols<'a> {
     None,
@@ -268,7 +350,7 @@ impl<'a> Proc<'a> {
             .iter()
             .map(|(_, symbol)| symbol_to_doc(alloc, *symbol));
 
-        if PRETTY_PRINT_IR_SYMBOLS {
+        if pretty_print_ir_symbols() {
             alloc
                 .text("procedure : ")
                 .append(symbol_to_doc(alloc, self.name))
@@ -662,6 +744,7 @@ impl<'a> Specialized<'a> {
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
+    partial_exprs: PartialExprs,
     pub imported_module_thunks: &'a [Symbol],
     pub module_thunks: &'a [Symbol],
     pending_specializations: PendingSpecializations<'a>,
@@ -674,6 +757,7 @@ impl<'a> Procs<'a> {
     pub fn new_in(arena: &'a Bump) -> Self {
         Self {
             partial_procs: PartialProcs::new_in(arena),
+            partial_exprs: PartialExprs::new_in(arena),
             imported_module_thunks: &[],
             module_thunks: &[],
             pending_specializations: PendingSpecializations::Finding(Suspended::new_in(arena)),
@@ -732,14 +816,18 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<ProcLayout<'a>, RuntimeError> {
-        // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
-        let is_self_recursive = false;
-
         let raw_layout = layout_cache
             .raw_from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
         let top_level = ProcLayout::from_raw(env.arena, raw_layout);
+
+        // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
+        // EXCEPT when the closure conversion makes it tail-recursive.
+        let is_self_recursive = match top_level.arguments.last() {
+            Some(Layout::LambdaSet(lambda_set)) => lambda_set.contains(symbol),
+            _ => false,
+        };
 
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
@@ -993,7 +1081,7 @@ pub struct Env<'a, 'i> {
     pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
-    pub ptr_bytes: u32,
+    pub target_info: TargetInfo,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
 }
@@ -1038,7 +1126,7 @@ impl<'a> Param<'a> {
     pub const EMPTY: Self = Param {
         symbol: Symbol::EMPTY_PARAM,
         borrow: false,
-        layout: Layout::Struct(&[]),
+        layout: Layout::UNIT,
     };
 }
 
@@ -1119,7 +1207,7 @@ impl<'a> BranchInfo<'a> {
                 tag_id,
                 scrutinee,
                 layout: _,
-            } if PRETTY_PRINT_IR_SYMBOLS => alloc
+            } if pretty_print_ir_symbols() => alloc
                 .hardline()
                 .append("    BranchInfo: { scrutinee: ")
                 .append(symbol_to_doc(alloc, *scrutinee))
@@ -1128,7 +1216,7 @@ impl<'a> BranchInfo<'a> {
                 .append("} "),
 
             _ => {
-                if PRETTY_PRINT_IR_SYMBOLS {
+                if pretty_print_ir_symbols() {
                     alloc.text(" <no branch info>")
                 } else {
                     alloc.text("")
@@ -1199,6 +1287,7 @@ impl ModifyRc {
 pub enum Literal<'a> {
     // Literals
     Int(i128),
+    U128(u128),
     Float(f64),
     Decimal(RocDec),
     Str(&'a str),
@@ -1445,6 +1534,7 @@ impl<'a> Literal<'a> {
 
         match self {
             Int(lit) => alloc.text(format!("{}i64", lit)),
+            U128(lit) => alloc.text(format!("{}u128", lit)),
             Float(lit) => alloc.text(format!("{}f64", lit)),
             // TODO: Add proper Dec.to_str
             Decimal(lit) => alloc.text(format!("{}Dec", lit.0)),
@@ -1455,26 +1545,30 @@ impl<'a> Literal<'a> {
     }
 }
 
+pub(crate) fn symbol_to_doc_string(symbol: Symbol) -> String {
+    use roc_module::ident::ModuleName;
+
+    if pretty_print_ir_symbols() {
+        format!("{:?}", symbol)
+    } else {
+        let text = format!("{}", symbol);
+
+        if text.starts_with(ModuleName::APP) {
+            let name: String = text.trim_start_matches(ModuleName::APP).into();
+            format!("Test{}", name)
+        } else {
+            text
+        }
+    }
+}
+
 fn symbol_to_doc<'b, D, A>(alloc: &'b D, symbol: Symbol) -> DocBuilder<'b, D, A>
 where
     D: DocAllocator<'b, A>,
     D::Doc: Clone,
     A: Clone,
 {
-    use roc_module::ident::ModuleName;
-
-    if PRETTY_PRINT_IR_SYMBOLS {
-        alloc.text(format!("{:?}", symbol))
-    } else {
-        let text = format!("{}", symbol);
-
-        if text.starts_with(ModuleName::APP) {
-            let name: String = text.trim_start_matches(ModuleName::APP).into();
-            alloc.text("Test").append(name)
-        } else {
-            alloc.text(text)
-        }
-    }
+    alloc.text(symbol_to_doc_string(symbol))
 }
 
 fn join_point_to_doc<'b, D, A>(alloc: &'b D, symbol: JoinPointId) -> DocBuilder<'b, D, A>
@@ -1632,19 +1726,16 @@ impl<'a> Stmt<'a> {
         use Stmt::*;
 
         match self {
-            Let(symbol, expr, layout, cont) => {
-                let mut doc = alloc.text("let ").append(symbol_to_doc(alloc, *symbol));
-                if PRETTY_PRINT_IR_SYMBOLS {
-                    doc = doc
-                        .append(" : ")
-                        .append(alloc.text(format!("{:?}", layout)));
-                }
-                doc.append(" = ")
-                    .append(expr.to_doc(alloc))
-                    .append(";")
-                    .append(alloc.hardline())
-                    .append(cont.to_doc(alloc))
-            }
+            Let(symbol, expr, layout, cont) => alloc
+                .text("let ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(" : ")
+                .append(layout.to_doc(alloc, Parens::NotNeeded))
+                .append(" = ")
+                .append(expr.to_doc(alloc))
+                .append(";")
+                .append(alloc.hardline())
+                .append(cont.to_doc(alloc)),
 
             Refcounting(modify, cont) => modify
                 .to_doc(alloc)
@@ -1804,35 +1895,11 @@ fn patterns_to_when<'a>(
     // see https://github.com/rtfeldman/roc/issues/786
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
     for (pattern_var, pattern) in patterns.into_iter() {
-        let context = crate::exhaustive::Context::BadArg;
+        let context = roc_exhaustive::Context::BadArg;
         let mono_pattern = match from_can_pattern(env, layout_cache, &pattern.value) {
-            Ok((pat, assignments)) => {
-                for (symbol, variable, expr) in assignments.into_iter().rev() {
-                    if let Ok(old_body) = body {
-                        let def = roc_can::def::Def {
-                            annotation: None,
-                            expr_var: variable,
-                            loc_expr: Loc::at(pattern.region, expr),
-                            loc_pattern: Loc::at(
-                                pattern.region,
-                                roc_can::pattern::Pattern::Identifier(symbol),
-                            ),
-                            pattern_vars: std::iter::once((symbol, variable)).collect(),
-                        };
-                        let new_expr = roc_can::expr::Expr::LetNonRec(
-                            Box::new(def),
-                            Box::new(old_body),
-                            variable,
-                        );
-                        let new_body = Loc {
-                            region: pattern.region,
-                            value: new_expr,
-                        };
-
-                        body = Ok(new_body);
-                    }
-                }
-
+            Ok((pat, _assignments)) => {
+                // Don't apply any assignments (e.g. to initialize optional variables) yet.
+                // We'll take care of that later when expanding the new "when" branch.
                 pat
             }
             Err(runtime_error) => {
@@ -1854,7 +1921,7 @@ fn patterns_to_when<'a>(
             pattern.region,
             &[(
                 Loc::at(pattern.region, mono_pattern),
-                crate::exhaustive::Guard::NoGuard,
+                roc_exhaustive::Guard::NoGuard,
             )],
             context,
         ) {
@@ -1925,12 +1992,12 @@ fn pattern_to_when<'a>(
             // for underscore we generate a dummy Symbol
             (env.unique_symbol(), body)
         }
-        Shadowed(region, loc_ident) => {
+        Shadowed(region, loc_ident, new_symbol) => {
             let error = roc_problem::can::RuntimeError::Shadowing {
                 original_region: *region,
                 shadow: loc_ident.clone(),
             };
-            (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
+            (*new_symbol, Loc::at_zero(RuntimeError(error)))
         }
 
         UnsupportedPattern(region) => {
@@ -1946,7 +2013,14 @@ fn pattern_to_when<'a>(
             (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
         }
 
-        AppliedTag { .. } | RecordDestructure { .. } => {
+        OpaqueNotInScope(loc_ident) => {
+            // create the runtime error here, instead of delegating to When.
+            // TODO(opaques) should be `RuntimeError::OpaqueNotDefined`
+            let error = roc_problem::can::RuntimeError::UnsupportedPattern(loc_ident.region);
+            (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
+        }
+
+        AppliedTag { .. } | RecordDestructure { .. } | UnwrappedOpaque { .. } => {
             let symbol = env.unique_symbol();
 
             let wrapped_body = When {
@@ -1964,7 +2038,11 @@ fn pattern_to_when<'a>(
             (symbol, Loc::at_zero(wrapped_body))
         }
 
-        IntLiteral(_, _, _) | NumLiteral(_, _, _) | FloatLiteral(_, _, _) | StrLiteral(_) => {
+        IntLiteral(..)
+        | NumLiteral(..)
+        | FloatLiteral(..)
+        | StrLiteral(..)
+        | roc_can::pattern::Pattern::SingleQuote(..) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -2234,7 +2312,7 @@ fn specialize_external<'a>(
         env.subs,
         partial_proc.annotation,
         fn_var,
-        roc_unify::unify::Mode::Eq,
+        roc_unify::unify::Mode::EQ,
     );
 
     // This will not hold for programs with type errors
@@ -2370,7 +2448,7 @@ fn specialize_external<'a>(
 
             let closure_data_layout = match opt_closure_layout {
                 Some(lambda_set) => Layout::LambdaSet(lambda_set),
-                None => Layout::Struct(&[]),
+                None => Layout::UNIT,
             };
 
             // I'm not sure how to handle the closure case, does it ever occur?
@@ -2416,7 +2494,7 @@ fn specialize_external<'a>(
                                 env.arena,
                             );
 
-                            let ptr_bytes = env.ptr_bytes;
+                            let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
                                 let size1 = layout1.alignment_bytes(ptr_bytes);
@@ -2449,7 +2527,7 @@ fn specialize_external<'a>(
                                 env.arena,
                             );
 
-                            let ptr_bytes = env.ptr_bytes;
+                            let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
                                 let size1 = layout1.alignment_bytes(ptr_bytes);
@@ -2883,8 +2961,7 @@ fn specialize_naked_symbol<'a>(
     symbol: Symbol,
 ) -> Stmt<'a> {
     if procs.is_module_thunk(symbol) {
-        let partial_proc = procs.get_partial_proc(symbol).unwrap();
-        let fn_var = partial_proc.annotation;
+        let fn_var = variable;
 
         // This is a top-level declaration, which will code gen to a 0-arity thunk.
         let result = call_by_name(
@@ -2953,15 +3030,18 @@ fn try_make_literal<'a>(
     use roc_can::expr::Expr::*;
 
     match can_expr {
-        Int(_, precision, _, int) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *precision, false) {
-                IntOrFloat::Int(_) => Some(Literal::Int(*int)),
+        Int(_, precision, _, int, _bound) => {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *precision, false) {
+                IntOrFloat::Int(_) => Some(match *int {
+                    IntValue::I128(n) => Literal::Int(n),
+                    IntValue::U128(n) => Literal::U128(n),
+                }),
                 _ => unreachable!("unexpected float precision for integer"),
             }
         }
 
-        Float(_, precision, float_str, float) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *precision, true) {
+        Float(_, precision, float_str, float, _bound) => {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *precision, true) {
                 IntOrFloat::Float(_) => Some(Literal::Float(*float)),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(float_str) {
@@ -2980,11 +3060,17 @@ fn try_make_literal<'a>(
 
         // TODO investigate lifetime trouble
         // Str(string) => Some(Literal::Str(env.arena.alloc(string))),
-        Num(var, num_str, num) => {
+        Num(var, num_str, num, _bound) => {
             // first figure out what kind of number this is
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                IntOrFloat::Int(_) => Some(Literal::Int((*num).into())),
-                IntOrFloat::Float(_) => Some(Literal::Float(*num as f64)),
+            match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
+                IntOrFloat::Int(_) => Some(match *num {
+                    IntValue::I128(n) => Literal::Int(n),
+                    IntValue::U128(n) => Literal::U128(n),
+                }),
+                IntOrFloat::Float(_) => Some(match *num {
+                    IntValue::I128(n) => Literal::Float(n as f64),
+                    IntValue::U128(n) => Literal::Float(n as f64),
+                }),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
                         Some(d) => d,
@@ -3016,11 +3102,14 @@ pub fn with_hole<'a>(
     let arena = env.arena;
 
     match can_expr {
-        Int(_, precision, _, int) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, false) {
+        Int(_, precision, _, int, _bound) => {
+            match num_argument_to_int_or_float(env.subs, env.target_info, precision, false) {
                 IntOrFloat::Int(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(int)),
+                    Expr::Literal(match int {
+                        IntValue::I128(n) => Literal::Int(n),
+                        IntValue::U128(n) => Literal::U128(n),
+                    }),
                     Layout::Builtin(Builtin::Int(precision)),
                     hole,
                 ),
@@ -3028,8 +3117,8 @@ pub fn with_hole<'a>(
             }
         }
 
-        Float(_, precision, float_str, float) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, true) {
+        Float(_, precision, float_str, float, _bound) => {
+            match num_argument_to_int_or_float(env.subs, env.target_info, precision, true) {
                 IntOrFloat::Float(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Float(float)),
@@ -3059,18 +3148,31 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Num(var, num_str, num) => {
+        SingleQuote(character) => Stmt::Let(
+            assigned,
+            Expr::Literal(Literal::Int(character as _)),
+            Layout::int_width(IntWidth::I32),
+            hole,
+        ),
+
+        Num(var, num_str, num, _bound) => {
             // first figure out what kind of number this is
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, var, false) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, var, false) {
                 IntOrFloat::Int(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(num.into())),
+                    Expr::Literal(match num {
+                        IntValue::I128(n) => Literal::Int(n),
+                        IntValue::U128(n) => Literal::U128(n),
+                    }),
                     Layout::int_width(precision),
                     hole,
                 ),
                 IntOrFloat::Float(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Float(num as f64)),
+                    Expr::Literal(match num {
+                        IntValue::I128(n) => Literal::Float(n as f64),
+                        IntValue::U128(n) => Literal::Float(n as f64),
+                    }),
                     Layout::float_width(precision),
                     hole,
                 ),
@@ -3120,16 +3222,20 @@ pub fn with_hole<'a>(
                     _ => {}
                 }
 
-                // continue with the default path
-                let mut stmt = with_hole(
-                    env,
-                    cont.value,
-                    variable,
-                    procs,
-                    layout_cache,
-                    assigned,
-                    hole,
-                );
+                let build_rest =
+                    |env: &mut Env<'a, '_>,
+                     procs: &mut Procs<'a>,
+                     layout_cache: &mut LayoutCache<'a>| {
+                        with_hole(
+                            env,
+                            cont.value,
+                            variable,
+                            procs,
+                            layout_cache,
+                            assigned,
+                            hole,
+                        )
+                    };
 
                 // a variable is aliased
                 if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
@@ -3141,18 +3247,17 @@ pub fn with_hole<'a>(
                     //
                     //  foo = RBTRee.empty
 
-                    stmt = handle_variable_aliasing(
+                    handle_variable_aliasing(
                         env,
                         procs,
                         layout_cache,
                         def.expr_var,
                         symbol,
                         original,
-                        stmt,
-                    );
-
-                    stmt
+                        build_rest,
+                    )
                 } else {
+                    let rest = build_rest(env, procs, layout_cache);
                     with_hole(
                         env,
                         def.loc_expr.value,
@@ -3160,7 +3265,7 @@ pub fn with_hole<'a>(
                         procs,
                         layout_cache,
                         symbol,
-                        env.arena.alloc(stmt),
+                        env.arena.alloc(rest),
                     )
                 }
             } else {
@@ -3174,12 +3279,12 @@ pub fn with_hole<'a>(
                         }
                     };
 
-                let context = crate::exhaustive::Context::BadDestruct;
+                let context = roc_exhaustive::Context::BadDestruct;
                 match crate::exhaustive::check(
                     def.loc_pattern.region,
                     &[(
                         Loc::at(def.loc_pattern.region, mono_pattern.clone()),
-                        crate::exhaustive::Guard::NoGuard,
+                        roc_exhaustive::Guard::NoGuard,
                     )],
                     context,
                 ) {
@@ -3326,6 +3431,19 @@ pub fn with_hole<'a>(
             }
         }
 
+        OpaqueRef { argument, .. } => {
+            let (arg_var, loc_arg_expr) = *argument;
+            with_hole(
+                env,
+                loc_arg_expr.value,
+                arg_var,
+                procs,
+                layout_cache,
+                assigned,
+                hole,
+            )
+        }
+
         Record {
             record_var,
             mut fields,
@@ -3335,7 +3453,7 @@ pub fn with_hole<'a>(
                 env.arena,
                 record_var,
                 env.subs,
-                env.ptr_bytes,
+                env.target_info,
             ) {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't create record with improper layout"),
@@ -3344,7 +3462,9 @@ pub fn with_hole<'a>(
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
 
+            #[allow(clippy::enum_variant_names)]
             enum Field {
+                // TODO: rename this since it can handle unspecialized expressions now too
                 Function(Symbol, Variable),
                 ValueSymbol,
                 Field(roc_can::expr::Field),
@@ -3355,7 +3475,7 @@ pub fn with_hole<'a>(
                 use ReuseSymbol::*;
                 match fields.remove(&label) {
                     Some(field) => match can_reuse_symbol(env, procs, &field.loc_expr.value) {
-                        Imported(symbol) | LocalFunction(symbol) => {
+                        Imported(symbol) | LocalFunction(symbol) | UnspecializedExpr(symbol) => {
                             field_symbols.push(symbol);
                             can_fields.push(Field::Function(symbol, variable));
                         }
@@ -3695,7 +3815,7 @@ pub fn with_hole<'a>(
                 env.arena,
                 record_var,
                 env.subs,
-                env.ptr_bytes,
+                env.target_info,
             ) {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't access record with improper layout"),
@@ -3811,9 +3931,16 @@ pub fn with_hole<'a>(
                     );
 
                     match raw_layout {
-                        RawFunctionLayout::Function(_, lambda_set, _) => {
-                            construct_closure_data(env, lambda_set, name, &[], assigned, hole)
-                        }
+                        RawFunctionLayout::Function(_, lambda_set, _) => construct_closure_data(
+                            env,
+                            procs,
+                            layout_cache,
+                            lambda_set,
+                            name,
+                            &[],
+                            assigned,
+                            hole,
+                        ),
                         RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
                     }
                 }
@@ -3845,7 +3972,7 @@ pub fn with_hole<'a>(
                 env.arena,
                 record_var,
                 env.subs,
-                env.ptr_bytes,
+                env.target_info,
             ) {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't update record with improper layout"),
@@ -3890,7 +4017,7 @@ pub fn with_hole<'a>(
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let field_layouts = match &record_layout {
-                Layout::Struct(layouts) => *layouts,
+                Layout::Struct { field_layouts, .. } => *field_layouts,
                 other => arena.alloc([*other]),
             };
 
@@ -3946,13 +4073,36 @@ pub fn with_hole<'a>(
                             );
                         }
                         CopyExisting(index) => {
+                            let record_needs_specialization =
+                                procs.partial_exprs.contains(structure);
+                            let specialized_structure_sym = if record_needs_specialization {
+                                // We need to specialize the record now; create a new one for it.
+                                // TODO: reuse this symbol for all updates
+                                env.unique_symbol()
+                            } else {
+                                // The record is already good.
+                                structure
+                            };
+
                             let access_expr = Expr::StructAtIndex {
-                                structure,
+                                structure: specialized_structure_sym,
                                 index,
                                 field_layouts,
                             };
                             stmt =
                                 Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
+
+                            if record_needs_specialization {
+                                stmt = reuse_function_symbol(
+                                    env,
+                                    procs,
+                                    layout_cache,
+                                    Some(record_var),
+                                    specialized_structure_sym,
+                                    stmt,
+                                    structure,
+                                );
+                            }
                         }
                     }
                 }
@@ -4007,10 +4157,18 @@ pub fn with_hole<'a>(
                     // define the closure data
 
                     let symbols =
-                        Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
-                            .into_bump_slice();
+                        Vec::from_iter_in(captured_symbols.iter(), env.arena).into_bump_slice();
 
-                    construct_closure_data(env, lambda_set, name, symbols, assigned, hole)
+                    construct_closure_data(
+                        env,
+                        procs,
+                        layout_cache,
+                        lambda_set,
+                        name,
+                        symbols,
+                        assigned,
+                        hole,
+                    )
                 }
             }
         }
@@ -4134,6 +4292,49 @@ pub fn with_hole<'a>(
                                     assigned,
                                     hole,
                                 );
+                            }
+                            RawFunctionLayout::ZeroArgumentThunk(_) => {
+                                unreachable!("calling a non-closure layout")
+                            }
+                        },
+                        UnspecializedExpr(symbol) => match full_layout {
+                            RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
+                                let closure_data_symbol = env.unique_symbol();
+
+                                result = match_on_lambda_set(
+                                    env,
+                                    lambda_set,
+                                    closure_data_symbol,
+                                    arg_symbols,
+                                    arg_layouts,
+                                    ret_layout,
+                                    assigned,
+                                    hole,
+                                );
+
+                                let (lambda_expr, lambda_expr_var) =
+                                    procs.partial_exprs.get(symbol).unwrap();
+
+                                let snapshot = env.subs.snapshot();
+                                let cache_snapshot = layout_cache.snapshot();
+                                let _unified = roc_unify::unify::unify(
+                                    env.subs,
+                                    fn_var,
+                                    lambda_expr_var,
+                                    roc_unify::unify::Mode::EQ,
+                                );
+
+                                result = with_hole(
+                                    env,
+                                    lambda_expr.clone(),
+                                    fn_var,
+                                    procs,
+                                    layout_cache,
+                                    closure_data_symbol,
+                                    env.arena.alloc(result),
+                                );
+                                env.subs.rollback_to(snapshot);
+                                layout_cache.rollback_to(cache_snapshot);
                             }
                             RawFunctionLayout::ZeroArgumentThunk(_) => {
                                 unreachable!("calling a non-closure layout")
@@ -4459,17 +4660,20 @@ pub fn with_hole<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn construct_closure_data<'a>(
     env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
     lambda_set: LambdaSet<'a>,
     name: Symbol,
-    symbols: &'a [Symbol],
+    symbols: &'a [&(Symbol, Variable)],
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let lambda_set_layout = Layout::LambdaSet(lambda_set);
 
-    match lambda_set.layout_for_member(name) {
+    let mut result = match lambda_set.layout_for_member(name) {
         ClosureRepresentation::Union {
             tag_id,
             alphabetic_order_fields: field_layouts,
@@ -4478,10 +4682,12 @@ fn construct_closure_data<'a>(
         } => {
             // captured variables are in symbol-alphabetic order, but now we want
             // them ordered by their alignment requirements
-            let mut combined =
-                Vec::from_iter_in(symbols.iter().zip(field_layouts.iter()), env.arena);
+            let mut combined = Vec::from_iter_in(
+                symbols.iter().map(|&&(s, _)| s).zip(field_layouts.iter()),
+                env.arena,
+            );
 
-            let ptr_bytes = env.ptr_bytes;
+            let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
                 let size1 = layout1.alignment_bytes(ptr_bytes);
@@ -4491,7 +4697,7 @@ fn construct_closure_data<'a>(
             });
 
             let symbols =
-                Vec::from_iter_in(combined.iter().map(|(a, _)| **a), env.arena).into_bump_slice();
+                Vec::from_iter_in(combined.iter().map(|(a, _)| *a), env.arena).into_bump_slice();
 
             let expr = Expr::Tag {
                 tag_id,
@@ -4507,10 +4713,12 @@ fn construct_closure_data<'a>(
 
             // captured variables are in symbol-alphabetic order, but now we want
             // them ordered by their alignment requirements
-            let mut combined =
-                Vec::from_iter_in(symbols.iter().zip(field_layouts.iter()), env.arena);
+            let mut combined = Vec::from_iter_in(
+                symbols.iter().map(|&(s, _)| s).zip(field_layouts.iter()),
+                env.arena,
+            );
 
-            let ptr_bytes = env.ptr_bytes;
+            let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
                 let size1 = layout1.alignment_bytes(ptr_bytes);
@@ -4525,7 +4733,7 @@ fn construct_closure_data<'a>(
                 Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
 
             debug_assert_eq!(
-                Layout::Struct(field_layouts),
+                Layout::struct_no_name_order(field_layouts),
                 lambda_set.runtime_representation()
             );
 
@@ -4552,7 +4760,23 @@ fn construct_closure_data<'a>(
             Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
         _ => unreachable!(),
+    };
+
+    // Some of the captured symbols may be references to polymorphic expressions,
+    // which have not been specialized yet. We need to perform those
+    // specializations now so that there are real symbols to capture.
+    //
+    // TODO: this is not quite right. What we should actually be doing is removing references to
+    // polymorphic expressions from the captured symbols, and allowing the specializations of those
+    // symbols to be inlined when specializing the closure body elsewhere.
+    for &&(symbol, var) in symbols {
+        if procs.partial_exprs.contains(symbol) {
+            result =
+                reuse_function_symbol(env, procs, layout_cache, Some(var), symbol, result, symbol);
+        }
     }
+
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4569,7 +4793,7 @@ fn convert_tag_union<'a>(
 ) -> Stmt<'a> {
     use crate::layout::UnionVariant::*;
     let res_variant =
-        crate::layout::union_sorted_tags(env.arena, variant_var, env.subs, env.ptr_bytes);
+        crate::layout::union_sorted_tags(env.arena, variant_var, env.subs, env.target_info);
     let variant = match res_variant {
         Ok(cached) => cached,
         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
@@ -4593,9 +4817,7 @@ fn convert_tag_union<'a>(
             "The `[]` type has no constructors, source var {:?}",
             variant_var
         ),
-        Unit | UnitWithArguments => {
-            Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
-        }
+        Unit | UnitWithArguments => Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole),
         BoolUnion { ttrue, .. } => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Bool(tag_name == ttrue)),
@@ -4855,9 +5077,16 @@ fn tag_union_to_function<'a>(
             );
 
             match raw_layout {
-                RawFunctionLayout::Function(_, lambda_set, _) => {
-                    construct_closure_data(env, lambda_set, proc_symbol, &[], assigned, hole)
-                }
+                RawFunctionLayout::Function(_, lambda_set, _) => construct_closure_data(
+                    env,
+                    procs,
+                    layout_cache,
+                    lambda_set,
+                    proc_symbol,
+                    &[],
+                    assigned,
+                    hole,
+                ),
                 RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
             }
         }
@@ -4897,7 +5126,7 @@ fn sorted_field_symbols<'a>(
                 // Note it does not catch the use of `[]` currently.
                 use roc_can::expr::Expr;
                 arg.value = Expr::RuntimeError(RuntimeError::VoidValue);
-                Layout::Struct(&[])
+                Layout::UNIT
             }
             Err(LayoutProblem::Erroneous) => {
                 // something went very wrong
@@ -4905,7 +5134,7 @@ fn sorted_field_symbols<'a>(
             }
         };
 
-        let alignment = layout.alignment_bytes(env.ptr_bytes);
+        let alignment = layout.alignment_bytes(env.target_info);
 
         let symbol = possible_reuse_symbol(env, procs, &arg.value);
         field_symbols_temp.push((alignment, symbol, ((var, arg), &*env.arena.alloc(symbol))));
@@ -4988,40 +5217,44 @@ fn register_capturing_closure<'a>(
 
         let is_self_recursive = !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
-        // does this function capture any local values?
-        let function_layout = layout_cache.raw_from_var(env.arena, function_type, env.subs);
-
-        let captured_symbols = match function_layout {
-            Ok(RawFunctionLayout::Function(_, lambda_set, _)) => {
-                if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
-                    CapturedSymbols::None
-                } else {
-                    let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
-                    temp.sort();
-                    CapturedSymbols::Captured(temp.into_bump_slice())
+        let captured_symbols = match *env.subs.get_content_without_compacting(function_type) {
+            Content::Structure(FlatType::Func(_, closure_var, _)) => {
+                match LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info) {
+                    Ok(lambda_set) => {
+                        if let Layout::Struct {
+                            field_layouts: &[], ..
+                        } = lambda_set.runtime_representation()
+                        {
+                            CapturedSymbols::None
+                        } else {
+                            let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
+                            temp.sort();
+                            CapturedSymbols::Captured(temp.into_bump_slice())
+                        }
+                    }
+                    Err(_) => {
+                        // just allow this. see https://github.com/rtfeldman/roc/issues/1585
+                        if captured_symbols.is_empty() {
+                            CapturedSymbols::None
+                        } else {
+                            let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
+                            temp.sort();
+                            CapturedSymbols::Captured(temp.into_bump_slice())
+                        }
+                    }
                 }
             }
-            Ok(RawFunctionLayout::ZeroArgumentThunk(_)) => {
-                // top-level thunks cannot capture any variables
+            _ => {
+                // This is a value (zero-argument thunk); it cannot capture any variables.
                 debug_assert!(
                     captured_symbols.is_empty(),
                     "{:?} with layout {:?} {:?} {:?}",
                     &captured_symbols,
-                    function_layout,
+                    layout_cache.raw_from_var(env.arena, function_type, env.subs),
                     env.subs,
                     (function_type, closure_type, closure_ext_var),
                 );
                 CapturedSymbols::None
-            }
-            Err(_) => {
-                // just allow this. see https://github.com/rtfeldman/roc/issues/1585
-                if captured_symbols.is_empty() {
-                    CapturedSymbols::None
-                } else {
-                    let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
-                    temp.sort();
-                    CapturedSymbols::Captured(temp.into_bump_slice())
-                }
             }
         };
 
@@ -5038,6 +5271,32 @@ fn register_capturing_closure<'a>(
 
         procs.partial_procs.insert(closure_name, partial_proc);
     }
+}
+
+fn is_literal_like(expr: &roc_can::expr::Expr) -> bool {
+    use roc_can::expr::Expr::*;
+    matches!(
+        expr,
+        Num(..)
+            | Int(..)
+            | Float(..)
+            | List { .. }
+            | Str(_)
+            | ZeroArgumentTag { .. }
+            | Tag { .. }
+            | Record { .. }
+            | Call(..)
+    )
+}
+
+fn expr_is_polymorphic<'a>(
+    env: &mut Env<'a, '_>,
+    expr: &roc_can::expr::Expr,
+    expr_var: Variable,
+) -> bool {
+    // TODO: I don't think we need the `is_literal_like` check, but taking it slow for now...
+    let is_flex_or_rigid = |c: &Content| matches!(c, Content::FlexVar(_) | Content::RigidVar(_));
+    is_literal_like(expr) && env.subs.var_contains_content(expr_var, is_flex_or_rigid)
 }
 
 pub fn from_can<'a>(
@@ -5194,19 +5453,26 @@ pub fn from_can<'a>(
                         // or
                         //
                         //  foo = RBTRee.empty
-                        let mut rest = from_can(env, def.expr_var, cont.value, procs, layout_cache);
 
-                        rest = handle_variable_aliasing(
+                        // TODO: right now we need help out rustc with the closure types;
+                        // it isn't able to infer the right lifetime bounds. See if we
+                        // can remove the annotations in the future.
+                        let build_rest =
+                            |env: &mut Env<'a, '_>,
+                             procs: &mut Procs<'a>,
+                             layout_cache: &mut LayoutCache<'a>| {
+                                from_can(env, def.expr_var, cont.value, procs, layout_cache)
+                            };
+
+                        return handle_variable_aliasing(
                             env,
                             procs,
                             layout_cache,
                             def.expr_var,
                             *symbol,
                             original,
-                            rest,
+                            build_rest,
                         );
-
-                        return rest;
                     }
                     roc_can::expr::Expr::LetNonRec(nested_def, nested_cont, nested_annotation) => {
                         use roc_can::expr::Expr::*;
@@ -5290,6 +5556,26 @@ pub fn from_can<'a>(
 
                         return from_can(env, variable, new_outer, procs, layout_cache);
                     }
+                    ref body if expr_is_polymorphic(env, body, def.expr_var) => {
+                        // This is a pattern like
+                        //
+                        //   n = 1
+                        //   asU8 n
+                        //
+                        // At the definition site `n = 1` we only know `1` to have the type `[Int *]`,
+                        // which won't be refined until the call `asU8 n`. Add it as a partial expression
+                        // that will be specialized at each concrete usage site.
+                        procs
+                            .partial_exprs
+                            .insert(*symbol, def.loc_expr.value, def.expr_var);
+
+                        let result = from_can(env, variable, cont.value, procs, layout_cache);
+
+                        // We won't see this symbol again.
+                        procs.partial_exprs.remove(*symbol);
+
+                        return result;
+                    }
                     _ => {
                         let rest = from_can(env, variable, cont.value, procs, layout_cache);
                         return with_hole(
@@ -5333,12 +5619,12 @@ pub fn from_can<'a>(
                     hole,
                 )
             } else {
-                let context = crate::exhaustive::Context::BadDestruct;
+                let context = roc_exhaustive::Context::BadDestruct;
                 match crate::exhaustive::check(
                     def.loc_pattern.region,
                     &[(
                         Loc::at(def.loc_pattern.region, mono_pattern.clone()),
-                        crate::exhaustive::Guard::NoGuard,
+                        roc_exhaustive::Guard::NoGuard,
                     )],
                     context,
                 ) {
@@ -5464,11 +5750,11 @@ fn to_opt_branches<'a>(
     // NOTE exhaustiveness is checked after the construction of all the branches
     // In contrast to elm (currently), we still do codegen even if a pattern is non-exhaustive.
     // So we not only report exhaustiveness errors, but also correct them
-    let context = crate::exhaustive::Context::BadCase;
+    let context = roc_exhaustive::Context::BadCase;
     match crate::exhaustive::check(region, &loc_branches, context) {
         Ok(_) => {}
         Err(errors) => {
-            use crate::exhaustive::Error::*;
+            use roc_exhaustive::Error::*;
             let mut is_not_exhaustive = false;
             let mut overlapping_branches = std::vec::Vec::new();
 
@@ -5986,6 +6272,7 @@ fn store_pattern_help<'a>(
             return StorePattern::NotProductive(stmt);
         }
         IntLiteral(_, _)
+        | U128Literal(_)
         | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | EnumLiteral { .. }
@@ -6001,7 +6288,7 @@ fn store_pattern_help<'a>(
                 let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
                 fields.extend(arguments.iter().map(|x| x.1));
 
-                let layout = Layout::Struct(fields.into_bump_slice());
+                let layout = Layout::struct_no_name_order(fields.into_bump_slice());
 
                 return store_newtype_pattern(
                     env,
@@ -6031,6 +6318,10 @@ fn store_pattern_help<'a>(
                 stmt,
             );
         }
+        OpaqueUnwrap { argument, .. } => {
+            return store_pattern_help(env, procs, layout_cache, &argument.0, outer_symbol, stmt);
+        }
+
         RecordDestructure(destructs, [_single_field]) => {
             for destruct in destructs {
                 match &destruct.typ {
@@ -6307,6 +6598,7 @@ enum ReuseSymbol {
     Imported(Symbol),
     LocalFunction(Symbol),
     Value(Symbol),
+    UnspecializedExpr(Symbol),
     NotASymbol,
 }
 
@@ -6324,6 +6616,8 @@ fn can_reuse_symbol<'a>(
             Imported(symbol)
         } else if procs.partial_procs.contains_key(symbol) {
             LocalFunction(symbol)
+        } else if procs.partial_exprs.contains(symbol) {
+            UnspecializedExpr(symbol)
         } else {
             Value(symbol)
         }
@@ -6343,15 +6637,29 @@ fn possible_reuse_symbol<'a>(
     }
 }
 
-fn handle_variable_aliasing<'a>(
+fn handle_variable_aliasing<'a, BuildRest>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     variable: Variable,
     left: Symbol,
     right: Symbol,
-    mut result: Stmt<'a>,
-) -> Stmt<'a> {
+    build_rest: BuildRest,
+) -> Stmt<'a>
+where
+    BuildRest: FnOnce(&mut Env<'a, '_>, &mut Procs<'a>, &mut LayoutCache<'a>) -> Stmt<'a>,
+{
+    if procs.partial_exprs.contains(right) {
+        // If `right` links to a partial expression, make sure we link `left` to it as well, so
+        // that usages of it will be specialized when building the rest of the program.
+        procs.partial_exprs.insert_alias(left, right);
+        return build_rest(env, procs, layout_cache);
+    }
+
+    // Otherwise we're dealing with an alias to something that doesn't need to be specialized, or
+    // whose usages will already be specialized in the rest of the program. Let's just build the
+    // rest of the program now to get our hole.
+    let mut result = build_rest(env, procs, layout_cache);
     if procs.is_imported_module_thunk(right) {
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
@@ -6405,10 +6713,11 @@ fn force_thunk<'a>(
 }
 
 fn let_empty_struct<'a>(assigned: Symbol, hole: &'a Stmt<'a>) -> Stmt<'a> {
-    Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
+    Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole)
 }
 
 /// If the symbol is a function, make sure it is properly specialized
+// TODO: rename this now that we handle polymorphic non-function expressions too
 fn reuse_function_symbol<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -6418,6 +6727,35 @@ fn reuse_function_symbol<'a>(
     result: Stmt<'a>,
     original: Symbol,
 ) -> Stmt<'a> {
+    if let Some((expr, expr_var)) = procs.partial_exprs.get(original) {
+        // Specialize the expression type now, based off the `arg_var` we've been given.
+        // TODO: cache the specialized result
+        let snapshot = env.subs.snapshot();
+        let cache_snapshot = layout_cache.snapshot();
+        let _unified = roc_unify::unify::unify(
+            env.subs,
+            arg_var.unwrap(),
+            expr_var,
+            roc_unify::unify::Mode::EQ,
+        );
+
+        let result = with_hole(
+            env,
+            expr.clone(),
+            expr_var,
+            procs,
+            layout_cache,
+            symbol,
+            env.arena.alloc(result),
+        );
+
+        // Restore the prior state so as not to interfere with future specializations.
+        env.subs.rollback_to(snapshot);
+        layout_cache.rollback_to(cache_snapshot);
+
+        return result;
+    }
+
     match procs.get_partial_proc(original) {
         None => {
             match arg_var {
@@ -6508,7 +6846,7 @@ fn reuse_function_symbol<'a>(
 
                         let symbols = match captured {
                             CapturedSymbols::Captured(captured_symbols) => {
-                                Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
+                                Vec::from_iter_in(captured_symbols.iter(), env.arena)
                                     .into_bump_slice()
                             }
                             CapturedSymbols::None => unreachable!(),
@@ -6516,6 +6854,8 @@ fn reuse_function_symbol<'a>(
 
                         construct_closure_data(
                             env,
+                            procs,
+                            layout_cache,
                             lambda_set,
                             original,
                             symbols,
@@ -6552,6 +6892,8 @@ fn reuse_function_symbol<'a>(
                         // unification may still cause it to have an extra argument
                         construct_closure_data(
                             env,
+                            procs,
+                            layout_cache,
                             lambda_set,
                             original,
                             &[],
@@ -6583,7 +6925,7 @@ fn assign_to_symbol<'a>(
 ) -> Stmt<'a> {
     use ReuseSymbol::*;
     match can_reuse_symbol(env, procs, &loc_arg.value) {
-        Imported(original) | LocalFunction(original) => {
+        Imported(original) | LocalFunction(original) | UnspecializedExpr(original) => {
             // for functions we must make sure they are specialized correctly
             reuse_function_symbol(
                 env,
@@ -6907,7 +7249,8 @@ fn call_by_name_help<'a>(
         } else {
             debug_assert!(
                 !field_symbols.is_empty(),
-                "should be in the list of imported_module_thunks"
+                "{} should be in the list of imported_module_thunks",
+                proc_name
             );
 
             debug_assert_eq!(
@@ -7235,8 +7578,8 @@ fn call_specialized_proc<'a>(
             .map(|pp| &pp.captured_symbols)
         {
             Some(&CapturedSymbols::Captured(captured_symbols)) => {
-                let symbols = Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
-                    .into_bump_slice();
+                let symbols =
+                    Vec::from_iter_in(captured_symbols.iter(), env.arena).into_bump_slice();
 
                 let closure_data_symbol = env.unique_symbol();
 
@@ -7261,6 +7604,8 @@ fn call_specialized_proc<'a>(
 
                 let result = construct_closure_data(
                     env,
+                    procs,
+                    layout_cache,
                     lambda_set,
                     proc_name,
                     symbols,
@@ -7305,18 +7650,19 @@ fn call_specialized_proc<'a>(
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
+    U128Literal(u128),
     IntLiteral(i128, IntWidth),
     FloatLiteral(u64, FloatWidth),
     DecimalLiteral(RocDec),
     BitLiteral {
         value: bool,
         tag_name: TagName,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
     },
     EnumLiteral {
         tag_id: u8,
         tag_name: TagName,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
     },
     StrLiteral(Box<str>),
 
@@ -7330,7 +7676,11 @@ pub enum Pattern<'a> {
         tag_id: TagIdIntType,
         arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
         layout: UnionLayout<'a>,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
+    },
+    OpaqueUnwrap {
+        opaque: Symbol,
+        argument: Box<(Pattern<'a>, Layout<'a>)>,
     },
 }
 
@@ -7384,9 +7734,15 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        IntLiteral(var, _, int) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*int as i128, precision)),
+        IntLiteral(_, precision_var, _, int, _bound) => {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, false) {
+                IntOrFloat::Int(precision) => {
+                    let int = match *int {
+                        IntValue::I128(n) => Pattern::IntLiteral(n, precision),
+                        IntValue::U128(n) => Pattern::U128Literal(n),
+                    };
+                    Ok(int)
+                }
                 other => {
                     panic!(
                         "Invalid precision for int pattern: {:?} has {:?}",
@@ -7395,11 +7751,11 @@ fn from_can_pattern_help<'a>(
                 }
             }
         }
-        FloatLiteral(var, float_str, float) => {
+        FloatLiteral(_, precision_var, float_str, float, _bound) => {
             // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, true) {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, true) {
                 IntOrFloat::Int(_) => {
-                    panic!("Invalid precision for float pattern {:?}", var)
+                    panic!("Invalid precision for float pattern {:?}", precision_var)
                 }
                 IntOrFloat::Float(precision) => {
                     Ok(Pattern::FloatLiteral(f64::to_bits(*float), precision))
@@ -7417,7 +7773,8 @@ fn from_can_pattern_help<'a>(
             }
         }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
-        Shadowed(region, ident) => Err(RuntimeError::Shadowing {
+        SingleQuote(c) => Ok(Pattern::IntLiteral(*c as _, IntWidth::I32)),
+        Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
         }),
@@ -7426,10 +7783,24 @@ fn from_can_pattern_help<'a>(
             // TODO preserve malformed problem information here?
             Err(RuntimeError::UnsupportedPattern(*region))
         }
-        NumLiteral(var, num_str, num) => {
-            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*num as i128, precision)),
-                IntOrFloat::Float(precision) => Ok(Pattern::FloatLiteral(*num as u64, precision)),
+        OpaqueNotInScope(loc_ident) => {
+            // TODO(opaques) should be `RuntimeError::OpaqueNotDefined`
+            Err(RuntimeError::UnsupportedPattern(loc_ident.region))
+        }
+        NumLiteral(var, num_str, num, _bound) => {
+            match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
+                IntOrFloat::Int(precision) => Ok(match num {
+                    IntValue::I128(num) => Pattern::IntLiteral(*num, precision),
+                    IntValue::U128(num) => Pattern::U128Literal(*num),
+                }),
+                IntOrFloat::Float(precision) => {
+                    // TODO: this may be lossy
+                    let num = match *num {
+                        IntValue::I128(n) => f64::to_bits(n as f64),
+                        IntValue::U128(n) => f64::to_bits(n as f64),
+                    };
+                    Ok(Pattern::FloatLiteral(num, precision))
+                }
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
                             Some(d) => d,
@@ -7446,11 +7817,11 @@ fn from_can_pattern_help<'a>(
             arguments,
             ..
         } => {
-            use crate::exhaustive::Union;
             use crate::layout::UnionVariant::*;
+            use roc_exhaustive::Union;
 
             let res_variant =
-                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.ptr_bytes)
+                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.target_info)
                     .map_err(Into::into);
 
             let variant = match res_variant {
@@ -7512,7 +7883,7 @@ fn from_can_pattern_help<'a>(
                         })
                     }
 
-                    let union = crate::exhaustive::Union {
+                    let union = roc_exhaustive::Union {
                         render_as: RenderAs::Tag,
                         alternatives: ctors,
                     };
@@ -7532,12 +7903,12 @@ fn from_can_pattern_help<'a>(
                     arguments.sort_by(|arg1, arg2| {
                         let size1 = layout_cache
                             .from_var(env.arena, arg1.0, env.subs)
-                            .map(|x| x.alignment_bytes(env.ptr_bytes))
+                            .map(|x| x.alignment_bytes(env.target_info))
                             .unwrap_or(0);
 
                         let size2 = layout_cache
                             .from_var(env.arena, arg2.0, env.subs)
-                            .map(|x| x.alignment_bytes(env.ptr_bytes))
+                            .map(|x| x.alignment_bytes(env.target_info))
                             .unwrap_or(0);
 
                         size2.cmp(&size1)
@@ -7570,8 +7941,8 @@ fn from_can_pattern_help<'a>(
                             let layout2 =
                                 layout_cache.from_var(env.arena, arg2.0, env.subs).unwrap();
 
-                            let size1 = layout1.alignment_bytes(env.ptr_bytes);
-                            let size2 = layout2.alignment_bytes(env.ptr_bytes);
+                            let size1 = layout1.alignment_bytes(env.target_info);
+                            let size2 = layout2.alignment_bytes(env.target_info);
 
                             size2.cmp(&size1)
                         });
@@ -7603,7 +7974,7 @@ fn from_can_pattern_help<'a>(
                                 })
                             }
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -7655,7 +8026,7 @@ fn from_can_pattern_help<'a>(
                                 })
                             }
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -7698,7 +8069,7 @@ fn from_can_pattern_help<'a>(
                                 arity: fields.len(),
                             });
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -7768,7 +8139,7 @@ fn from_can_pattern_help<'a>(
                                 });
                             }
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -7823,7 +8194,7 @@ fn from_can_pattern_help<'a>(
                                 arity: other_fields.len() - 1,
                             });
 
-                            let union = crate::exhaustive::Union {
+                            let union = roc_exhaustive::Union {
                                 render_as: RenderAs::Tag,
                                 alternatives: ctors,
                             };
@@ -7864,6 +8235,21 @@ fn from_can_pattern_help<'a>(
             Ok(result)
         }
 
+        UnwrappedOpaque {
+            opaque, argument, ..
+        } => {
+            let (arg_var, loc_arg_pattern) = &(**argument);
+            let arg_layout = layout_cache
+                .from_var(env.arena, *arg_var, env.subs)
+                .unwrap();
+            let mono_arg_pattern =
+                from_can_pattern_help(env, layout_cache, &loc_arg_pattern.value, assignments)?;
+            Ok(Pattern::OpaqueUnwrap {
+                opaque: *opaque,
+                argument: Box::new((mono_arg_pattern, arg_layout)),
+            })
+        }
+
         RecordDestructure {
             whole_var,
             destructs,
@@ -7871,7 +8257,7 @@ fn from_can_pattern_help<'a>(
         } => {
             // sorted fields based on the type
             let sorted_fields =
-                crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.ptr_bytes)
+                crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.target_info)
                     .map_err(RuntimeError::from)?;
 
             // sorted fields based on the destruct
@@ -8023,7 +8409,7 @@ pub enum IntOrFloat {
 /// Given the `a` in `Num a`, determines whether it's an int or a float
 pub fn num_argument_to_int_or_float(
     subs: &Subs,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
     var: Variable,
     known_to_be_float: bool,
 ) -> IntOrFloat {
@@ -8033,15 +8419,15 @@ pub fn num_argument_to_int_or_float(
         }
         Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::Int(IntWidth::I64), // We default (Num *) to I64
 
-        Content::Alias(Symbol::NUM_INTEGER, args, _) => {
+        Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
             let var = subs[args.variables().into_iter().next().unwrap()];
-            num_argument_to_int_or_float(subs, ptr_bytes, var, false)
+            num_argument_to_int_or_float(subs, target_info, var, false)
         }
 
-        other @ Content::Alias(symbol, args, _) => {
+        other @ Content::Alias(symbol, args, _, _) => {
             if let Some(int_width) = IntWidth::try_from_symbol(*symbol) {
                 return IntOrFloat::Int(int_width);
             }
@@ -8056,16 +8442,15 @@ pub fn num_argument_to_int_or_float(
 
                     // Recurse on the second argument
                     let var = subs[args.variables().into_iter().next().unwrap()];
-                    num_argument_to_int_or_float(subs, ptr_bytes, var, true)
+                    num_argument_to_int_or_float(subs, target_info, var, true)
                 }
 
                 Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => IntOrFloat::DecimalFloatType,
 
                 Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
-                    let int_width = match ptr_bytes {
-                        4 => IntWidth::U32,
-                        8 => IntWidth::U64,
-                        _ => panic!("unsupported word size"),
+                    let int_width = match target_info.ptr_width() {
+                        roc_target::PtrWidth::Bytes4 => IntWidth::U32,
+                        roc_target::PtrWidth::Bytes8 => IntWidth::U64,
                     };
 
                     IntOrFloat::Int(int_width)
@@ -8134,7 +8519,7 @@ where
                 env.arena.alloc(result),
             )
         }
-        Layout::Struct(_) => match lambda_set.set.get(0) {
+        Layout::Struct { .. } => match lambda_set.set.get(0) {
             Some((function_symbol, _)) => {
                 let call_spec_id = env.next_call_specialization_id();
                 let update_mode = env.next_update_mode_id();
@@ -8307,7 +8692,10 @@ fn match_on_lambda_set<'a>(
                 env.arena.alloc(result),
             )
         }
-        Layout::Struct(fields) => {
+        Layout::Struct {
+            field_layouts,
+            field_order_hash,
+        } => {
             let function_symbol = lambda_set.set[0].0;
 
             union_lambda_set_branch_help(
@@ -8315,7 +8703,10 @@ fn match_on_lambda_set<'a>(
                 function_symbol,
                 lambda_set,
                 closure_data_symbol,
-                Layout::Struct(fields),
+                Layout::Struct {
+                    field_layouts,
+                    field_order_hash,
+                },
                 argument_symbols,
                 argument_layouts,
                 return_layout,
@@ -8474,7 +8865,9 @@ fn union_lambda_set_branch_help<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let (argument_layouts, argument_symbols) = match closure_data_layout {
-        Layout::Struct(&[])
+        Layout::Struct {
+            field_layouts: &[], ..
+        }
         | Layout::Builtin(Builtin::Bool)
         | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
             (argument_layouts_slice, argument_symbols_slice)
@@ -8601,7 +8994,9 @@ fn enum_lambda_set_branch<'a>(
     let assigned = result_symbol;
 
     let (argument_layouts, argument_symbols) = match closure_data_layout {
-        Layout::Struct(&[])
+        Layout::Struct {
+            field_layouts: &[], ..
+        }
         | Layout::Builtin(Builtin::Bool)
         | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
             (argument_layouts_slice, argument_symbols_slice)

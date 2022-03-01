@@ -13,6 +13,9 @@ use crate::helpers::wasm::assert_evals_to;
 // use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
 
+#[cfg(test)]
+use roc_std::RocList;
+
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn basic_record() {
@@ -587,9 +590,7 @@ fn optional_field_function_use_default() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
 fn optional_field_function_no_use_default() {
-    // blocked on https://github.com/rtfeldman/roc/issues/786
     assert_evals_to!(
         indoc!(
             r#"
@@ -608,9 +609,7 @@ fn optional_field_function_no_use_default() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
 fn optional_field_function_no_use_default_nested() {
-    // blocked on https://github.com/rtfeldman/roc/issues/786
     assert_evals_to!(
         indoc!(
             r#"
@@ -1001,13 +1000,43 @@ fn both_have_unique_fields() {
             b = { x: 42, z: 44 }
 
             f : { x : I64 }a, { x : I64 }b -> I64
-            f = \{ x: x1}, { x: x2 } -> x1 + x2 
+            f = \{ x: x1}, { x: x2 } -> x1 + x2
 
             f a b
             "#
         ),
         84,
         i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// https://github.com/rtfeldman/roc/issues/2535
+fn different_proc_types_specialized_to_same_layout() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ nums ] to "./platform"
+
+            # Top-level values compile to procedure calls with no args
+            # alpha has the generic type { a: Num *, b: Num * }
+            # and gets specialized to two procedure calls below
+            alpha = { a: 1, b: 2 }
+
+            # The wider number always comes first in the layout,
+            # which makes the two specializations look very similar.
+            # Test that the compiler doesn't get them mixed up!
+            nums : List U8
+            nums =
+                [
+                    alpha.a,   # alpha specialized to layout { b: I64, a: U8 }
+                    alpha.b,   # alpha specialized to layout { a: I64, b: U8 }
+                ]
+            "#
+        ),
+        RocList::from_slice(&[1, 2]),
+        RocList<u8>
     );
 }
 

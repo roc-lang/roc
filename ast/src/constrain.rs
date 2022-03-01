@@ -1474,6 +1474,15 @@ pub fn constrain_pattern<'a>(
             ));
         }
 
+        CharacterLiteral(_) => {
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Character,
+                num_unsigned32(env.pool),
+                expected,
+            ));
+        }
+
         RecordDestructure {
             whole_var,
             ext_var,
@@ -1928,6 +1937,26 @@ fn _num_signed64(pool: &mut Pool) -> Type2 {
 }
 
 #[inline(always)]
+fn num_unsigned32(pool: &mut Pool) -> Type2 {
+    let alias_content = Type2::TagUnion(
+        PoolVec::new(
+            std::iter::once((
+                TagName::Private(Symbol::NUM_UNSIGNED32),
+                PoolVec::empty(pool),
+            )),
+            pool,
+        ),
+        pool.add(Type2::EmptyTagUnion),
+    );
+
+    Type2::Alias(
+        Symbol::NUM_UNSIGNED32,
+        PoolVec::empty(pool),
+        pool.add(alias_content),
+    )
+}
+
+#[inline(always)]
 fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
@@ -2325,7 +2354,7 @@ pub mod test_constrain {
             indoc!(
                 r#"
                 person = { name: "roc" }
-    
+
                 person
                 "#
             ),
@@ -2339,8 +2368,8 @@ pub mod test_constrain {
             indoc!(
                 r#"
                 person = { name: "roc" }
-    
-                { person & name: "bird" } 
+
+                { person & name: "bird" }
                 "#
             ),
             "{ name : Str }",
@@ -2462,7 +2491,7 @@ pub mod test_constrain {
             indoc!(
                 r#"
                 x = 1
-    
+
                 \{} -> x
                 "#
             ),

@@ -1,28 +1,22 @@
 use core::cell::Cell;
+use roc_gen_wasm::wasm_module::{Export, ExportType};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
-use tempfile::{tempdir, TempDir};
 use wasmer::{Memory, WasmPtr};
 
-use crate::helpers::from_wasm32_memory::FromWasm32Memory;
-use crate::helpers::wasm32_test_result::Wasm32TestResult;
-use roc_builtins::bitcode;
-use roc_can::builtins::builtin_defs_map;
+use crate::helpers::from_wasmer_memory::FromWasmerMemory;
 use roc_collections::all::{MutMap, MutSet};
+use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
 
 // Should manually match build.rs
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
 const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
-const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
-const COMPILER_RT_PATH_VAR: &str = "TEST_GEN_WASM_COMPILER_RT_PATH";
-
-#[allow(unused_imports)]
-use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
+const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -37,40 +31,30 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-pub enum TestType {
-    /// Test that some Roc code evaluates to the right result
-    Evaluate,
-    /// Test that some Roc values have the right refcount
-    Refcount,
-}
-
 #[allow(dead_code)]
-pub fn compile_and_load<'a, T: Wasm32TestResult>(
+pub fn compile_and_load<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
     _test_wrapper_type_info: PhantomData<T>,
-    test_type: TestType,
 ) -> wasmer::Instance {
-    let (app_module_bytes, needs_linking) =
-        compile_roc_to_wasm_bytes(arena, src, stdlib, _test_wrapper_type_info);
+    let platform_bytes = load_platform_and_builtins();
 
-    let keep_test_binary = DEBUG_LOG_SETTINGS.keep_test_binary;
-    let build_dir_hash = if keep_test_binary {
-        // Keep the output files for debugging, in a directory with a hash in the name
-        Some(src_hash(src))
-    } else {
-        // Use a temporary build directory for linking, then delete it
-        None
+    let compiled_bytes =
+        compile_roc_to_wasm_bytes(arena, stdlib, &platform_bytes, src, _test_wrapper_type_info);
+
+    if DEBUG_LOG_SETTINGS.keep_test_binary {
+        let build_dir_hash = src_hash(src);
+        save_wasm_file(&compiled_bytes, build_dir_hash)
     };
 
-    let final_bytes = if needs_linking || keep_test_binary {
-        run_linker(app_module_bytes, build_dir_hash, test_type)
-    } else {
-        app_module_bytes
-    };
+    load_bytes_into_runtime(compiled_bytes)
+}
 
-    load_bytes_into_runtime(final_bytes)
+fn load_platform_and_builtins() -> std::vec::Vec<u8> {
+    let out_dir = std::env::var(OUT_DIR_VAR).unwrap();
+    let platform_path = Path::new(&out_dir).join([PLATFORM_FILENAME, "o"].join("."));
+    std::fs::read(&platform_path).unwrap()
 }
 
 fn src_hash(src: &str) -> u64 {
@@ -79,12 +63,13 @@ fn src_hash(src: &str) -> u64 {
     hash_state.finish()
 }
 
-fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
+fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
-    src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
+    preload_bytes: &[u8],
+    src: &str,
     _test_wrapper_type_info: PhantomData<T>,
-) -> (Vec<u8>, bool) {
+) -> Vec<u8> {
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -100,7 +85,6 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
     }
 
     let exposed_types = MutMap::default();
-    let ptr_bytes = 4;
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
@@ -108,8 +92,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
         stdlib,
         src_dir,
         exposed_types,
-        ptr_bytes,
-        builtin_defs_map,
+        roc_target::TargetInfo::default_wasm32(),
     );
 
     let loaded = loaded.expect("failed to load module");
@@ -123,9 +106,13 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
         ..
     } = loaded;
 
-    debug_assert_eq!(exposed_to_host.len(), 1);
+    debug_assert_eq!(exposed_to_host.values.len(), 1);
 
-    let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
+    let exposed_to_host = exposed_to_host
+        .values
+        .keys()
+        .copied()
+        .collect::<MutSet<_>>();
 
     let env = roc_gen_wasm::Env {
         arena,
@@ -133,98 +120,40 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32TestResult>(
         exposed_to_host,
     };
 
-    let (mut wasm_module, main_fn_index) =
-        roc_gen_wasm::build_module_help(&env, &mut interns, procedures).unwrap();
+    let (mut module, called_preload_fns, main_fn_index) =
+        roc_gen_wasm::build_module_without_wrapper(&env, &mut interns, preload_bytes, procedures);
 
-    T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
+    T::insert_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
 
-    roc_gen_wasm::wasm_module::sections::test_assert_preload(arena, &wasm_module);
+    // Export the initialiser function for refcount tests
+    let init_refcount_bytes = INIT_REFCOUNT_NAME.as_bytes();
+    let init_refcount_idx = module.names.functions[init_refcount_bytes];
+    module.export.append(Export {
+        name: arena.alloc_slice_copy(init_refcount_bytes),
+        ty: ExportType::Func,
+        index: init_refcount_idx,
+    });
 
-    let needs_linking = !wasm_module.import.entries.is_empty();
+    module.remove_dead_preloads(env.arena, called_preload_fns);
 
-    let mut app_module_bytes = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize_mut(&mut app_module_bytes);
+    let mut app_module_bytes = std::vec::Vec::with_capacity(module.size());
+    module.serialize(&mut app_module_bytes);
 
-    (app_module_bytes, needs_linking)
+    app_module_bytes
 }
 
-fn run_linker(
-    app_module_bytes: Vec<u8>,
-    build_dir_hash: Option<u64>,
-    test_type: TestType,
-) -> Vec<u8> {
-    let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
-    let debug_dir: String; // persistent directory for debugging
+fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
+    let debug_dir_str = format!("/tmp/roc/gen_wasm/{:016x}", build_dir_hash);
+    let debug_dir_path = Path::new(&debug_dir_str);
+    let final_wasm_file = debug_dir_path.join("final.wasm");
 
-    let wasm_build_dir: &Path = if let Some(src_hash) = build_dir_hash {
-        debug_dir = format!("/tmp/roc/gen_wasm/{:016x}", src_hash);
-        std::fs::remove_file(format!("{}/app.o", debug_dir)).unwrap_or_else(|_| {});
-        std::fs::remove_file(format!("{}/final.wasm", debug_dir)).unwrap_or_else(|_| {});
-        std::fs::create_dir_all(&debug_dir).unwrap();
-        println!(
-            "Debug commands:\n\twasm-objdump -dx {}/app.o\n\twasm-objdump -dx {}/final.wasm",
-            &debug_dir, &debug_dir,
-        );
-        Path::new(&debug_dir)
-    } else {
-        tmp_dir = tempdir().unwrap();
-        tmp_dir.path()
-    };
+    std::fs::create_dir_all(debug_dir_path).unwrap();
+    std::fs::write(&final_wasm_file, app_module_bytes).unwrap();
 
-    let final_wasm_file = wasm_build_dir.join("final.wasm");
-    let app_o_file = wasm_build_dir.join("app.o");
-    let test_out_dir = std::env::var(OUT_DIR_VAR).unwrap();
-    let test_platform_o = format!("{}/{}.o", test_out_dir, PLATFORM_FILENAME);
-    let libc_a_file = std::env::var(LIBC_PATH_VAR).unwrap();
-    let compiler_rt_o_file = std::env::var(COMPILER_RT_PATH_VAR).unwrap();
-
-    // write the module to a file so the linker can access it
-    std::fs::write(&app_o_file, &app_module_bytes).unwrap();
-
-    let mut args = vec![
-        "wasm-ld",
-        // input files
-        app_o_file.to_str().unwrap(),
-        bitcode::BUILTINS_WASM32_OBJ_PATH,
-        &test_platform_o,
-        &libc_a_file,
-        &compiler_rt_o_file,
-        // output
-        "-o",
-        final_wasm_file.to_str().unwrap(),
-        // we don't define `_start`
-        "--no-entry",
-        // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
-        // But if you specify both exports, you get all the dependencies.
-        //
-        // It seems that it will not write out an export you didn't explicitly specify,
-        // even if it's a dependency of another export!
-        "--export",
-        "test_wrapper",
-        "--export",
-        "#UserApp_main_1",
-    ];
-
-    if matches!(test_type, TestType::Refcount) {
-        // If we always export this, tests run ~2.5x slower! Not sure why.
-        args.extend_from_slice(&["--export", "init_refcount_test"]);
-    }
-
-    let linker_output = std::process::Command::new(&crate::helpers::zig_executable())
-        .args(&args)
-        .output()
-        .unwrap();
-
-    if !linker_output.status.success() {
-        print!("\nLINKER FAILED\n");
-        for arg in args {
-            print!("{} ", arg);
-        }
-        println!("\n{}", std::str::from_utf8(&linker_output.stdout).unwrap());
-        println!("{}", std::str::from_utf8(&linker_output.stderr).unwrap());
-    }
-
-    std::fs::read(final_wasm_file).unwrap()
+    println!(
+        "Debug command:\n\twasm-objdump -dx {}",
+        final_wasm_file.to_str().unwrap()
+    );
 }
 
 fn load_bytes_into_runtime(bytes: Vec<u8>) -> wasmer::Instance {
@@ -249,15 +178,14 @@ fn load_bytes_into_runtime(bytes: Vec<u8>) -> wasmer::Instance {
 #[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
 where
-    T: FromWasm32Memory + Wasm32TestResult,
+    T: FromWasmerMemory + Wasm32Result,
 {
     let arena = bumpalo::Bump::new();
 
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance =
-        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, TestType::Evaluate);
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -266,10 +194,7 @@ where
     match test_wrapper.call(&[]) {
         Err(e) => Err(format!("{:?}", e)),
         Ok(result) => {
-            let address = match result[0] {
-                wasmer::Value::I32(a) => a,
-                _ => panic!(),
-            };
+            let address = result[0].unwrap_i32();
 
             if false {
                 println!("test_wrapper returned 0x{:x}", address);
@@ -281,7 +206,7 @@ where
                 // Manually provide address and size based on printf in wasm_test_platform.c
                 crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
             }
-            let output = <T as FromWasm32Memory>::decode(memory, address as u32);
+            let output = <T as FromWasmerMemory>::decode(memory, address as u32);
 
             Ok(output)
         }
@@ -295,27 +220,23 @@ pub fn assert_wasm_refcounts_help<T>(
     num_refcounts: usize,
 ) -> Result<Vec<u32>, String>
 where
-    T: FromWasm32Memory + Wasm32TestResult,
+    T: FromWasmerMemory + Wasm32Result,
 {
     let arena = bumpalo::Bump::new();
 
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance =
-        crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom, TestType::Refcount);
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
     let expected_len = num_refcounts as i32;
-    let init_refcount_test = instance.exports.get_function("init_refcount_test").unwrap();
+    let init_refcount_test = instance.exports.get_function(INIT_REFCOUNT_NAME).unwrap();
     let init_result = init_refcount_test.call(&[wasmer::Value::I32(expected_len)]);
     let refcount_vector_addr = match init_result {
         Err(e) => return Err(format!("{:?}", e)),
-        Ok(result) => match result[0] {
-            wasmer::Value::I32(a) => a,
-            _ => panic!(),
-        },
+        Ok(result) => result[0].unwrap_i32(),
     };
 
     // Run the test

@@ -3,9 +3,12 @@
 #![allow(unused_imports)]
 
 use bumpalo::collections::Vec as BumpVec;
-use roc_can::expr::unescape_char;
-use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use roc_can::expr::{unescape_char, IntValue};
+use roc_can::num::{
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult,
+};
 use roc_collections::all::BumpMap;
+use roc_error_macros::todo_opaques;
 use roc_module::symbol::{Interns, Symbol};
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
@@ -36,6 +39,7 @@ pub enum Pattern2 {
     IntLiteral(IntVal),        // 16B
     FloatLiteral(FloatVal),    // 16B
     StrLiteral(PoolStr),       // 8B
+    CharacterLiteral(char),    // 4B
     Underscore,                // 0B
     GlobalTag {
         whole_var: Variable,                       // 4B
@@ -183,18 +187,35 @@ pub fn to_pattern2<'a>(
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(float) => Pattern2::FloatLiteral(FloatVal::F64(float)),
+                Ok((float, _bound)) => Pattern2::FloatLiteral(FloatVal::F64(float)),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
 
         NumLiteral(string) => match pattern_type {
-            WhenBranch => match finish_parsing_int(string) {
+            WhenBranch => match finish_parsing_num(string) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => Pattern2::NumLiteral(env.var_store.fresh(), int),
+                Ok(ParsedNumResult::UnknownNum(int, _bound)) => {
+                    Pattern2::NumLiteral(
+                        env.var_store.fresh(),
+                        match int {
+                            IntValue::U128(_) => todo!(),
+                            IntValue::I128(n) => n as i64, // FIXME
+                        },
+                    )
+                }
+                Ok(ParsedNumResult::Int(int, _bound)) => {
+                    Pattern2::IntLiteral(IntVal::I64(match int {
+                        IntValue::U128(_) => todo!(),
+                        IntValue::I128(n) => n as i64, // FIXME
+                    }))
+                }
+                Ok(ParsedNumResult::Float(int, _bound)) => {
+                    Pattern2::FloatLiteral(FloatVal::F64(int))
+                }
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -209,7 +230,11 @@ pub fn to_pattern2<'a>(
                     let problem = MalformedPatternProblem::MalformedBase(*base);
                     malformed_pattern(env, problem, region)
                 }
-                Ok(int) => {
+                Ok((int, _bound)) => {
+                    let int = match int {
+                        IntValue::U128(_) => todo!(),
+                        IntValue::I128(n) => n as i64, // FIXME
+                    };
                     if *is_negative {
                         Pattern2::IntLiteral(IntVal::I64(-int))
                     } else {
@@ -222,6 +247,26 @@ pub fn to_pattern2<'a>(
 
         StrLiteral(literal) => match pattern_type {
             WhenBranch => flatten_str_literal(env.pool, literal),
+            ptype => unsupported_pattern(env, ptype, region),
+        },
+
+        SingleQuote(string) => match pattern_type {
+            WhenBranch => {
+                let mut it = string.chars().peekable();
+                if let Some(char) = it.next() {
+                    if it.peek().is_none() {
+                        Pattern2::CharacterLiteral(char)
+                    } else {
+                        // multiple chars is found
+                        let problem = MalformedPatternProblem::MultipleCharsInSingleQuote;
+                        malformed_pattern(env, problem, region)
+                    }
+                } else {
+                    // no characters found
+                    let problem = MalformedPatternProblem::EmptySingleQuote;
+                    malformed_pattern(env, problem, region)
+                }
+            }
             ptype => unsupported_pattern(env, ptype, region),
         },
 
@@ -245,6 +290,8 @@ pub fn to_pattern2<'a>(
                 arguments: PoolVec::empty(env.pool),
             }
         }
+
+        OpaqueRef(..) => todo_opaques!(),
 
         Apply(tag, patterns) => {
             let can_patterns = PoolVec::with_capacity(patterns.len() as u32, env.pool);
@@ -480,6 +527,7 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
             | IntLiteral(_)
             | FloatLiteral(_)
             | StrLiteral(_)
+            | CharacterLiteral(_)
             | Underscore
             | MalformedPattern(_, _)
             | Shadowed { .. }
@@ -540,6 +588,7 @@ pub fn symbols_and_variables_from_pattern(
             | IntLiteral(_)
             | FloatLiteral(_)
             | StrLiteral(_)
+            | CharacterLiteral(_)
             | Underscore
             | MalformedPattern(_, _)
             | Shadowed { .. }

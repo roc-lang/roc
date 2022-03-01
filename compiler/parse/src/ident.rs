@@ -5,6 +5,29 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::Position;
 
+/// A global tag, for example. Must start with an uppercase letter
+/// and then contain only letters and numbers afterwards - no dots allowed!
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct UppercaseIdent<'a>(&'a str);
+
+impl<'a> From<&'a str> for UppercaseIdent<'a> {
+    fn from(string: &'a str) -> Self {
+        UppercaseIdent(string)
+    }
+}
+
+impl<'a> From<UppercaseIdent<'a>> for &'a str {
+    fn from(ident: UppercaseIdent<'a>) -> Self {
+        ident.0
+    }
+}
+
+impl<'a> From<&'a UppercaseIdent<'a>> for &'a str {
+    fn from(ident: &'a UppercaseIdent<'a>) -> Self {
+        ident.0
+    }
+}
+
 /// The parser accepts all of these in any position where any one of them could
 /// appear. This way, canonicalization can give more helpful error messages like
 /// "you can't redefine this tag!" if you wrote `Foo = ...` or
@@ -15,6 +38,9 @@ pub enum Ident<'a> {
     GlobalTag(&'a str),
     /// @Foo or @Bar
     PrivateTag(&'a str),
+    /// $Foo or $Bar
+    // TODO(opaques): $->@ in the above comment
+    OpaqueRef(&'a str),
     /// foo or foo.bar or Foo.Bar.baz.qux
     Access {
         module_name: &'a str,
@@ -31,7 +57,7 @@ impl<'a> Ident<'a> {
         use self::Ident::*;
 
         match self {
-            GlobalTag(string) | PrivateTag(string) => string.len(),
+            GlobalTag(string) | PrivateTag(string) | OpaqueRef(string) => string.len(),
             Access { module_name, parts } => {
                 let mut len = if module_name.is_empty() {
                     0
@@ -77,7 +103,11 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
     move |arena, state: State<'a>| {
         if state.bytes().starts_with(b"@") {
-            match chomp_private_tag(state.bytes(), state.pos()) {
+            match chomp_private_tag_or_opaque(
+                /* private tag */ true,
+                state.bytes(),
+                state.pos(),
+            ) {
                 Err(BadIdent::Start(_)) => Err((NoProgress, (), state)),
                 Err(_) => Err((MadeProgress, (), state)),
                 Ok(ident) => {
@@ -87,6 +117,21 @@ pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
             }
         } else {
             uppercase_ident().parse(arena, state)
+        }
+    }
+}
+
+/// This could be:
+///
+/// * A module name
+/// * A type name
+/// * A global tag
+pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
+    move |_, state: State<'a>| match chomp_uppercase_part(state.bytes()) {
+        Err(progress) => Err((progress, (), state)),
+        Ok(ident) => {
+            let width = ident.len();
+            Ok((MadeProgress, ident.into(), state.advance(width)))
         }
     }
 }
@@ -198,6 +243,7 @@ pub enum BadIdent {
     WeirdDotQualified(Position),
     StrayDot(Position),
     BadPrivateTag(Position),
+    BadOpaqueRef(Position),
 }
 
 fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
@@ -266,23 +312,33 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
 }
 
 /// a `@Token` private tag
-fn chomp_private_tag(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
+fn chomp_private_tag_or_opaque(
+    private_tag: bool, // If false, opaque
+    buffer: &[u8],
+    pos: Position,
+) -> Result<&str, BadIdent> {
     // assumes the leading `@` has NOT been chomped already
-    debug_assert_eq!(buffer.get(0), Some(&b'@'));
+    debug_assert_eq!(buffer.get(0), Some(if private_tag { &b'@' } else { &b'$' }));
     use encode_unicode::CharExt;
+
+    let bad_ident = if private_tag {
+        BadIdent::BadPrivateTag
+    } else {
+        BadIdent::BadOpaqueRef
+    };
 
     match chomp_uppercase_part(&buffer[1..]) {
         Ok(name) => {
             let width = 1 + name.len();
 
             if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[width..]) {
-                Err(BadIdent::BadPrivateTag(pos.bump_column(width as u32)))
+                Err(bad_ident(pos.bump_column(width as u32)))
             } else {
                 let value = unsafe { std::str::from_utf8_unchecked(&buffer[..width]) };
                 Ok(value)
             }
         }
-        Err(_) => Err(BadIdent::BadPrivateTag(pos.bump_column(1))),
+        Err(_) => Err(bad_ident(pos.bump_column(1))),
     }
 }
 
@@ -306,11 +362,17 @@ fn chomp_identifier_chain<'a>(
                 }
                 Err(fail) => return Err((1, fail)),
             },
-            '@' => match chomp_private_tag(buffer, pos) {
+            c @ ('@' | '$') => match chomp_private_tag_or_opaque(c == '@', buffer, pos) {
                 Ok(tagname) => {
                     let bytes_parsed = tagname.len();
 
-                    return Ok((bytes_parsed as u32, Ident::PrivateTag(tagname)));
+                    let ident = if c == '@' {
+                        Ident::PrivateTag
+                    } else {
+                        Ident::OpaqueRef
+                    };
+
+                    return Ok((bytes_parsed as u32, ident(tagname)));
                 }
                 Err(fail) => return Err((1, fail)),
             },

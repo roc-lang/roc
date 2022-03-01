@@ -31,10 +31,7 @@ pub fn infer_expr(
     constraint: &Constraint,
     expr_var: Variable,
 ) -> (Content, Subs) {
-    let env = solve::Env {
-        aliases: MutMap::default(),
-        vars_by_symbol: MutMap::default(),
-    };
+    let env = solve::Env::default();
     let (solved, _) = solve::run(&env, problems, subs, constraint);
 
     let content = solved

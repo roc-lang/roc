@@ -75,18 +75,31 @@ mod test_parse {
                 let mut base = std::path::PathBuf::from("tests");
                 base.push("snapshots");
                 let pass_or_fail_names = list(&base);
+                let mut extra_test_files = std::collections::HashSet::new();
                 for res in pass_or_fail_names {
                     assert!(res == "pass" || res == "fail");
                     let res_dir = base.join(&res);
                     for file in list(&res_dir) {
-                        if let Some(file) = file.strip_suffix(".roc") {
-                            assert!(tests.contains(format!("{}/{}", &res, file).as_str()), "{}", file);
-                        } else if let Some(file) = file.strip_suffix(".result-ast") {
-                            assert!(tests.contains(format!("{}/{}", &res, file).as_str()), "{}", file);
+                        let test = if let Some(test) = file.strip_suffix(".roc") {
+                            test
+                        } else if let Some(test) = file.strip_suffix(".result-ast") {
+                            test
                         } else {
-                            panic!("unexpected test file found: {}", file);
+                            panic!("unexpected file found in tests/snapshots: {}", file);
+                        };
+                        let test_name = format!("{}/{}", &res, test);
+                        if !tests.contains(test_name.as_str()) {
+                            extra_test_files.insert(test_name);
                         }
                     }
+                }
+
+                if extra_test_files.len() > 0 {
+                    eprintln!("Found extra test files:");
+                    for file in extra_test_files {
+                        eprintln!("{}", file);
+                    }
+                    panic!("Add entries for these in the `snapshot_tests!` macro in test_parse.rs");
                 }
             }
 
@@ -105,9 +118,11 @@ mod test_parse {
         };
     }
 
+    // see tests/snapshots to see test input(.roc) and expected output(.result-ast)
     snapshot_tests! {
         fail/type_argument_no_arrow.expr,
         fail/type_double_comma.expr,
+        pass/list_closing_indent_not_enough.expr,
         pass/add_var_with_spaces.expr,
         pass/add_with_spaces.expr,
         pass/annotated_record_destructure.expr,
@@ -126,6 +141,7 @@ mod test_parse {
         pass/basic_private_tag.expr,
         pass/basic_var.expr,
         pass/closure_with_underscores.expr,
+        pass/comment_after_def.module,
         pass/comment_after_op.expr,
         pass/comment_before_op.expr,
         pass/comment_inside_empty_list.expr,
@@ -133,6 +149,8 @@ mod test_parse {
         pass/destructure_tag_assignment.expr,
         pass/empty_app_header.header,
         pass/empty_interface_header.header,
+        pass/empty_hosted_header.header,
+        pass/nonempty_hosted_header.header,
         pass/empty_list.expr,
         pass/empty_platform_header.header,
         pass/empty_record.expr,
@@ -148,7 +166,10 @@ mod test_parse {
         pass/highest_int.expr,
         pass/if_def.expr,
         pass/int_with_underscore.expr,
+        pass/interface_with_newline.header,
         pass/lowest_float.expr,
+        pass/list_closing_same_indent_no_trailing_comma.expr,
+        pass/list_closing_same_indent_with_trailing_comma.expr,
         pass/lowest_int.expr,
         pass/malformed_ident_due_to_underscore.expr,
         pass/malformed_pattern_field_access.expr, // See https://github.com/rtfeldman/roc/issues/399
@@ -179,12 +200,19 @@ mod test_parse {
         pass/newline_singleton_list.expr,
         pass/nonempty_platform_header.header,
         pass/not_docs.expr,
+        pass/number_literal_suffixes.expr,
         pass/one_backpassing.expr,
         pass/one_char_string.expr,
         pass/one_def.expr,
         pass/one_minus_two.expr,
         pass/one_plus_two.expr,
         pass/one_spaced_def.expr,
+        pass/opaque_simple.module,
+        pass/opaque_with_type_arguments.module,
+        pass/opaque_reference_expr.expr,
+        pass/opaque_reference_expr_with_arguments.expr,
+        pass/opaque_reference_pattern.expr,
+        pass/opaque_reference_pattern_with_arguments.expr,
         pass/ops_with_newlines.expr,
         pass/packed_singleton_list.expr,
         pass/parenthetical_apply.expr,
@@ -198,6 +226,7 @@ mod test_parse {
         pass/positive_float.expr,
         pass/positive_int.expr,
         pass/private_qualified_tag.expr,
+        pass/provides_type.header,
         pass/qualified_field.expr,
         pass/qualified_global_tag.expr,
         pass/qualified_var.expr,
@@ -205,6 +234,7 @@ mod test_parse {
         pass/record_func_type_decl.expr,
         pass/record_update.expr,
         pass/record_with_if.expr,
+        pass/requires_type.header,
         pass/single_arg_closure.expr,
         pass/single_underscore_closure.expr,
         pass/space_only_after_minus.expr,
@@ -264,9 +294,11 @@ mod test_parse {
         let result = func(&input);
 
         let actual_result = if should_pass {
-            result.unwrap()
+            result.expect("The source code for this test did not successfully parse!")
         } else {
-            result.unwrap_err()
+            result.expect_err(
+                "The source code for this test successfully parsed, but it was not expected to!",
+            )
         };
 
         if std::env::var("ROC_PARSER_SNAPSHOT_TEST_OVERWRITE").is_ok() {
@@ -487,18 +519,27 @@ mod test_parse {
     }
 
     #[quickcheck]
-    fn all_f64_values_parse(num: f64) {
-        let string = num.to_string();
-        if string.contains('.') {
-            assert_parses_to(&string, Float(&string));
-        } else if num.is_nan() {
-            assert_parses_to(&string, Expr::GlobalTag(&string));
-        } else if num.is_finite() {
-            // These are whole numbers. Add the `.0` back to make float.
-            let float_string = format!("{}.0", string);
-            assert_parses_to(&float_string, Float(&float_string));
+    fn all_f64_values_parse(mut num: f64) {
+        // NaN, Infinity, -Infinity (these would all parse as tags in Roc)
+        if !num.is_finite() {
+            num = 0.0;
         }
+
+        // These can potentially be whole numbers. `Display` omits the decimal point for those,
+        // causing them to no longer be parsed as fractional numbers by Roc.
+        // Using `Debug` instead of `Display` ensures they always have a decimal point.
+        let float_string = format!("{:?}", num);
+
+        assert_parses_to(float_string.as_str(), Float(float_string.as_str()));
     }
+
+    // SINGLE QUOTE LITERAL
+    #[test]
+    fn single_quote() {
+        assert_parses_to("'b'", Expr::SingleQuote("b"));
+    }
+
+    // RECORD LITERALS
 
     // #[test]
     // fn type_signature_def() {

@@ -2,7 +2,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Layout, UnionLayout};
 
 use crate::wasm_module::ValueType;
-use crate::{PTR_SIZE, PTR_TYPE};
+use crate::{PTR_SIZE, PTR_TYPE, TARGET_INFO};
 
 /// Manually keep up to date with the Zig version we are using for builtins
 pub const BUILTINS_ZIG_VERSION: ZigVersion = ZigVersion::Zig8;
@@ -47,8 +47,8 @@ impl WasmLayout {
         use UnionLayout::*;
         use ValueType::*;
 
-        let size = layout.stack_size(PTR_SIZE);
-        let alignment_bytes = layout.alignment_bytes(PTR_SIZE);
+        let size = layout.stack_size(TARGET_INFO);
+        let alignment_bytes = layout.alignment_bytes(TARGET_INFO);
 
         match layout {
             Layout::Builtin(Int(int_width)) => {
@@ -88,7 +88,7 @@ impl WasmLayout {
             },
 
             Layout::Builtin(Str | Dict(_, _) | Set(_) | List(_))
-            | Layout::Struct(_)
+            | Layout::Struct { .. }
             | Layout::LambdaSet(_)
             | Layout::Union(NonRecursive(_)) => Self::StackMemory {
                 size,

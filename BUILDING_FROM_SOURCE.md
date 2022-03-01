@@ -1,7 +1,89 @@
 # Building the Roc compiler from source
 
+## Using Nix
 
-## Installing LLVM, Zig, valgrind, and Python
+### Install
+
+Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.
+
+Anyone having trouble installing the proper version of LLVM themselves might also prefer this method.
+
+If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
+
+Install nix:
+
+`curl -L https://nixos.org/nix/install | sh`
+
+You will need to start a fresh terminal session to use nix.
+
+### Usage
+
+Now with nix installed, you just need to run one command:
+
+`nix-shell`
+
+> This may not output anything for a little while. This is normal, hang in there. Also make sure you are in the roc project root.
+
+> Also, if you're on NixOS you'll need to enable opengl at the system-wide level. You can do this in configuration.nix with `hardware.opengl.enable = true;`. If you don't do this, nix-shell will fail!
+
+You should be in a shell with everything needed to build already installed.
+Use `cargo run help` to see all subcommands.
+To use the `repl` subcommand, execute `cargo run repl`.
+Use `cargo build` to build the whole project.
+
+### Extra tips
+
+If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependencies into your current shell, so you never have to run nix-shell directly!
+
+### Editor
+
+The editor is a WIP and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
+`cargo run edit` should work from NixOS, if you use a nix-shell from inside another OS, follow the instructions below.
+
+#### Nvidia GPU
+
+Outside of a nix shell, execute the following:
+```
+nix-channel --add https://github.com/guibou/nixGL/archive/main.tar.gz nixgl && nix-channel --update
+nix-env -iA nixgl.auto.nixVulkanNvidia
+```
+Running the editor does not work with `nix-shell --pure`.
+```
+nix-shell
+```
+460.91.03 may be different for you, type nixVulkanNvidia and press tab to autocomplete for your version.
+```
+nixVulkanNvidia-460.91.03 cargo run edit
+```
+
+#### Integrated Intel Graphics
+
+:exclamation: ** Our Nix setup currently cannot run the editor with integrated intel graphics, see #1856 ** :exclamation:
+
+Outside of a nix shell, run:
+
+```bash
+git clone https://github.com/guibou/nixGL
+cd nixGL
+nix-env -f ./ -iA nixVulkanIntel
+```
+
+cd to the roc repo, and run (without --pure):
+```
+nix-shell
+nixVulkanIntel cargo run edit
+```
+
+#### Other configs
+
+Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations.
+
+## Troubleshooting
+
+Create an issue if you run into problems not listed here.
+That will help us improve this document for everyone who reads it in the future!
+
+## Manual Install
 
 To build the compiler, you need these installed:
 
@@ -15,7 +97,7 @@ To run the test suite (via `cargo test`), you additionally need to install:
 * [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
 Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specific_tests` to skip over the valgrind failures & tests.
 
-For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal developtment you should be fine without it. 
+For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal developtment you should be fine without it.
 
 ### libcxb libraries
 
@@ -79,89 +161,11 @@ There are also alternative installation options at http://releases.llvm.org/down
 
 [Troubleshooting](#troubleshooting)
 
-## Using Nix
+### Building
 
-### Install
-
-Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.
-
-Anyone having trouble installing the proper version of LLVM themselves might also prefer this method.
-
-If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
-
-Install nix:
-
-`curl -L https://nixos.org/nix/install | sh`
-
-You will need to start a fresh terminal session to use nix.
-
-### Usage
-
-Now with nix installed, you just need to run one command:
-
-`nix-shell`
-
-> This may not output anything for a little while. This is normal, hang in there. Also make sure you are in the roc project root.
-
-> Also, if you're on NixOS you'll need to enable opengl at the system-wide level. You can do this in configuration.nix with `hardware.opengl.enable = true;`. If you don't do this, nix-shell will fail!
-
-You should be in a shell with everything needed to build already installed. Next run:
-
-`cargo run repl`
-
-You should be in a repl now. Have fun!
-
-### Extra tips
-
-If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependencies into your current shell, so you never have to run nix-shell directly!
-
-### Editor
-
-The editor is a WIP and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
-`cargo run edit` should work from NixOS, if you use a nix-shell from inside another OS, follow the instructions below.
-
-#### Nvidia GPU
-
-Outside of a nix shell, execute the following:
-```
-nix-channel --add https://github.com/guibou/nixGL/archive/main.tar.gz nixgl && nix-channel --update
-nix-env -iA nixgl.auto.nixVulkanNvidia
-```
-Running the editor does not work with `nix-shell --pure`.
-```
-nix-shell
-```
-460.91.03 may be different for you, type nixVulkanNvidia and press tab to autocomplete for your version.
-```
-nixVulkanNvidia-460.91.03 cargo run edit
-```
-
-#### Integrated Intel Graphics
-
-:exclamation: ** Our Nix setup currently cannot run the editor with integrated intel graphics, see #1856 ** :exclamation:
-
-Outside of a nix shell, run:
-
-```bash
-git clone https://github.com/guibou/nixGL
-cd nixGL
-nix-env -f ./ -iA nixVulkanIntel
-```
-
-cd to the roc repo, and run (without --pure):
-```
-nix-shell
-nixVulkanIntel cargo run edit
-```
-
-#### Other configs
-
-Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations.
-
-## Troubleshooting
-
-Create an issue if you run into problems not listed here.
-That will help us improve this document for everyone who reads it in the future!
+Use `cargo build` to build the whole project.
+Use `cargo run help` to see all subcommands.
+To use the `repl` subcommand, execute `cargo run repl`.
 
 ### LLVM installation on Linux
 

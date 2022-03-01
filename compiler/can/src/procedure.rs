@@ -46,7 +46,8 @@ impl Procedure {
 pub struct References {
     pub bound_symbols: ImSet<Symbol>,
     pub lookups: ImSet<Symbol>,
-    pub referenced_aliases: ImSet<Symbol>,
+    /// Aliases or opaque types referenced
+    pub referenced_type_defs: ImSet<Symbol>,
     pub calls: ImSet<Symbol>,
 }
 
@@ -59,7 +60,7 @@ impl References {
         self.lookups = self.lookups.union(other.lookups);
         self.calls = self.calls.union(other.calls);
         self.bound_symbols = self.bound_symbols.union(other.bound_symbols);
-        self.referenced_aliases = self.referenced_aliases.union(other.referenced_aliases);
+        self.referenced_type_defs = self.referenced_type_defs.union(other.referenced_type_defs);
 
         self
     }
@@ -68,7 +69,7 @@ impl References {
         self.lookups.extend(other.lookups);
         self.calls.extend(other.calls);
         self.bound_symbols.extend(other.bound_symbols);
-        self.referenced_aliases.extend(other.referenced_aliases);
+        self.referenced_type_defs.extend(other.referenced_type_defs);
     }
 
     pub fn has_lookup(&self, symbol: Symbol) -> bool {

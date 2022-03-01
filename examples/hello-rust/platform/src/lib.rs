@@ -59,7 +59,7 @@ pub extern "C" fn rust_main() -> i32 {
         let roc_str = roc_main();
 
         let len = roc_str.len();
-        let str_bytes = roc_str.get_bytes() as *const libc::c_void;
+        let str_bytes = roc_str.as_bytes().as_ptr() as *const libc::c_void;
 
         if libc::write(1, str_bytes, len) < 0 {
             panic!("Writing to stdout failed!");

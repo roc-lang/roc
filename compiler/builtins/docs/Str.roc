@@ -392,27 +392,19 @@ toUtf32Le : Str -> List U8
 
 # Parsing
 
-## If the string begins with a valid [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster),
-## return it along with the rest of the string after that grapheme.
+## If the bytes begin with a valid [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster)
+## encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8), return it along with the number of bytes it took up.
 ##
-## If the string does not begin with a full grapheme, for example because it was
-## empty, return `Err`.
-parseGrapheme : Str -> Result { val : Str, rest : Str } [ Expected [ Grapheme ]* Str ]*
+## If the bytes do not begin with a valid grapheme, for example because the list was
+## empty or began with an invalid grapheme, return `Err`.
+parseUtf8Grapheme : List U8 -> Result { grapheme : Str, bytesParsed: Nat } [ InvalidGrapheme ]*
 
-## If the string begins with a valid [Unicode code point](http://www.unicode.org/glossary/#code_point),
-## return it along with the rest of the string after that code point.
+## If the bytes begin with a valid [Unicode code point](http://www.unicode.org/glossary/#code_point)
+## encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8), return it along with the number of bytes it took up.
 ##
-## If the string does not begin with a valid code point, for example because it was
-## empty, return `Err`.
-parseCodePt : Str -> Result { val : U32, rest : Str } [ Expected [ CodePt ]* Str ]*
-
-## If the first string begins with the second, return whatever comes
-## after the second.
-chomp : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Str ]*
-
-## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
-## equal to the given [U32], return whatever comes after that code point.
-chompCodePt : Str, U32 -> Result Str [ Expected [ ExactCodePt U32 ]* Str ]*
+## If the string does not begin with a valid code point, for example because the list was
+## empty or began with an invalid code point, return an `Err`.
+parseUtf8CodePt : List U8 -> Result { codePt : U32, bytesParsed: Nat } [ InvalidCodePt ]*
 
 ## If the string represents a valid [U8] number, return that number.
 ##

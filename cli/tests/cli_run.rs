@@ -6,12 +6,17 @@ extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
 
+#[macro_use]
+extern crate indoc;
+
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        example_file, examples_dir, extract_valgrind_errors, fixture_file, run_cmd, run_roc,
-        run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
+        example_file, examples_dir, extract_valgrind_errors, fixture_file, fixtures_dir,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
+        ValgrindErrorXWhat,
     };
+    use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::path::{Path, PathBuf};
 
@@ -44,6 +49,49 @@ mod cli_run {
         use_valgrind: bool,
     }
 
+    fn strip_colors(str: &str) -> String {
+        use roc_reporting::report::*;
+        str.replace(RED_CODE, "")
+            .replace(WHITE_CODE, "")
+            .replace(BLUE_CODE, "")
+            .replace(YELLOW_CODE, "")
+            .replace(GREEN_CODE, "")
+            .replace(CYAN_CODE, "")
+            .replace(MAGENTA_CODE, "")
+            .replace(RESET_CODE, "")
+            .replace(BOLD_CODE, "")
+            .replace(UNDERLINE_CODE, "")
+    }
+
+    fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
+        let compile_out = run_roc(&[&["check", file.to_str().unwrap()], &flags[..]].concat());
+        let err = compile_out.stdout.trim();
+        let err = strip_colors(&err);
+        assert_multiline_str_eq!(err, expected.into());
+    }
+
+    fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
+        let flags = &["--check"];
+        let out = run_roc(&[&["format", &file.to_str().unwrap()], &flags[..]].concat());
+
+        if expects_success_exit_code {
+            assert!(out.status.success());
+        } else {
+            assert!(!out.status.success());
+        }
+    }
+
+    fn build_example(file: &Path, flags: &[&str]) -> Out {
+        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
+        if !compile_out.stderr.is_empty() {
+            panic!("roc build had stderr: {}", compile_out.stderr);
+        }
+
+        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+
+        compile_out
+    }
+
     fn check_output_with_stdin(
         file: &Path,
         stdin: &[&str],
@@ -60,12 +108,7 @@ mod cli_run {
             all_flags.extend_from_slice(&["--valgrind"]);
         }
 
-        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], &all_flags[..]].concat());
-        if !compile_out.stderr.is_empty() {
-            panic!("{}", compile_out.stderr);
-        }
-
-        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+        build_example(file, &all_flags[..]);
 
         let out = if use_valgrind && ALLOW_VALGRIND {
             let (valgrind_out, raw_xml) = if let Some(input_file) = input_file {
@@ -202,6 +245,17 @@ mod cli_run {
                                 return;
                             }
                         }
+                        "hello-gui" => {
+                            // Since this one requires opening a window, we do `roc build` on it but don't run it.
+                            if cfg!(target_os = "linux") {
+                                // The surgical linker can successfully link this on Linux, but the legacy linker errors!
+                                build_example(&file_name, &["--optimize", "--roc-linker"]);
+                            } else {
+                                build_example(&file_name, &["--optimize"]);
+                            }
+
+                            return;
+                        }
                         _ => {}
                     }
 
@@ -318,6 +372,14 @@ mod cli_run {
             expected_ending:"55\n",
             use_valgrind: true,
         },
+        gui:"gui" => Example {
+            filename: "Hello.roc",
+            executable_filename: "hello-gui",
+            stdin: &[],
+            input_file: None,
+            expected_ending: "",
+            use_valgrind: false,
+        },
         quicksort:"quicksort" => Example {
             filename: "Quicksort.roc",
             executable_filename: "quicksort",
@@ -351,11 +413,19 @@ mod cli_run {
         //     use_valgrind: true,
         // },
         cli:"cli" => Example {
-            filename: "Echo.roc",
-            executable_filename: "echo",
+            filename: "form.roc",
+            executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
             input_file: None,
-            expected_ending: "Hi, Giovanni Giorgio!\n",
+            expected_ending: "Hi, Giovanni Giorgio! 👋\n",
+            use_valgrind: true,
+        },
+        tui:"tui" => Example {
+            filename: "Main.roc",
+            executable_filename: "tui",
+            stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
+            input_file: None,
+            expected_ending: "Hello Worldfoo!\n",
             use_valgrind: true,
         },
         // custom_malloc:"custom-malloc" => Example {
@@ -388,9 +458,11 @@ mod cli_run {
 
     macro_rules! benchmarks {
         ($($test_name:ident => $benchmark:expr,)+) => {
+
             $(
                 #[test]
                 #[cfg_attr(not(debug_assertions), serial(benchmark))]
+                #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
                 fn $test_name() {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);
@@ -739,6 +811,113 @@ mod cli_run {
             "I am Dep2.value2\n",
             true,
         );
+    }
+
+    #[test]
+    fn known_type_error() {
+        check_compile_error(
+            &known_bad_file("TypeError.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                I cannot find a `d` value
+
+                10│      _ <- await (line d)
+                                          ^
+
+                Did you mean one of these?
+
+                    U8
+                    Ok
+                    I8
+                    F64
+
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
+        );
+    }
+
+    #[test]
+    fn exposed_not_defined() {
+        check_compile_error(
+            &known_bad_file("ExposedNotDefined.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── MISSING DEFINITION ──────────────────────────────────────────────────────────
+
+                bar is listed as exposed, but it isn't defined in this module.
+
+                You can fix this by adding a definition for bar, or by removing it
+                from exposes.
+
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
+        );
+    }
+
+    #[test]
+    fn unused_import() {
+        check_compile_error(
+            &known_bad_file("UnusedImport.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNUSED IMPORT ───────────────────────────────────────────────────────────────
+
+                Nothing from Symbol is used in this module.
+
+                3│      imports [ Symbol.{ Ident } ]
+                                  ^^^^^^^^^^^^^^^^
+
+                Since Symbol isn't used, you don't need to import it.
+
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
+        );
+    }
+
+    #[test]
+    fn unknown_generates_with() {
+        check_compile_error(
+            &known_bad_file("UnknownGeneratesWith.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNKNOWN GENERATES FUNCTION ──────────────────────────────────────────────────
+
+                I don't know how to generate the foobar function.
+
+                4│      generates Effect with [ after, map, always, foobar ]
+                                                                    ^^^^^^
+
+                Only specific functions like `after` and `map` can be generated.Learn
+                more about hosted modules at TODO.
+
+                ────────────────────────────────────────────────────────────────────────────────"#
+            ),
+        );
+    }
+
+    #[test]
+    fn format_check_good() {
+        check_format_check_as_expected(&fixture_file("format", "Formatted.roc"), true);
+    }
+
+    #[test]
+    fn format_check_reformatting_needed() {
+        check_format_check_as_expected(&fixture_file("format", "NotFormatted.roc"), false);
+    }
+
+    #[test]
+    fn format_check_folders() {
+        // This fails, because "NotFormatted.roc" is present in this folder
+        check_format_check_as_expected(&fixtures_dir("format"), false);
+
+        // This doesn't fail, since only "Formatted.roc" is present in this folder
+        check_format_check_as_expected(&fixtures_dir("format/formatted_directory"), true);
     }
 }
 

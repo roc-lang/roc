@@ -23,9 +23,9 @@ fn width_and_alignment_u8_u8() {
 
     let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
 
-    let ptr_width = 8;
-    assert_eq!(layout.alignment_bytes(ptr_width), 1);
-    assert_eq!(layout.stack_size(ptr_width), 2);
+    let target_info = roc_target::TargetInfo::default_x86_64();
+    assert_eq!(layout.alignment_bytes(target_info), 1);
+    assert_eq!(layout.stack_size(target_info), 2);
 }
 
 #[test]
@@ -1177,10 +1177,7 @@ fn applied_tag_function() {
             x
             "#
         ),
-        RocList::from_slice(&[
-            RocStr::from_slice("a".as_bytes()),
-            RocStr::from_slice("b".as_bytes())
-        ]),
+        RocList::from_slice(&[RocStr::from("a"), RocStr::from("b")]),
         RocList<RocStr>
     );
 }
@@ -1197,10 +1194,7 @@ fn applied_tag_function_result() {
             List.keepOks x (\y -> y)
             "#
         ),
-        RocList::from_slice(&[
-            (RocStr::from_slice("a".as_bytes())),
-            (RocStr::from_slice("b".as_bytes()))
-        ]),
+        RocList::from_slice(&[(RocStr::from("a")), (RocStr::from("b"))]),
         RocList<RocStr>
     );
 }
@@ -1260,5 +1254,297 @@ fn recursive_tag_union_into_flat_tag_union() {
         0,
         usize,
         |_| 0
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            b = False
+            f : Bool, [True, False, Idk] -> U8
+            f = \_, _ -> 18
+            f b b
+            "#
+        ),
+        18,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_applied_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main =
+                a = A "abc"
+                f = \x ->
+                    when x is
+                        A y -> y
+                        B y -> y
+                f a
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_tag_with_polymorphic_arg() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                a = A
+                wrap = Wrapped a
+
+                useWrap1 : [Wrapped [A], Other] -> U8
+                useWrap1 =
+                    \w -> when w is
+                        Wrapped A -> 2
+                        Other -> 3
+
+                useWrap2 : [Wrapped [A, B]] -> U8
+                useWrap2 =
+                    \w -> when w is
+                        Wrapped A -> 5
+                        Wrapped B -> 7
+
+                useWrap1 wrap * useWrap2 wrap
+            "#
+        ),
+        10,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                mono : U8
+                mono = 15
+                poly = A
+                wrap = Wrapped poly mono
+
+                useWrap1 : [Wrapped [A] U8, Other] -> U8
+                useWrap1 =
+                    \w -> when w is
+                        Wrapped A n -> n
+                        Other -> 0
+
+                useWrap2 : [Wrapped [A, B] U8] -> U8
+                useWrap2 =
+                    \w -> when w is
+                        Wrapped A n -> n
+                        Wrapped B _ -> 0
+
+                useWrap1 wrap * useWrap2 wrap
+            "#
+        ),
+        225,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2365_monomorphize_tag_with_non_empty_ext_var() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Single a : [A, B, C]a
+            Compound a : Single [D, E, F]a
+
+            single : {} -> Single *
+            single = \{} -> C
+
+            compound : {} -> Compound *
+            compound = \{} -> single {}
+
+            main = compound {}
+            "#
+        ),
+        2, // C
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Single a : [A, B, C]a
+            Compound a : Single [D, E, F]a
+
+            single : {} -> Result Str (Single *)
+            single = \{} -> Err C
+
+            compound : {} -> Result Str (Compound *)
+            compound = \{} ->
+                when single {} is
+                    Ok s -> Ok s
+                    Err e -> Err e
+
+            main = compound {}
+            "#
+        ),
+        2, // C
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Single a : [A, B, C]a
+            Compound a : Single [D, E, F]a
+
+            main =
+                single : {} -> Result Str (Single *)
+                single = \{} -> Err C
+
+                compound : {} -> Result Str (Compound *)
+                compound = \{} ->
+                    when single {} is
+                        Ok s -> Ok s
+                        Err e -> Err e
+
+                compound {}
+            "#
+        ),
+        2, // C
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_2445() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            none : [ None, Update a ]
+            none = None
+
+            press : [ None, Update U8 ]
+            press = none
+
+            main =
+                when press is
+                    None -> 15
+                    Update _ -> 25
+            "#
+        ),
+        15,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2458() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Foo a : [ Blah (Bar a), Nothing {} ]
+            Bar a : Foo a
+
+            v : Bar {}
+            v = Blah (Blah (Nothing {}))
+
+            when v is
+                Blah (Blah (Nothing {})) -> 15
+                _ -> 25
+            "#
+        ),
+        15,
+        u8
+    )
+}
+
+#[test]
+#[ignore = "See https://github.com/rtfeldman/roc/issues/2466"]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2458_deep_recursion_var() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Foo a : [ Blah (Result (Bar a) {}) ]
+            Bar a : Foo a
+
+            v : Bar {}
+
+            when v is
+                Blah (Ok (Blah (Err {}))) -> "1"
+                _ -> "2"
+            "#
+        ),
+        15,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_1162() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+
+            balance : a, RBTree a -> RBTree a
+            balance = \key, left ->
+                  when left is
+                    Node _ _ lRight ->
+                        Node key lRight Empty
+
+                    _ ->
+                        Empty
+
+
+            tree : RBTree {}
+            tree =
+                balance {} Empty
+
+            main : U8
+            main =
+                when tree is
+                    Empty -> 15
+                    _ -> 25
+            "#
+        ),
+        15,
+        u8
     )
 }

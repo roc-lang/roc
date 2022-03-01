@@ -1194,6 +1194,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56899898ce76aaf4a0f24d914c97ea6ed976d42fec6ad33fcbb0a1103e07b2b0"
 
 [[package]]
+name = "dunce"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "453440c271cf5577fd2a40e4942540cb7d0d2f85e27c8d07dd0023c925a67541"
+
+[[package]]
+name = "dynasm"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47b1801e630bd336d0bbbdbf814de6cc749c9a400c7e3d995e6adfd455d0c83c"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "lazy_static",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "dynasmrt"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d428afc93ad288f6dffc1fa5f4a78201ad2eec33c5a522e51c181009eb09061"
+dependencies = [
+ "byteorder",
+ "dynasm",
+ "memmap2 0.5.0",
+]
+
+[[package]]
 name = "either"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1305,12 +1337,6 @@ checksum = "59a98bbaacea1c0eb6a0876280051b892eb73594fd90cf3b20e9c817029c57d2"
 dependencies = [
  "toml",
 ]
-
-[[package]]
-name = "fixedbitset"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37ab347416e802de484e4d03c7316c48f1ecb56574dfd4a46a80f173ce1de04d"
 
 [[package]]
 name = "flate2"
@@ -1865,9 +1891,9 @@ dependencies = [
 
 [[package]]
 name = "js-sys"
-version = "0.3.55"
+version = "0.3.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cc9ffccd38c451a86bf13657df244e9c3f37493cce8e5e21e940963777acc84"
+checksum = "a38fc24e30fd564ce974c02bf1d337caddff65be6cc4735a1f7eab22a7440f04"
 dependencies = [
  "wasm-bindgen",
 ]
@@ -2676,14 +2702,11 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d76e8e1493bcac0d2766c42737f34458f1c8c50c0d23bcb24ea953affb273216"
 dependencies = [
- "backtrace",
  "cfg-if 1.0.0",
  "instant",
  "libc",
- "petgraph",
  "redox_syscall",
  "smallvec",
- "thread-id",
  "winapi",
 ]
 
@@ -2767,16 +2790,6 @@ dependencies = [
  "maplit",
  "pest",
  "sha-1",
-]
-
-[[package]]
-name = "petgraph"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "467d164a6de56270bd7c4d070df81d07beace25012d5103ced4e9ff08d6afdb7"
-dependencies = [
- "fixedbitset",
- "indexmap",
 ]
 
 [[package]]
@@ -3232,6 +3245,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1382d1f0a252c4bf97dc20d979a2fdd05b024acd7c2ed0f7595d7817666a157"
 
 [[package]]
+name = "repl_test"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "lazy_static",
+ "roc_cli",
+ "roc_repl_cli",
+ "roc_test_utils",
+ "strip-ansi-escapes",
+ "wasmer",
+ "wasmer-wasi",
+]
+
+[[package]]
 name = "rkyv"
 version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3275,12 +3302,13 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_load",
  "roc_module",
  "roc_parse",
  "roc_problem",
  "roc_region",
- "roc_reporting",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "snafu",
@@ -3310,6 +3338,7 @@ dependencies = [
  "roc_reporting",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "serde_json",
@@ -3321,9 +3350,11 @@ dependencies = [
 name = "roc_builtins"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "roc_collections",
  "roc_module",
  "roc_region",
+ "roc_target",
  "roc_types",
 ]
 
@@ -3336,6 +3367,7 @@ dependencies = [
  "pretty_assertions",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_parse",
  "roc_problem",
@@ -3354,33 +3386,26 @@ dependencies = [
  "const_format",
  "criterion 0.3.5 (git+https://github.com/Anton-4/criterion.rs)",
  "indoc",
- "inkwell 0.1.0",
- "libloading 0.7.1",
  "mimalloc",
  "pretty_assertions",
  "roc_build",
  "roc_builtins",
  "roc_can",
  "roc_collections",
- "roc_constrain",
  "roc_docs",
  "roc_editor",
+ "roc_error_macros",
  "roc_fmt",
- "roc_gen_llvm",
  "roc_linker",
  "roc_load",
  "roc_module",
  "roc_mono",
  "roc_parse",
- "roc_problem",
  "roc_region",
+ "roc_repl_cli",
  "roc_reporting",
- "roc_solve",
+ "roc_target",
  "roc_test_utils",
- "roc_types",
- "roc_unify",
- "rustyline",
- "rustyline-derive",
  "serial_test",
  "target-lexicon",
  "tempfile",
@@ -3420,6 +3445,7 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_parse",
  "roc_region",
@@ -3431,6 +3457,7 @@ name = "roc_docs"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "indoc",
  "pretty_assertions",
  "pulldown-cmark",
  "roc_ast",
@@ -3442,6 +3469,7 @@ dependencies = [
  "roc_module",
  "roc_parse",
  "roc_region",
+ "roc_target",
  "roc_types",
  "snafu",
  "tempfile",
@@ -3498,6 +3526,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_error_macros"
+version = "0.1.0"
+
+[[package]]
+name = "roc_exhaustive"
+version = "0.1.0"
+dependencies = [
+ "roc_collections",
+ "roc_module",
+ "roc_region",
+ "roc_std",
+]
+
+[[package]]
 name = "roc_fmt"
 version = "0.1.0"
 dependencies = [
@@ -3522,14 +3564,15 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
  "roc_parse",
  "roc_problem",
  "roc_region",
- "roc_reporting",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "target-lexicon",
@@ -3544,10 +3587,11 @@ dependencies = [
  "morphic_lib",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
- "roc_reporting",
  "roc_std",
+ "roc_target",
  "target-lexicon",
 ]
 
@@ -3558,10 +3602,11 @@ dependencies = [
  "bumpalo",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
- "roc_reporting",
  "roc_std",
+ "roc_target",
 ]
 
 [[package]]
@@ -3610,6 +3655,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -3617,8 +3663,10 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_target",
  "roc_types",
  "roc_unify",
+ "strip-ansi-escapes",
  "tempfile",
  "ven_pretty",
 ]
@@ -3630,6 +3678,7 @@ dependencies = [
  "bumpalo",
  "lazy_static",
  "roc_collections",
+ "roc_error_macros",
  "roc_ident",
  "roc_region",
  "snafu",
@@ -3646,11 +3695,14 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
+ "roc_exhaustive",
  "roc_module",
  "roc_problem",
  "roc_region",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "static_assertions",
@@ -3694,6 +3746,68 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_repl_cli"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "const_format",
+ "inkwell 0.1.0",
+ "libloading 0.7.1",
+ "roc_build",
+ "roc_builtins",
+ "roc_collections",
+ "roc_gen_llvm",
+ "roc_load",
+ "roc_mono",
+ "roc_parse",
+ "roc_repl_eval",
+ "roc_std",
+ "roc_target",
+ "roc_types",
+ "rustyline",
+ "rustyline-derive",
+ "target-lexicon",
+]
+
+[[package]]
+name = "roc_repl_eval"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_fmt",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_region",
+ "roc_reporting",
+ "roc_target",
+ "roc_types",
+]
+
+[[package]]
+name = "roc_repl_wasm"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "futures",
+ "js-sys",
+ "roc_builtins",
+ "roc_collections",
+ "roc_gen_wasm",
+ "roc_load",
+ "roc_parse",
+ "roc_repl_eval",
+ "roc_target",
+ "roc_types",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "roc_reporting"
 version = "0.1.0"
 dependencies = [
@@ -3705,12 +3819,14 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_exhaustive",
  "roc_module",
  "roc_mono",
  "roc_parse",
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_target",
  "roc_test_utils",
  "roc_types",
  "ven_pretty",
@@ -3733,6 +3849,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "tempfile",
@@ -3743,9 +3860,17 @@ name = "roc_std"
 version = "0.1.0"
 dependencies = [
  "indoc",
+ "libc",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
+]
+
+[[package]]
+name = "roc_target"
+version = "0.1.0"
+dependencies = [
+ "target-lexicon",
 ]
 
 [[package]]
@@ -3761,6 +3886,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_region",
  "static_assertions",
@@ -3771,6 +3897,7 @@ dependencies = [
 name = "roc_unify"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "roc_collections",
  "roc_module",
  "roc_types",
@@ -4294,6 +4421,7 @@ dependencies = [
  "roc_reporting",
  "roc_solve",
  "roc_std",
+ "roc_target",
  "roc_types",
  "roc_unify",
  "target-lexicon",
@@ -4315,6 +4443,7 @@ dependencies = [
  "roc_load",
  "roc_module",
  "roc_mono",
+ "roc_target",
  "test_mono_macros",
 ]
 
@@ -4360,17 +4489,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "thread-id"
-version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fdfe0627923f7411a43ec9ec9c39c3a9b4151be313e0922042581fb6c9b717f"
-dependencies = [
- "libc",
- "redox_syscall",
- "winapi",
 ]
 
 [[package]]
@@ -4641,9 +4759,9 @@ checksum = "fd6fbd9a79829dd1ad0cc20627bf1ed606756a7f77edff7b66b7064f9cb327c6"
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.78"
+version = "0.2.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "632f73e236b219150ea279196e54e610f5dbafa5d61786303d4da54f84e47fce"
+checksum = "25f1af7423d8588a3d840681122e72e6a24ddbcb3f0ec385cac0d12d24256c06"
 dependencies = [
  "cfg-if 1.0.0",
  "wasm-bindgen-macro",
@@ -4651,9 +4769,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-backend"
-version = "0.2.78"
+version = "0.2.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a317bf8f9fba2476b4b2c85ef4c4af8ff39c3c7f0cdfeed4f82c34a880aa837b"
+checksum = "8b21c0df030f5a177f3cba22e9bc4322695ec43e7257d865302900290bcdedca"
 dependencies = [
  "bumpalo",
  "lazy_static",
@@ -4666,9 +4784,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.28"
+version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e8d7523cb1f2a4c96c1317ca690031b714a51cc14e05f712446691f413f5d39"
+checksum = "2eb6ec270a31b1d3c7e266b999739109abce8b6c87e4b31fcfcd788b65267395"
 dependencies = [
  "cfg-if 1.0.0",
  "js-sys",
@@ -4678,9 +4796,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.78"
+version = "0.2.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d56146e7c495528bf6587663bea13a8eb588d39b36b679d83972e1a2dbbdacf9"
+checksum = "2f4203d69e40a52ee523b2529a773d5ffc1dc0071801c87b3d270b471b80ed01"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -4688,9 +4806,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.78"
+version = "0.2.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7803e0eea25835f8abdc585cd3021b3deb11543c6fe226dcd30b228857c5c5ab"
+checksum = "bfa8a30d46208db204854cadbb5d4baf5fcf8071ba5bf48190c3e59937962ebc"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4701,9 +4819,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.78"
+version = "0.2.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0237232789cf037d5480773fe568aac745bfe2afbc11a863e97901780a6b47cc"
+checksum = "3d958d035c4438e28c70e4321a2911302f10135ce78a9c7834c0cab4123d06a2"
 
 [[package]]
 name = "wasmer"
@@ -4719,6 +4837,7 @@ dependencies = [
  "thiserror",
  "wasmer-compiler",
  "wasmer-compiler-cranelift",
+ "wasmer-compiler-singlepass",
  "wasmer-derive",
  "wasmer-engine",
  "wasmer-engine-dylib",
@@ -4762,6 +4881,25 @@ dependencies = [
  "rayon",
  "smallvec",
  "tracing",
+ "wasmer-compiler",
+ "wasmer-types",
+ "wasmer-vm",
+]
+
+[[package]]
+name = "wasmer-compiler-singlepass"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9429b9f7708c582d855b1787f09c7029ff23fb692550d4a1cc351c8ea84c3014"
+dependencies = [
+ "byteorder",
+ "dynasm",
+ "dynasmrt",
+ "lazy_static",
+ "loupe",
+ "more-asserts",
+ "rayon",
+ "smallvec",
  "wasmer-compiler",
  "wasmer-types",
  "wasmer-vm",

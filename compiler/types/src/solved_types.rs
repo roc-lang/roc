@@ -1,5 +1,5 @@
 use crate::subs::{FlatType, GetSubsSlice, Subs, VarId, VarStore, Variable};
-use crate::types::{Problem, RecordField, Type};
+use crate::types::{AliasKind, Problem, RecordField, Type};
 use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -60,6 +60,7 @@ pub enum SolvedType {
         Vec<(Lowercase, SolvedType)>,
         Vec<SolvedLambdaSet>,
         Box<SolvedType>,
+        AliasKind,
     ),
 
     HostExposedAlias {
@@ -85,7 +86,7 @@ impl SolvedType {
         match typ {
             EmptyRec => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Apply(symbol, types) => {
+            Apply(symbol, types, _) => {
                 let mut solved_types = Vec::with_capacity(types.len());
 
                 for typ in types {
@@ -181,7 +182,7 @@ impl SolvedType {
                 type_arguments,
                 lambda_set_variables,
                 actual: box_type,
-                ..
+                kind,
             } => {
                 let solved_type = Self::from_type(solved_subs, box_type);
                 let mut solved_args = Vec::with_capacity(type_arguments.len());
@@ -201,6 +202,7 @@ impl SolvedType {
                     solved_args,
                     solved_lambda_sets,
                     Box::new(solved_type),
+                    *kind,
                 )
             }
             HostExposedAlias {
@@ -231,6 +233,7 @@ impl SolvedType {
                 }
             }
             Variable(var) => Self::from_var(solved_subs.inner(), *var),
+            RangedNumber(typ, _) => Self::from_type(solved_subs, typ),
         }
     }
 
@@ -256,7 +259,7 @@ impl SolvedType {
             }
             RigidVar(name) => SolvedType::Rigid(name.clone()),
             Structure(flat_type) => Self::from_flat_type(subs, recursion_vars, flat_type),
-            Alias(symbol, args, actual_var) => {
+            Alias(symbol, args, actual_var, kind) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
                 for var_index in args.named_type_arguments() {
@@ -282,8 +285,15 @@ impl SolvedType {
 
                 let aliased_to = Self::from_var_help(subs, recursion_vars, *actual_var);
 
-                SolvedType::Alias(*symbol, new_args, solved_lambda_sets, Box::new(aliased_to))
+                SolvedType::Alias(
+                    *symbol,
+                    new_args,
+                    solved_lambda_sets,
+                    Box::new(aliased_to),
+                    *kind,
+                )
             }
+            RangedNumber(typ, _range_vars) => Self::from_var_help(subs, recursion_vars, *typ),
             Error => SolvedType::Error,
         }
     }
@@ -454,7 +464,7 @@ pub fn to_type(
                 new_args.push(to_type(arg, free_vars, var_store));
             }
 
-            Type::Apply(*symbol, new_args)
+            Type::Apply(*symbol, new_args, Region::zero())
         }
         Rigid(lowercase) => {
             if let Some(var) = free_vars.named_vars.get(lowercase) {
@@ -534,7 +544,7 @@ pub fn to_type(
                 Box::new(to_type(ext, free_vars, var_store)),
             )
         }
-        Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual) => {
+        Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual, kind) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
 
             for (lowercase, solved_arg) in solved_type_variables {
@@ -557,6 +567,7 @@ pub fn to_type(
                 type_arguments: type_variables,
                 lambda_set_variables,
                 actual: Box::new(actual),
+                kind: *kind,
             }
         }
         HostExposedAlias {

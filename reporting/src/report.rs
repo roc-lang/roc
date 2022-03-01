@@ -136,6 +136,7 @@ pub struct Palette<'a> {
     pub type_variable: &'a str,
     pub structure: &'a str,
     pub alias: &'a str,
+    pub opaque: &'a str,
     pub error: &'a str,
     pub line_number: &'a str,
     pub header: &'a str,
@@ -155,6 +156,7 @@ pub const DEFAULT_PALETTE: Palette = Palette {
     type_variable: YELLOW_CODE,
     structure: GREEN_CODE,
     alias: YELLOW_CODE,
+    opaque: YELLOW_CODE,
     error: RED_CODE,
     line_number: CYAN_CODE,
     header: CYAN_CODE,
@@ -324,6 +326,29 @@ impl<'a> RocDocAllocator<'a> {
     pub fn global_tag_name(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
         self.text(format!("{}", uppercase))
             .annotate(Annotation::GlobalTag)
+    }
+
+    pub fn opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
+        let fmt = if opaque.module_id() == self.home {
+            // Render it unqualified if it's in the current module.
+            format!("{}", opaque.ident_str(self.interns))
+        } else {
+            format!(
+                "{}.{}",
+                opaque.module_string(self.interns),
+                opaque.ident_str(self.interns),
+            )
+        };
+
+        self.text(fmt).annotate(Annotation::Opaque)
+    }
+
+    pub fn wrapped_opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
+        debug_assert_eq!(opaque.module_id(), self.home, "Opaque wrappings can only be defined in the same module they're defined in, but this one is defined elsewhere: {:?}", opaque);
+
+        // TODO(opaques): $->@
+        self.text(format!("${}", opaque.ident_str(self.interns)))
+            .annotate(Annotation::Opaque)
     }
 
     pub fn record_field(&'a self, lowercase: Lowercase) -> DocBuilder<'a, Self, Annotation> {
@@ -632,9 +657,42 @@ impl<'a> RocDocAllocator<'a> {
         self.text(format!("{}", ident.as_inline_str()))
             .annotate(Annotation::Symbol)
     }
+
+    pub fn int_literal<I>(&'a self, int: I) -> DocBuilder<'a, Self, Annotation>
+    where
+        I: ToString,
+    {
+        let s = int.to_string();
+
+        let is_negative = s.starts_with('-');
+
+        if s.len() < 7 + (is_negative as usize) {
+            // If the number is not at least in the millions, return it as-is.
+            return self.text(s);
+        }
+
+        // Otherwise, let's add numeric separators to make it easier to read.
+        let mut result = String::with_capacity(s.len() + s.len() / 3);
+        for (idx, c) in s
+            .get((is_negative as usize)..)
+            .unwrap()
+            .chars()
+            .rev()
+            .enumerate()
+        {
+            if idx != 0 && idx % 3 == 0 {
+                result.push('_');
+            }
+            result.push(c);
+        }
+        if is_negative {
+            result.push('-');
+        }
+        self.text(result.chars().rev().collect::<String>())
+    }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Annotation {
     Emphasized,
     Url,
@@ -644,6 +702,7 @@ pub enum Annotation {
     RecordField,
     TypeVariable,
     Alias,
+    Opaque,
     Structure,
     Symbol,
     BinOp,
@@ -816,6 +875,9 @@ where
             Alias => {
                 self.write_str(self.palette.alias)?;
             }
+            Opaque => {
+                self.write_str(self.palette.alias)?;
+            }
             BinOp => {
                 self.write_str(self.palette.alias)?;
             }
@@ -870,7 +932,7 @@ where
                     self.write_str(RESET_CODE)?;
                 }
 
-                TypeBlock | GlobalTag | PrivateTag | RecordField => { /* nothing yet */ }
+                TypeBlock | GlobalTag | PrivateTag | Opaque | RecordField => { /* nothing yet */ }
             },
         }
         Ok(())

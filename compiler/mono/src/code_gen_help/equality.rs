@@ -32,7 +32,7 @@ pub fn eq_generic<'a>(
         }
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_)) => eq_todo(),
         Layout::Builtin(Builtin::List(elem_layout)) => eq_list(root, ident_ids, ctx, elem_layout),
-        Layout::Struct(field_layouts) => eq_struct(root, ident_ids, ctx, field_layouts),
+        Layout::Struct { field_layouts, .. } => eq_struct(root, ident_ids, ctx, field_layouts),
         Layout::Union(union_layout) => eq_tag_union(root, ident_ids, ctx, union_layout),
         Layout::LambdaSet(_) => unreachable!("`==` is not defined on functions"),
         Layout::RecursivePointer => {
@@ -590,7 +590,9 @@ fn eq_list<'a>(
 
     // let size = literal int
     let size = root.create_symbol(ident_ids, "size");
-    let size_expr = Expr::Literal(Literal::Int(elem_layout.stack_size(root.ptr_size) as i128));
+    let size_expr = Expr::Literal(Literal::Int(
+        elem_layout.stack_size(root.target_info) as i128
+    ));
     let size_stmt = |next| Stmt::Let(size, size_expr, layout_isize, next);
 
     // let list_size = len_1 * size

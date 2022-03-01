@@ -10,7 +10,6 @@ mod helpers;
 #[cfg(test)]
 mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
-    use roc_can::builtins::builtin_defs_map;
     use roc_collections::all::MutMap;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
@@ -63,8 +62,7 @@ mod solve_expr {
                 &stdlib,
                 dir.path(),
                 exposed_types,
-                8,
-                builtin_defs_map,
+                roc_target::TargetInfo::default_x86_64(),
             );
 
             dir.close()?;
@@ -3036,7 +3034,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn typecheck_mutually_recursive_tag_union_2() {
         infer_eq_without_problem(
             indoc!(
@@ -3064,7 +3061,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn typecheck_mutually_recursive_tag_union_listabc() {
         infer_eq_without_problem(
             indoc!(
@@ -3342,6 +3338,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn min_i128() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minI128
+                "#
+            ),
+            "I128",
+        );
+    }
+
+    #[test]
     fn max_i128() {
         infer_eq_without_problem(
             indoc!(
@@ -3350,6 +3358,102 @@ mod solve_expr {
                 "#
             ),
             "I128",
+        );
+    }
+
+    #[test]
+    fn min_i64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minI64
+                "#
+            ),
+            "I64",
+        );
+    }
+
+    #[test]
+    fn max_i64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxI64
+                "#
+            ),
+            "I64",
+        );
+    }
+
+    #[test]
+    fn min_u64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minU64
+                "#
+            ),
+            "U64",
+        );
+    }
+
+    #[test]
+    fn max_u64() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxU64
+                "#
+            ),
+            "U64",
+        );
+    }
+
+    #[test]
+    fn min_i32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minI32
+                "#
+            ),
+            "I32",
+        );
+    }
+
+    #[test]
+    fn max_i32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxI32
+                "#
+            ),
+            "I32",
+        );
+    }
+
+    #[test]
+    fn min_u32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.minU32
+                "#
+            ),
+            "U32",
+        );
+    }
+
+    #[test]
+    fn max_u32() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxU32
+                "#
+            ),
+            "U32",
         );
     }
 
@@ -4934,6 +5038,475 @@ mod solve_expr {
                  "#
             ),
             "[ Email Str ] -> Bool",
+        )
+    }
+
+    #[test]
+    fn numeric_literal_suffixes() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                {
+                    u8:   123u8,
+                    u16:  123u16,
+                    u32:  123u32,
+                    u64:  123u64,
+                    u128: 123u128,
+
+                    i8:   123i8,
+                    i16:  123i16,
+                    i32:  123i32,
+                    i64:  123i64,
+                    i128: 123i128,
+
+                    nat:  123nat,
+
+                    bu8:   0b11u8,
+                    bu16:  0b11u16,
+                    bu32:  0b11u32,
+                    bu64:  0b11u64,
+                    bu128: 0b11u128,
+
+                    bi8:   0b11i8,
+                    bi16:  0b11i16,
+                    bi32:  0b11i32,
+                    bi64:  0b11i64,
+                    bi128: 0b11i128,
+
+                    bnat:  0b11nat,
+
+                    dec:  123.0dec,
+                    f32:  123.0f32,
+                    f64:  123.0f64,
+
+                    fdec: 123dec,
+                    ff32: 123f32,
+                    ff64: 123f64,
+                }
+                "#
+            ),
+            r#"{ bi128 : I128, bi16 : I16, bi32 : I32, bi64 : I64, bi8 : I8, bnat : Nat, bu128 : U128, bu16 : U16, bu32 : U32, bu64 : U64, bu8 : U8, dec : Dec, f32 : F32, f64 : F64, fdec : Dec, ff32 : F32, ff64 : F64, i128 : I128, i16 : I16, i32 : I32, i64 : I64, i8 : I8, nat : Nat, u128 : U128, u16 : U16, u32 : U32, u64 : U64, u8 : U8 }"#,
+        )
+    }
+
+    #[test]
+    fn numeric_literal_suffixes_in_pattern() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                {
+                    u8:   (\n ->
+                            when n is
+                              123u8 -> n),
+                    u16:  (\n ->
+                            when n is
+                              123u16 -> n),
+                    u32:  (\n ->
+                            when n is
+                              123u32 -> n),
+                    u64:  (\n ->
+                            when n is
+                              123u64 -> n),
+                    u128: (\n ->
+                            when n is
+                              123u128 -> n),
+
+                    i8:   (\n ->
+                            when n is
+                              123i8 -> n),
+                    i16:  (\n ->
+                            when n is
+                              123i16 -> n),
+                    i32:  (\n ->
+                            when n is
+                              123i32 -> n),
+                    i64:  (\n ->
+                            when n is
+                              123i64 -> n),
+                    i128: (\n ->
+                            when n is
+                              123i128 -> n),
+
+                    nat:  (\n ->
+                            when n is
+                              123nat -> n),
+
+                    bu8:   (\n ->
+                            when n is
+                              0b11u8 -> n),
+                    bu16:  (\n ->
+                            when n is
+                              0b11u16 -> n),
+                    bu32:  (\n ->
+                            when n is
+                              0b11u32 -> n),
+                    bu64:  (\n ->
+                            when n is
+                              0b11u64 -> n),
+                    bu128: (\n ->
+                            when n is
+                              0b11u128 -> n),
+
+                    bi8:   (\n ->
+                            when n is
+                              0b11i8 -> n),
+                    bi16:  (\n ->
+                            when n is
+                              0b11i16 -> n),
+                    bi32:  (\n ->
+                            when n is
+                              0b11i32 -> n),
+                    bi64:  (\n ->
+                            when n is
+                              0b11i64 -> n),
+                    bi128: (\n ->
+                            when n is
+                              0b11i128 -> n),
+
+                    bnat:  (\n ->
+                            when n is
+                              0b11nat -> n),
+
+                    dec:  (\n ->
+                            when n is
+                              123.0dec -> n),
+                    f32:  (\n ->
+                            when n is
+                              123.0f32 -> n),
+                    f64:  (\n ->
+                            when n is
+                              123.0f64 -> n),
+
+                    fdec: (\n ->
+                            when n is
+                              123dec -> n),
+                    ff32: (\n ->
+                            when n is
+                              123f32 -> n),
+                    ff64: (\n ->
+                            when n is
+                              123f64 -> n),
+                }
+                "#
+            ),
+            r#"{ bi128 : I128 -> I128, bi16 : I16 -> I16, bi32 : I32 -> I32, bi64 : I64 -> I64, bi8 : I8 -> I8, bnat : Nat -> Nat, bu128 : U128 -> U128, bu16 : U16 -> U16, bu32 : U32 -> U32, bu64 : U64 -> U64, bu8 : U8 -> U8, dec : Dec -> Dec, f32 : F32 -> F32, f64 : F64 -> F64, fdec : Dec -> Dec, ff32 : F32 -> F32, ff64 : F64 -> F64, i128 : I128 -> I128, i16 : I16 -> I16, i32 : I32 -> I32, i64 : I64 -> I64, i8 : I8 -> I8, nat : Nat -> Nat, u128 : U128 -> U128, u16 : U16 -> U16, u32 : U32 -> U32, u64 : U64 -> U64, u8 : U8 -> U8 }"#,
+        )
+    }
+
+    #[test]
+    fn issue_2458() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Foo a : [ Blah (Result (Bar a) { val: a }) ]
+                Bar a : Foo a
+
+                v : Bar U8
+                v = Blah (Ok (Blah (Err { val: 1 })))
+
+                v
+                "#
+            ),
+            "Bar U8",
+        )
+    }
+
+    // https://github.com/rtfeldman/roc/issues/2379
+    #[test]
+    fn copy_vars_referencing_copied_vars() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Job : [ Job [ Command ] (List Job) ]
+
+                job : Job
+
+                job
+                "#
+            ),
+            "Job",
+        )
+    }
+
+    #[test]
+    fn copy_vars_referencing_copied_vars_specialized() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Job a : [ Job [ Command ] (Job a) (List (Job a)) a ]
+
+                job : Job Str
+
+                when job is
+                    Job _ j lst _ ->
+                        when j is
+                            Job _ _ _ s ->
+                                { j, lst, s }
+                "#
+            ),
+            // TODO: this means that we're doing our job correctly, as now both `Job a`s have been
+            // specialized to the same type, and the second destructuring proves the reified type
+            // is `Job Str`. But we should just print the structure of the recursive type directly.
+            // See https://github.com/rtfeldman/roc/issues/2513
+            "{ j : a, lst : List a, s : Str }",
+        )
+    }
+
+    #[test]
+    fn to_int() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                {
+                    toI8: Num.toI8,
+                    toI16: Num.toI16,
+                    toI32: Num.toI32,
+                    toI64: Num.toI64,
+                    toI128: Num.toI128,
+                    toU8: Num.toU8,
+                    toU16: Num.toU16,
+                    toU32: Num.toU32,
+                    toU64: Num.toU64,
+                    toU128: Num.toU128,
+                }
+                "#
+            ),
+            r#"{ toI128 : Int * -> I128, toI16 : Int * -> I16, toI32 : Int * -> I32, toI64 : Int * -> I64, toI8 : Int * -> I8, toU128 : Int * -> U128, toU16 : Int * -> U16, toU32 : Int * -> U32, toU64 : Int * -> U64, toU8 : Int * -> U8 }"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                $Age 21
+                "#
+            ),
+            r#"Age"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                a : Age
+                a = $Age 21
+
+                a
+                "#
+            ),
+            r#"Age"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                $Id (Id 21 "sasha")
+                "#
+            ),
+            r#"Id Str"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                a : Id Str
+                a = $Id (Id 21 "sasha")
+
+                a
+                "#
+            ),
+            r#"Id Str"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_from_multiple_branches_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+                condition : Bool
+
+                if condition
+                then $Id (Id 21 (Y "sasha"))
+                else $Id (Id 21 (Z "felix"))
+                "#
+            ),
+            r#"Id [ Y Str, Z Str ]*"#,
+        )
+    }
+
+    #[test]
+    fn opaque_wrap_polymorphic_from_multiple_branches_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+                condition : Bool
+
+                v : Id [ Y Str, Z Str ]
+                v = 
+                    if condition
+                    then $Id (Id 21 (Y "sasha"))
+                    else $Id (Id 21 (Z "felix"))
+
+                v
+                "#
+            ),
+            r#"Id [ Y Str, Z Str ]"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                \$Age n -> n
+                "#
+            ),
+            r#"Age -> U32"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Age := U32
+
+                v : Age -> U32
+                v = \$Age n -> n
+                v
+                "#
+            ),
+            r#"Age -> U32"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                \$Id (Id _ n) -> n
+                "#
+            ),
+            r#"Id a -> a"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                v : Id a -> a
+                v = \$Id (Id _ n) -> n
+
+                v
+                "#
+            ),
+            r#"Id a -> a"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_specialized_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                strToBool : Str -> Bool
+
+                \$Id (Id _ n) -> strToBool n
+                "#
+            ),
+            r#"Id Str -> Bool"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_specialized_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                strToBool : Str -> Bool
+
+                v : Id Str -> Bool
+                v = \$Id (Id _ n) -> strToBool n
+
+                v
+                "#
+            ),
+            r#"Id Str -> Bool"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_from_multiple_branches_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                \id ->
+                    when id is
+                        $Id (Id _ A) -> ""
+                        $Id (Id _ B) -> ""
+                        $Id (Id _ (C { a: "" })) -> ""
+                "#
+            ),
+            r#"Id [ A, B, C { a : Str }* ] -> Str"#,
+        )
+    }
+
+    #[test]
+    fn opaque_unwrap_polymorphic_from_multiple_branches_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Id n := [ Id U32 n ]
+
+                f : Id [ A, B, C { a : Str }e ] -> Str
+                f = \id ->
+                    when id is
+                        $Id (Id _ A) -> ""
+                        $Id (Id _ B) -> ""
+                        $Id (Id _ (C { a: "" })) -> ""
+
+                f
+                "#
+            ),
+            r#"Id [ A, B, C { a : Str }e ] -> Str"#,
         )
     }
 }

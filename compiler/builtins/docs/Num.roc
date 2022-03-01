@@ -62,10 +62,25 @@ interface Num
             isZero,
             log,
             maxFloat,
+            maxI8,
+            maxU8,
+            maxI16,
+            maxU16,
+            maxI32,
+            maxU32,
+            maxI64,
+            maxU64,
             maxI128,
-            maxInt,
             minFloat,
-            minInt,
+            minI8,
+            minU8,
+            minI16,
+            minU16,
+            minI32,
+            minU32,
+            minI64,
+            minU64,
+            minI128,
             modInt,
             modFloat,
             mul,
@@ -85,6 +100,26 @@ interface Num
             subWrap,
             sqrt,
             tan,
+            toI8,
+            toI8Checked,
+            toI16,
+            toI16Checked,
+            toI32,
+            toI32Checked,
+            toI64,
+            toI64Checked,
+            toI128,
+            toI128Checked,
+            toU8,
+            toU8Checked,
+            toU16,
+            toU16Checked,
+            toU32,
+            toU32Checked,
+            toU64,
+            toU64Checked,
+            toU128,
+            toU128Checked,
             toFloat,
             toStr
         ]
@@ -577,6 +612,35 @@ mulCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
 
 ## Convert
 
+## Convert any [Int] to a specifically-sized [Int], without checking validity.
+## These are unchecked bitwise operations,
+## so if the source number is outside the target range, then these will
+## effectively modulo-wrap around the target range to reach a valid value.
+toI8 : Int * -> I8
+toI16 : Int * -> I16
+toI32 : Int * -> I32
+toI64 : Int * -> I64
+toI128 : Int * -> I128
+toU8 : Int * -> U8
+toU16 : Int * -> U16
+toU32 : Int * -> U32
+toU64 : Int * -> U64
+toU128 : Int * -> U128
+## Convert any [Int] to a specifically-sized [Int], after checking validity.
+## These are checked bitwise operations,
+## so if the source number is outside the target range, then these will
+## return `Err OutOfBounds`.
+toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
+toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
+toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
+toI64Checked : Int * -> Result I64 [ OutOfBounds ]*
+toI128Checked : Int * -> Result I128 [ OutOfBounds ]*
+toU8Checked : Int * -> Result U8 [ OutOfBounds ]*
+toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
+toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
+toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
+toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+
 ## Convert a number to a [Str].
 ##
 ## This is the same as calling `Num.format {}` - so for more details on
@@ -767,6 +831,15 @@ not : Int a -> Int a
 
 ## Limits
 
+## The lowest number that can be stored in a #Nat without underflowing its
+## available memory and crashing.
+##
+## For reference, this is the number zero, because #Nat is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
+minNat : Nat
+
 ## The highest number that can be stored in a #Nat without overflowing its
 ## available memory and crashing.
 ##
@@ -775,82 +848,191 @@ not : Int a -> Int a
 ## 32-bit system, this will be equal to #Num.maxU32.
 maxNat : Nat
 
-## The number zero.
+## The lowest number that can be stored in an #I8 without underflowing its
+## available memory and crashing.
 ##
-## #Num.minNat is the lowest number that can be stored in a #Nat, which is zero
-## because #Nat is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
-## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
-minNat : Nat
+## For reference, this number is `-128`.
+##
+## Note that the positive version of this number is larger than #Int.maxI8,
+## which means if you call #Num.abs on #Int.minI8, it will overflow and crash!
+minI8 : I8
+
+## The highest number that can be stored in an #I8 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `127`.
+##
+## Note that this is smaller than the positive version of #Int.minI8,
+## which means if you call #Num.abs on #Int.minI8, it will overflow and crash!
+maxI8 : I8
+
+## The lowest number that can be stored in a #U8 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is zero, because #U8 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
+minU8 : U8
+
+## The highest number that can be stored in a #U8 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `255`.
+maxU8 : U8
+
+## The lowest number that can be stored in an #I16 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is `-32_768`.
+##
+## Note that the positive version of this number is larger than #Int.maxI16,
+## which means if you call #Num.abs on #Int.minI16, it will overflow and crash!
+minI16 : I16
+
+## The highest number that can be stored in an #I16 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `32_767`.
+##
+## Note that this is smaller than the positive version of #Int.minI16,
+## which means if you call #Num.abs on #Int.minI16, it will overflow and crash!
+maxI16 : I16
+
+## The lowest number that can be stored in a #U16 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is zero, because #U16 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
+minU16 : U16
+
+## The highest number that can be stored in a #U16 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is `65_535`.
+maxU16 : U16
+
+## The lowest number that can be stored in an #I32 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is `-2_147_483_648`.
+##
+## Note that the positive version of this number is larger than #Int.maxI32,
+## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
+minI32 : I32
 
 ## The highest number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
-## Note that this is smaller than the positive version of #Int.minI32
+## For reference, this number is `2_147_483_647`,
+## which is over 2 million.
+##
+## Note that this is smaller than the positive version of #Int.minI32,
 ## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
 maxI32 : I32
 
-## The min number that can be stored in an #I32 without overflowing its
+## The lowest number that can be stored in a #U32 without underflowing its
 ## available memory and crashing.
 ##
-## Note that the positive version of this number is this is larger than
-## #Int.maxI32, which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
-minI32 : I32
-
-## The highest number that can be stored in a #U64 without overflowing its
-## available memory and crashing.
-##
-## For reference, that number is `18_446_744_073_709_551_615`, which is over 18 quintillion.
-maxU64 : U64
-
-## The number zero.
-##
-## #Num.minU64 is the lowest number that can be stored in a #U64, which is zero
-## because #U64 is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
-## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
-minU64 : U64
+## For reference, this number is zero, because #U32 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number.
+## Unsigned numbers cannot be negative.
+minU32 : U32
 
 ## The highest number that can be stored in a #U32 without overflowing its
 ## available memory and crashing.
 ##
-## For reference, that number is `4_294_967_295`, which is over 4 million.
+## For reference, this number is `4_294_967_295`,
+## which is over 4 million.
 maxU32 : U32
 
-## The number zero.
+## The min number that can be stored in an #I64 without underflowing its
+## available memory and crashing.
 ##
-## #Num.minU32 is the lowest number that can be stored in a #U32, which is zero
-## because #U32 is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## For reference, this number is `-`.
+##
+## Note that the positive version of this number is larger than #Int.maxI64,
+## which means if you call #Num.abs on #Int.minI64, it will overflow and crash!
+minI64 : I64
+
+## The highest number that can be stored in an #I64 without overflowing its
+## available memory and crashing.
+##
+## For reference, this number is ``,
+## which is over 2 million.
+##
+## Note that this is smaller than the positive version of #Int.minI64,
+## which means if you call #Num.abs on #Int.minI64, it will overflow and crash!
+maxI64 : I64
+
+## The lowest number that can be stored in a #U64 without underflowing its
+## available memory and crashing.
+##
+## For reference, this number is zero because #U64 is
+## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
 ## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
-minU32 : U32
+minU64 : U64
 
-## The highest supported #F64 value you can have, which is approximately 1.8 × 10^308.
+## The highest number that can be stored in a #U64 without overflowing its
+## available memory and crashing.
 ##
-## If you go higher than this, your running Roc code will crash - so be careful not to!
-maxF64 : F64
+## For reference, this number is `18_446_744_073_709_551_615`,
+## which is over 18 quintillion.
+maxU64 : U64
 
-## The lowest supported #F64 value you can have, which is approximately -1.8 × 10^308.
+## The lowest number that can be stored in an #I128 without underflowing its
+## available memory and crashing.
 ##
-## If you go lower than this, your running Roc code will crash - so be careful not to!
-minF64 : F64
+## For reference, this number is `-170_141_183_460_469_231_731_687_303_715_884_105_728`.
+##
+## Note that the positive version of this number is larger than #Int.maxI128,
+## which means if you call #Num.abs on #Int.minI128, it will overflow and crash!
+minI128 : I128
 
-## The highest supported #F32 value you can have, which is approximately 1.8 × 10^308.
+## The highest number that can be stored in an #I128 without overflowing its
+## available memory and crashing.
 ##
-## If you go higher than this, your running Roc code will crash - so be careful not to!
-maxF32 : F32
+## For reference, this number is `170_141_183_460_469_231_731_687_303_715_884_105_727`,
+## which is over 2 million.
+##
+## Note that this is smaller than the positive version of #Int.minI128,
+## which means if you call #Num.abs on #Int.minI128, it will overflow and crash!
+maxI128 : I128
 
 ## The lowest supported #F32 value you can have, which is approximately -1.8 × 10^308.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
 minF32 : F32
 
-## The highest supported #Dec value you can have, which is precisely 170_141_183_460_469_231_731.687303715884105727.
+## The highest supported #F32 value you can have, which is approximately 1.8 × 10^308.
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
-maxDec : Dec
+maxF32 : F32
 
-## The lowest supported #Dec value you can have, which is precisely -170_141_183_460_469_231_731.687303715884105728.
+## The lowest supported #F64 value you can have, which is approximately -1.8 × 10^308.
+##
+## If you go lower than this, your running Roc code will crash - so be careful not to!
+minF64 : F64
+
+## The highest supported #F64 value you can have, which is approximately 1.8 × 10^308.
+##
+## If you go higher than this, your running Roc code will crash - so be careful not to!
+maxF64 : F64
+
+## The lowest supported #Dec value you can have,
+## which is precisely -170_141_183_460_469_231_731.687303715884105728.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
 minDec : Dec
+
+## The highest supported #Dec value you can have,
+## which is precisely 170_141_183_460_469_231_731.687303715884105727.
+##
+## If you go higher than this, your running Roc code will crash - so be careful not to!
+maxDec : Dec
 
 ## Constants
 
@@ -1010,7 +1192,7 @@ shr : Int a, Int a -> Int a
 
 ## [Arithmetic bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Arithmetic_shift) right.
 ##
-## This is called `shlWrap` because any bits shifted
+## This is called `shrWrap` because any bits shifted
 ## off the end of the number will be wrapped around to
 ## the beginning. (In contrast, [shr] replaces discarded bits with zeroes.)
 shrWrap : Int a, Int a -> Int a

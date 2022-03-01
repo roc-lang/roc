@@ -30,11 +30,13 @@ impl<'a> Formattable for Pattern<'a> {
             Pattern::Identifier(_)
             | Pattern::GlobalTag(_)
             | Pattern::PrivateTag(_)
+            | Pattern::OpaqueRef(_)
             | Pattern::Apply(_, _)
-            | Pattern::NumLiteral(_)
+            | Pattern::NumLiteral(..)
             | Pattern::NonBase10Literal { .. }
-            | Pattern::FloatLiteral(_)
+            | Pattern::FloatLiteral(..)
             | Pattern::StrLiteral(_)
+            | Pattern::SingleQuote(_)
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
             | Pattern::MalformedIdent(_, _)
@@ -56,7 +58,7 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.indent(indent);
                 buf.push_str(string)
             }
-            GlobalTag(name) | PrivateTag(name) => {
+            GlobalTag(name) | PrivateTag(name) | OpaqueRef(name) => {
                 buf.indent(indent);
                 buf.push_str(name);
             }
@@ -116,17 +118,17 @@ impl<'a> Formattable for Pattern<'a> {
                 loc_pattern.format(buf, indent);
             }
 
-            NumLiteral(string) => {
+            &NumLiteral(string) => {
                 buf.indent(indent);
                 buf.push_str(string);
             }
-            NonBase10Literal {
+            &NonBase10Literal {
                 base,
                 string,
                 is_negative,
             } => {
                 buf.indent(indent);
-                if *is_negative {
+                if is_negative {
                     buf.push('-');
                 }
 
@@ -139,12 +141,17 @@ impl<'a> Formattable for Pattern<'a> {
 
                 buf.push_str(string);
             }
-            FloatLiteral(string) => {
+            &FloatLiteral(string) => {
                 buf.indent(indent);
                 buf.push_str(string);
             }
             StrLiteral(literal) => {
                 todo!("Format string literal: {:?}", literal);
+            }
+            SingleQuote(string) => {
+                buf.push('\'');
+                buf.push_str(string);
+                buf.push('\'');
             }
             Underscore(name) => {
                 buf.indent(indent);

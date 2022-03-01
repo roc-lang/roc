@@ -1,4 +1,6 @@
-use crate::builtins::{empty_list_type, float_literal, int_literal, list_type, str_type};
+use crate::builtins::{
+    empty_list_type, float_literal, int_literal, list_type, num_literal, num_u32, str_type,
+};
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::Constraint::{self, *};
@@ -15,7 +17,7 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
-use roc_types::types::{AnnotationSource, Category, PReason, Reason, RecordField};
+use roc_types::types::{AliasKind, AnnotationSource, Category, PReason, Reason, RecordField};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
@@ -77,7 +79,6 @@ fn constrain_untyped_args(
             loc_pattern.region,
             pattern_expected,
             &mut pattern_state,
-            true,
         );
 
         vars.push(*pattern_var);
@@ -96,17 +97,11 @@ pub fn constrain_expr(
     expected: Expected<Type>,
 ) -> Constraint {
     match expr {
-        Int(var, precision, _, _) => int_literal(*var, *precision, expected, region),
-        Num(var, _, _) => exists(
-            vec![*var],
-            Eq(
-                crate::builtins::num_num(Type::Variable(*var)),
-                expected,
-                Category::Num,
-                region,
-            ),
-        ),
-        Float(var, precision, _, _) => float_literal(*var, *precision, expected, region),
+        &Int(var, precision, _, _, bound) => int_literal(var, precision, expected, region, bound),
+        &Num(var, _, _, bound) => num_literal(var, expected, region, bound),
+        &Float(var, precision, _, _, bound) => {
+            float_literal(var, precision, expected, region, bound)
+        }
         EmptyRecord => constrain_empty_record(region, expected),
         Expr::Record { record_var, fields } => {
             if fields.is_empty() {
@@ -217,6 +212,7 @@ pub fn constrain_expr(
             exists(vars, And(cons))
         }
         Str(_) => Eq(str_type(), expected, Category::Str, region),
+        SingleQuote(_) => Eq(num_u32(), expected, Category::Character, region),
         List {
             elem_var,
             loc_elems,
@@ -920,6 +916,80 @@ pub fn constrain_expr(
             exists(vars, And(arg_cons))
         }
 
+        OpaqueRef {
+            opaque_var,
+            name,
+            argument,
+            specialized_def_type,
+            type_arguments,
+            lambda_set_variables,
+        } => {
+            let (arg_var, arg_loc_expr) = &**argument;
+            let arg_type = Type::Variable(*arg_var);
+
+            let opaque_type = Type::Alias {
+                symbol: *name,
+                type_arguments: type_arguments.clone(),
+                lambda_set_variables: lambda_set_variables.clone(),
+                actual: Box::new(arg_type.clone()),
+                kind: AliasKind::Opaque,
+            };
+
+            // Constrain the argument
+            let arg_con = constrain_expr(
+                env,
+                arg_loc_expr.region,
+                &arg_loc_expr.value,
+                Expected::NoExpectation(arg_type.clone()),
+            );
+
+            // Link the entire wrapped opaque type (with the now-constrained argument) to the
+            // expected type
+            let opaque_con = Eq(
+                opaque_type,
+                expected.clone(),
+                Category::OpaqueWrap(*name),
+                region,
+            );
+
+            // Link the entire wrapped opaque type (with the now-constrained argument) to the type
+            // variables of the opaque type
+            // TODO: better expectation here
+            let link_type_variables_con = Eq(
+                arg_type,
+                Expected::NoExpectation((**specialized_def_type).clone()),
+                Category::OpaqueArg,
+                arg_loc_expr.region,
+            );
+
+            // Store the entire wrapped opaque type in `opaque_var`
+            let storage_con = Eq(
+                Type::Variable(*opaque_var),
+                expected,
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            );
+
+            let mut vars = vec![*arg_var, *opaque_var];
+            // Also add the fresh variables we created for the type argument and lambda sets
+            vars.extend(type_arguments.iter().map(|(_, t)| {
+                t.expect_variable("all type arguments should be fresh variables here")
+            }));
+            vars.extend(lambda_set_variables.iter().map(|v| {
+                v.0.expect_variable("all lambda sets should be fresh variables here")
+            }));
+
+            exists(
+                vars,
+                And(vec![
+                    arg_con,
+                    opaque_con,
+                    link_type_variables_con,
+                    storage_con,
+                ]),
+            )
+        }
+
         RunLowLevel { args, ret_var, op } => {
             // This is a modified version of what we do for function calls.
 
@@ -1040,7 +1110,6 @@ fn constrain_when_branch(
             loc_pattern.region,
             pattern_expected.clone(),
             &mut state,
-            true,
         );
     }
 
@@ -1144,7 +1213,6 @@ fn constrain_def_pattern(env: &Env, loc_pattern: &Loc<Pattern>, expr_type: Type)
         loc_pattern.region,
         pattern_expected,
         &mut state,
-        true,
     );
 
     state
@@ -1265,7 +1333,6 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 loc_pattern.region,
                                 pattern_expected,
                                 &mut state,
-                                false,
                             );
                         }
 
@@ -1633,7 +1700,6 @@ pub fn rec_defs_help(
                                     loc_pattern.region,
                                     pattern_expected,
                                     &mut state,
-                                    false,
                                 );
                             }
 

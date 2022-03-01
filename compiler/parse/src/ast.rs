@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::header::{AppHeader, InterfaceHeader, PlatformHeader};
+use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PlatformHeader};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
@@ -70,6 +70,7 @@ pub enum Module<'a> {
     Interface { header: InterfaceHeader<'a> },
     App { header: AppHeader<'a> },
     Platform { header: PlatformHeader<'a> },
+    Hosted { header: HostedHeader<'a> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -151,6 +152,8 @@ pub enum Expr<'a> {
     Access(&'a Expr<'a>, &'a str),
     /// e.g. `.foo`
     AccessorFunction(&'a str),
+    /// eg 'b'
+    SingleQuote(&'a str),
 
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -173,6 +176,10 @@ pub enum Expr<'a> {
     // Tags
     GlobalTag(&'a str),
     PrivateTag(&'a str),
+
+    // Reference to an opaque type, e.g. $Opaq
+    // TODO(opaques): $->@ in the above comment
+    OpaqueRef(&'a str),
 
     // Pattern Matching
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
@@ -226,9 +233,19 @@ pub struct PrecedenceConflict<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AliasHeader<'a> {
+pub struct TypeHeader<'a> {
     pub name: Loc<&'a str>,
     pub vars: &'a [Loc<Pattern<'a>>],
+}
+
+impl<'a> TypeHeader<'a> {
+    pub fn region(&self) -> Region {
+        Region::across_all(
+            [self.name.region]
+                .iter()
+                .chain(self.vars.iter().map(|v| &v.region)),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -242,8 +259,14 @@ pub enum Def<'a> {
     ///
     /// Foo : Bar Baz
     Alias {
-        header: AliasHeader<'a>,
+        header: TypeHeader<'a>,
         ann: Loc<TypeAnnotation<'a>>,
+    },
+
+    /// An opaque type, wrapping its inner type. E.g. Age := U64.
+    Opaque {
+        header: TypeHeader<'a>,
+        typ: Loc<TypeAnnotation<'a>>,
     },
 
     // TODO in canonicalization, check to see if there are any newlines after the
@@ -296,7 +319,7 @@ pub enum TypeAnnotation<'a> {
     As(
         &'a Loc<TypeAnnotation<'a>>,
         &'a [CommentOrNewline<'a>],
-        AliasHeader<'a>,
+        TypeHeader<'a>,
     ),
 
     Record {
@@ -395,6 +418,15 @@ impl<'a> CommentOrNewline<'a> {
             DocComment(_) => false,
         }
     }
+
+    pub fn to_string_repr(&self) -> std::string::String {
+        use CommentOrNewline::*;
+        match self {
+            Newline => "\n".to_owned(),
+            LineComment(comment_str) => format!("#{}", comment_str),
+            DocComment(comment_str) => format!("##{}", comment_str),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -404,6 +436,9 @@ pub enum Pattern<'a> {
 
     GlobalTag(&'a str),
     PrivateTag(&'a str),
+
+    OpaqueRef(&'a str),
+
     Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
 
     /// This is Located<Pattern> rather than Located<str> so we can record comments
@@ -429,6 +464,7 @@ pub enum Pattern<'a> {
     FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
     Underscore(&'a str),
+    SingleQuote(&'a str),
 
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
@@ -456,6 +492,7 @@ impl<'a> Pattern<'a> {
         match ident {
             Ident::GlobalTag(string) => Pattern::GlobalTag(string),
             Ident::PrivateTag(string) => Pattern::PrivateTag(string),
+            Ident::OpaqueRef(string) => Pattern::OpaqueRef(string),
             Ident::Access { module_name, parts } => {
                 if parts.len() == 1 {
                     // This is valid iff there is no module.

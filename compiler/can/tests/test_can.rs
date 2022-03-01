@@ -15,7 +15,7 @@ mod test_can {
     use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
-    use roc_can::expr::{ClosureData, Recursive};
+    use roc_can::expr::{ClosureData, IntValue, Recursive};
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::{Position, Region};
     use std::{f64, i64};
@@ -32,7 +32,7 @@ mod test_can {
         let actual_out = can_expr_with(&arena, test_home(), input);
 
         match actual_out.loc_expr.value {
-            Expr::Float(_, _, _, actual) => {
+            Expr::Float(_, _, _, actual, _) => {
                 assert_eq!(expected, actual);
             }
             actual => {
@@ -46,8 +46,8 @@ mod test_can {
         let actual_out = can_expr_with(&arena, test_home(), input);
 
         match actual_out.loc_expr.value {
-            Expr::Int(_, _, _, actual) => {
-                assert_eq!(expected, actual);
+            Expr::Int(_, _, _, actual, _) => {
+                assert_eq!(IntValue::I128(expected), actual);
             }
             actual => {
                 panic!("Expected an Int *, but got: {:?}", actual);
@@ -55,13 +55,13 @@ mod test_can {
         }
     }
 
-    fn assert_can_num(input: &str, expected: i64) {
+    fn assert_can_num(input: &str, expected: i128) {
         let arena = Bump::new();
         let actual_out = can_expr_with(&arena, test_home(), input);
 
         match actual_out.loc_expr.value {
-            Expr::Num(_, _, actual) => {
-                assert_eq!(expected, actual);
+            Expr::Num(_, _, actual, _) => {
+                assert_eq!(IntValue::I128(expected), actual);
             }
             actual => {
                 panic!("Expected a Num, but got: {:?}", actual);
@@ -79,7 +79,7 @@ mod test_can {
     fn int_too_large() {
         use roc_parse::ast::Base;
 
-        let string = (i64::MAX as i128 + 1).to_string();
+        let string = "340_282_366_920_938_463_463_374_607_431_768_211_456".to_string();
 
         assert_can(
             &string.clone(),
@@ -96,7 +96,7 @@ mod test_can {
     fn int_too_small() {
         use roc_parse::ast::Base;
 
-        let string = (i64::MIN as i128 - 1).to_string();
+        let string = "-170_141_183_460_469_231_731_687_303_715_884_105_729".to_string();
 
         assert_can(
             &string.clone(),
@@ -186,12 +186,12 @@ mod test_can {
 
     #[test]
     fn num_max() {
-        assert_can_num(&(i64::MAX.to_string()), i64::MAX);
+        assert_can_num(&(i64::MAX.to_string()), i64::MAX.into());
     }
 
     #[test]
     fn num_min() {
-        assert_can_num(&(i64::MIN.to_string()), i64::MIN);
+        assert_can_num(&(i64::MIN.to_string()), i64::MIN.into());
     }
 
     #[test]
@@ -368,9 +368,11 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 1);
+        assert_eq!(problems.len(), 2);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            // Due to one of the shadows
+            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -389,9 +391,11 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 1);
+        assert_eq!(problems.len(), 2);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            // Due to one of the shadows
+            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -410,10 +414,12 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 1);
+        assert_eq!(problems.len(), 2);
         println!("{:#?}", problems);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            // Due to one of the shadows
+            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -524,7 +530,7 @@ mod test_can {
     fn annotation_followed_with_unrelated_affectation() {
         let src = indoc!(
             r#"
-                F : Str 
+                F : Str
 
                 x = 1
 
@@ -545,10 +551,10 @@ mod test_can {
     fn two_annotations_followed_with_unrelated_affectation() {
         let src = indoc!(
             r#"
-                G : Str 
+                G : Str
 
-                F : {} 
-                
+                F : {}
+
                 x = 1
 
                 x
@@ -629,7 +635,7 @@ mod test_can {
     fn incorrect_optional_value() {
         let src = indoc!(
             r#"
-                { x ? 42 }                
+                { x ? 42 }
             "#
         );
         let arena = Bump::new();
@@ -1004,7 +1010,7 @@ mod test_can {
         let src = indoc!(
             r#"
                 x = Dict.empty
-                
+
                 Dict.len x
             "#
         );
@@ -1049,6 +1055,22 @@ mod test_can {
                     { x, y, z }
 
                 fn { x: 0, y: 1 }
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn issue_2534() {
+        let src = indoc!(
+            r#"
+            x = { a: 1 }
+            {
+                x & a: 2
+            }
             "#
         );
         let arena = Bump::new();
