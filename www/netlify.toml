@@ -5,7 +5,7 @@
 # https://docs.netlify.com/routing/headers/#syntax-for-the-netlify-configuration-file
 [build]
   publish = "build/"
-  command = "bash build.sh"
+  command = "mkdir $HOME/zig && pushd $HOME/zig && curl -L https://ziglang.org/download/0.8.1/zig-linux-x86_64-0.8.1.tar.xz | tar -xJ --strip-components=1 -C . && export PATH=$PATH:$HOME/zig && popd && bash build.sh"
 
 [[headers]]
   for = "/*"
