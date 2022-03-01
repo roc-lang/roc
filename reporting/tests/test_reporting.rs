@@ -4491,32 +4491,6 @@ mod test_reporting {
     }
 
     #[test]
-    fn record_type_indent_end() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { a: Int
-                }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a record type, but I got stuck here:
-
-                1│  f : { a: Int
-                2│  }
-                    ^
-
-                I need this curly brace to be indented more. Try adding more spaces
-                before it!
-            "#
-            ),
-        )
-    }
-
-    #[test]
     fn record_type_keyword_field_name() {
         report_problem_as(
             indoc!(
@@ -5446,36 +5420,6 @@ mod test_reporting {
                 Note: When I get stuck like this, it usually means that there is a
                 missing parenthesis or bracket somewhere earlier. It could also be a
                 stray keyword or operator.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn list_bad_indent() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = [ 1, 2,
-                ]
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
-
-                I cannot find the end of this list:
-
-                1│  x = [ 1, 2,
-                               ^
-
-                You could change it to something like [ 1, 2, 3 ] or even just [].
-                Anything where there is an open and a close square bracket, and where
-                the elements of the list are separated by commas.
-
-                Note: I may be confused by indentation
             "#
             ),
         )
@@ -6470,38 +6414,6 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn outdented_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Box item : [
-                    Box item,
-                    Items item item
-                ]
-
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a tag union type, but I got stuck here:
-
-                1│  Box item : [
-                2│      Box item,
-                3│      Items item item
-                4│  ]
-                    ^
-
-                I need this square bracket to be indented more. Try adding more spaces
-                before it!
-            "#
-            ),
-        )
-    }
-
-    #[test]
     fn outdented_in_parens() {
         report_problem_as(
             indoc!(
@@ -6526,36 +6438,6 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 I need this parenthesis to be indented more. Try adding more spaces
-                before it!
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn outdented_record() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Box : {
-                    id: Str
-                }
-
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a record type, but I got stuck here:
-
-                1│  Box : {
-                2│      id: Str
-                3│  }
-                    ^
-
-                I need this curly brace to be indented more. Try adding more spaces
                 before it!
             "#
             ),

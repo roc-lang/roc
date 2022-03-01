@@ -75,18 +75,31 @@ mod test_parse {
                 let mut base = std::path::PathBuf::from("tests");
                 base.push("snapshots");
                 let pass_or_fail_names = list(&base);
+                let mut extra_test_files = std::collections::HashSet::new();
                 for res in pass_or_fail_names {
                     assert!(res == "pass" || res == "fail");
                     let res_dir = base.join(&res);
                     for file in list(&res_dir) {
-                        if let Some(file) = file.strip_suffix(".roc") {
-                            assert!(tests.contains(format!("{}/{}", &res, file).as_str()), "{}", file);
-                        } else if let Some(file) = file.strip_suffix(".result-ast") {
-                            assert!(tests.contains(format!("{}/{}", &res, file).as_str()), "{}", file);
+                        let test = if let Some(test) = file.strip_suffix(".roc") {
+                            test
+                        } else if let Some(test) = file.strip_suffix(".result-ast") {
+                            test
                         } else {
-                            panic!("unexpected test file found: {}", file);
+                            panic!("unexpected file found in tests/snapshots: {}", file);
+                        };
+                        let test_name = format!("{}/{}", &res, test);
+                        if !tests.contains(test_name.as_str()) {
+                            extra_test_files.insert(test_name);
                         }
                     }
+                }
+
+                if extra_test_files.len() > 0 {
+                    eprintln!("Found extra test files:");
+                    for file in extra_test_files {
+                        eprintln!("{}", file);
+                    }
+                    panic!("Add entries for these in the `snapshot_tests!` macro in test_parse.rs");
                 }
             }
 
@@ -109,6 +122,7 @@ mod test_parse {
     snapshot_tests! {
         fail/type_argument_no_arrow.expr,
         fail/type_double_comma.expr,
+        pass/list_closing_indent_not_enough.expr,
         pass/add_var_with_spaces.expr,
         pass/add_with_spaces.expr,
         pass/annotated_record_destructure.expr,
@@ -154,6 +168,8 @@ mod test_parse {
         pass/int_with_underscore.expr,
         pass/interface_with_newline.header,
         pass/lowest_float.expr,
+        pass/list_closing_same_indent_no_trailing_comma.expr,
+        pass/list_closing_same_indent_with_trailing_comma.expr,
         pass/lowest_int.expr,
         pass/malformed_ident_due_to_underscore.expr,
         pass/malformed_pattern_field_access.expr, // See https://github.com/rtfeldman/roc/issues/399
@@ -278,15 +294,11 @@ mod test_parse {
         let result = func(&input);
 
         let actual_result = if should_pass {
-            eprintln!("The source code for this test did not successfully parse!\n");
-
-            result.unwrap()
+            result.expect("The source code for this test did not successfully parse!")
         } else {
-            eprintln!(
-                "The source code for this test successfully parsed, but it was not expected to!\n"
-            );
-
-            result.unwrap_err()
+            result.expect_err(
+                "The source code for this test successfully parsed, but it was not expected to!",
+            )
         };
 
         if std::env::var("ROC_PARSER_SNAPSHOT_TEST_OVERWRITE").is_ok() {

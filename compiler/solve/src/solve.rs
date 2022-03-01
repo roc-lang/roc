@@ -1,3 +1,4 @@
+use bumpalo::Bump;
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::PresenceConstraint;
 use roc_can::expected::{Expected, PExpected};
@@ -12,7 +13,7 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, Alias, AliasKind, Category, ErrorType, PatternCategory,
+    gather_fields_unsorted_iter, AliasKind, Category, ErrorType, PatternCategory,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
 use std::collections::hash_map::Entry;
@@ -78,8 +79,37 @@ pub enum TypeError {
 
 #[derive(Clone, Debug, Default)]
 pub struct Env {
-    pub vars_by_symbol: MutMap<Symbol, Variable>,
-    pub aliases: MutMap<Symbol, Alias>,
+    symbols: Vec<Symbol>,
+    variables: Vec<Variable>,
+}
+
+impl Env {
+    pub fn vars_by_symbol(&self) -> MutMap<Symbol, Variable> {
+        let it1 = self.symbols.iter().copied();
+        let it2 = self.variables.iter().copied();
+
+        it1.zip(it2).collect()
+    }
+
+    fn get_var_by_symbol(&self, symbol: &Symbol) -> Option<Variable> {
+        self.symbols
+            .iter()
+            .position(|s| s == symbol)
+            .map(|index| self.variables[index])
+    }
+
+    fn insert_symbol_var_if_vacant(&mut self, symbol: Symbol, var: Variable) {
+        match self.symbols.iter().position(|s| *s == symbol) {
+            None => {
+                // symbol is not in vars_by_symbol yet; insert it
+                self.symbols.push(symbol);
+                self.variables.push(var);
+            }
+            Some(_) => {
+                // do nothing
+            }
+        }
+    }
 }
 
 const DEFAULT_POOLS: usize = 8;
@@ -163,7 +193,11 @@ pub fn run_in_place(
         mark: Mark::NONE.next(),
     };
     let rank = Rank::toplevel();
+
+    let arena = Bump::new();
+
     let state = solve(
+        &arena,
         env,
         state,
         rank,
@@ -183,7 +217,7 @@ enum After {
 
 enum Work<'a> {
     Constraint {
-        env: Env,
+        env: &'a Env,
         rank: Rank,
         constraint: &'a Constraint,
         after: Option<After>,
@@ -194,6 +228,7 @@ enum Work<'a> {
 
 #[allow(clippy::too_many_arguments)]
 fn solve(
+    arena: &Bump,
     env: &Env,
     mut state: State,
     rank: Rank,
@@ -204,7 +239,7 @@ fn solve(
     constraint: &Constraint,
 ) -> State {
     let mut stack = vec![Work::Constraint {
-        env: env.clone(),
+        env,
         rank,
         constraint,
         after: None,
@@ -240,7 +275,7 @@ fn solve(
                 // NOTE deviation: elm only copies the env into the state on SaveTheEnvironment
                 let mut copy = state;
 
-                copy.env = env;
+                copy.env = env.clone();
 
                 copy
             }
@@ -312,7 +347,7 @@ fn solve(
                 }
             }
             Lookup(symbol, expectation, region) => {
-                match env.vars_by_symbol.get(symbol) {
+                match env.get_var_by_symbol(symbol) {
                     Some(var) => {
                         // Deep copy the vars associated with this symbol before unifying them.
                         // Otherwise, suppose we have this:
@@ -335,7 +370,7 @@ fn solve(
                         // then we copy from that module's Subs into our own. If the value
                         // is being looked up in this module, then we use our Subs as both
                         // the source and destination.
-                        let actual = deep_copy_var(subs, rank, pools, *var);
+                        let actual = deep_copy_var(subs, rank, pools, var);
                         let expected = type_to_var(
                             subs,
                             rank,
@@ -383,7 +418,7 @@ fn solve(
             And(sub_constraints) => {
                 for sub_constraint in sub_constraints.iter().rev() {
                     stack.push(Work::Constraint {
-                        env: env.clone(),
+                        env,
                         rank,
                         constraint: sub_constraint,
                         after: None,
@@ -455,7 +490,8 @@ fn solve(
                     ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
                         // TODO: make into `WorkItem` with `After`
                         let state = solve(
-                            &env,
+                            arena,
+                            env,
                             state,
                             rank,
                             pools,
@@ -484,18 +520,11 @@ fn solve(
 
                         let mut new_env = env.clone();
                         for (symbol, loc_var) in local_def_vars.iter() {
-                            match new_env.vars_by_symbol.entry(*symbol) {
-                                Entry::Occupied(_) => {
-                                    // keep the existing value
-                                }
-                                Entry::Vacant(vacant) => {
-                                    vacant.insert(loc_var.value);
-                                }
-                            }
+                            new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                         }
 
                         stack.push(Work::Constraint {
-                            env: new_env,
+                            env: arena.alloc(new_env),
                             rank,
                             constraint: ret_con,
                             after: Some(After::CheckForInfiniteTypes(local_def_vars)),
@@ -559,7 +588,8 @@ fn solve(
                             env: saved_env,
                             mark,
                         } = solve(
-                            &env,
+                            arena,
+                            env,
                             state,
                             next_rank,
                             pools,
@@ -625,14 +655,7 @@ fn solve(
 
                         let mut new_env = env.clone();
                         for (symbol, loc_var) in local_def_vars.iter() {
-                            match new_env.vars_by_symbol.entry(*symbol) {
-                                Entry::Occupied(_) => {
-                                    // keep the existing value
-                                }
-                                Entry::Vacant(vacant) => {
-                                    vacant.insert(loc_var.value);
-                                }
-                            }
+                            new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                         }
 
                         // Note that this vars_by_symbol is the one returned by the
@@ -645,7 +668,7 @@ fn solve(
                         // Now solve the body, using the new vars_by_symbol which includes
                         // the assignments' name-to-variable mappings.
                         stack.push(Work::Constraint {
-                            env: new_env,
+                            env: arena.alloc(new_env),
                             rank,
                             constraint: ret_con,
                             after: Some(After::CheckForInfiniteTypes(local_def_vars)),

@@ -1,10 +1,10 @@
-use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{
     BranchInfo, DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt,
 };
 use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
+use roc_exhaustive::{Ctor, RenderAs, TagId, Union};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
@@ -83,7 +83,7 @@ enum Test<'a> {
     IsCtor {
         tag_id: TagIdIntType,
         tag_name: TagName,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
     IsInt(i128, IntWidth),

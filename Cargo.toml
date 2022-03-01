@@ -3,6 +3,7 @@ members = [
     "compiler/ident",
     "compiler/region",
     "compiler/collections",
+    "compiler/exhaustive",
     "compiler/module",
     "compiler/parse",
     "compiler/can",

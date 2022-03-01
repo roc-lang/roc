@@ -711,9 +711,8 @@ where
         let cur_indent = INDENT.with(|i| *i.borrow());
 
         println!(
-            "@{:>5}:{:<5}: {}{:<50}",
-            state.line,
-            state.column,
+            "{:>5?}: {}{:<50}",
+            state.pos(),
             &indent_text[..cur_indent * 2],
             self.message
         );
@@ -728,9 +727,8 @@ where
         };
 
         println!(
-            "@{:>5}:{:<5}: {}{:<50} {:<15} {:?}",
-            state.line,
-            state.column,
+            "{:<5?}: {}{:<50} {:<15} {:?}",
+            state.pos(),
             &indent_text[..cur_indent * 2],
             self.message,
             format!("{:?}", progress),
@@ -1217,7 +1215,11 @@ macro_rules! collection_trailing_sep_e {
                                             $indent_problem
                                         )
                                     ),
-                                    $crate::blankspace::space0_e($min_indent, $indent_problem)
+                                    $crate::blankspace::space0_e(
+                                        // we use min_indent=0 because we want to parse incorrectly indented closing braces
+                                        // and later fix these up in the formatter.
+                                        0 /* min_indent */,
+                                        $indent_problem)
                                 ).parse(arena, state)?;
 
                 let (_,_, state) =
@@ -1400,21 +1402,6 @@ where
             Ok((MadeProgress, (), state))
         } else {
             Err((NoProgress, to_error(state.pos()), state))
-        }
-    }
-}
-
-pub fn check_indent<'a, TE, E>(min_indent: u32, to_problem: TE) -> impl Parser<'a, (), E>
-where
-    TE: Fn(Position) -> E,
-    E: 'a,
-{
-    move |_arena, state: State<'a>| {
-        dbg!(state.indent_column, min_indent);
-        if state.indent_column < min_indent {
-            Err((NoProgress, to_problem(state.pos()), state))
-        } else {
-            Ok((NoProgress, (), state))
         }
     }
 }
