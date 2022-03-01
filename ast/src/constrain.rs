@@ -264,7 +264,7 @@ pub fn constrain_expr<'a>(
                 *variant_var,
             )
         }
-        Expr2::PrivateTag {
+        Expr2::OpaqueRef {
             name,
             arguments,
             ext_var,
@@ -2291,10 +2291,10 @@ pub mod test_constrain {
         infer_eq(
             indoc!(
                 r#"
-                @Foo
+                $Foo
                 "#
             ),
-            "[ @Foo ]*",
+            "[ $Foo ]*",
         )
     }
 
