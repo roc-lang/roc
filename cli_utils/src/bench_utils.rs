@@ -78,7 +78,7 @@ fn bench_cmd<T: Measurement>(
         #[cfg(unix)]
         use rlimit::{setrlimit, Resource};
         #[cfg(unix)]
-        setrlimit(Resource::STACK, CFOLD_STACK_SIZE, CFOLD_STACK_SIZE)
+        setrlimit(Resource::STACK, CFOLD_STACK_SIZE as u64, CFOLD_STACK_SIZE as u64)
             .expect("Failed to increase stack limit.");
 
         #[cfg(windows)]

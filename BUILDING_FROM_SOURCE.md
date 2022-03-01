@@ -203,7 +203,7 @@ Installing LLVM's prebuilt binaries doesn't seem to be enough for the `llvm-sys`
 1. Download the custom LLVM 7z archive [here](https://github.com/PLC-lang/llvm-package-windows/releases/tag/v12.0.1).
 1. [Download 7-zip](https://www.7-zip.org/) to be able to extract this archive.
 1. Extract the 7z file to where you want to permanently keep the folder.
-1. In powershell, set the `LLVM_SYS_120_PREFIX` environment variable:
+1. In powershell, set the `LLVM_SYS_120_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-changes-to-environment-variables) to make this a permanent environment variable):
 ```
 [Environment]::SetEnvironmentVariable(
    "Path",
