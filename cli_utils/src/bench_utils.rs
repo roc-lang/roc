@@ -78,8 +78,12 @@ fn bench_cmd<T: Measurement>(
         #[cfg(unix)]
         use rlimit::{setrlimit, Resource};
         #[cfg(unix)]
-        setrlimit(Resource::STACK, CFOLD_STACK_SIZE as u64, CFOLD_STACK_SIZE as u64)
-            .expect("Failed to increase stack limit.");
+        setrlimit(
+            Resource::STACK,
+            CFOLD_STACK_SIZE as u64,
+            CFOLD_STACK_SIZE as u64,
+        )
+        .expect("Failed to increase stack limit.");
 
         #[cfg(windows)]
         println!("Skipping the cfold benchmark on windows, I can't adjust the stack size and use criterion at the same time.");
