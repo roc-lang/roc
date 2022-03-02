@@ -27,6 +27,14 @@ pub fn constrain_module(declarations: &[Declaration], home: ModuleId) -> Constra
     constrain_decls(home, declarations)
 }
 
+pub fn constrain_module_soa(
+    constraints: &mut Constraints,
+    declarations: &[Declaration],
+    home: ModuleId,
+) -> ConstraintSoa {
+    crate::soa_expr::constrain_decls(constraints, home, declarations)
+}
+
 #[derive(Debug, Clone)]
 pub struct Import {
     pub loc_symbol: Loc<Symbol>,

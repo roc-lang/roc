@@ -210,6 +210,53 @@ pub fn run_in_place(
     state.env
 }
 
+use roc_can::constraint_soa::{Constraint as ConstraintSoa, Constraints};
+
+pub fn run_soa(
+    constraints: &Constraints,
+    env: &Env,
+    problems: &mut Vec<TypeError>,
+    mut subs: Subs,
+    constraint: &ConstraintSoa,
+) -> (Solved<Subs>, Env) {
+    let env = run_in_place_soa(constraints, env, problems, &mut subs, constraint);
+
+    (Solved(subs), env)
+}
+
+/// Modify an existing subs in-place instead
+pub fn run_in_place_soa(
+    constraints: &Constraints,
+    env: &Env,
+    problems: &mut Vec<TypeError>,
+    subs: &mut Subs,
+    constraint: &ConstraintSoa,
+) -> Env {
+    let mut pools = Pools::default();
+    let state = State {
+        env: env.clone(),
+        mark: Mark::NONE.next(),
+    };
+    let rank = Rank::toplevel();
+
+    let arena = Bump::new();
+
+    let state = solve_soa(
+        &arena,
+        constraints,
+        env,
+        state,
+        rank,
+        &mut pools,
+        problems,
+        &mut MutMap::default(),
+        subs,
+        constraint,
+    );
+
+    state.env
+}
+
 enum After {
     CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
 }

@@ -1,9 +1,15 @@
 use std::usize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Index<T> {
     index: u32,
     _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> std::fmt::Debug for Index<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Index({})", self.index)
+    }
 }
 
 impl<T> Index<T> {
@@ -27,11 +33,17 @@ impl<T> Index<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Slice<T> {
     start: u32,
     length: u16,
     _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> std::fmt::Debug for Slice<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Slice(start = {}, length = {})", self.start, self.length)
+    }
 }
 
 impl<T> Default for Slice<T> {

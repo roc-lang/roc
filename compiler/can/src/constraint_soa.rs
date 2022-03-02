@@ -6,6 +6,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{Category, PatternCategory, Type};
 
+#[derive(Debug)]
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
     pub types: Vec<Type>,
@@ -20,6 +21,37 @@ pub struct Constraints {
 }
 
 impl Constraints {
+    pub fn new() -> Self {
+        let constraints = Vec::new();
+        let mut types = Vec::new();
+        let variables = Vec::new();
+        let def_types = Vec::new();
+        let let_constraints = Vec::new();
+        let mut categories = Vec::new();
+        let pattern_categories = Vec::new();
+        let expectations = Vec::new();
+        let pattern_expectations = Vec::new();
+        let includes_tags = Vec::new();
+
+        types.push(Type::EmptyRec);
+        types.push(Type::EmptyTagUnion);
+
+        categories.push(Category::Record);
+
+        Self {
+            constraints,
+            types,
+            variables,
+            def_types,
+            let_constraints,
+            categories,
+            pattern_categories,
+            expectations,
+            pattern_expectations,
+            includes_tags,
+        }
+    }
+
     pub const EMPTY_RECORD: Index<Type> = Index::new(0);
     pub const EMPTY_TAG_UNION: Index<Type> = Index::new(1);
 
