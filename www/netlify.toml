@@ -6,6 +6,8 @@
 [build]
   publish = "build/"
   command = "bash netlify.sh"
+  # Always build on push - see https://answers.netlify.com/t/builds-cancelled-for-a-new-branch-due-to-no-content-change/17169/2
+  ignore = "/bin/false"
 
 [[headers]]
   for = "/*"
