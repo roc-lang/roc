@@ -399,7 +399,7 @@ pub fn sort_can_defs(
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
     let CanDefs {
         refs_by_symbol,
-        can_defs_by_symbol,
+        mut can_defs_by_symbol,
         aliases,
     } = defs;
 
@@ -583,7 +583,7 @@ pub fn sort_can_defs(
                     &group,
                     &env.closures,
                     &mut all_successors_with_self,
-                    &can_defs_by_symbol,
+                    &mut can_defs_by_symbol,
                     &mut declarations,
                 );
             }
@@ -717,7 +717,7 @@ pub fn sort_can_defs(
                                 group,
                                 &env.closures,
                                 &mut all_successors_with_self,
-                                &can_defs_by_symbol,
+                                &mut can_defs_by_symbol,
                                 &mut declarations,
                             );
                         }
@@ -739,7 +739,7 @@ fn group_to_declaration(
     group: &[Symbol],
     closures: &MutMap<Symbol, References>,
     successors: &mut dyn FnMut(&Symbol) -> ImSet<Symbol>,
-    can_defs_by_symbol: &MutMap<Symbol, Def>,
+    can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     declarations: &mut Vec<Declaration>,
 ) {
     use Declaration::*;
@@ -759,57 +759,60 @@ fn group_to_declaration(
     // Can bind multiple symbols. When not incorrectly recursive (which is guaranteed in this function),
     // normally `someDef` would be inserted twice. We use the region of the pattern as a unique key
     // for a definition, so every definition is only inserted (thus typechecked and emitted) once
-    let mut seen_pattern_regions: ImSet<Region> = ImSet::default();
+    let mut seen_pattern_regions: Vec<Region> = Vec::with_capacity(2);
 
     for cycle in strongly_connected_components(group, filtered_successors) {
         if cycle.len() == 1 {
             let symbol = &cycle[0];
 
-            if let Some(can_def) = can_defs_by_symbol.get(symbol) {
-                let mut new_def = can_def.clone();
-
-                // Determine recursivity of closures that are not tail-recursive
-                if let Closure(ClosureData {
-                    recursive: recursive @ Recursive::NotRecursive,
-                    ..
-                }) = &mut new_def.loc_expr.value
-                {
-                    *recursive = closure_recursivity(*symbol, closures);
-                }
-
-                let is_recursive = successors(symbol).contains(symbol);
-
-                if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
-                    if is_recursive {
-                        declarations.push(DeclareRec(vec![new_def.clone()]));
-                    } else {
-                        declarations.push(Declare(new_def.clone()));
-                    }
-                    seen_pattern_regions.insert(new_def.loc_pattern.region);
-                }
-            }
-        } else {
-            let mut can_defs = Vec::new();
-
-            // Topological sort gives us the reverse of the sorting we want!
-            for symbol in cycle.into_iter().rev() {
-                if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
-                    let mut new_def = can_def.clone();
-
+            match can_defs_by_symbol.remove(symbol) {
+                Some(mut new_def) => {
                     // Determine recursivity of closures that are not tail-recursive
                     if let Closure(ClosureData {
                         recursive: recursive @ Recursive::NotRecursive,
                         ..
                     }) = &mut new_def.loc_expr.value
                     {
-                        *recursive = closure_recursivity(symbol, closures);
+                        *recursive = closure_recursivity(*symbol, closures);
                     }
+
+                    let is_recursive = successors(symbol).contains(symbol);
 
                     if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
-                        can_defs.push(new_def.clone());
-                    }
+                        seen_pattern_regions.push(new_def.loc_pattern.region);
 
-                    seen_pattern_regions.insert(new_def.loc_pattern.region);
+                        if is_recursive {
+                            declarations.push(DeclareRec(vec![new_def]));
+                        } else {
+                            declarations.push(Declare(new_def));
+                        }
+                    }
+                }
+                None => roc_error_macros::internal_error!("def not available {:?}", symbol),
+            }
+        } else {
+            let mut can_defs = Vec::new();
+
+            // Topological sort gives us the reverse of the sorting we want!
+            for symbol in cycle.into_iter().rev() {
+                match can_defs_by_symbol.remove(&symbol) {
+                    Some(mut new_def) => {
+                        // Determine recursivity of closures that are not tail-recursive
+                        if let Closure(ClosureData {
+                            recursive: recursive @ Recursive::NotRecursive,
+                            ..
+                        }) = &mut new_def.loc_expr.value
+                        {
+                            *recursive = closure_recursivity(symbol, closures);
+                        }
+
+                        if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
+                            seen_pattern_regions.push(new_def.loc_pattern.region);
+
+                            can_defs.push(new_def);
+                        }
+                    }
+                    None => roc_error_macros::internal_error!("def not available {:?}", symbol),
                 }
             }
 
