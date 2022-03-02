@@ -7,16 +7,16 @@ use roc_types::subs::Variable;
 use roc_types::types::{Category, PatternCategory, Type};
 
 pub struct Constraints {
-    constraints: Vec<Constraint>,
-    types: Vec<Type>,
-    variables: Vec<Variable>,
-    def_types: Vec<(Symbol, Loc<Index<Type>>)>,
-    let_constraints: Vec<LetConstraint>,
-    categories: Vec<Category>,
-    pattern_categories: Vec<PatternCategory>,
-    expectations: Vec<Expected<Type>>,
-    pattern_expectations: Vec<PExpected<Type>>,
-    includes_tags: Vec<IncludesTag>,
+    pub constraints: Vec<Constraint>,
+    pub types: Vec<Type>,
+    pub variables: Vec<Variable>,
+    pub def_types: Vec<(Symbol, Loc<Index<Type>>)>,
+    pub let_constraints: Vec<LetConstraint>,
+    pub categories: Vec<Category>,
+    pub pattern_categories: Vec<PatternCategory>,
+    pub expectations: Vec<Expected<Type>>,
+    pub pattern_expectations: Vec<PExpected<Type>>,
+    pub includes_tags: Vec<IncludesTag>,
 }
 
 impl Constraints {
@@ -265,9 +265,9 @@ impl Constraints {
             Constraint::True => false,
             Constraint::SaveTheEnvironment => true,
             Constraint::Let(index) => {
-                let let_constraint = &self.let_constraints[index.usize()];
+                let let_constraint = &self.let_constraints[index.index()];
 
-                let offset = let_constraint.defs_and_ret_constraint.usize();
+                let offset = let_constraint.defs_and_ret_constraint.index();
                 let defs_constraint = &self.constraints[offset];
                 let ret_constraint = &self.constraints[offset + 1];
 

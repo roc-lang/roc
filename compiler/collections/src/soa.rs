@@ -14,7 +14,7 @@ impl<T> Index<T> {
         }
     }
 
-    pub const fn usize(&self) -> usize {
+    pub const fn index(&self) -> usize {
         self.index as usize
     }
 
