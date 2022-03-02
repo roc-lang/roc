@@ -779,12 +779,13 @@ fn group_to_declaration(
                     let is_recursive = successors(symbol).contains(symbol);
 
                     if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
-                        if is_recursive {
-                            declarations.push(DeclareRec(vec![new_def.clone()]));
-                        } else {
-                            declarations.push(Declare(new_def.clone()));
-                        }
                         seen_pattern_regions.insert(new_def.loc_pattern.region);
+
+                        if is_recursive {
+                            declarations.push(DeclareRec(vec![new_def]));
+                        } else {
+                            declarations.push(Declare(new_def));
+                        }
                     }
                 }
                 None => roc_error_macros::internal_error!("def not available {:?}", symbol),
@@ -806,10 +807,10 @@ fn group_to_declaration(
                         }
 
                         if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
-                            can_defs.push(new_def.clone());
-                        }
+                            seen_pattern_regions.insert(new_def.loc_pattern.region);
 
-                        seen_pattern_regions.insert(new_def.loc_pattern.region);
+                            can_defs.push(new_def);
+                        }
                     }
                     None => roc_error_macros::internal_error!("def not available {:?}", symbol),
                 }
