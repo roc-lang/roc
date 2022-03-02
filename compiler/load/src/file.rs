@@ -5,16 +5,14 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::std::StdLib;
-use roc_can::constraint::Constraint;
 use roc_can::constraint_soa::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
-    constrain_imports, constrain_imports_soa, constrain_module_soa, pre_constrain_imports,
-    ConstrainableImports, Import,
+    constrain_imports_soa, constrain_module_soa, pre_constrain_imports, ConstrainableImports,
+    ExposedModuleTypes, Import, SubsByModule,
 };
-use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, PackageQualified,

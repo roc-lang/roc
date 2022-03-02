@@ -20,6 +20,12 @@ pub struct Constraints {
     pub includes_tags: Vec<IncludesTag>,
 }
 
+impl Default for Constraints {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Constraints {
     pub fn new() -> Self {
         let constraints = Vec::new();
