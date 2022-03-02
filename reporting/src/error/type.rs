@@ -1,5 +1,5 @@
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::{Index, MutSet, SendMap};
+use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -350,7 +350,7 @@ fn to_expr_report<'b>(
                     num_branches,
                     ..
                 } if num_branches == 2 => alloc.concat(vec![
-                    alloc.keyword(if index == Index::FIRST {
+                    alloc.keyword(if index == HumanIndex::FIRST {
                         "then"
                     } else {
                         "else"
@@ -1384,7 +1384,7 @@ fn to_pattern_report<'b>(
                             found,
                             expected_type,
                             add_pattern_category(
-                                alloc,
+                            HumanIndexlloc,
                                 alloc.text("The first pattern is trying to match"),
                                 &category,
                             ),

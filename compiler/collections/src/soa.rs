@@ -11,6 +11,14 @@ impl<T> Index<T> {
             _marker: std::marker::PhantomData,
         }
     }
+
+    pub fn push_new(vector: &mut Vec<T>, value: T) -> Index<T> {
+        let index = Self::new(vector.len() as _);
+
+        vector.push(value);
+
+        index
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +26,16 @@ pub struct Slice<T> {
     start: u32,
     length: u16,
     _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Default for Slice<T> {
+    fn default() -> Self {
+        Self {
+            start: Default::default(),
+            length: Default::default(),
+            _marker: Default::default(),
+        }
+    }
 }
 
 impl<T> Slice<T> {

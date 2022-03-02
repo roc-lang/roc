@@ -1,7 +1,7 @@
 use crate::expected::{Expected, PExpected};
-use roc_collections::all::{MutSet, SendMap};
+use roc_collections::soa::{Index, Slice};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::types::{Category, PatternCategory, Type};
 use roc_types::{subs::Variable, types::VariableDetail};
 
@@ -9,7 +9,7 @@ pub struct Constraints {
     constraints: Vec<Constraint>,
     types: Vec<Type>,
     variables: Vec<Variable>,
-    def_types: Vec<(Symbol, Located<Index<Type>>)>,
+    def_types: Vec<(Symbol, Loc<Index<Type>>)>,
     let_constraints: Vec<LetConstraint>,
     categories: Vec<Category>,
     pattern_categories: Vec<PatternCategory>,
@@ -18,6 +18,26 @@ pub struct Constraints {
 }
 
 impl Constraints {
+    pub const EMPTY_RECORD: Index<Type> = Index::new(0);
+    pub const EMPTY_TAG_UNION: Index<Type> = Index::new(1);
+
+    pub const CATEGORY_RECORD: Index<Category> = Index::new(0);
+
+    pub fn push_type(&mut self, typ: Type) -> Index<Type> {
+        match typ {
+            Type::EmptyRec => Self::EMPTY_RECORD,
+            Type::EmptyTagUnion => Self::EMPTY_TAG_UNION,
+            other => Index::push_new(&mut self.types, other),
+        }
+    }
+
+    pub fn push_category(&mut self, category: Category) -> Index<Category> {
+        match category {
+            Category::Record => Self::CATEGORY_RECORD,
+            other => Index::push_new(&mut self.categories, other),
+        }
+    }
+
     pub fn equal_types(
         &mut self,
         typ: Type,
@@ -65,19 +85,18 @@ impl Constraints {
         Slice::new(start as _, length as _)
     }
 
-    fn def_types_slice<I>(&mut self, it: I) -> Slice<(Symbol, Located<Type>)>
+    fn def_types_slice<I>(&mut self, it: I) -> Slice<(Symbol, Loc<Type>)>
     where
-        I: IntoIterator<Item = (Symbol, Located<Type>)>,
+        I: IntoIterator<Item = (Symbol, Loc<Type>)>,
     {
         let start = self.def_types.len();
 
         for (symbol, loc_type) in it {
             let type_index = Index::new(self.types.len() as _);
-            let Located { region, value } = loc_type;
+            let Loc { region, value } = loc_type;
             self.types.push(value);
 
-            self.def_types
-                .push((symbol, Located::at(region, type_index)));
+            self.def_types.push((symbol, Loc::at(region, type_index)));
         }
 
         let length = self.def_types.len() - start;
@@ -118,7 +137,7 @@ impl Constraints {
     where
         I1: IntoIterator<Item = Variable>,
         I2: IntoIterator<Item = Variable>,
-        I3: IntoIterator<Item = (Symbol, Located<Type>)>,
+        I3: IntoIterator<Item = (Symbol, Loc<Type>)>,
     {
         let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
@@ -163,60 +182,6 @@ pub enum Constraint {
 pub struct LetConstraint {
     pub rigid_vars: Slice<Variable>,
     pub flex_vars: Slice<Variable>,
-    pub def_types: Slice<(Symbol, Located<Type>)>,
+    pub def_types: Slice<(Symbol, Loc<Type>)>,
     pub defs_and_ret_constraint: Index<(Constraint, Constraint)>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Index<T> {
-    index: u32,
-    _marker: std::marker::PhantomData<T>,
-}
-
-impl<T> Index<T> {
-    pub const fn new(index: u32) -> Self {
-        Self {
-            index,
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Slice<T> {
-    start: u32,
-    length: u16,
-    _marker: std::marker::PhantomData<T>,
-}
-
-impl<T> Default for Slice<T> {
-    fn default() -> Self {
-        Self::new(0, 0)
-    }
-}
-
-impl<T> Slice<T> {
-    pub const fn new(start: u32, length: u16) -> Self {
-        Self {
-            start,
-            length,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    pub const fn len(&self) -> usize {
-        self.length as _
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.length == 0
-    }
-
-    pub const fn indices(&self) -> std::ops::Range<usize> {
-        self.start as usize..(self.start as usize + self.length as usize)
-    }
-
-    pub fn into_iter(&self) -> impl Iterator<Item = Index<T>> {
-        self.indices().map(|i| Index::new(i as _))
-    }
 }
