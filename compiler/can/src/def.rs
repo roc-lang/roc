@@ -399,7 +399,7 @@ pub fn sort_can_defs(
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
     let CanDefs {
         refs_by_symbol,
-        can_defs_by_symbol,
+        mut can_defs_by_symbol,
         aliases,
     } = defs;
 
@@ -583,7 +583,7 @@ pub fn sort_can_defs(
                     &group,
                     &env.closures,
                     &mut all_successors_with_self,
-                    &can_defs_by_symbol,
+                    &mut can_defs_by_symbol,
                     &mut declarations,
                 );
             }
@@ -717,7 +717,7 @@ pub fn sort_can_defs(
                                 group,
                                 &env.closures,
                                 &mut all_successors_with_self,
-                                &can_defs_by_symbol,
+                                &mut can_defs_by_symbol,
                                 &mut declarations,
                             );
                         }
@@ -739,7 +739,7 @@ fn group_to_declaration(
     group: &[Symbol],
     closures: &MutMap<Symbol, References>,
     successors: &mut dyn FnMut(&Symbol) -> ImSet<Symbol>,
-    can_defs_by_symbol: &MutMap<Symbol, Def>,
+    can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     declarations: &mut Vec<Declaration>,
 ) {
     use Declaration::*;
