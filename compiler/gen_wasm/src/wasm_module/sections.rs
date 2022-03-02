@@ -1022,7 +1022,7 @@ impl Serialize for DataSegment<'_> {
 #[derive(Debug)]
 pub struct DataSection<'a> {
     count: u32,
-    pub bytes: Vec<'a, u8>,
+    pub bytes: Vec<'a, u8>, // public so backend.rs can calculate addr of first string
 }
 
 impl<'a> DataSection<'a> {
