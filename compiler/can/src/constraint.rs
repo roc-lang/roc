@@ -33,16 +33,44 @@ impl Constraints {
         let variables = Vec::new();
         let def_types = Vec::new();
         let let_constraints = Vec::new();
-        let mut categories = Vec::new();
-        let pattern_categories = Vec::new();
+        let mut categories = Vec::with_capacity(16);
+        let mut pattern_categories = Vec::with_capacity(16);
         let expectations = Vec::new();
         let pattern_expectations = Vec::new();
         let includes_tags = Vec::new();
 
-        types.push(Type::EmptyRec);
-        types.push(Type::EmptyTagUnion);
+        types.extend([Type::EmptyRec, Type::EmptyTagUnion]);
 
-        categories.push(Category::Record);
+        categories.extend([
+            Category::Record,
+            Category::ForeignCall,
+            Category::OpaqueArg,
+            Category::Lambda,
+            Category::ClosureSize,
+            Category::StrInterpolation,
+            Category::If,
+            Category::When,
+            Category::Float,
+            Category::Int,
+            Category::Num,
+            Category::List,
+            Category::Str,
+            Category::Character,
+        ]);
+
+        pattern_categories.extend([
+            PatternCategory::Record,
+            PatternCategory::EmptyRecord,
+            PatternCategory::PatternGuard,
+            PatternCategory::PatternDefault,
+            PatternCategory::Set,
+            PatternCategory::Map,
+            PatternCategory::Str,
+            PatternCategory::Num,
+            PatternCategory::Int,
+            PatternCategory::Float,
+            PatternCategory::Character,
+        ]);
 
         Self {
             constraints,
@@ -62,6 +90,31 @@ impl Constraints {
     pub const EMPTY_TAG_UNION: Index<Type> = Index::new(1);
 
     pub const CATEGORY_RECORD: Index<Category> = Index::new(0);
+    pub const CATEGORY_FOREIGNCALL: Index<Category> = Index::new(1);
+    pub const CATEGORY_OPAQUEARG: Index<Category> = Index::new(2);
+    pub const CATEGORY_LAMBDA: Index<Category> = Index::new(3);
+    pub const CATEGORY_CLOSURESIZE: Index<Category> = Index::new(4);
+    pub const CATEGORY_STRINTERPOLATION: Index<Category> = Index::new(5);
+    pub const CATEGORY_IF: Index<Category> = Index::new(6);
+    pub const CATEGORY_WHEN: Index<Category> = Index::new(7);
+    pub const CATEGORY_FLOAT: Index<Category> = Index::new(8);
+    pub const CATEGORY_INT: Index<Category> = Index::new(9);
+    pub const CATEGORY_NUM: Index<Category> = Index::new(10);
+    pub const CATEGORY_LIST: Index<Category> = Index::new(11);
+    pub const CATEGORY_STR: Index<Category> = Index::new(12);
+    pub const CATEGORY_CHARACTER: Index<Category> = Index::new(13);
+
+    pub const PCATEGORY_RECORD: Index<PatternCategory> = Index::new(0);
+    pub const PCATEGORY_EMPTYRECORD: Index<PatternCategory> = Index::new(1);
+    pub const PCATEGORY_PATTERNGUARD: Index<PatternCategory> = Index::new(2);
+    pub const PCATEGORY_PATTERNDEFAULT: Index<PatternCategory> = Index::new(3);
+    pub const PCATEGORY_SET: Index<PatternCategory> = Index::new(4);
+    pub const PCATEGORY_MAP: Index<PatternCategory> = Index::new(5);
+    pub const PCATEGORY_STR: Index<PatternCategory> = Index::new(6);
+    pub const PCATEGORY_NUM: Index<PatternCategory> = Index::new(7);
+    pub const PCATEGORY_INT: Index<PatternCategory> = Index::new(8);
+    pub const PCATEGORY_FLOAT: Index<PatternCategory> = Index::new(9);
+    pub const PCATEGORY_CHARACTER: Index<PatternCategory> = Index::new(10);
 
     #[inline(always)]
     pub fn push_type(&mut self, typ: Type) -> Index<Type> {
@@ -81,7 +134,38 @@ impl Constraints {
     pub fn push_category(&mut self, category: Category) -> Index<Category> {
         match category {
             Category::Record => Self::CATEGORY_RECORD,
+            Category::ForeignCall => Self::CATEGORY_FOREIGNCALL,
+            Category::OpaqueArg => Self::CATEGORY_OPAQUEARG,
+            Category::Lambda => Self::CATEGORY_LAMBDA,
+            Category::ClosureSize => Self::CATEGORY_CLOSURESIZE,
+            Category::StrInterpolation => Self::CATEGORY_STRINTERPOLATION,
+            Category::If => Self::CATEGORY_IF,
+            Category::When => Self::CATEGORY_WHEN,
+            Category::Float => Self::CATEGORY_FLOAT,
+            Category::Int => Self::CATEGORY_INT,
+            Category::Num => Self::CATEGORY_NUM,
+            Category::List => Self::CATEGORY_LIST,
+            Category::Str => Self::CATEGORY_STR,
+            Category::Character => Self::CATEGORY_CHARACTER,
             other => Index::push_new(&mut self.categories, other),
+        }
+    }
+
+    #[inline(always)]
+    pub fn push_pattern_category(&mut self, category: PatternCategory) -> Index<PatternCategory> {
+        match category {
+            PatternCategory::Record => Self::PCATEGORY_RECORD,
+            PatternCategory::EmptyRecord => Self::PCATEGORY_EMPTYRECORD,
+            PatternCategory::PatternGuard => Self::PCATEGORY_PATTERNGUARD,
+            PatternCategory::PatternDefault => Self::PCATEGORY_PATTERNDEFAULT,
+            PatternCategory::Set => Self::PCATEGORY_SET,
+            PatternCategory::Map => Self::PCATEGORY_MAP,
+            PatternCategory::Str => Self::PCATEGORY_STR,
+            PatternCategory::Num => Self::PCATEGORY_NUM,
+            PatternCategory::Int => Self::PCATEGORY_INT,
+            PatternCategory::Float => Self::PCATEGORY_FLOAT,
+            PatternCategory::Character => Self::PCATEGORY_CHARACTER,
+            other => Index::push_new(&mut self.pattern_categories, other),
         }
     }
 
@@ -94,7 +178,7 @@ impl Constraints {
     ) -> Constraint {
         let type_index = Index::push_new(&mut self.types, typ);
         let expected_index = Index::push_new(&mut self.expectations, expected);
-        let category_index = Index::push_new(&mut self.categories, category);
+        let category_index = Self::push_category(self, category);
 
         Constraint::Eq(type_index, expected_index, category_index, region)
     }
@@ -108,7 +192,7 @@ impl Constraints {
     ) -> Constraint {
         let type_index = Index::push_new(&mut self.types, typ);
         let expected_index = Index::push_new(&mut self.pattern_expectations, expected);
-        let category_index = Index::push_new(&mut self.pattern_categories, category);
+        let category_index = Self::push_pattern_category(self, category);
 
         Constraint::Pattern(type_index, expected_index, category_index, region)
     }
