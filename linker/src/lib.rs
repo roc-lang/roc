@@ -367,9 +367,7 @@ fn preprocess_impl(
         Some(section) => {
             let file_offset = match section.compressed_file_range() {
                 Ok(
-                    range
-                    @
-                    CompressedFileRange {
+                    range @ CompressedFileRange {
                         format: CompressionFormat::None,
                         ..
                     },
@@ -494,9 +492,7 @@ fn preprocess_impl(
     for sec in text_sections {
         let (file_offset, compressed) = match sec.compressed_file_range() {
             Ok(
-                range
-                @
-                CompressedFileRange {
+                range @ CompressedFileRange {
                     format: CompressionFormat::None,
                     ..
                 },
@@ -626,9 +622,7 @@ fn preprocess_impl(
     };
     let dyn_offset = match dyn_sec.compressed_file_range() {
         Ok(
-            range
-            @
-            CompressedFileRange {
+            range @ CompressedFileRange {
                 format: CompressionFormat::None,
                 ..
             },
@@ -714,9 +708,7 @@ fn preprocess_impl(
     };
     let symtab_offset = match symtab_sec.compressed_file_range() {
         Ok(
-            range
-            @
-            CompressedFileRange {
+            range @ CompressedFileRange {
                 format: CompressionFormat::None,
                 ..
             },
@@ -738,9 +730,7 @@ fn preprocess_impl(
     };
     let dynsym_offset = match dynsym_sec.compressed_file_range() {
         Ok(
-            range
-            @
-            CompressedFileRange {
+            range @ CompressedFileRange {
                 format: CompressionFormat::None,
                 ..
             },
@@ -759,9 +749,7 @@ fn preprocess_impl(
     {
         match sec.compressed_file_range() {
             Ok(
-                range
-                @
-                CompressedFileRange {
+                range @ CompressedFileRange {
                     format: CompressionFormat::None,
                     ..
                 },
