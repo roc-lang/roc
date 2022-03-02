@@ -212,9 +212,10 @@ impl Constraints {
         I: IntoIterator<Item = Variable>,
         C: IntoIterator<Item = Constraint>,
     {
-        let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
+        let defs_constraint = self.and_constraint(defs_constraint);
 
-        self.and_constraint(defs_constraint);
+        let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
+        self.constraints.push(defs_constraint);
         self.constraints.push(Constraint::True);
 
         let let_contraint = LetConstraint {
@@ -261,6 +262,7 @@ impl Constraints {
         Constraint::Let(let_index)
     }
 
+    #[must_use]
     pub fn and_constraint<I>(&mut self, constraints: I) -> Constraint
     where
         I: IntoIterator<Item = Constraint>,

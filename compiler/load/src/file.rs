@@ -3091,8 +3091,6 @@ fn run_solve<'a>(
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
 
-    dbg!(&constraint, &constraints);
-
     // Finish constraining the module by wrapping the existing Constraint
     // in the ones we just computed. We can do this off the main thread.
     let constraint = constrain_imports_soa(
