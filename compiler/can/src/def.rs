@@ -759,7 +759,7 @@ fn group_to_declaration(
     // Can bind multiple symbols. When not incorrectly recursive (which is guaranteed in this function),
     // normally `someDef` would be inserted twice. We use the region of the pattern as a unique key
     // for a definition, so every definition is only inserted (thus typechecked and emitted) once
-    let mut seen_pattern_regions: ImSet<Region> = ImSet::default();
+    let mut seen_pattern_regions: Vec<Region> = Vec::with_capacity(2);
 
     for cycle in strongly_connected_components(group, filtered_successors) {
         if cycle.len() == 1 {
@@ -779,7 +779,7 @@ fn group_to_declaration(
                     let is_recursive = successors(symbol).contains(symbol);
 
                     if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
-                        seen_pattern_regions.insert(new_def.loc_pattern.region);
+                        seen_pattern_regions.push(new_def.loc_pattern.region);
 
                         if is_recursive {
                             declarations.push(DeclareRec(vec![new_def]));
@@ -807,7 +807,7 @@ fn group_to_declaration(
                         }
 
                         if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
-                            seen_pattern_regions.insert(new_def.loc_pattern.region);
+                            seen_pattern_regions.push(new_def.loc_pattern.region);
 
                             can_defs.push(new_def);
                         }
