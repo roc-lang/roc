@@ -116,30 +116,22 @@ pub fn float_literal(
     let reason = Reason::FloatLiteral;
 
     let mut constrs = Vec::with_capacity(3);
-    let num_type = {
-        let constrs: &mut Vec<Constraint> = &mut constrs;
-        let num_type = Variable(num_var);
-        let category = Category::Float;
-        let range = bound.bounded_range();
-
-        let total_num_type = num_type;
-
-        match range.len() {
-            0 => total_num_type,
-            1 => {
-                let actual_type = Variable(range[0]);
-                constrs.push(Eq(
-                    total_num_type.clone(),
-                    Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region),
-                    category,
-                    region,
-                ));
-                total_num_type
-            }
-            _ => RangedNumber(Box::new(total_num_type), range),
-        }
-    };
-    constrs.extend(vec![]);
+    let num_type = add_numeric_bound_constr(
+        &mut constrs,
+        Variable(num_var),
+        bound,
+        region,
+        Category::Float,
+    );
+    constrs.extend(vec![
+        Eq(
+            num_type.clone(),
+            ForReason(reason, num_float(Type::Variable(precision_var)), region),
+            Category::Float,
+            region,
+        ),
+        Eq(num_type, expected, Category::Float, region),
+    ]);
 
     exists(vec![num_var, precision_var], And(constrs))
 }
