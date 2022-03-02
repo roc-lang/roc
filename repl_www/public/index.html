@@ -1,28 +1,28 @@
 <html>
-  <head>
-    <link rel="stylesheet" href="./repl.css" />
-    <title>Roc REPL</title>
-  </head>
-  <body>
-    <div class="body-wrapper">
-      <section class="text">
-        <h1>The rockin' Roc REPL</h1>
-      </section>
 
-      <section class="history">
-        <div class="scroll-wrap">
-          <div id="history-text" class="scroll code"></div>
-        </div>
-      </section>
+<head>
+  <title>Roc REPL</title>
+  <base href="repl">
+  <link rel="stylesheet" href="repl.css" />
+</head>
 
-      <section class="source">
-        <input
-          id="source-input"
-          class="code"
-          placeholder="Type some Roc code and press Enter"
-        />
-      </section>
-    </div>
-    <script type="module" src="./repl.js"></script>
-  </body>
+<body>
+  <div class="body-wrapper">
+    <section class="text">
+      <h1>The rockin' Roc REPL</h1>
+    </section>
+
+    <section class="history">
+      <div class="scroll-wrap">
+        <div id="history-text" class="scroll code"></div>
+      </div>
+    </section>
+
+    <section class="source">
+      <input id="source-input" class="code" placeholder="Type some Roc code and press Enter" />
+    </section>
+  </div>
+  <script type="module" src="repl.js"></script>
+</body>
+
 </html>

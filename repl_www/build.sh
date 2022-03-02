@@ -15,7 +15,7 @@ then
 fi
 
 # output directory is first argument or default
-WWW_DIR="${1:-repl_www/build}"
+WWW_DIR="${1:-repl_www/build/repl}"
 mkdir -p $WWW_DIR
 cp repl_www/public/* $WWW_DIR
 
