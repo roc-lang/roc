@@ -354,18 +354,28 @@ macro_rules! assert_evals_to {
         $crate::helpers::wasm::assert_evals_to!($src, $expected, $ty, $transform, false);
     };
 
-    // LLVM tests call the last arg $ignore_problems rather than $expect_panic
-    // Either way, it's only `true` for tests that use `should_panic`.
-    // In Wasm, `should_panic` only works if we spawn a child process.
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $expect_panic: expr) => {{
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems: expr) => {{
         let phantom = std::marker::PhantomData;
-        let _ = $expect_panic; // TODO
+        let _ = $ignore_problems; // Always ignore "problems"! One backend (LLVM) is enough to cover them.
         match $crate::helpers::wasm::assert_evals_to_help::<$ty>($src, phantom) {
             Err(msg) => panic!("{}", msg),
             Ok(actual) => {
                 assert_eq!($transform(actual), $expected)
             }
         }
+    }};
+}
+
+#[allow(unused_macros)]
+macro_rules! expect_runtime_error_panic {
+    ($src:expr) => {{
+        $crate::helpers::wasm::assert_evals_to!(
+            $src,
+            false, // fake value/type for eval
+            bool,
+            $crate::helpers::wasm::identity,
+            true // ignore problems
+        );
     }};
 }
 
@@ -395,6 +405,9 @@ macro_rules! assert_refcounts {
 
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
+
+#[allow(unused_imports)]
+pub(crate) use expect_runtime_error_panic;
 
 #[allow(unused_imports)]
 pub(crate) use assert_refcounts;
