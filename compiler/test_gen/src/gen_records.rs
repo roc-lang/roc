@@ -1,14 +1,11 @@
 #[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::assert_evals_to;
-
-#[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::expect_runtime_error_panic;
+use crate::helpers::llvm::{assert_evals_to, expect_runtime_error_panic};
 
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
-use crate::helpers::wasm::assert_evals_to;
+use crate::helpers::wasm::{assert_evals_to, expect_runtime_error_panic};
 
 // use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
@@ -1044,8 +1041,25 @@ fn different_proc_types_specialized_to_same_layout() {
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(
     // TODO: something upstream is escaping the '
+    // NOTE: Are we sure it's upstream? It's not escaped in gen-wasm version below!
     expected = r#"Roc failed with message: "Can\'t create record with improper layout""#
 )]
+fn call_with_bad_record_runtime_error() {
+    expect_runtime_error_panic!(indoc!(
+        r#"
+            app "test" provides [ main ] to "./platform"
+
+            main =
+                get : {a: Bool} -> Bool
+                get = \{a} -> a
+                get {b: ""}
+            "#
+    ))
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+#[should_panic(expected = r#"Can't create record with improper layout"#)]
 fn call_with_bad_record_runtime_error() {
     expect_runtime_error_panic!(indoc!(
         r#"
