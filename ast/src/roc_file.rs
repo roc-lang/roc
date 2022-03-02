@@ -2,11 +2,12 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_fmt::def::fmt_def;
 use roc_fmt::module::fmt_module;
+use roc_fmt::Buf;
 use roc_parse::ast::{Def, Module};
 use roc_parse::module::module_defs;
-use roc_parse::parser;
 use roc_parse::parser::{Parser, SyntaxError};
-use roc_region::all::Located;
+use roc_parse::state;
+use roc_region::all::Loc;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::{fs, io};
@@ -15,7 +16,7 @@ use std::{fs, io};
 pub struct File<'a> {
     path: &'a Path,
     module_header: Module<'a>,
-    content: Vec<'a, Located<Def<'a>>>,
+    content: Vec<'a, Loc<Def<'a>>>,
 }
 
 #[derive(Debug)]
@@ -36,7 +37,7 @@ impl<'a> File<'a> {
 
         let allocation = arena.alloc(bytes);
 
-        let module_parse_state = parser::State::new(allocation);
+        let module_parse_state = state::State::new(allocation);
         let parsed_module = roc_parse::module::parse_header(arena, module_parse_state);
 
         match parsed_module {
@@ -52,7 +53,7 @@ impl<'a> File<'a> {
                     Err((_, error, _)) => Err(ReadError::ParseDefs(error)),
                 }
             }
-            Err(error) => Err(ReadError::ParseHeader(SyntaxError::Header(error))),
+            Err(error) => Err(ReadError::ParseHeader(SyntaxError::Header(error.problem))),
         }
     }
 
@@ -60,19 +61,20 @@ impl<'a> File<'a> {
         let arena = Bump::new();
         let mut formatted_file = String::new();
 
-        let mut module_header_buf = bumpalo::collections::String::new_in(&arena);
-        fmt_module(&mut module_header_buf, &self.module_header);
+        let mut buf = Buf::new_in(&arena);
+        fmt_module(&mut buf, &self.module_header);
 
-        formatted_file.push_str(module_header_buf.as_str());
+        formatted_file.push_str(buf.as_str());
 
         for def in &self.content {
-            let mut def_buf = bumpalo::collections::String::new_in(&arena);
+            let mut buf = Buf::new_in(&arena);
 
-            fmt_def(&mut def_buf, &def.value, 0);
+            fmt_def(&mut buf, &def.value, 0);
 
-            formatted_file.push_str(def_buf.as_str());
+            formatted_file.push_str(buf.as_str());
         }
 
+        formatted_file.push_str("\n");
         formatted_file
     }
 
@@ -98,17 +100,18 @@ impl<'a> File<'a> {
 
 #[cfg(test)]
 mod test_file {
-    use crate::lang::roc_file;
+    use super::File;
     use bumpalo::Bump;
+    use indoc::indoc;
     use std::path::Path;
 
     #[test]
     fn read_and_fmt_simple_roc_module() {
-        let simple_module_path = Path::new("./tests/modules/SimpleUnformatted.roc");
+        let simple_module_path = Path::new("../editor/tests/modules/SimpleUnformatted.roc");
 
         let arena = Bump::new();
 
-        let file = roc_file::File::read(simple_module_path, &arena)
+        let file = File::read(simple_module_path, &arena)
             .expect("Could not read SimpleUnformatted.roc in test_file test");
 
         assert_eq!(
@@ -117,8 +120,9 @@ mod test_file {
                 r#"
                     interface Simple
                         exposes [
-                        v, x
-                         ]
+                                v,
+                                x,
+                            ]
                         imports []
 
                     v : Str
@@ -126,7 +130,8 @@ mod test_file {
                     v = "Value!"
 
                     x : Int
-                    x = 4"#
+                    x = 4
+                "#
             )
         );
     }
