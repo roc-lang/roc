@@ -4,9 +4,7 @@ use crate::builtins::{
 };
 use crate::soa_pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
-// use roc_can::constraint::Constraint::{self, *};
-// use roc_can::constraint::LetConstraint;
-use roc_can::constraint_soa::{Constraint, Constraints};
+use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::{Declaration, Def};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
@@ -21,23 +19,23 @@ use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{AliasKind, AnnotationSource, Category, PReason, Reason, RecordField};
 
-/// This is for constraining Defs
-#[derive(Default, Debug)]
-pub struct Info {
-    pub vars: Vec<Variable>,
-    pub constraints: Vec<Constraint>,
-    pub def_types: SendMap<Symbol, Loc<Type>>,
-}
-
-impl Info {
-    pub fn with_capacity(capacity: usize) -> Self {
-        Info {
-            vars: Vec::with_capacity(capacity),
-            constraints: Vec::with_capacity(capacity),
-            def_types: SendMap::default(),
-        }
-    }
-}
+ /// This is for constraining Defs
+ #[derive(Default, Debug)]
+ pub struct Info {
+     pub vars: Vec<Variable>,
+     pub constraints: Vec<Constraint>,
+     pub def_types: SendMap<Symbol, Loc<Type>>,
+ }
+ 
+ impl Info {
+     pub fn with_capacity(capacity: usize) -> Self {
+         Info {
+             vars: Vec::with_capacity(capacity),
+             constraints: Vec::with_capacity(capacity),
+             def_types: SendMap::default(),
+         }
+     }
+ }
 
 pub struct Env {
     /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
@@ -1662,7 +1660,7 @@ fn instantiate_rigids(
         annotation.substitute(&rigid_substitution);
     }
 
-    if let Some(new_headers) = crate::pattern::headers_from_annotation(
+    if let Some(new_headers) = crate::soa_pattern::headers_from_annotation(
         &loc_pattern.value,
         &Loc::at(loc_pattern.region, annotation.clone()),
     ) {

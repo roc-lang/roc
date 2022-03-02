@@ -1,11 +1,7 @@
 use arrayvec::ArrayVec;
-use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::LetConstraint;
-use roc_can::constraint_soa;
-use roc_can::constraint_soa::Constraints;
+use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::Expected::{self, *};
 use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumericBound, SignDemand};
-use roc_collections::all::SendMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
@@ -15,38 +11,10 @@ use roc_types::types::Type::{self, *};
 use roc_types::types::{AliasKind, Category};
 
 #[must_use]
-pub fn add_numeric_bound_constr(
-    constrs: &mut Vec<Constraint>,
-    num_type: Type,
-    bound: impl TypedNumericBound,
-    region: Region,
-    category: Category,
-) -> Type {
-    let range = bound.bounded_range();
-
-    let total_num_type = num_type;
-
-    match range.len() {
-        0 => total_num_type,
-        1 => {
-            let actual_type = Variable(range[0]);
-            constrs.push(Eq(
-                total_num_type.clone(),
-                Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region),
-                category,
-                region,
-            ));
-            total_num_type
-        }
-        _ => RangedNumber(Box::new(total_num_type), range),
-    }
-}
-
-#[must_use]
 #[inline(always)]
 pub fn add_numeric_bound_constr_soa(
     constraints: &mut Constraints,
-    num_constraints: &mut impl Extend<constraint_soa::Constraint>,
+    num_constraints: &mut impl Extend<Constraint>,
     num_type: Type,
     bound: impl TypedNumericBound,
     region: Region,
@@ -73,87 +41,6 @@ pub fn add_numeric_bound_constr_soa(
 }
 
 #[inline(always)]
-pub fn int_literal(
-    num_var: Variable,
-    precision_var: Variable,
-    expected: Expected<Type>,
-    region: Region,
-    bound: IntBound,
-) -> Constraint {
-    let reason = Reason::IntLiteral;
-
-    let mut constrs = Vec::with_capacity(3);
-    // Always add the bound first; this improves the resolved type quality in case it's an alias
-    // like "U8".
-    let num_type = add_numeric_bound_constr(
-        &mut constrs,
-        Variable(num_var),
-        bound,
-        region,
-        Category::Num,
-    );
-    constrs.extend(vec![
-        Eq(
-            num_type.clone(),
-            ForReason(reason, num_int(Type::Variable(precision_var)), region),
-            Category::Int,
-            region,
-        ),
-        Eq(num_type, expected, Category::Int, region),
-    ]);
-
-    exists(vec![num_var], And(constrs))
-}
-
-#[inline(always)]
-pub fn float_literal(
-    num_var: Variable,
-    precision_var: Variable,
-    expected: Expected<Type>,
-    region: Region,
-    bound: FloatBound,
-) -> Constraint {
-    let reason = Reason::FloatLiteral;
-
-    let mut constrs = Vec::with_capacity(3);
-    let num_type = add_numeric_bound_constr(
-        &mut constrs,
-        Variable(num_var),
-        bound,
-        region,
-        Category::Float,
-    );
-    constrs.extend(vec![
-        Eq(
-            num_type.clone(),
-            ForReason(reason, num_float(Type::Variable(precision_var)), region),
-            Category::Float,
-            region,
-        ),
-        Eq(num_type, expected, Category::Float, region),
-    ]);
-
-    exists(vec![num_var, precision_var], And(constrs))
-}
-
-#[inline(always)]
-pub fn num_literal(
-    num_var: Variable,
-    expected: Expected<Type>,
-    region: Region,
-    bound: NumericBound,
-) -> Constraint {
-    let open_number_type = crate::builtins::num_num(Type::Variable(num_var));
-
-    let mut constrs = Vec::with_capacity(3);
-    let num_type =
-        add_numeric_bound_constr(&mut constrs, open_number_type, bound, region, Category::Num);
-    constrs.extend(vec![Eq(num_type, expected, Category::Num, region)]);
-
-    exists(vec![num_var], And(constrs))
-}
-
-#[inline(always)]
 pub fn int_literal_soa(
     constraints: &mut Constraints,
     num_var: Variable,
@@ -161,7 +48,7 @@ pub fn int_literal_soa(
     expected: Expected<Type>,
     region: Region,
     bound: IntBound,
-) -> constraint_soa::Constraint {
+) -> Constraint {
     let reason = Reason::IntLiteral;
 
     // Always add the bound first; this improves the resolved type quality in case it's an alias like "U8".
@@ -198,7 +85,7 @@ pub fn float_literal_soa(
     expected: Expected<Type>,
     region: Region,
     bound: FloatBound,
-) -> constraint_soa::Constraint {
+) -> Constraint {
     let reason = Reason::FloatLiteral;
 
     let mut constrs = ArrayVec::<_, 3>::new();
@@ -232,7 +119,7 @@ pub fn num_literal_soa(
     expected: Expected<Type>,
     region: Region,
     bound: NumericBound,
-) -> constraint_soa::Constraint {
+) -> Constraint {
     let open_number_type = crate::builtins::num_num(Type::Variable(num_var));
 
     let mut constrs = ArrayVec::<_, 2>::new();
@@ -249,17 +136,6 @@ pub fn num_literal_soa(
 
     let and_constraint = constraints.and_constraint(constrs);
     constraints.exists([num_var], and_constraint)
-}
-
-#[inline(always)]
-pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
-    Let(Box::new(LetConstraint {
-        rigid_vars: Vec::new(),
-        flex_vars,
-        def_types: SendMap::default(),
-        defs_constraint: constraint,
-        ret_constraint: Constraint::True,
-    }))
 }
 
 #[inline(always)]

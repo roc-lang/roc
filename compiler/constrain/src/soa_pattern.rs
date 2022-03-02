@@ -1,6 +1,6 @@
 use crate::builtins;
 use crate::soa_expr::{constrain_expr, Env};
-use roc_can::constraint_soa::{Constraint, Constraints};
+use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, RecordDestruct};
