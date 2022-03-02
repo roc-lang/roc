@@ -1222,7 +1222,7 @@ checksum = "1d428afc93ad288f6dffc1fa5f4a78201ad2eec33c5a522e51c181009eb09061"
 dependencies = [
  "byteorder",
  "dynasm",
- "memmap2 0.5.0",
+ "memmap2 0.5.3",
 ]
 
 [[package]]
@@ -2095,9 +2095,9 @@ dependencies = [
 
 [[package]]
 name = "memmap2"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4647a11b578fead29cdbb34d4adef8dd3dc35b876c9c6d5240d83f205abfe96e"
+checksum = "057a3db23999c867821a7a59feb06a578fcb03685e983dff90daf9e7d24ac08f"
 dependencies = [
  "libc",
 ]
@@ -3286,6 +3286,7 @@ dependencies = [
  "roc_unify",
  "snafu",
  "ven_graph",
+ "winapi",
 ]
 
 [[package]]
@@ -3594,7 +3595,7 @@ dependencies = [
  "bumpalo",
  "clap 3.0.0-beta.5",
  "iced-x86",
- "memmap2 0.5.0",
+ "memmap2 0.5.3",
  "object 0.26.2",
  "roc_build",
  "roc_collections",
@@ -3822,13 +3823,6 @@ dependencies = [
 [[package]]
 name = "roc_std"
 version = "0.1.0"
-dependencies = [
- "indoc",
- "libc",
- "pretty_assertions",
- "quickcheck",
- "quickcheck_macros",
-]
 
 [[package]]
 name = "roc_target"
@@ -3927,7 +3921,7 @@ checksum = "61b3909d758bb75c79f23d4736fac9433868679d3ad2ea7a61e3c25cfda9a088"
 [[package]]
 name = "rustyline"
 version = "9.1.1"
-source = "git+https://github.com/rtfeldman/rustyline?tag=v9.1.1#7053ae0fe0ee710d38ed5845dd979113382994dc"
+source = "git+https://github.com/rtfeldman/rustyline?rev=e74333c#e74333c0d618896b88175bf06645108f996fe6d0"
 dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
@@ -3950,7 +3944,7 @@ dependencies = [
 [[package]]
 name = "rustyline-derive"
 version = "0.6.0"
-source = "git+https://github.com/rtfeldman/rustyline?tag=v9.1.1#7053ae0fe0ee710d38ed5845dd979113382994dc"
+source = "git+https://github.com/rtfeldman/rustyline?rev=e74333c#e74333c0d618896b88175bf06645108f996fe6d0"
 dependencies = [
  "quote",
  "syn",
