@@ -217,6 +217,7 @@ impl Constraints {
     where
         I: IntoIterator<Item = Variable>,
         C: IntoIterator<Item = Constraint>,
+        C::IntoIter: ExactSizeIterator,
     {
         let defs_constraint = self.and_constraint(defs_constraint);
 
@@ -268,20 +269,28 @@ impl Constraints {
         Constraint::Let(let_index)
     }
 
-    #[must_use]
     pub fn and_constraint<I>(&mut self, constraints: I) -> Constraint
     where
         I: IntoIterator<Item = Constraint>,
+        I::IntoIter: ExactSizeIterator,
     {
-        let start = self.constraints.len() as u32;
+        let mut it = constraints.into_iter();
 
-        self.constraints.extend(constraints);
+        match it.len() {
+            0 => Constraint::True,
+            1 => it.next().unwrap(),
+            _ => {
+                let start = self.constraints.len() as u32;
 
-        let end = self.constraints.len() as u32;
+                self.constraints.extend(it);
 
-        let slice = Slice::new(start, (end - start) as u16);
+                let end = self.constraints.len() as u32;
 
-        Constraint::And(slice)
+                let slice = Slice::new(start, (end - start) as u16);
+
+                Constraint::And(slice)
+            }
+        }
     }
 
     pub fn lookup(

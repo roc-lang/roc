@@ -1091,8 +1091,10 @@ pub fn constrain_expr(
 
             let category = Category::LowLevelOpResult(*op);
 
+            // Deviation: elm uses an additional And here
             let eq = constraints.equal_types(ret_type, expected, category, region);
-            constraints.exists_many(vars, arg_cons.into_iter().chain(std::iter::once(eq)))
+            arg_cons.push(eq);
+            constraints.exists_many(vars, arg_cons)
         }
         ForeignCall {
             args,
@@ -1132,8 +1134,10 @@ pub fn constrain_expr(
 
             let category = Category::ForeignCall;
 
+            // Deviation: elm uses an additional And here
             let eq = constraints.equal_types(ret_type, expected, category, region);
-            constraints.exists_many(vars, arg_cons.into_iter().chain(std::iter::once(eq)))
+            arg_cons.push(eq);
+            constraints.exists_many(vars, arg_cons)
         }
         RuntimeError(_) => {
             // Runtime Errors have no constraints because they're going to crash.
