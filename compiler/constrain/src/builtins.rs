@@ -61,7 +61,8 @@ pub fn add_numeric_bound_constr_soa(
         1 => {
             let actual_type = Variable(range[0]);
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
-            let because_suffix = constraints.equal_types(actual_type, expected, category, region);
+            let because_suffix =
+                constraints.equal_types(total_num_type.clone(), expected, category, region);
 
             num_constraints.extend([because_suffix]);
 

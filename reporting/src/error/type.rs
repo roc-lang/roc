@@ -1372,7 +1372,7 @@ fn to_pattern_report<'b>(
                 }
             }
             PReason::WhenMatch { index } => {
-                if index == Index::FIRST {
+                if index == HumanIndex::FIRST {
                     let doc = alloc.stack(vec![
                         alloc
                             .text("The 1st pattern in this ")
@@ -1384,7 +1384,7 @@ fn to_pattern_report<'b>(
                             found,
                             expected_type,
                             add_pattern_category(
-                                HumanIndexlloc,
+                                alloc,
                                 alloc.text("The first pattern is trying to match"),
                                 &category,
                             ),

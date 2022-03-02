@@ -1,6 +1,6 @@
 use crate::builtins;
 use crate::soa_expr::{constrain_expr, Env};
-use roc_can::constraint_soa::{Constraint, Constraints, PresenceConstraint};
+use roc_can::constraint_soa::{Constraint, Constraints};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, RecordDestruct};
@@ -168,20 +168,18 @@ pub fn constrain_pattern(
             //     A -> ""
             //     _ -> ""
             // so, we know that "x" (in this case, a tag union) must be open.
-            state.constraints.push(Constraint::Present(
-                expected.get_type(),
-                PresenceConstraint::IsOpen,
-            ));
+            state
+                .constraints
+                .push(constraints.is_open_type(expected.get_type()));
         }
         UnsupportedPattern(_) | MalformedPattern(_, _) | OpaqueNotInScope(..) => {
             // Erroneous patterns don't add any constraints.
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            state.constraints.push(Constraint::Present(
-                expected.get_type_ref().clone(),
-                PresenceConstraint::IsOpen,
-            ));
+            state
+                .constraints
+                .push(constraints.is_open_type(expected.get_type_ref().clone()));
             state.headers.insert(
                 *symbol,
                 Loc {
@@ -205,18 +203,19 @@ pub fn constrain_pattern(
                 Category::Num,
             );
 
-            state.constraints.push(Constraint::Pattern(
-                region,
-                PatternCategory::Num,
+            state.constraints.push(constraints.equal_pattern_types(
                 num_type,
                 expected,
+                PatternCategory::Num,
+                region,
             ));
         }
 
         &IntLiteral(num_var, precision_var, _, _, bound) => {
             // First constraint on the free num var; this improves the resolved type quality in
             // case the bound is an alias.
-            let num_type = builtins::add_numeric_bound_constr(
+            let num_type = builtins::add_numeric_bound_constr_soa(
+                constraints,
                 &mut state.constraints,
                 Type::Variable(num_var),
                 bound,
@@ -266,29 +265,29 @@ pub fn constrain_pattern(
             ));
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
-            state.constraints.push(Constraint::Pattern(
-                region,
-                PatternCategory::Float,
+            state.constraints.push(constraints.equal_pattern_types(
                 num_type, // TODO check me if something breaks!
                 expected,
+                PatternCategory::Float,
+                region,
             ));
         }
 
         StrLiteral(_) => {
-            state.constraints.push(Constraint::Pattern(
-                region,
-                PatternCategory::Str,
+            state.constraints.push(constraints.equal_pattern_types(
                 builtins::str_type(),
                 expected,
+                PatternCategory::Str,
+                region,
             ));
         }
 
         SingleQuote(_) => {
-            state.constraints.push(Constraint::Pattern(
-                region,
-                PatternCategory::Character,
+            state.constraints.push(constraints.equal_pattern_types(
                 builtins::num_u32(),
                 expected,
+                PatternCategory::Character,
+                region,
             ));
         }
 
@@ -325,36 +324,39 @@ pub fn constrain_pattern(
 
                 let field_type = match typ {
                     DestructType::Guard(guard_var, loc_guard) => {
-                        state.constraints.push(Constraint::Present(
+                        state.constraints.push(constraints.pattern_presence(
                             Type::Variable(*guard_var),
-                            PresenceConstraint::Pattern(
-                                region,
-                                PatternCategory::PatternGuard,
-                                PExpected::ForReason(
-                                    PReason::PatternGuard,
-                                    pat_type.clone(),
-                                    loc_guard.region,
-                                ),
+                            PExpected::ForReason(
+                                PReason::PatternGuard,
+                                pat_type.clone(),
+                                loc_guard.region,
                             ),
+                            PatternCategory::PatternGuard,
+                            region,
                         ));
                         state.vars.push(*guard_var);
 
-                        constrain_pattern(env, &loc_guard.value, loc_guard.region, expected, state);
+                        constrain_pattern(
+                            constraints,
+                            env,
+                            &loc_guard.value,
+                            loc_guard.region,
+                            expected,
+                            state,
+                        );
 
                         RecordField::Demanded(pat_type)
                     }
                     DestructType::Optional(expr_var, loc_expr) => {
-                        state.constraints.push(Constraint::Present(
+                        state.constraints.push(constraints.pattern_presence(
                             Type::Variable(*expr_var),
-                            PresenceConstraint::Pattern(
-                                region,
-                                PatternCategory::PatternDefault,
-                                PExpected::ForReason(
-                                    PReason::OptionalField,
-                                    pat_type.clone(),
-                                    loc_expr.region,
-                                ),
+                            PExpected::ForReason(
+                                PReason::OptionalField,
+                                pat_type.clone(),
+                                loc_expr.region,
                             ),
+                            PatternCategory::PatternDefault,
+                            region,
                         ));
 
                         state.vars.push(*expr_var);
@@ -365,8 +367,13 @@ pub fn constrain_pattern(
                             loc_expr.region,
                         );
 
-                        let expr_con =
-                            constrain_expr(env, loc_expr.region, &loc_expr.value, expr_expected);
+                        let expr_con = constrain_expr(
+                            constraints,
+                            env,
+                            loc_expr.region,
+                            &loc_expr.value,
+                            expr_expected,
+                        );
                         state.constraints.push(expr_con);
 
                         RecordField::Optional(pat_type)
@@ -391,9 +398,11 @@ pub fn constrain_pattern(
                 region,
             );
 
-            let record_con = Constraint::Present(
+            let record_con = constraints.pattern_presence(
                 Type::Variable(*whole_var),
-                PresenceConstraint::Pattern(region, PatternCategory::Record, expected),
+                expected,
+                PatternCategory::Record,
+                region,
             );
 
             state.constraints.push(whole_con);
@@ -420,24 +429,31 @@ pub fn constrain_pattern(
                     pattern_type,
                     region,
                 );
-                constrain_pattern(env, &loc_pattern.value, loc_pattern.region, expected, state);
+                constrain_pattern(
+                    constraints,
+                    env,
+                    &loc_pattern.value,
+                    loc_pattern.region,
+                    expected,
+                    state,
+                );
             }
 
             let pat_category = PatternCategory::Ctor(tag_name.clone());
 
-            let whole_con = Constraint::Present(
+            let whole_con = constraints.includes_tag(
                 expected.clone().get_type(),
-                PresenceConstraint::IncludesTag(
-                    tag_name.clone(),
-                    argument_types.clone(),
-                    region,
-                    pat_category.clone(),
-                ),
+                tag_name.clone(),
+                argument_types.clone(),
+                pat_category.clone(),
+                region,
             );
 
-            let tag_con = Constraint::Present(
+            let tag_con = constraints.pattern_presence(
                 Type::Variable(*whole_var),
-                PresenceConstraint::Pattern(region, pat_category, expected),
+                expected,
+                pat_category,
+                region,
             );
 
             state.vars.push(*whole_var);
@@ -469,6 +485,7 @@ pub fn constrain_pattern(
             // First, add a constraint for the argument "who"
             let arg_pattern_expected = PExpected::NoExpectation(arg_pattern_type.clone());
             constrain_pattern(
+                constraints,
                 env,
                 &loc_arg_pattern.value,
                 loc_arg_pattern.region,
@@ -495,9 +512,11 @@ pub fn constrain_pattern(
             );
 
             // Next, link `whole_var` (the type of "@Id who") to the expected type
-            let opaque_pattern_con = Constraint::Present(
+            let opaque_pattern_con = constraints.pattern_presence(
                 Type::Variable(*whole_var),
-                PresenceConstraint::Pattern(region, PatternCategory::Opaque(*opaque), expected),
+                expected,
+                PatternCategory::Opaque(*opaque),
+                region,
             );
 
             state

@@ -1,5 +1,6 @@
 use crate::expected::{Expected, PExpected};
 use roc_collections::soa::{Index, Slice};
+use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::types::{Category, PatternCategory, Type};
@@ -15,6 +16,7 @@ pub struct Constraints {
     pattern_categories: Vec<PatternCategory>,
     expectations: Vec<Expected<Type>>,
     pattern_expectations: Vec<PExpected<Type>>,
+    includes_tags: Vec<IncludesTag>,
 }
 
 impl Constraints {
@@ -52,13 +54,9 @@ impl Constraints {
         category: Category,
         region: Region,
     ) -> Constraint {
-        let type_index = Index::new(self.types.len() as _);
-        let expected_index = Index::new(self.expectations.len() as _);
-        let category_index = Index::new(self.categories.len() as _);
-
-        self.types.push(typ);
-        self.expectations.push(expected);
-        self.categories.push(category);
+        let type_index = Index::push_new(&mut self.types, typ);
+        let expected_index = Index::push_new(&mut self.expectations, expected);
+        let category_index = Index::push_new(&mut self.categories, category);
 
         Constraint::Eq(type_index, expected_index, category_index, region)
     }
@@ -70,15 +68,59 @@ impl Constraints {
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let type_index = Index::new(self.types.len() as _);
-        let expected_index = Index::new(self.pattern_expectations.len() as _);
-        let category_index = Index::new(self.pattern_categories.len() as _);
-
-        self.types.push(typ);
-        self.pattern_expectations.push(expected);
-        self.pattern_categories.push(category);
+        let type_index = Index::push_new(&mut self.types, typ);
+        let expected_index = Index::push_new(&mut self.pattern_expectations, expected);
+        let category_index = Index::push_new(&mut self.pattern_categories, category);
 
         Constraint::Pattern(type_index, expected_index, category_index, region)
+    }
+
+    pub fn pattern_presence(
+        &mut self,
+        typ: Type,
+        expected: PExpected<Type>,
+        category: PatternCategory,
+        region: Region,
+    ) -> Constraint {
+        let type_index = Index::push_new(&mut self.types, typ);
+        let expected_index = Index::push_new(&mut self.pattern_expectations, expected);
+        let category_index = Index::push_new(&mut self.pattern_categories, category);
+
+        Constraint::PatternPresence(type_index, expected_index, category_index, region)
+    }
+
+    pub fn is_open_type(&mut self, typ: Type) -> Constraint {
+        let type_index = Index::push_new(&mut self.types, typ);
+
+        Constraint::IsOpenType(type_index)
+    }
+
+    pub fn includes_tag<I>(
+        &mut self,
+        typ: Type,
+        tag_name: TagName,
+        types: I,
+        category: PatternCategory,
+        region: Region,
+    ) -> Constraint
+    where
+        I: IntoIterator<Item = Type>,
+    {
+        let type_index = Index::push_new(&mut self.types, typ);
+        let category_index = Index::push_new(&mut self.pattern_categories, category);
+        let types_slice = Slice::extend_new(&mut self.types, types);
+
+        let includes_tag = IncludesTag {
+            type_index,
+            tag_name,
+            types: types_slice,
+            pattern_category: category_index,
+            region,
+        };
+
+        let includes_tag_index = Index::push_new(&mut self.includes_tags, includes_tag);
+
+        Constraint::IncludesTag(includes_tag_index)
     }
 
     fn variable_slice<I>(&mut self, it: I) -> Slice<Variable>
@@ -118,6 +160,29 @@ impl Constraints {
         let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
         self.constraints.push(defs_constraint);
+        self.constraints.push(Constraint::True);
+
+        let let_contraint = LetConstraint {
+            rigid_vars: Slice::default(),
+            flex_vars: self.variable_slice(flex_vars),
+            def_types: Slice::default(),
+            defs_and_ret_constraint,
+        };
+
+        let let_index = Index::new(self.let_constraints.len() as _);
+        self.let_constraints.push(let_contraint);
+
+        Constraint::Let(let_index)
+    }
+
+    pub fn exists_many<I, C>(&mut self, flex_vars: I, defs_constraint: C) -> Constraint
+    where
+        I: IntoIterator<Item = Variable>,
+        C: IntoIterator<Item = Constraint>,
+    {
+        let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
+
+        self.and_constraint(defs_constraint);
         self.constraints.push(Constraint::True);
 
         let let_contraint = LetConstraint {
@@ -191,7 +256,7 @@ impl Constraints {
             region,
         )
     }
-    pub fn contains_save_the_environment(&self, constraint: Constraint) -> bool {
+    pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         todo!()
     }
 
@@ -228,6 +293,15 @@ pub enum Constraint {
     SaveTheEnvironment,
     Let(Index<LetConstraint>),
     And(Slice<Constraint>),
+    /// Presence constraints
+    IsOpenType(Index<Type>), // Theory; always applied to a variable? if yes the use that
+    IncludesTag(Index<IncludesTag>),
+    PatternPresence(
+        Index<Type>,
+        Index<PExpected<Type>>,
+        Index<PatternCategory>,
+        Region,
+    ),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -236,4 +310,13 @@ pub struct LetConstraint {
     pub flex_vars: Slice<Variable>,
     pub def_types: Slice<(Symbol, Loc<Type>)>,
     pub defs_and_ret_constraint: Index<(Constraint, Constraint)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IncludesTag {
+    pub type_index: Index<Type>,
+    pub tag_name: TagName,
+    pub types: Slice<Type>,
+    pub pattern_category: Index<PatternCategory>,
+    pub region: Region,
 }

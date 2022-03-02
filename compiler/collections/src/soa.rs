@@ -47,6 +47,19 @@ impl<T> Slice<T> {
         }
     }
 
+    pub fn extend_new<I>(vector: &mut Vec<T>, values: I) -> Slice<T>
+    where
+        I: IntoIterator<Item = T>,
+    {
+        let start = vector.len() as u32;
+
+        vector.extend(values);
+
+        let end = vector.len() as u32;
+
+        Self::new(start, (end - start) as u16)
+    }
+
     pub const fn len(&self) -> usize {
         self.length as _
     }
