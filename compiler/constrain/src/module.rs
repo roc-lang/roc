@@ -1,6 +1,7 @@
 use crate::expr::constrain_decls;
 use roc_builtins::std::StdLib;
 use roc_can::constraint::{Constraint, LetConstraint};
+use roc_can::constraint_soa::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::symbol::{ModuleId, Symbol};
@@ -94,6 +95,62 @@ pub fn constrain_imported_values(
     )
 }
 
+pub fn constrain_imported_values_soa(
+    constraints: &mut Constraints,
+    imports: Vec<Import>,
+    body_con: ConstraintSoa,
+    var_store: &mut VarStore,
+) -> (Vec<Variable>, ConstraintSoa) {
+    let mut def_types = SendMap::default();
+    let mut rigid_vars = Vec::new();
+
+    for import in imports {
+        let mut free_vars = FreeVars::default();
+        let loc_symbol = import.loc_symbol;
+
+        // an imported symbol can be either an alias or a value
+        match import.solved_type {
+            SolvedType::Alias(symbol, _, _, _, _) if symbol == loc_symbol.value => {
+                // do nothing, in the future the alias definitions should not be in the list of imported values
+            }
+            _ => {
+                let typ = roc_types::solved_types::to_type(
+                    &import.solved_type,
+                    &mut free_vars,
+                    var_store,
+                );
+
+                def_types.insert(
+                    loc_symbol.value,
+                    Loc {
+                        region: loc_symbol.region,
+                        value: typ,
+                    },
+                );
+
+                for (_, var) in free_vars.named_vars {
+                    rigid_vars.push(var);
+                }
+
+                for var in free_vars.wildcards {
+                    rigid_vars.push(var);
+                }
+
+                // Variables can lose their name during type inference. But the unnamed
+                // variables are still part of a signature, and thus must be treated as rigids here!
+                for (_, var) in free_vars.unnamed_vars {
+                    rigid_vars.push(var);
+                }
+            }
+        }
+    }
+
+    (
+        rigid_vars.clone(),
+        constraints.let_constraint(rigid_vars, [], def_types, ConstraintSoa::True, body_con),
+    )
+}
+
 /// Run pre_constrain_imports to get imported_symbols and imported_aliases.
 pub fn constrain_imports(
     imported_symbols: Vec<Import>,
@@ -102,6 +159,24 @@ pub fn constrain_imports(
 ) -> Constraint {
     let (_introduced_rigids, constraint) =
         constrain_imported_values(imported_symbols, constraint, var_store);
+
+    // TODO determine what to do with those rigids
+    //    for var in introduced_rigids {
+    //        output.ftv.insert(var, format!("internal_{:?}", var).into());
+    //    }
+
+    constraint
+}
+
+/// Run pre_constrain_imports to get imported_symbols and imported_aliases.
+pub fn constrain_imports_soa(
+    constraints: &mut Constraints,
+    imported_symbols: Vec<Import>,
+    constraint: ConstraintSoa,
+    var_store: &mut VarStore,
+) -> ConstraintSoa {
+    let (_introduced_rigids, constraint) =
+        constrain_imported_values_soa(constraints, imported_symbols, constraint, var_store);
 
     // TODO determine what to do with those rigids
     //    for var in introduced_rigids {
