@@ -765,10 +765,8 @@ fn group_to_declaration(
         if cycle.len() == 1 {
             let symbol = &cycle[0];
 
-            match can_defs_by_symbol.get(symbol) {
-                Some(can_def) => {
-                    let mut new_def = can_def.clone();
-
+            match can_defs_by_symbol.remove(symbol) {
+                Some(mut new_def) => {
                     // Determine recursivity of closures that are not tail-recursive
                     if let Closure(ClosureData {
                         recursive: recursive @ Recursive::NotRecursive,
@@ -796,10 +794,8 @@ fn group_to_declaration(
 
             // Topological sort gives us the reverse of the sorting we want!
             for symbol in cycle.into_iter().rev() {
-                match can_defs_by_symbol.get(&symbol) {
-                    Some(can_def) => {
-                        let mut new_def = can_def.clone();
-
+                match can_defs_by_symbol.remove(&symbol) {
+                    Some(mut new_def) => {
                         // Determine recursivity of closures that are not tail-recursive
                         if let Closure(ClosureData {
                             recursive: recursive @ Recursive::NotRecursive,
