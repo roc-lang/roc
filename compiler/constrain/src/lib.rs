@@ -6,3 +6,4 @@ pub mod expr;
 pub mod module;
 pub mod pattern;
 pub mod soa_expr;
+pub mod soa_pattern;

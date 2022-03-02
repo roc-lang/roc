@@ -133,7 +133,7 @@ impl Constraints {
         Constraint::Let(let_index)
     }
 
-    pub fn let_contraint<I1, I2, I3>(
+    pub fn let_constraint<I1, I2, I3>(
         &mut self,
         rigid_vars: I1,
         flex_vars: I2,
@@ -164,7 +164,7 @@ impl Constraints {
         Constraint::Let(let_index)
     }
 
-    pub fn and_contraint<I>(&mut self, constraints: I) -> Constraint
+    pub fn and_constraint<I>(&mut self, constraints: I) -> Constraint
     where
         I: IntoIterator<Item = Constraint>,
     {
@@ -177,6 +177,36 @@ impl Constraints {
         let slice = Slice::new(start, (end - start) as u16);
 
         Constraint::And(slice)
+    }
+
+    pub fn lookup(
+        &mut self,
+        symbol: Symbol,
+        expected: Expected<Type>,
+        region: Region,
+    ) -> Constraint {
+        Constraint::Lookup(
+            symbol,
+            Index::push_new(&mut self.expectations, expected),
+            region,
+        )
+    }
+    pub fn contains_save_the_environment(&self, constraint: Constraint) -> bool {
+        todo!()
+    }
+
+    pub fn store(
+        &mut self,
+        typ: Type,
+        variable: Variable,
+        filename: &'static str,
+        line_number: u32,
+    ) -> Constraint {
+        let type_index = Index::new(self.types.len() as _);
+
+        self.types.push(typ);
+
+        Constraint::Store(type_index, variable, filename, line_number)
     }
 }
 

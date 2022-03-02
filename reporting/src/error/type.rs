@@ -1384,7 +1384,7 @@ fn to_pattern_report<'b>(
                             found,
                             expected_type,
                             add_pattern_category(
-                            HumanIndexlloc,
+                                HumanIndexlloc,
                                 alloc.text("The first pattern is trying to match"),
                                 &category,
                             ),
