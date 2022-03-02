@@ -16,17 +16,13 @@ pub enum ExposedModuleTypes {
     Valid(MutMap<Symbol, SolvedType>, MutMap<Symbol, Alias>),
 }
 
-// pub struct ConstrainedModule {
-//     pub unused_imports: MutMap<ModuleId, Region>,
-//     pub constraint: Constraint,
-// }
 
 pub fn constrain_module_soa(
     constraints: &mut Constraints,
     declarations: &[Declaration],
     home: ModuleId,
 ) -> Constraint {
-    crate::soa_expr::constrain_decls(constraints, home, declarations)
+    crate::expr::constrain_decls(constraints, home, declarations)
 }
 
 #[derive(Debug, Clone)]
