@@ -1,3 +1,5 @@
+use std::usize;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Index<T> {
     index: u32,
@@ -10,6 +12,10 @@ impl<T> Index<T> {
             index,
             _marker: std::marker::PhantomData,
         }
+    }
+
+    pub const fn usize(&self) -> usize {
+        self.index as usize
     }
 
     pub fn push_new(vector: &mut Vec<T>, value: T) -> Index<T> {

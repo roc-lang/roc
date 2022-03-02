@@ -3,8 +3,8 @@ use roc_collections::soa::{Index, Slice};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
+use roc_types::subs::Variable;
 use roc_types::types::{Category, PatternCategory, Type};
-use roc_types::{subs::Variable, types::VariableDetail};
 
 pub struct Constraints {
     constraints: Vec<Constraint>,
@@ -257,7 +257,34 @@ impl Constraints {
         )
     }
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
-        todo!()
+        match constraint {
+            Constraint::Eq(..) => false,
+            Constraint::Store(..) => false,
+            Constraint::Lookup(..) => false,
+            Constraint::Pattern(..) => false,
+            Constraint::True => false,
+            Constraint::SaveTheEnvironment => true,
+            Constraint::Let(index) => {
+                let let_constraint = &self.let_constraints[index.usize()];
+
+                let offset = let_constraint.defs_and_ret_constraint.usize();
+                let defs_constraint = &self.constraints[offset];
+                let ret_constraint = &self.constraints[offset + 1];
+
+                self.contains_save_the_environment(defs_constraint)
+                    || self.contains_save_the_environment(ret_constraint)
+            }
+            Constraint::And(slice) => {
+                let constraints = &self.constraints[slice.indices()];
+
+                constraints
+                    .iter()
+                    .any(|c| self.contains_save_the_environment(c))
+            }
+            Constraint::IsOpenType(_) => false,
+            Constraint::IncludesTag(_) => false,
+            Constraint::PatternPresence(_, _, _, _) => false,
+        }
     }
 
     pub fn store(
