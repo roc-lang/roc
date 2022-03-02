@@ -12,7 +12,7 @@ pub struct SolvedModule {
     pub solved_types: MutMap<Symbol, SolvedType>,
     pub aliases: MutMap<Symbol, Alias>,
     pub exposed_symbols: Vec<Symbol>,
-    pub exposed_vars_by_symbol: MutMap<Symbol, Variable>,
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub problems: Vec<solve::TypeError>,
 }
 
@@ -41,7 +41,7 @@ pub fn run_solve(
 
 pub fn make_solved_types(
     solved_subs: &Solved<Subs>,
-    exposed_vars_by_symbol: &MutMap<Symbol, Variable>,
+    exposed_vars_by_symbol: &[(Symbol, Variable)],
 ) -> MutMap<Symbol, SolvedType> {
     let mut solved_types = MutMap::default();
 
