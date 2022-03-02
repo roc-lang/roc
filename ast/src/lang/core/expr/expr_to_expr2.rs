@@ -185,12 +185,12 @@ pub fn expr_to_expr2<'a>(
                 Output::default(),
             )
         }
-        OpaqueRef(name) => {
-            // an opaque ref without any arguments
+        PrivateTag(name) => {
+            // a private tag without any arguments
             let ident_id = env.ident_ids.get_or_insert(&(*name).into());
             let name = Symbol::new(env.home, ident_id);
             (
-                Expr2::OpaqueRef {
+                Expr2::PrivateTag {
                     name,
                     variant_var: env.var_store.fresh(),
                     ext_var: env.var_store.fresh(),
@@ -568,12 +568,12 @@ pub fn expr_to_expr2<'a>(
                     name,
                     arguments: args,
                 },
-                Expr2::OpaqueRef {
+                Expr2::PrivateTag {
                     variant_var,
                     ext_var,
                     name,
                     ..
-                } => Expr2::OpaqueRef {
+                } => Expr2::PrivateTag {
                     variant_var,
                     ext_var,
                     name,
