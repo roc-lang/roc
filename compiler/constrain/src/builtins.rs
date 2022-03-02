@@ -1,5 +1,6 @@
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::LetConstraint;
+use roc_can::constraint_soa::Constraints;
 use roc_can::expected::Expected::{self, *};
 use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumericBound, SignDemand};
 use roc_collections::all::SendMap;
@@ -74,6 +75,55 @@ pub fn int_literal(
 
 #[inline(always)]
 pub fn float_literal(
+    num_var: Variable,
+    precision_var: Variable,
+    expected: Expected<Type>,
+    region: Region,
+    bound: FloatBound,
+) -> Constraint {
+    let reason = Reason::FloatLiteral;
+
+    let value_is_float_literal = Eq(
+        num_type.clone(),
+        ForReason(reason, num_float(Type::Variable(precision_var)), region),
+        Category::Float,
+        region,
+    );
+
+    let expected_float = Eq(num_type, expected, Category::Float, region);
+
+    let mut constrs = Vec::with_capacity(3);
+    let num_type = {
+        let constrs: &mut Vec<Constraint> = &mut constrs;
+        let num_type = Variable(num_var);
+        let category = Category::Float;
+        let range = bound.bounded_range();
+
+        let total_num_type = num_type;
+
+        match range.len() {
+            0 => total_num_type,
+            1 => {
+                let actual_type = Variable(range[0]);
+                constrs.push(Eq(
+                    total_num_type.clone(),
+                    Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region),
+                    category,
+                    region,
+                ));
+                total_num_type
+            }
+            _ => RangedNumber(Box::new(total_num_type), range),
+        }
+    };
+    constrs.extend(vec![]);
+
+    exists(vec![num_var, precision_var], And(constrs))
+}
+
+#[inline(always)]
+pub fn float_literal_soa(
+    constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
     expected: Expected<Type>,

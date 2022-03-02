@@ -23,6 +23,7 @@ impl Constraints {
 
     pub const CATEGORY_RECORD: Index<Category> = Index::new(0);
 
+    #[inline(always)]
     pub fn push_type(&mut self, typ: Type) -> Index<Type> {
         match typ {
             Type::EmptyRec => Self::EMPTY_RECORD,
@@ -31,6 +32,12 @@ impl Constraints {
         }
     }
 
+    #[inline(always)]
+    pub fn push_expected_type(&mut self, expected: Expected<Type>) -> Index<Expected<Type>> {
+        Index::push_new(&mut self.expectations, expected)
+    }
+
+    #[inline(always)]
     pub fn push_category(&mut self, category: Category) -> Index<Category> {
         match category {
             Category::Record => Self::CATEGORY_RECORD,
@@ -155,6 +162,21 @@ impl Constraints {
         self.let_constraints.push(let_contraint);
 
         Constraint::Let(let_index)
+    }
+
+    pub fn and_contraint<I>(&mut self, constraints: I) -> Constraint
+    where
+        I: IntoIterator<Item = Constraint>,
+    {
+        let start = self.constraints.len() as u32;
+
+        self.constraints.extend(constraints);
+
+        let end = self.constraints.len() as u32;
+
+        let slice = Slice::new(start, (end - start) as u16);
+
+        Constraint::And(slice)
     }
 }
 
