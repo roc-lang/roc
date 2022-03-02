@@ -16,8 +16,7 @@ pub enum ExposedModuleTypes {
     Valid(MutMap<Symbol, SolvedType>, MutMap<Symbol, Alias>),
 }
 
-
-pub fn constrain_module_soa(
+pub fn constrain_module(
     constraints: &mut Constraints,
     declarations: &[Declaration],
     home: ModuleId,
@@ -31,7 +30,7 @@ pub struct Import {
     pub solved_type: SolvedType,
 }
 
-pub fn constrain_imported_values_soa(
+pub fn constrain_imported_values(
     constraints: &mut Constraints,
     imports: Vec<Import>,
     body_con: Constraint,
@@ -88,14 +87,14 @@ pub fn constrain_imported_values_soa(
 }
 
 /// Run pre_constrain_imports to get imported_symbols and imported_aliases.
-pub fn constrain_imports_soa(
+pub fn constrain_imports(
     constraints: &mut Constraints,
     imported_symbols: Vec<Import>,
     constraint: Constraint,
     var_store: &mut VarStore,
 ) -> Constraint {
     let (_introduced_rigids, constraint) =
-        constrain_imported_values_soa(constraints, imported_symbols, constraint, var_store);
+        constrain_imported_values(constraints, imported_symbols, constraint, var_store);
 
     // TODO determine what to do with those rigids
     //    for var in introduced_rigids {

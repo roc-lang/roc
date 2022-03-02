@@ -1,6 +1,5 @@
 use crate::builtins::{
-    empty_list_type, float_literal_soa, int_literal_soa, list_type, num_literal_soa, num_u32,
-    str_type,
+    empty_list_type, float_literal, int_literal, list_type, num_literal, num_u32, str_type,
 };
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
@@ -19,23 +18,23 @@ use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{AliasKind, AnnotationSource, Category, PReason, Reason, RecordField};
 
- /// This is for constraining Defs
- #[derive(Default, Debug)]
- pub struct Info {
-     pub vars: Vec<Variable>,
-     pub constraints: Vec<Constraint>,
-     pub def_types: SendMap<Symbol, Loc<Type>>,
- }
- 
- impl Info {
-     pub fn with_capacity(capacity: usize) -> Self {
-         Info {
-             vars: Vec::with_capacity(capacity),
-             constraints: Vec::with_capacity(capacity),
-             def_types: SendMap::default(),
-         }
-     }
- }
+/// This is for constraining Defs
+#[derive(Default, Debug)]
+pub struct Info {
+    pub vars: Vec<Variable>,
+    pub constraints: Vec<Constraint>,
+    pub def_types: SendMap<Symbol, Loc<Type>>,
+}
+
+impl Info {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Info {
+            vars: Vec::with_capacity(capacity),
+            constraints: Vec::with_capacity(capacity),
+            def_types: SendMap::default(),
+        }
+    }
+}
 
 pub struct Env {
     /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
@@ -90,11 +89,11 @@ pub fn constrain_expr(
 ) -> Constraint {
     match expr {
         &Int(var, precision, _, _, bound) => {
-            int_literal_soa(constraints, var, precision, expected, region, bound)
+            int_literal(constraints, var, precision, expected, region, bound)
         }
-        &Num(var, _, _, bound) => num_literal_soa(constraints, var, expected, region, bound),
+        &Num(var, _, _, bound) => num_literal(constraints, var, expected, region, bound),
         &Float(var, precision, _, _, bound) => {
-            float_literal_soa(constraints, var, precision, expected, region, bound)
+            float_literal(constraints, var, precision, expected, region, bound)
         }
         EmptyRecord => constrain_empty_record(constraints, region, expected),
         Expr::Record { record_var, fields } => {

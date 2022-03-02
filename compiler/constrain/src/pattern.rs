@@ -194,7 +194,7 @@ pub fn constrain_pattern(
 
             let num_type = builtins::num_num(Type::Variable(var));
 
-            let num_type = builtins::add_numeric_bound_constr_soa(
+            let num_type = builtins::add_numeric_bound_constr(
                 constraints,
                 &mut state.constraints,
                 num_type,
@@ -214,7 +214,7 @@ pub fn constrain_pattern(
         &IntLiteral(num_var, precision_var, _, _, bound) => {
             // First constraint on the free num var; this improves the resolved type quality in
             // case the bound is an alias.
-            let num_type = builtins::add_numeric_bound_constr_soa(
+            let num_type = builtins::add_numeric_bound_constr(
                 constraints,
                 &mut state.constraints,
                 Type::Variable(num_var),
@@ -245,7 +245,7 @@ pub fn constrain_pattern(
         &FloatLiteral(num_var, precision_var, _, _, bound) => {
             // First constraint on the free num var; this improves the resolved type quality in
             // case the bound is an alias.
-            let num_type = builtins::add_numeric_bound_constr_soa(
+            let num_type = builtins::add_numeric_bound_constr(
                 constraints,
                 &mut state.constraints,
                 Type::Variable(num_var),

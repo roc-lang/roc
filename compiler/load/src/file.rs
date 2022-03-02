@@ -10,7 +10,7 @@ use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
-    constrain_imports_soa, constrain_module_soa, pre_constrain_imports, ConstrainableImports,
+    constrain_imports, constrain_module, pre_constrain_imports, ConstrainableImports,
     ExposedModuleTypes, Import, SubsByModule,
 };
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
@@ -3091,7 +3091,7 @@ fn run_solve<'a>(
 
     // Finish constraining the module by wrapping the existing Constraint
     // in the ones we just computed. We can do this off the main thread.
-    let constraint = constrain_imports_soa(
+    let constraint = constrain_imports(
         &mut constraints,
         imported_symbols,
         constraint,
@@ -3113,7 +3113,7 @@ fn run_solve<'a>(
     // if false { debug_assert!(constraint.validate(), "{:?}", &constraint); }
 
     let (solved_subs, solved_env, problems) =
-        roc_solve::module::run_solve_soa(&constraints, constraint, rigid_variables, var_store);
+        roc_solve::module::run_solve(&constraints, constraint, rigid_variables, var_store);
 
     let exposed_vars_by_symbol: Vec<_> = solved_env
         .vars_by_symbol()
@@ -3260,7 +3260,7 @@ fn canonicalize_and_constrain<'a>(
 
             let mut constraints = Constraints::new();
             let constraint =
-                constrain_module_soa(&mut constraints, &module_output.declarations, module_id);
+                constrain_module(&mut constraints, &module_output.declarations, module_id);
 
             let module = Module {
                 module_id,

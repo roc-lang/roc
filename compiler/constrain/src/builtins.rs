@@ -12,7 +12,7 @@ use roc_types::types::{AliasKind, Category};
 
 #[must_use]
 #[inline(always)]
-pub fn add_numeric_bound_constr_soa(
+pub fn add_numeric_bound_constr(
     constraints: &mut Constraints,
     num_constraints: &mut impl Extend<Constraint>,
     num_type: Type,
@@ -41,7 +41,7 @@ pub fn add_numeric_bound_constr_soa(
 }
 
 #[inline(always)]
-pub fn int_literal_soa(
+pub fn int_literal(
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
@@ -53,7 +53,7 @@ pub fn int_literal_soa(
 
     // Always add the bound first; this improves the resolved type quality in case it's an alias like "U8".
     let mut constrs = ArrayVec::<_, 3>::new();
-    let num_type = add_numeric_bound_constr_soa(
+    let num_type = add_numeric_bound_constr(
         constraints,
         &mut constrs,
         Variable(num_var),
@@ -78,7 +78,7 @@ pub fn int_literal_soa(
 }
 
 #[inline(always)]
-pub fn float_literal_soa(
+pub fn float_literal(
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
@@ -89,7 +89,7 @@ pub fn float_literal_soa(
     let reason = Reason::FloatLiteral;
 
     let mut constrs = ArrayVec::<_, 3>::new();
-    let num_type = add_numeric_bound_constr_soa(
+    let num_type = add_numeric_bound_constr(
         constraints,
         &mut constrs,
         Variable(num_var),
@@ -113,7 +113,7 @@ pub fn float_literal_soa(
 }
 
 #[inline(always)]
-pub fn num_literal_soa(
+pub fn num_literal(
     constraints: &mut Constraints,
     num_var: Variable,
     expected: Expected<Type>,
@@ -123,7 +123,7 @@ pub fn num_literal_soa(
     let open_number_type = crate::builtins::num_num(Type::Variable(num_var));
 
     let mut constrs = ArrayVec::<_, 2>::new();
-    let num_type = add_numeric_bound_constr_soa(
+    let num_type = add_numeric_bound_constr(
         constraints,
         &mut constrs,
         open_number_type,

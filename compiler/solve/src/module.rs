@@ -16,7 +16,7 @@ pub struct SolvedModule {
     pub problems: Vec<solve::TypeError>,
 }
 
-pub fn run_solve_soa(
+pub fn run_solve(
     constraints: &Constraints,
     constraint: ConstraintSoa,
     rigid_variables: MutMap<Variable, Lowercase>,
