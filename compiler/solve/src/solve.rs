@@ -168,20 +168,20 @@ struct State {
     mark: Mark,
 }
 
-pub fn run_soa(
+pub fn run(
     constraints: &Constraints,
     env: &Env,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
-    let env = run_in_place_soa(constraints, env, problems, &mut subs, constraint);
+    let env = run_in_place(constraints, env, problems, &mut subs, constraint);
 
     (Solved(subs), env)
 }
 
 /// Modify an existing subs in-place instead
-pub fn run_in_place_soa(
+pub fn run_in_place(
     constraints: &Constraints,
     env: &Env,
     problems: &mut Vec<TypeError>,
@@ -197,7 +197,7 @@ pub fn run_in_place_soa(
 
     let arena = Bump::new();
 
-    let state = solve_soa(
+    let state = solve(
         &arena,
         constraints,
         env,
@@ -213,22 +213,17 @@ pub fn run_in_place_soa(
     state.env
 }
 
-enum After {
-    CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
-}
-
-enum WorkSoa<'a> {
+enum SolveWork<'a> {
     Constraint {
         env: &'a Env,
         rank: Rank,
         constraint: &'a Constraint,
     },
-    /// Something to be done after a constraint and all its dependencies are fully solved.
-    After(After),
+    CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
 }
 
 #[allow(clippy::too_many_arguments)]
-fn solve_soa(
+fn solve(
     arena: &Bump,
     constraints: &Constraints,
     env: &Env,
@@ -242,7 +237,7 @@ fn solve_soa(
 ) -> State {
     use Constraint::*;
 
-    let initial = WorkSoa::Constraint {
+    let initial = SolveWork::Constraint {
         env,
         rank,
         constraint,
@@ -251,14 +246,14 @@ fn solve_soa(
 
     while let Some(work_item) = stack.pop() {
         let (env, rank, constraint) = match work_item {
-            WorkSoa::After(After::CheckForInfiniteTypes(def_vars)) => {
+            SolveWork::CheckForInfiniteTypes(def_vars) => {
                 for (symbol, loc_var) in def_vars.iter() {
                     check_for_infinite_type(subs, problems, *symbol, *loc_var);
                 }
                 // No constraint to be solved
                 continue;
             }
-            WorkSoa::Constraint {
+            SolveWork::Constraint {
                 env,
                 rank,
                 constraint,
@@ -423,7 +418,7 @@ fn solve_soa(
             And(slice) => {
                 let it = constraints.constraints[slice.indices()].iter().rev();
                 for sub_constraint in it {
-                    stack.push(WorkSoa::Constraint {
+                    stack.push(SolveWork::Constraint {
                         env,
                         rank,
                         constraint: sub_constraint,
@@ -499,7 +494,7 @@ fn solve_soa(
 
                         // If the return expression is guaranteed to solve,
                         // solve the assignments themselves and move on.
-                        stack.push(WorkSoa::Constraint {
+                        stack.push(SolveWork::Constraint {
                             env,
                             rank,
                             constraint: defs_constraint,
@@ -508,7 +503,7 @@ fn solve_soa(
                     }
                     ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
                         // TODO: make into `WorkItem` with `After`
-                        let state = solve_soa(
+                        let state = solve(
                             arena,
                             constraints,
                             env,
@@ -543,8 +538,8 @@ fn solve_soa(
                             new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                         }
 
-                        stack.push(WorkSoa::After(After::CheckForInfiniteTypes(local_def_vars)));
-                        stack.push(WorkSoa::Constraint {
+                        stack.push(SolveWork::CheckForInfiniteTypes(local_def_vars));
+                        stack.push(SolveWork::Constraint {
                             env: arena.alloc(new_env),
                             rank,
                             constraint: ret_con,
@@ -604,7 +599,7 @@ fn solve_soa(
                         let State {
                             env: saved_env,
                             mark,
-                        } = solve_soa(
+                        } = solve(
                             arena,
                             constraints,
                             env,
@@ -685,8 +680,8 @@ fn solve_soa(
 
                         // Now solve the body, using the new vars_by_symbol which includes
                         // the assignments' name-to-variable mappings.
-                        stack.push(WorkSoa::After(After::CheckForInfiniteTypes(local_def_vars)));
-                        stack.push(WorkSoa::Constraint {
+                        stack.push(SolveWork::CheckForInfiniteTypes(local_def_vars));
+                        stack.push(SolveWork::Constraint {
                             env: arena.alloc(new_env),
                             rank,
                             constraint: ret_con,

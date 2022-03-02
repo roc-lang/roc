@@ -35,8 +35,7 @@ pub fn run_solve_soa(
     let mut problems = Vec::new();
 
     // Run the solver to populate Subs.
-    let (solved_subs, solved_env) =
-        solve::run_soa(constraints, &env, &mut problems, subs, &constraint);
+    let (solved_subs, solved_env) = solve::run(constraints, &env, &mut problems, subs, &constraint);
 
     (solved_subs, solved_env, problems)
 }
