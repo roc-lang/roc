@@ -1,4 +1,5 @@
 use peg::error::ParseError;
+use roc_code_markup::markup::common_nodes::new_blank_mn;
 use roc_code_markup::markup::nodes::MarkupNode;
 
 use crate::tokenizer::Token;
@@ -18,7 +19,7 @@ peg::parser!{
         common_expr()
 
       rule common_expr() -> MarkupNode =
-        [T::Number] { new_blank_mn(None) }
+        [T::Number] { new_blank_mn() }
       
     }
 }

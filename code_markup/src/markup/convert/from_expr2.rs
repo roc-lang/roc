@@ -8,7 +8,7 @@ use crate::{
         },
         nodes::{
             get_string, join_mark_nodes_commas, join_mark_nodes_spaces, new_markup_node, MarkupNode,
-        },
+        }, mark_id_ast_id_map::MarkIdAstIdMap,
     },
     slow_pool::{MarkNodeId, SlowPool},
     syntax_highlight::HighlightStyle,
@@ -32,12 +32,15 @@ use roc_ast::{
 };
 use roc_module::{module_err::ModuleResult, symbol::Interns};
 
+use super::from_def2::add_node;
+
 // make Markup Nodes: generate String representation, assign Highlighting Style
 pub fn expr2_to_markup<'a>(
     env: &Env<'a>,
     expr2: &Expr2,
     expr2_node_id: ExprId,
     mark_node_pool: &mut SlowPool,
+    mark_id_ast_id_map: &mut MarkIdAstIdMap,
     interns: &Interns,
     indent_level: usize,
 ) -> ASTResult<MarkNodeId> {
@@ -58,30 +61,32 @@ pub fn expr2_to_markup<'a>(
                 ast_node_id,
                 HighlightStyle::Number,
                 mark_node_pool,
+                mark_id_ast_id_map,
                 indent_level,
             )
         }
         Expr2::Str(text) => {
             let content = format!("\"{}\"", text.as_str(env.pool));
 
-            string_mark_node(&content, indent_level, ast_node_id, mark_node_pool)
+            string_mark_node(&content, indent_level, ast_node_id, mark_node_pool, mark_id_ast_id_map)
         }
         Expr2::SmallStr(array_str) => {
             let content = format!("\"{}\"", array_str.as_str());
 
-            string_mark_node(&content, indent_level, ast_node_id, mark_node_pool)
+            string_mark_node(&content, indent_level, ast_node_id, mark_node_pool, mark_id_ast_id_map)
         }
         Expr2::GlobalTag { name, .. } => new_markup_node(
             with_indent(indent_level, &get_string(env, name)),
             ast_node_id,
             HighlightStyle::Type,
             mark_node_pool,
+            mark_id_ast_id_map,
             indent_level,
         ),
         Expr2::Call { args, expr_id, .. } => {
             let expr = env.pool.get(*expr_id);
             let fun_call_mark_id =
-                expr2_to_markup(env, expr, *expr_id, mark_node_pool, interns, indent_level)?;
+                expr2_to_markup(env, expr, *expr_id, mark_node_pool, mark_id_ast_id_map, interns, indent_level)?;
 
             let arg_expr_ids: Vec<ExprId> =
                 args.iter(env.pool).map(|(_, arg_id)| *arg_id).collect();
@@ -91,24 +96,23 @@ pub fn expr2_to_markup<'a>(
                 .map(|arg_id| {
                     let arg_expr = env.pool.get(*arg_id);
 
-                    expr2_to_markup(env, arg_expr, *arg_id, mark_node_pool, interns, 0)
+                    expr2_to_markup(env, arg_expr, *arg_id, mark_node_pool, mark_id_ast_id_map, interns, 0)
                 })
                 .collect::<ASTResult<Vec<MarkNodeId>>>()?;
 
             let mut args_with_sapces =
-                join_mark_nodes_spaces(arg_call_mark_ids, true, ast_node_id, mark_node_pool);
+                join_mark_nodes_spaces(arg_call_mark_ids, true, mark_node_pool);
 
             let mut children_ids = vec![fun_call_mark_id];
             children_ids.append(&mut args_with_sapces);
 
             let call_node = MarkupNode::Nested {
-                ast_node_id,
                 children_ids,
                 parent_id_opt: None,
                 newlines_at_end: 0,
             };
 
-            mark_node_pool.add(call_node)
+            add_node(call_node, ast_node_id, mark_node_pool, mark_id_ast_id_map)
         }
         Expr2::Var(symbol) => {
             let text = symbol.fully_qualified(interns, env.home);
@@ -118,12 +122,20 @@ pub fn expr2_to_markup<'a>(
                 ast_node_id,
                 HighlightStyle::Value,
                 mark_node_pool,
+                mark_id_ast_id_map,
                 indent_level,
             )
         }
         Expr2::List { elems, .. } => {
             let mut children_ids =
-                vec![mark_node_pool.add(new_left_square_mn(expr2_node_id, None))];
+                vec![
+                    add_node(
+                        new_left_square_mn(), 
+                        ast_node_id,
+                        mark_node_pool,
+                        mark_id_ast_id_map
+                    )
+                ];
 
             let indexed_node_ids: Vec<(usize, ExprId)> =
                 elems.iter(env.pool).copied().enumerate().collect();
@@ -136,43 +148,58 @@ pub fn expr2_to_markup<'a>(
                     sub_expr2,
                     *node_id,
                     mark_node_pool,
+                    mark_id_ast_id_map,
                     interns,
                     indent_level,
                 )?);
 
                 if idx + 1 < elems.len() {
-                    children_ids.push(mark_node_pool.add(new_comma_mn(expr2_node_id, None)));
+                    children_ids.push(
+                        add_node(
+                            new_comma_mn(), 
+                            ast_node_id,
+                            mark_node_pool,
+                            mark_id_ast_id_map
+                        )
+                    );
                 }
             }
-            children_ids.push(mark_node_pool.add(new_right_square_mn(expr2_node_id, None)));
+            children_ids.push(
+                add_node(
+                    new_right_square_mn(), 
+                    ast_node_id,
+                    mark_node_pool,
+                    mark_id_ast_id_map
+                )
+            );
 
-            let list_node = MarkupNode::Nested {
-                ast_node_id,
+            let list_mn = MarkupNode::Nested {
                 children_ids,
                 parent_id_opt: None,
                 newlines_at_end: 0,
             };
 
-            mark_node_pool.add(list_node)
+            add_node(list_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map)
         }
         Expr2::EmptyRecord => {
             let children_ids = vec![
-                mark_node_pool.add(new_left_accolade_mn(expr2_node_id, None)),
-                mark_node_pool.add(new_right_accolade_mn(expr2_node_id, None)),
+                add_node(new_left_accolade_mn(), ast_node_id, mark_node_pool, mark_id_ast_id_map),
+                add_node(new_right_accolade_mn(), ast_node_id, mark_node_pool, mark_id_ast_id_map),
             ];
 
-            let record_node = MarkupNode::Nested {
-                ast_node_id,
+            let record_mn = MarkupNode::Nested {
                 children_ids,
                 parent_id_opt: None,
                 newlines_at_end: 0,
             };
 
-            mark_node_pool.add(record_node)
+            add_node(record_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map)
         }
         Expr2::Record { fields, .. } => {
             let mut children_ids =
-                vec![mark_node_pool.add(new_left_accolade_mn(expr2_node_id, None))];
+                vec![
+                    add_node(new_left_accolade_mn(), ast_node_id, mark_node_pool, mark_id_ast_id_map)
+                ];
 
             for (idx, field_node_id) in fields.iter_node_ids().enumerate() {
                 let record_field = env.pool.get(field_node_id);
@@ -184,6 +211,7 @@ pub fn expr2_to_markup<'a>(
                     ast_node_id,
                     HighlightStyle::RecordField,
                     mark_node_pool,
+                    mark_id_ast_id_map,
                     indent_level,
                 ));
 
@@ -191,7 +219,9 @@ pub fn expr2_to_markup<'a>(
                     RecordField::InvalidLabelOnly(_, _) => (),
                     RecordField::LabelOnly(_, _, _) => (),
                     RecordField::LabeledValue(_, _, sub_expr2_node_id) => {
-                        children_ids.push(mark_node_pool.add(new_colon_mn(expr2_node_id, None)));
+                        children_ids.push(
+                            add_node(new_colon_mn(), ast_node_id, mark_node_pool, mark_id_ast_id_map)
+                        );
 
                         let sub_expr2 = env.pool.get(*sub_expr2_node_id);
                         children_ids.push(expr2_to_markup(
@@ -199,6 +229,7 @@ pub fn expr2_to_markup<'a>(
                             sub_expr2,
                             *sub_expr2_node_id,
                             mark_node_pool,
+                            mark_id_ast_id_map,
                             interns,
                             indent_level,
                         )?);
@@ -206,22 +237,25 @@ pub fn expr2_to_markup<'a>(
                 }
 
                 if idx + 1 < fields.len() {
-                    children_ids.push(mark_node_pool.add(new_comma_mn(expr2_node_id, None)));
+                    children_ids.push(
+                        add_node(new_comma_mn(), ast_node_id, mark_node_pool, mark_id_ast_id_map)
+                    );
                 }
             }
 
-            children_ids.push(mark_node_pool.add(new_right_accolade_mn(expr2_node_id, None)));
+            children_ids.push(
+                add_node(new_right_accolade_mn(), ast_node_id, mark_node_pool, mark_id_ast_id_map)
+            );
 
-            let record_node = MarkupNode::Nested {
-                ast_node_id,
+            let record_mn = MarkupNode::Nested {
                 children_ids,
                 parent_id_opt: None,
                 newlines_at_end: 0,
             };
 
-            mark_node_pool.add(record_node)
+            add_node(record_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map)
         }
-        Expr2::Blank => mark_node_pool.add(new_blank_mn(ast_node_id, None)),
+        Expr2::Blank => add_node(new_blank_mn(), ast_node_id, mark_node_pool, mark_id_ast_id_map),
         Expr2::LetValue {
             def_id,
             body_id: _,
@@ -235,16 +269,15 @@ pub fn expr2_to_markup<'a>(
 
             let val_name_mn = MarkupNode::Text {
                 content: val_name,
-                ast_node_id,
                 syn_high_style: HighlightStyle::Value,
                 attributes: Attributes::default(),
                 parent_id_opt: None,
                 newlines_at_end: 0,
             };
 
-            let val_name_mn_id = mark_node_pool.add(val_name_mn);
+            let val_name_mn_id = add_node(val_name_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map);
 
-            let equals_mn_id = mark_node_pool.add(new_equals_mn(ast_node_id, None));
+            let equals_mn_id = add_node(new_equals_mn(), ast_node_id, mark_node_pool, mark_id_ast_id_map);
 
             let value_def = env.pool.get(*def_id);
 
@@ -259,6 +292,7 @@ pub fn expr2_to_markup<'a>(
                         env.pool.get(*expr_id),
                         *expr_id,
                         mark_node_pool,
+                        mark_id_ast_id_map,
                         interns,
                         indent_level,
                     )?;
@@ -266,14 +300,13 @@ pub fn expr2_to_markup<'a>(
                     let body_mn = mark_node_pool.get_mut(body_mn_id);
                     body_mn.add_newline_at_end();
 
-                    let full_let_node = MarkupNode::Nested {
-                        ast_node_id,
+                    let full_let_mn = MarkupNode::Nested {
                         children_ids: vec![val_name_mn_id, equals_mn_id, body_mn_id],
                         parent_id_opt: None,
                         newlines_at_end: 1,
                     };
 
-                    mark_node_pool.add(full_let_node)
+                    add_node(full_let_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map)
                 }
                 other => {
                     unimplemented!(
@@ -291,8 +324,8 @@ pub fn expr2_to_markup<'a>(
             body_id,
             extra: _,
         } => {
-            let backslash_mn = new_operator_mn("\\".to_string(), expr2_node_id, None);
-            let backslash_mn_id = mark_node_pool.add(backslash_mn);
+            let backslash_mn = new_operator_mn("\\".to_string());
+            let backslash_mn_id = add_node(backslash_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map);
 
             let arg_names: Vec<&str> = args
                 .iter(env.pool)
@@ -320,31 +353,32 @@ pub fn expr2_to_markup<'a>(
 
             let arg_mark_nodes = arg_names
                 .iter()
-                .map(|arg_name| new_arg_name_mn(arg_name.to_string(), expr2_node_id))
+                .map(|arg_name| new_arg_name_mn(arg_name.to_string()))
                 .collect_vec();
 
             let args_with_commas: Vec<MarkupNode> =
-                join_mark_nodes_commas(arg_mark_nodes, ASTNodeId::AExprId(expr2_node_id));
+                join_mark_nodes_commas(arg_mark_nodes);
 
             let mut args_with_commas_ids: Vec<MarkNodeId> = args_with_commas
                 .into_iter()
-                .map(|mark_node| mark_node_pool.add(mark_node))
+                .map(|mark_node| {
+                    add_node(mark_node, ast_node_id, mark_node_pool, mark_id_ast_id_map)
+                })
                 .collect();
 
-            let arrow_mn = new_arrow_mn(ASTNodeId::AExprId(expr2_node_id), 1);
-            let arrow_mn_id = mark_node_pool.add(arrow_mn);
+            let arrow_mn = new_arrow_mn(1);
+            let arrow_mn_id = add_node(arrow_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map);
 
             let mut children_ids = vec![backslash_mn_id];
             children_ids.append(&mut args_with_commas_ids);
             children_ids.push(arrow_mn_id);
 
             let args_mn = MarkupNode::Nested {
-                ast_node_id: ASTNodeId::AExprId(expr2_node_id),
                 children_ids,
                 parent_id_opt: None,
                 newlines_at_end: 0,
             };
-            let args_mn_id = mark_node_pool.add(args_mn);
+            let args_mn_id = add_node(args_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map);
 
             let body_expr = env.pool.get(*body_id);
             let body_mn_id = expr2_to_markup(
@@ -352,24 +386,25 @@ pub fn expr2_to_markup<'a>(
                 body_expr,
                 *body_id,
                 mark_node_pool,
+                mark_id_ast_id_map,
                 interns,
                 indent_level + 1,
             )?;
 
-            let function_node = MarkupNode::Nested {
-                ast_node_id,
+            let function_mn = MarkupNode::Nested {
                 children_ids: vec![args_mn_id, body_mn_id],
                 parent_id_opt: None,
                 newlines_at_end: 0,
             };
 
-            mark_node_pool.add(function_node)
+            add_node(function_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map)
         }
         Expr2::RuntimeError() => new_markup_node(
             "RunTimeError".to_string(),
             ast_node_id,
             HighlightStyle::Blank,
             mark_node_pool,
+            mark_id_ast_id_map,
             indent_level,
         ),
         rest => todo!("implement expr2_to_markup for {:?}", rest),
@@ -392,12 +427,14 @@ fn string_mark_node(
     indent_level: usize,
     ast_node_id: ASTNodeId,
     mark_node_pool: &mut SlowPool,
+    mark_id_ast_id_map: &mut MarkIdAstIdMap,
 ) -> MarkNodeId {
     new_markup_node(
         with_indent(indent_level, content),
         ast_node_id,
         HighlightStyle::String,
         mark_node_pool,
+        mark_id_ast_id_map,
         indent_level,
     )
 }

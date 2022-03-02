@@ -52,7 +52,7 @@ pub fn insert_new_blank(ed_model: &mut EdModel, insert_on_line_nr: usize) -> EdR
     // find position of the previous ASTNode to figure out where to add this new Blank ASTNode
     let def_mark_node_id = ed_model
         .grid_node_map
-        .get_def_mark_node_id_before_line(insert_on_line_nr, &ed_model.mark_node_pool)?;
+        .get_def_mark_node_id_before_line(insert_on_line_nr, &ed_model.mark_node_pool, &ed_model.mark_id_ast_id_map)?;
 
     let new_line_blank = Def2::Blank;
     let new_line_blank_id = ed_model.module.env.pool.add(new_line_blank);
