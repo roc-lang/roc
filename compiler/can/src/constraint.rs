@@ -435,8 +435,7 @@ impl Constraints {
     }
 }
 
-static_assertions::assert_eq_size!([u8; 4 * 8], Constraint);
-static_assertions::assert_eq_size!([u8; 3 * 8 + 4], LetConstraint);
+static_assertions::assert_eq_size!([u8; 3 * 8], Constraint);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
