@@ -13,6 +13,7 @@ use std::path::Path;
 use std::{fs, io};
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct File<'a> {
     path: &'a Path,
     module_header: Module<'a>,
@@ -20,6 +21,7 @@ pub struct File<'a> {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ReadError<'a> {
     Read(std::io::Error),
     ParseDefs(SyntaxError<'a>),
@@ -28,6 +30,7 @@ pub enum ReadError<'a> {
 }
 
 impl<'a> File<'a> {
+    #[allow(unused)]
     pub fn read(path: &'a Path, arena: &'a Bump) -> Result<File<'a>, ReadError<'a>> {
         if path.extension() != Some(OsStr::new("roc")) {
             return Err(ReadError::DoesntHaveRocExtension);
@@ -57,6 +60,7 @@ impl<'a> File<'a> {
         }
     }
 
+    #[allow(unused)]
     pub fn fmt(&self) -> String {
         let arena = Bump::new();
         let mut formatted_file = String::new();
@@ -74,16 +78,18 @@ impl<'a> File<'a> {
             formatted_file.push_str(buf.as_str());
         }
 
-        formatted_file.push_str("\n");
+        formatted_file.push('\n');
         formatted_file
     }
 
+    #[allow(unused)]
     pub fn fmt_then_write_to(&self, write_path: &'a Path) -> io::Result<()> {
         let formatted_file = self.fmt();
 
         fs::write(write_path, formatted_file)
     }
 
+    #[allow(unused)]
     pub fn fmt_then_write_with_name(&self, new_name: &str) -> io::Result<()> {
         self.fmt_then_write_to(
             self.path
@@ -93,6 +99,7 @@ impl<'a> File<'a> {
         )
     }
 
+    #[allow(unused)]
     pub fn fmt_then_write(&self) -> io::Result<()> {
         self.fmt_then_write_to(self.path)
     }
