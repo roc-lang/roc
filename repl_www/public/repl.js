@@ -82,7 +82,9 @@ function onInputKeyup(event) {
       break;
 
     case ENTER:
-      onInputChange({ target: repl.elemSourceInput });
+      if (!event.shiftKey) {
+        onInputChange({ target: repl.elemSourceInput });
+      }
       break;
 
     default:
@@ -168,8 +170,8 @@ function createHistoryEntry(inputText) {
   const historyIndex = repl.inputHistory.length;
   repl.inputHistory.push(inputText);
 
-  const inputElem = document.createElement("div");
-  inputElem.textContent = "> " + inputText;
+  const inputElem = document.createElement("pre");
+  inputElem.textContent = inputText;
   inputElem.classList.add("input");
 
   const historyItem = document.createElement("div");

@@ -64,9 +64,7 @@ section.source {
   display: flex;
   flex-direction: column;
 }
-
 section.source textarea {
-  height: 32px;
   padding: 8px;
   margin-bottom: 16px;
 }
