@@ -65,7 +65,7 @@ section.source {
   flex-direction: column;
 }
 
-section.source input {
+section.source textarea {
   height: 32px;
   padding: 8px;
   margin-bottom: 16px;
