@@ -55,7 +55,6 @@ impl<'a> Buf<'a> {
 
     pub fn push_str_allow_spaces(&mut self, s: &str) {
         debug_assert!(!self.beginning_of_line);
-        debug_assert!(!s.contains('\n'));
 
         self.flush_spaces();
 
