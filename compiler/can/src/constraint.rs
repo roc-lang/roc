@@ -18,6 +18,7 @@ pub struct Constraints {
     pub expectations: Vec<Expected<Type>>,
     pub pattern_expectations: Vec<PExpected<Type>>,
     pub includes_tags: Vec<IncludesTag>,
+    pub strings: Vec<&'static str>,
 }
 
 impl Default for Constraints {
@@ -38,6 +39,7 @@ impl Constraints {
         let expectations = Vec::new();
         let pattern_expectations = Vec::new();
         let includes_tags = Vec::new();
+        let strings = Vec::new();
 
         types.extend([Type::EmptyRec, Type::EmptyTagUnion]);
 
@@ -83,6 +85,7 @@ impl Constraints {
             expectations,
             pattern_expectations,
             includes_tags,
+            strings,
         }
     }
 
@@ -427,11 +430,10 @@ impl Constraints {
         filename: &'static str,
         line_number: u32,
     ) -> Constraint {
-        let type_index = Index::new(self.types.len() as _);
+        let type_index = Index::push_new(&mut self.types, typ);
+        let string_index = Index::push_new(&mut self.strings, filename);
 
-        self.types.push(typ);
-
-        Constraint::Store(type_index, variable, filename, line_number)
+        Constraint::Store(type_index, variable, string_index, line_number)
     }
 }
 
@@ -440,7 +442,7 @@ static_assertions::assert_eq_size!([u8; 3 * 8], Constraint);
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
     Eq(Index<Type>, Index<Expected<Type>>, Index<Category>, Region),
-    Store(Index<Type>, Variable, &'static str, u32),
+    Store(Index<Type>, Variable, Index<&'static str>, u32),
     Lookup(Symbol, Index<Expected<Type>>, Region),
     Pattern(
         Index<Type>,
