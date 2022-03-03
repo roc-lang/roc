@@ -37,7 +37,7 @@ If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.ne
 
 ### Editor
 
-The editor is a WIP and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
+The editor is a :construction:WIP:construction: and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
 `cargo run edit` should work from NixOS, if you use a nix-shell from inside another OS, follow the instructions below.
 
 #### Nvidia GPU
