@@ -27,7 +27,6 @@ pub const RocDec = extern struct {
     }
 
     pub fn fromF64(num: f64) ?RocDec {
-
         var result: f64 = num * comptime @intToFloat(f64, one_point_zero_i128);
 
         if (result > comptime @intToFloat(f64, math.maxInt(i128))) {
