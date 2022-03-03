@@ -16,12 +16,11 @@ pushd build
 wget https://github.com/rtfeldman/elm-css/files/8037422/roc-source-code.zip
 
 # grab the pre-compiled REPL and copy it to Netlify's server; if it's not there, fail the build.
-mkdir -p repl
-cd repl
 wget https://github.com/brian-carroll/mock-repl/files/8167902/roc_repl_wasm.tar.gz
 tar xzvf roc_repl_wasm.tar.gz
 rm roc_repl_wasm.tar.gz
-cp ../../../repl_www/public/* .
+cp -r ../../repl_www/public/* .
+
 popd
 
 # pushd ..

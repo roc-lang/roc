@@ -2,8 +2,8 @@
 window.js_create_app = js_create_app;
 window.js_run_app = js_run_app;
 window.js_get_result_and_memory = js_get_result_and_memory;
-import * as roc_repl_wasm from "./roc_repl_wasm.js";
-import { getMockWasiImports } from "./wasi.js";
+import * as roc_repl_wasm from "/roc_repl_wasm.js";
+import { getMockWasiImports } from "/wasi.js";
 
 // ----------------------------------------------------------------------------
 // REPL state
