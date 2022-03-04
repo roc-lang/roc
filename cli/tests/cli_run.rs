@@ -714,6 +714,22 @@ mod cli_run {
             if entry.file_type().unwrap().is_dir() {
                 let example_dir_name = entry.file_name().into_string().unwrap();
 
+                // TODO: Improve this with a more-dynamic approach. (Read all subdirectories?)
+                // Some hello-world examples live in nested directories
+                if example_dir_name == "hello-world" {
+                    for sub_dir in [
+                        "c-platform",
+                        "rust-platform",
+                        "swift-platform",
+                        "web-platform",
+                        "zig-platform",
+                    ] {
+                        all_examples.remove(format!("{}/{}", example_dir_name, sub_dir).as_str()).unwrap_or_else(|| {
+                            panic!("The example directory {}/{}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name, sub_dir);
+                        });
+                    }
+                }
+
                 // We test benchmarks separately
                 if example_dir_name != "benchmarks" {
                     all_examples.remove(example_dir_name.as_str()).unwrap_or_else(|| {
