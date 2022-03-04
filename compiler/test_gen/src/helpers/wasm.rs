@@ -1,8 +1,6 @@
 use core::cell::Cell;
-use libc::c_char;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
 use std::collections::hash_map::DefaultHasher;
-use std::ffi::CStr;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -238,10 +236,13 @@ fn get_roc_panic_msg(instance: &wasmer::Instance, memory: &Memory) -> Option<Str
         return None;
     }
     let msg_index = msg_addr as usize;
-    let msg_ptr = memory_bytes[msg_index..].as_ptr();
-    let msg_cstr = unsafe { CStr::from_ptr(msg_ptr as *const c_char) };
-    let msg_str = msg_cstr.to_str().unwrap();
-    Some(msg_str.to_string())
+    let msg_len = memory_bytes[msg_index..]
+        .iter()
+        .position(|c| *c == 0)
+        .unwrap();
+    let msg_bytes = memory_bytes[msg_index..][..msg_len].to_vec();
+    let msg = unsafe { String::from_utf8_unchecked(msg_bytes) };
+    Some(msg)
 }
 
 #[allow(dead_code)]
