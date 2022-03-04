@@ -176,6 +176,7 @@ function createHistoryEntry(inputText) {
 
   const historyItem = document.createElement("div");
   historyItem.appendChild(inputElem);
+  historyItem.classList.add("history-item");
 
   repl.elemHistory.appendChild(historyItem);
   repl.elemHistory.scrollTop = repl.elemHistory.scrollHeight;
@@ -184,7 +185,7 @@ function createHistoryEntry(inputText) {
 }
 
 function updateHistoryEntry(index, ok, outputText) {
-  const outputElem = document.createElement("div");
+  const outputElem = document.createElement("pre");
   outputElem.textContent = outputText;
   outputElem.classList.add("output");
   outputElem.classList.add(ok ? "output-ok" : "output-error");
