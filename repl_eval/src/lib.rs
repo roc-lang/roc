@@ -1,4 +1,5 @@
 use roc_parse::ast::Expr;
+use roc_std::RocDec;
 
 pub mod eval;
 pub mod gen;
@@ -46,6 +47,11 @@ pub trait ReplAppMemory {
 
     fn deref_f32(&self, addr: usize) -> f32;
     fn deref_f64(&self, addr: usize) -> f64;
+
+    fn deref_dec(&self, addr: usize) -> RocDec {
+        let bits = self.deref_i128(addr);
+        return RocDec(bits);
+    }
 
     fn deref_str(&self, addr: usize) -> &str;
 }

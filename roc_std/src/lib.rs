@@ -4,6 +4,9 @@ use core::ffi::c_void;
 use core::fmt;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
+use core::str;
+// use roc_error_macros::internal_error;
+// uncomment when we figure out why it fails below.
 
 mod rc;
 mod roc_list;
@@ -276,5 +279,31 @@ impl RocDec {
 
     pub fn from_str_to_i128_unsafe(val: &str) -> i128 {
         Self::from_str(val).unwrap().0
+    }
+
+    fn to_str_helper(&self, bytes: &mut [u8; 1]) {
+        bytes[0] = 0;
+        // TODO
+    }
+
+    pub fn to_str(&self) -> RocStr {
+        let mut bytes: [u8; 1] = [0];
+        self.to_str_helper(&mut bytes);
+        unsafe {RocStr::from_slice(&bytes) }
+    }
+
+}
+
+impl fmt::Display for RocDec {
+    fn fmt(&self, fmtr: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut bytes: [u8; 1] = [0];
+        self.to_str_helper(&mut bytes);
+        match str::from_utf8(&bytes) {
+            Ok(slice) => write!(fmtr, "{}", slice),
+            Err(payload) => panic!("Error in converting RocDec({}) to a string: {}", self.0, payload),
+            // Err(payload) => internal_error!("Error in converting RocDec({}) to a string: {}", self.0, payload),
+            // This raises a compile error: can't find eprintln
+            // Is this because we don't use std?
+        }
     }
 }

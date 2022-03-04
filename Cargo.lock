@@ -3749,6 +3749,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_reporting",
+ "roc_std",
  "roc_target",
  "roc_types",
 ]
@@ -3823,6 +3824,9 @@ dependencies = [
 [[package]]
 name = "roc_std"
 version = "0.1.0"
+dependencies = [
+ "roc_error_macros",
+]
 
 [[package]]
 name = "roc_target"

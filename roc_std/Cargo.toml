@@ -8,6 +8,9 @@ readme = "README.md"
 repository = "https://github.com/rtfeldman/roc"
 version = "0.1.0"
 
+[dependencies]
+roc_error_macros = { path = "../error_macros" }
+
 [dev-dependencies]
 indoc = "1.0.3"
 pretty_assertions = "1.0.0"
