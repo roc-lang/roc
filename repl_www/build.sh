@@ -29,7 +29,8 @@ then
     cargo build --target wasm32-unknown-unknown -p roc_repl_wasm --release
     wasm-bindgen --target web --keep-debug target/wasm32-unknown-unknown/release/roc_repl_wasm.wasm --out-dir repl_wasm/pkg/
 else
-    wasm-pack build --target web repl_wasm
+    # A `--profiling` build is optimized and has debug info, so we get stack traces for compiler `todo!()`
+    wasm-pack build --profiling --target web repl_wasm
 fi
 
 cp repl_wasm/pkg/*.wasm $WWW_ROOT
