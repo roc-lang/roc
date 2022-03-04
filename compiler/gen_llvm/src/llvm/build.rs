@@ -710,7 +710,7 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     top_level: ProcLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let it = top_level.arguments.iter().copied();
-    let bytes = roc_mono::alias_analysis::func_name_bytes_help(symbol, it, &top_level.result);
+    let bytes = roc_alias_analysis::func_name_bytes_help(symbol, it, &top_level.result);
     let func_name = FuncName(&bytes);
     let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
@@ -4045,7 +4045,7 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
     // Populate Procs further and get the low-level Expr from the canonical Expr
     let mut headers = Vec::with_capacity_in(procedures.len(), env.arena);
     for ((symbol, layout), proc) in procedures {
-        let name_bytes = roc_mono::alias_analysis::func_name_bytes(&proc);
+        let name_bytes = roc_alias_analysis::func_name_bytes(&proc);
         let func_name = FuncName(&name_bytes);
 
         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
@@ -4110,7 +4110,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
     let it = procedures.iter().map(|x| x.1);
 
-    let solutions = match roc_mono::alias_analysis::spec_program(opt_level, entry_point, it) {
+    let solutions = match roc_alias_analysis::spec_program(opt_level, entry_point, it) {
         Err(e) => panic!("Error in alias analysis: {}", e),
         Ok(solutions) => solutions,
     };
@@ -4118,7 +4118,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     let solutions = env.arena.alloc(solutions);
 
     let mod_solutions = solutions
-        .mod_solutions(roc_mono::alias_analysis::MOD_APP)
+        .mod_solutions(roc_alias_analysis::MOD_APP)
         .unwrap();
 
     // Add all the Proc headers to the module.
@@ -4470,11 +4470,8 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         // * roc__mainForHost_1_Update_result_size() -> i64
 
                         let it = top_level.arguments.iter().copied();
-                        let bytes = roc_mono::alias_analysis::func_name_bytes_help(
-                            symbol,
-                            it,
-                            &top_level.result,
-                        );
+                        let bytes =
+                            roc_alias_analysis::func_name_bytes_help(symbol, it, &top_level.result);
                         let func_name = FuncName(&bytes);
                         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
