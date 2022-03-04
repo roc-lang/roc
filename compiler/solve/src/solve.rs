@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::PresenceConstraint;
+use roc_can::constraint::{LetConstraint, PresenceConstraint};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
@@ -218,6 +218,11 @@ enum Work<'a> {
         constraint: &'a Constraint,
     },
     CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
+    LetConSimple {
+        env: &'a Env,
+        rank: Rank,
+        let_con: &'a LetConstraint,
+    },
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -241,6 +246,11 @@ fn solve(
     let mut stack = vec![initial];
     while let Some(work_item) = stack.pop() {
         let (env, rank, constraint) = match work_item {
+            Work::Constraint {
+                env,
+                rank,
+                constraint,
+            } => (env, rank, constraint),
             Work::CheckForInfiniteTypes(def_vars) => {
                 for (symbol, loc_var) in def_vars.iter() {
                     check_for_infinite_type(subs, problems, *symbol, *loc_var);
@@ -248,11 +258,35 @@ fn solve(
                 // No constraint to be solved
                 continue;
             }
-            Work::Constraint {
-                env,
-                rank,
-                constraint,
-            } => (env, rank, constraint),
+            Work::LetConSimple { env, rank, let_con } => {
+                // Add a variable for each def to new_vars_by_env.
+                let mut local_def_vars = LocalDefVarsVec::with_length(let_con.def_types.len());
+
+                for (symbol, loc_type) in let_con.def_types.iter() {
+                    let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
+
+                    local_def_vars.push((
+                        *symbol,
+                        Loc {
+                            value: var,
+                            region: loc_type.region,
+                        },
+                    ));
+                }
+
+                let mut new_env = env.clone();
+                for (symbol, loc_var) in local_def_vars.iter() {
+                    new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+                }
+
+                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
+                stack.push(Work::Constraint {
+                    env: arena.alloc(new_env),
+                    rank,
+                    constraint: &let_con.ret_constraint,
+                });
+                continue;
+            }
         };
 
         state = match constraint {
@@ -471,47 +505,12 @@ fn solve(
                         });
                         state
                     }
-                    ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
-                        // TODO: make into `WorkItem` with `After`
-                        let state = solve(
-                            arena,
-                            env,
-                            state,
-                            rank,
-                            pools,
-                            problems,
-                            cached_aliases,
-                            subs,
-                            &let_con.defs_constraint,
-                        );
-
-                        // Add a variable for each def to new_vars_by_env.
-                        let mut local_def_vars =
-                            LocalDefVarsVec::with_length(let_con.def_types.len());
-
-                        for (symbol, loc_type) in let_con.def_types.iter() {
-                            let var =
-                                type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
-
-                            local_def_vars.push((
-                                *symbol,
-                                Loc {
-                                    value: var,
-                                    region: loc_type.region,
-                                },
-                            ));
-                        }
-
-                        let mut new_env = env.clone();
-                        for (symbol, loc_var) in local_def_vars.iter() {
-                            new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
-                        }
-
-                        stack.push(Work::CheckForInfiniteTypes(local_def_vars));
+                    _ if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
+                        stack.push(Work::LetConSimple { env, rank, let_con });
                         stack.push(Work::Constraint {
-                            env: arena.alloc(new_env),
+                            env,
                             rank,
-                            constraint: ret_con,
+                            constraint: &let_con.defs_constraint,
                         });
 
                         state
