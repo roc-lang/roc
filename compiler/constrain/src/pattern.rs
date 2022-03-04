@@ -27,7 +27,7 @@ pub struct PatternState {
 /// definition has an annotation, we instead now add `x => Int`.
 pub fn headers_from_annotation(
     pattern: &Pattern,
-    annotation: &Loc<Type>,
+    annotation: &Loc<&Type>,
 ) -> Option<SendMap<Symbol, Loc<Type>>> {
     let mut headers = SendMap::default();
     // Check that the annotation structurally agrees with the pattern, preventing e.g. `{ x, y } : Int`
@@ -44,12 +44,13 @@ pub fn headers_from_annotation(
 
 fn headers_from_annotation_help(
     pattern: &Pattern,
-    annotation: &Loc<Type>,
+    annotation: &Loc<&Type>,
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> bool {
     match pattern {
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            headers.insert(*symbol, annotation.clone());
+            let typ = Loc::at(annotation.region, annotation.value.clone());
+            headers.insert(*symbol, typ);
             true
         }
         Underscore
@@ -106,7 +107,7 @@ fn headers_from_annotation_help(
                         .all(|(arg_pattern, arg_type)| {
                             headers_from_annotation_help(
                                 &arg_pattern.1.value,
-                                &Loc::at(annotation.region, arg_type.clone()),
+                                &Loc::at(annotation.region, arg_type),
                                 headers,
                             )
                         })
@@ -135,12 +136,13 @@ fn headers_from_annotation_help(
                 && type_arguments.len() == pat_type_arguments.len()
                 && lambda_set_variables.len() == pat_lambda_set_variables.len() =>
             {
-                headers.insert(*opaque, annotation.clone());
+                let typ = Loc::at(annotation.region, annotation.value.clone());
+                headers.insert(*opaque, typ);
 
                 let (_, argument_pat) = &**argument;
                 headers_from_annotation_help(
                     &argument_pat.value,
-                    &Loc::at(annotation.region, (**actual).clone()),
+                    &Loc::at(annotation.region, actual),
                     headers,
                 )
             }

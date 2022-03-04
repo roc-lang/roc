@@ -991,6 +991,118 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
     }
 }
 
+pub struct VariablesIter<'a> {
+    stack: Vec<&'a Type>,
+    recursion_variables: Vec<Variable>,
+    variables: Vec<Variable>,
+}
+
+impl<'a> VariablesIter<'a> {
+    pub fn new(typ: &'a Type) -> Self {
+        Self {
+            stack: vec![typ],
+            recursion_variables: vec![],
+            variables: vec![],
+        }
+    }
+}
+
+impl<'a> Iterator for VariablesIter<'a> {
+    type Item = Variable;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use Type::*;
+
+        if let Some(var) = self.variables.pop() {
+            debug_assert!(!self.recursion_variables.contains(&var));
+
+            return Some(var);
+        }
+
+        while let Some(tipe) = self.stack.pop() {
+            match tipe {
+                EmptyRec | EmptyTagUnion | Erroneous(_) => {
+                    continue;
+                }
+
+                ClosureTag { ext: v, .. } | Variable(v) => {
+                    if !self.recursion_variables.contains(v) {
+                        return Some(*v);
+                    }
+                }
+
+                Function(args, closure, ret) => {
+                    self.stack.push(ret);
+                    self.stack.push(closure);
+                    self.stack.extend(args.iter().rev());
+                }
+                Record(fields, ext) => {
+                    use RecordField::*;
+
+                    self.stack.push(ext);
+
+                    for (_, field) in fields {
+                        match field {
+                            Optional(x) => self.stack.push(x),
+                            Required(x) => self.stack.push(x),
+                            Demanded(x) => self.stack.push(x),
+                        };
+                    }
+                }
+                TagUnion(tags, ext) => {
+                    self.stack.push(ext);
+
+                    for (_, args) in tags {
+                        self.stack.extend(args);
+                    }
+                }
+                FunctionOrTagUnion(_, _, ext) => {
+                    self.stack.push(ext);
+                }
+                RecursiveTagUnion(rec, tags, ext) => {
+                    self.recursion_variables.push(*rec);
+                    self.stack.push(ext);
+
+                    for (_, args) in tags.iter().rev() {
+                        self.stack.extend(args);
+                    }
+                }
+                Alias {
+                    type_arguments,
+                    actual,
+                    ..
+                } => {
+                    self.stack.push(actual);
+
+                    for (_, args) in type_arguments.iter().rev() {
+                        self.stack.push(args);
+                    }
+                }
+                HostExposedAlias {
+                    type_arguments: arguments,
+                    actual,
+                    ..
+                } => {
+                    self.stack.push(actual);
+
+                    for (_, args) in arguments.iter().rev() {
+                        self.stack.push(args);
+                    }
+                }
+                RangedNumber(typ, vars) => {
+                    self.stack.push(typ);
+                    self.variables.extend(vars.iter().copied());
+                }
+                Apply(_, args, _) => {
+                    self.stack.extend(args);
+                }
+            }
+        }
+
+        None
+    }
+}
+
 fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     use Type::*;
 

@@ -11,7 +11,7 @@ use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
-use roc_collections::all::{ImMap, Index, MutSet, SendMap};
+use roc_collections::all::{ImMap, Index, MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -52,7 +52,7 @@ pub struct Env {
     /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
     /// for example `a` in the annotation `identity : a -> a`, we add it to this
     /// map so that expressions within that annotation can share these vars.
-    pub rigids: ImMap<Lowercase, Variable>,
+    pub rigids: MutMap<Lowercase, Variable>,
     pub home: ModuleId,
 }
 
@@ -693,7 +693,7 @@ pub fn constrain_expr(
             let constraint = constrain_expr(
                 &Env {
                     home: env.home,
-                    rigids: ImMap::default(),
+                    rigids: MutMap::default(),
                 },
                 region,
                 &loc_expr.value,
@@ -1170,7 +1170,7 @@ pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
 
     let mut env = Env {
         home,
-        rigids: ImMap::default(),
+        rigids: MutMap::default(),
     };
 
     for decl in decls.iter().rev() {
@@ -1227,12 +1227,28 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
     def_pattern_state.vars.push(expr_var);
 
     let mut new_rigids = Vec::new();
-
     let expr_con = match &def.annotation {
         Some(annotation) => {
             let arity = annotation.signature.arity();
             let rigids = &env.rigids;
             let mut ftv = rigids.clone();
+
+            /*
+            let mut new_rigids = Vec::new();
+
+            // pub wildcards: Vec<Variable>,
+            // pub var_by_name: SendMap<Lowercase, Variable>,
+            'outer: for (outer_name, outer_var) in rigids.iter() {
+                for (inner_name, inner_var) in annotation.introduced_variables.var_by_name.iter() {
+                    if outer_name == inner_name {
+                        debug_assert_eq!(inner_var, outer_var);
+                        continue 'outer;
+                    }
+                }
+
+                // the inner name is not in the outer scope; it's introduced here
+            }
+            */
 
             let signature = instantiate_rigids(
                 &annotation.signature,
@@ -1514,46 +1530,47 @@ fn instantiate_rigids(
     annotation: &Type,
     introduced_vars: &IntroducedVariables,
     new_rigids: &mut Vec<Variable>,
-    ftv: &mut ImMap<Lowercase, Variable>, // rigids defined before the current annotation
+    ftv: &mut MutMap<Lowercase, Variable>, // rigids defined before the current annotation
     loc_pattern: &Loc<Pattern>,
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> Type {
-    let mut annotation = annotation.clone();
+    // find out if rigid type variables first occur in this annotation,
+    // or if they are already introduced in an outer annotation
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
-
-    let outside_rigids: MutSet<Variable> = ftv.values().copied().collect();
-
     for (name, var) in introduced_vars.var_by_name.iter() {
-        if let Some(existing_rigid) = ftv.get(name) {
-            rigid_substitution.insert(*var, Type::Variable(*existing_rigid));
-        } else {
-            // It's possible to use this rigid in nested defs
-            ftv.insert(name.clone(), *var);
+        use std::collections::hash_map::Entry::*;
+
+        match ftv.entry(name.clone()) {
+            Occupied(occupied) => {
+                let existing_rigid = occupied.get();
+                rigid_substitution.insert(*var, Type::Variable(*existing_rigid));
+            }
+            Vacant(vacant) => {
+                // It's possible to use this rigid in nested defs
+                vacant.insert(*var);
+                new_rigids.push(*var);
+            }
         }
     }
 
-    // Instantiate rigid variables
+    // wildcards are always freshly introduced in this annotation
+    for (i, wildcard) in introduced_vars.wildcards.iter().enumerate() {
+        ftv.insert(format!("*{}", i).into(), *wildcard);
+        new_rigids.push(*wildcard);
+    }
+
+    let mut annotation = annotation.clone();
     if !rigid_substitution.is_empty() {
         annotation.substitute(&rigid_substitution);
     }
 
-    if let Some(new_headers) = crate::pattern::headers_from_annotation(
-        &loc_pattern.value,
-        &Loc::at(loc_pattern.region, annotation.clone()),
-    ) {
-        for (symbol, loc_type) in new_headers {
-            for var in loc_type.value.variables() {
-                // a rigid is only new if this annotation is the first occurrence of this rigid
-                if !outside_rigids.contains(&var) {
-                    new_rigids.push(var);
-                }
-            }
-            headers.insert(symbol, loc_type);
-        }
-    }
-
-    for (i, wildcard) in introduced_vars.wildcards.iter().enumerate() {
-        ftv.insert(format!("*{}", i).into(), *wildcard);
+    let loc_annotation_ref = Loc::at(loc_pattern.region, &annotation);
+    if let Pattern::Identifier(symbol) = loc_pattern.value {
+        headers.insert(symbol, Loc::at(loc_pattern.region, annotation.clone()));
+    } else if let Some(new_headers) =
+        crate::pattern::headers_from_annotation(&loc_pattern.value, &loc_annotation_ref)
+    {
+        headers.extend(new_headers)
     }
 
     annotation
@@ -1584,7 +1601,6 @@ pub fn rec_defs_help(
 
         def_pattern_state.vars.push(expr_var);
 
-        let mut new_rigids = Vec::new();
         match &def.annotation {
             None => {
                 let expr_con = constrain_expr(
@@ -1611,6 +1627,7 @@ pub fn rec_defs_help(
             Some(annotation) => {
                 let arity = annotation.signature.arity();
                 let mut ftv = env.rigids.clone();
+                let mut new_rigids = Vec::new();
 
                 let signature = instantiate_rigids(
                     &annotation.signature,

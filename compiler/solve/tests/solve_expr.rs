@@ -5509,4 +5509,42 @@ mod solve_expr {
             r#"Id [ A, B, C { a : Str }e ] -> Str"#,
         )
     }
+
+    #[test]
+    fn inner_annotation_rigid() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : a -> a
+                f = 
+                    g : b -> b
+                    g = \x -> x
+
+                    g
+
+                f
+                "#
+            ),
+            r#"a -> a"#,
+        )
+    }
+
+    #[test]
+    fn inner_annotation_rigid_2() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : {} -> List a
+                f = 
+                    g : List a
+                    g = [] 
+
+                    \{} -> g
+
+                f
+                "#
+            ),
+            r#"{} -> List a"#,
+        )
+    }
 }
