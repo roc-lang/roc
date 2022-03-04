@@ -211,19 +211,13 @@ pub fn run_in_place(
     state.env
 }
 
-enum After {
-    CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
-}
-
 enum Work<'a> {
     Constraint {
         env: &'a Env,
         rank: Rank,
         constraint: &'a Constraint,
-        after: Option<After>,
     },
-    /// Something to be done after a constraint and all its dependencies are fully solved.
-    After(After),
+    CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -238,16 +232,16 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
-    let mut stack = vec![Work::Constraint {
+    let initial = Work::Constraint {
         env,
         rank,
         constraint,
-        after: None,
-    }];
+    };
 
+    let mut stack = vec![initial];
     while let Some(work_item) = stack.pop() {
         let (env, rank, constraint) = match work_item {
-            Work::After(After::CheckForInfiniteTypes(def_vars)) => {
+            Work::CheckForInfiniteTypes(def_vars) => {
                 for (symbol, loc_var) in def_vars.iter() {
                     check_for_infinite_type(subs, problems, *symbol, *loc_var);
                 }
@@ -258,15 +252,7 @@ fn solve(
                 env,
                 rank,
                 constraint,
-                after,
-            } => {
-                // Push the `after` on first so that we look at it immediately after finishing all
-                // the children of this constraint.
-                if let Some(after) = after {
-                    stack.push(Work::After(after));
-                }
-                (env, rank, constraint)
-            }
+            } => (env, rank, constraint),
         };
 
         state = match constraint {
@@ -421,7 +407,6 @@ fn solve(
                         env,
                         rank,
                         constraint: sub_constraint,
-                        after: None,
                     })
                 }
 
@@ -483,7 +468,6 @@ fn solve(
                             env,
                             rank,
                             constraint: &let_con.defs_constraint,
-                            after: None,
                         });
                         state
                     }
@@ -523,11 +507,11 @@ fn solve(
                             new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                         }
 
+                        stack.push(Work::CheckForInfiniteTypes(local_def_vars));
                         stack.push(Work::Constraint {
                             env: arena.alloc(new_env),
                             rank,
                             constraint: ret_con,
-                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
                         });
 
                         state
@@ -667,11 +651,11 @@ fn solve(
 
                         // Now solve the body, using the new vars_by_symbol which includes
                         // the assignments' name-to-variable mappings.
+                        stack.push(Work::CheckForInfiniteTypes(local_def_vars));
                         stack.push(Work::Constraint {
                             env: arena.alloc(new_env),
                             rank,
                             constraint: ret_con,
-                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
                         });
 
                         state_for_ret_con
