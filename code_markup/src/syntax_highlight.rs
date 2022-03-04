@@ -21,6 +21,8 @@ pub enum HighlightStyle {
     Blank,
     Comment,
     DocsComment,
+    UppercaseIdent, // TODO remove other HighlightStyle subtypes of UppercaseIdent?
+    LowercaseIdent, // TODO remove other HighlightStyle subtypes of LowercaseIdent?
 }
 
 pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
@@ -46,6 +48,8 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
         (Blank, from_hsb(258, 50, 90)),
         (Comment, from_hsb(258, 50, 90)),     // TODO check color
         (DocsComment, from_hsb(258, 50, 90)), // TODO check color
+        (UppercaseIdent, almost_white),
+        (LowercaseIdent, from_hsb(225, 50, 100)),
     ]
     .iter()
     .for_each(|tup| {

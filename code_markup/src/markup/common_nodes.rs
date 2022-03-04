@@ -1,4 +1,4 @@
-use crate::{syntax_highlight::HighlightStyle};
+use crate::{syntax_highlight::HighlightStyle, slow_pool::MarkNodeId};
 
 use super::{attribute::Attributes, nodes, nodes::MarkupNode};
 
@@ -136,5 +136,13 @@ pub fn new_comments_mn(
         attributes: Attributes::default(),
         parent_id_opt: None,
         newlines_at_end,
+    }
+}
+
+pub fn assign_mn(val_name_mn_id: MarkNodeId, equals_mn_id: MarkNodeId, expr_mark_node_id: MarkNodeId) -> MarkupNode {
+    MarkupNode::Nested {
+        children_ids: vec![val_name_mn_id, equals_mn_id, expr_mark_node_id],
+        parent_id_opt: None,
+        newlines_at_end: 3,
     }
 }

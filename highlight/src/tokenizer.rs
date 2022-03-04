@@ -91,6 +91,7 @@
       Asterisk,
   }
   
+  #[derive(Default)]
   pub struct TokenTable {
       pub tokens: Vec<Token>,
       pub offsets: Vec<usize>,
@@ -105,19 +106,26 @@
       fn token(&mut self, token: Token, _offset: usize, _length: usize);
   }
 
-  struct TestConsumer{
-    tokens: Vec<Token>,
+  #[derive(Default)]
+  struct TokenConsumer{
+    token_table: TokenTable,
   }
 
-  impl ConsumeToken for TestConsumer {
-    fn token(&mut self, token: Token, _offset: usize, _length: usize){
-      self.tokens.push(token);
+  impl ConsumeToken for TokenConsumer {
+    fn token(&mut self, token: Token, offset: usize, length: usize){
+      self.token_table.tokens.push(token);
+      self.token_table.offsets.push(offset);
+      self.token_table.lengths.push(length);
     }
   }
 
   pub fn tokenize(code_str: &str) -> Vec<Token> {
+    full_tokenize(code_str).tokens
+  }
+
+  pub fn full_tokenize(code_str: &str) -> TokenTable {
     let mut lex_state = LexState{ indents: Vec::new() };
-    let mut consumer = TestConsumer{ tokens: Vec::new() };
+    let mut consumer = TokenConsumer::default();
 
     consume_all_tokens(
       &mut lex_state,
@@ -125,7 +133,7 @@
       &mut consumer
     );
 
-    consumer.tokens
+    consumer.token_table
   }
   
   fn consume_all_tokens(
@@ -245,6 +253,14 @@
           // }
   
           tt
+      }
+
+      pub fn extract_str<'a>(&self, index: usize, content: &'a str) -> &'a str {
+        // TODO remove unwrap
+        let len = *self.lengths.get(index).unwrap();
+        let offset = *self.offsets.get(index).unwrap();
+
+        &content[offset..(offset + len)]
       }
   }
   

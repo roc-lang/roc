@@ -1013,8 +1013,8 @@ peg::parser!{
           / ident()
 
         rule body() =
-        ident() [T::OpAssignment] [T::OpenIndent] full_expr() ([T::SameIndent]? full_expr())* ([T::CloseIndent] / end_of_file())
-        /  ident() [T::OpAssignment] full_expr() end_of_file()?
+          ident() [T::OpAssignment] [T::OpenIndent] full_expr() ([T::SameIndent]? full_expr())* ([T::CloseIndent] / end_of_file())
+          /  ident() [T::OpAssignment] full_expr() end_of_file()?
 
         rule annotated_body() =
           annotation() [T::SameIndent] body()

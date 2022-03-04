@@ -1,7 +1,7 @@
 use crate::{
     markup::{
         common_nodes::new_blank_mn_w_nls,
-        top_level_def::{tld_mark_node, tld_w_comments_mark_node}, mark_id_ast_id_map::MarkIdAstIdMap, nodes::MarkupNode,
+        top_level_def::{assignment_mark_node, tld_w_comments_mark_node}, mark_id_ast_id_map::MarkIdAstIdMap, nodes::MarkupNode,
     },
     slow_pool::{MarkNodeId, SlowPool},
 };
@@ -59,7 +59,7 @@ pub fn def2_to_markup<'a>(
             )?;
 
             let tld_mn =
-                tld_mark_node(*identifier_id, expr_mn_id, ast_node_id, mark_node_pool, mark_id_ast_id_map, env)?;
+                assignment_mark_node(*identifier_id, expr_mn_id, ast_node_id, mark_node_pool, mark_id_ast_id_map, env)?;
 
             add_node(tld_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map)
         }

@@ -14,10 +14,10 @@ use crate::{
     syntax_highlight::HighlightStyle,
 };
 
-use super::{mark_id_ast_id_map::MarkIdAstIdMap, convert::from_def2::add_node};
+use super::{mark_id_ast_id_map::MarkIdAstIdMap, convert::from_def2::add_node, common_nodes::assign_mn};
 
-// Top Level Defined Value. example: `main = "Hello, World!"`
-pub fn tld_mark_node<'a>(
+// represents for example: `main = "Hello, World!"`
+pub fn assignment_mark_node<'a>(
     identifier_id: IdentId,
     expr_mark_node_id: MarkNodeId,
     ast_node_id: ASTNodeId,
@@ -39,13 +39,7 @@ pub fn tld_mark_node<'a>(
 
     let equals_mn_id = add_node(new_equals_mn(), ast_node_id, mark_node_pool, mark_id_ast_id_map);
 
-    let full_let_node = MarkupNode::Nested {
-        children_ids: vec![val_name_mn_id, equals_mn_id, expr_mark_node_id],
-        parent_id_opt: None,
-        newlines_at_end: 3,
-    };
-
-    Ok(full_let_node)
+    Ok(assign_mn(val_name_mn_id, equals_mn_id, expr_mark_node_id))
 }
 
 pub fn tld_w_comments_mark_node(
