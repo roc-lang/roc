@@ -2,7 +2,7 @@ use bumpalo::Bump;
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{LetConstraint, PresenceConstraint};
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::MutMap;
+use roc_collections::all::{MutMap, SendMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -260,19 +260,13 @@ fn solve(
             }
             Work::LetConSimple { env, rank, let_con } => {
                 // Add a variable for each def to new_vars_by_env.
-                let mut local_def_vars = LocalDefVarsVec::with_length(let_con.def_types.len());
-
-                for (symbol, loc_type) in let_con.def_types.iter() {
-                    let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
-
-                    local_def_vars.push((
-                        *symbol,
-                        Loc {
-                            value: var,
-                            region: loc_type.region,
-                        },
-                    ));
-                }
+                let local_def_vars = LocalDefVarsVec::from_def_types(
+                    rank,
+                    pools,
+                    cached_aliases,
+                    subs,
+                    &let_con.def_types,
+                );
 
                 let mut new_env = env.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
@@ -548,22 +542,13 @@ fn solve(
                         // run solver in next pool
 
                         // Add a variable for each def to local_def_vars.
-                        let mut local_def_vars =
-                            LocalDefVarsVec::with_length(let_con.def_types.len());
-
-                        for (symbol, loc_type) in let_con.def_types.iter() {
-                            let def_type = &loc_type.value;
-
-                            let var = type_to_var(subs, next_rank, pools, cached_aliases, def_type);
-
-                            local_def_vars.push((
-                                *symbol,
-                                Loc {
-                                    value: var,
-                                    region: loc_type.region,
-                                },
-                            ));
-                        }
+                        let local_def_vars = LocalDefVarsVec::from_def_types(
+                            next_rank,
+                            pools,
+                            cached_aliases,
+                            subs,
+                            &let_con.def_types,
+                        );
 
                         // Solve the assignments' constraints first.
                         // TODO: make into `WorkItem` with `After`
@@ -756,6 +741,32 @@ impl<T> LocalDefVarsVec<T> {
             LocalDefVarsVec::Stack(vec) => vec.iter(),
             LocalDefVarsVec::Heap(vec) => vec.iter(),
         }
+    }
+}
+
+impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
+    fn from_def_types(
+        rank: Rank,
+        pools: &mut Pools,
+        cached_aliases: &mut MutMap<Symbol, Variable>,
+        subs: &mut Subs,
+        def_types: &SendMap<Symbol, Loc<Type>>,
+    ) -> Self {
+        let mut local_def_vars = Self::with_length(def_types.len());
+
+        for (symbol, loc_type) in def_types.iter() {
+            let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
+
+            local_def_vars.push((
+                *symbol,
+                Loc {
+                    value: var,
+                    region: loc_type.region,
+                },
+            ));
+        }
+
+        local_def_vars
     }
 }
 
