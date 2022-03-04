@@ -218,7 +218,7 @@ pub fn copy_preloads_shrinking_dead_fns<'a, T: SerialBuffer>(
 
     let mut live_iter = live_preload_indices
         .into_iter()
-        .filter(|f| (*f as usize) >= preload_idx_start);
+        .skip_while(|f| (*f as usize) < preload_idx_start);
     let mut next_live_idx = live_iter.next();
     for i in preload_idx_start..call_graph.num_preloads {
         match next_live_idx {
