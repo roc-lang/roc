@@ -1233,23 +1233,6 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             let rigids = &env.rigids;
             let mut ftv = rigids.clone();
 
-            /*
-            let mut new_rigids = Vec::new();
-
-            // pub wildcards: Vec<Variable>,
-            // pub var_by_name: SendMap<Lowercase, Variable>,
-            'outer: for (outer_name, outer_var) in rigids.iter() {
-                for (inner_name, inner_var) in annotation.introduced_variables.var_by_name.iter() {
-                    if outer_name == inner_name {
-                        debug_assert_eq!(inner_var, outer_var);
-                        continue 'outer;
-                    }
-                }
-
-                // the inner name is not in the outer scope; it's introduced here
-            }
-            */
-
             let signature = instantiate_rigids(
                 &annotation.signature,
                 &annotation.introduced_variables,
