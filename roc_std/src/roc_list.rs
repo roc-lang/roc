@@ -57,7 +57,7 @@ where
         let new_size = elements_offset + core::mem::size_of::<T>() * (self.len() + slice.len());
 
         let new_ptr = if let Some((elements, storage)) = self.elements_and_storage() {
-            // Decrement the lists refence count.
+            // Decrement the list's refence count.
             let mut copy = storage.get();
             let is_unique = copy.decrease();
 
