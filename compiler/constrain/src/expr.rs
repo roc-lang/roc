@@ -100,7 +100,6 @@ pub fn constrain_expr(
             if fields.is_empty() {
                 constrain_empty_record(constraints, region, expected)
             } else {
-                let mut field_exprs = SendMap::default();
                 let mut field_types = SendMap::default();
                 let mut field_vars = Vec::with_capacity(fields.len());
 
@@ -115,7 +114,6 @@ pub fn constrain_expr(
                         constrain_field(constraints, env, field_var, &*loc_field_expr);
 
                     field_vars.push(field_var);
-                    field_exprs.insert(label.clone(), loc_field_expr);
                     field_types.insert(label.clone(), RecordField::Required(field_type));
 
                     rec_constraints.push(field_con);
