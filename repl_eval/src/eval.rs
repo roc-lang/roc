@@ -278,6 +278,9 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     layout: &Layout<'a>,
     content: &'a Content,
 ) -> Result<Expr<'a>, ToAstProblem> {
+    let (newtype_containers, content) = unroll_newtypes(env, content);
+    let content = unroll_aliases(env, content);
+
     macro_rules! helper {
         ($ty:ty) => {
             app.call_function(main_fn_name, |_, num: $ty| {
@@ -286,8 +289,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         };
     }
 
-    let (newtype_containers, content) = unroll_newtypes(env, content);
-    let content = unroll_aliases(env, content);
     let result = match layout {
         Layout::Builtin(Builtin::Bool) => Ok(app
             .call_function(main_fn_name, |mem: &A::Memory, num: bool| {
