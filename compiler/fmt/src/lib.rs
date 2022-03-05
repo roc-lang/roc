@@ -90,4 +90,10 @@ impl<'a> Buf<'a> {
             self.spaces_to_flush = 0;
         }
     }
+
+    pub fn trim_end(&mut self) {
+        while self.text.ends_with(char::is_whitespace) {
+            self.text.truncate(self.text.len() - 1);
+        }
+    }
 }

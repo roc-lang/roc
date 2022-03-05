@@ -180,6 +180,9 @@ fn fmt_all<'a>(arena: &'a Bump, buf: &mut Buf<'a>, ast: &'a Ast) {
     for def in &ast.defs {
         fmt_def(buf, arena.alloc(def.value), 0);
     }
+
+    buf.trim_end();
+    buf.newline();
 }
 
 /// RemoveSpaces normalizes the ast to something that we _expect_ to be invariant under formatting.
