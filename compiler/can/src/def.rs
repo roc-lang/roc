@@ -864,6 +864,32 @@ fn pattern_to_vars_by_symbol(
     }
 }
 
+fn single_typed_can_def(
+    loc_can_pattern: Loc<Pattern>,
+    loc_can_expr: Loc<Expr>,
+    expr_var: Variable,
+    loc_annotation: Loc<crate::annotation::Annotation>,
+    pattern_vars: SendMap<Symbol, Variable>,
+) -> Def {
+    let def_annotation = Annotation {
+        signature: loc_annotation.value.typ,
+        introduced_variables: loc_annotation.value.introduced_variables,
+        aliases: loc_annotation.value.aliases,
+        region: loc_annotation.region,
+    };
+
+    Def {
+        expr_var,
+        loc_pattern: loc_can_pattern,
+        loc_expr: Loc {
+            region: loc_can_expr.region,
+            value: loc_can_expr.value,
+        },
+        pattern_vars,
+        annotation: Some(def_annotation),
+    }
+}
+
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::cognitive_complexity)]
@@ -1003,12 +1029,10 @@ fn canonicalize_pending_def<'a>(
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
 
             // Record all the annotation's references in output.references.lookups
-            for symbol in ann.references {
-                output.references.lookups.insert(symbol);
-                output.references.referenced_type_defs.insert(symbol);
+            for symbol in ann.references.iter() {
+                output.references.lookups.insert(*symbol);
+                output.references.referenced_type_defs.insert(*symbol);
             }
-
-            let typ = ann.typ;
 
             for (symbol, alias) in ann.aliases.clone() {
                 aliases.insert(symbol, alias);
@@ -1041,9 +1065,6 @@ fn canonicalize_pending_def<'a>(
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
 
-            // see below: a closure needs a fresh References!
-            let mut is_closure = false;
-
             // First, make sure we are actually assigning an identifier instead of (for example) a tag.
             //
             // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
@@ -1051,7 +1072,6 @@ fn canonicalize_pending_def<'a>(
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
             if let (
-                &ast::Pattern::Identifier(_name),
                 &Pattern::Identifier(ref defined_symbol),
                 &Closure(ClosureData {
                     function_type,
@@ -1064,13 +1084,8 @@ fn canonicalize_pending_def<'a>(
                     ref captured_symbols,
                     ..
                 }),
-            ) = (
-                &loc_pattern.value,
-                &loc_can_pattern.value,
-                &loc_can_expr.value,
-            ) {
-                is_closure = true;
-
+            ) = (&loc_can_pattern.value, &loc_can_expr.value)
+            {
                 // Since everywhere in the code it'll be referred to by its defined name,
                 // remove its generated name from the closure map. (We'll re-insert it later.)
                 let references = env.closures.remove(symbol).unwrap_or_else(|| {
@@ -1113,52 +1128,74 @@ fn canonicalize_pending_def<'a>(
                     loc_body: body.clone(),
                 });
 
-                // TODO exploit this fact to remove clones below
-                debug_assert_eq!(
-                    vec![*defined_symbol],
-                    scope.idents().map(|t| t.1 .0).filter(|x| vars_by_symbol.contains_key(x)).collect::<Vec<_>>()
+                // Functions' references don't count in defs.
+                // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
+                // parent commit for the bug this fixed!
+                let refs = References::new();
+
+                refs_by_symbol.insert(*defined_symbol, (loc_can_pattern.region, refs));
+
+                let symbol = *defined_symbol;
+                let def = single_typed_can_def(
+                    loc_can_pattern,
+                    loc_can_expr,
+                    expr_var,
+                    Loc::at(loc_ann.region, ann),
+                    vars_by_symbol.clone(),
                 );
-            }
+                can_defs_by_symbol.insert(symbol, def);
+            } else {
+                // Store the referenced locals in the refs_by_symbol map, so we can later figure out
+                // which defined names reference each other.
 
-            // Store the referenced locals in the refs_by_symbol map, so we can later figure out
-            // which defined names reference each other.
-            for (_, (symbol, region)) in scope.idents() {
-                if !vars_by_symbol.contains_key(symbol) {
-                    continue;
-                }
+                if let Loc {
+                    region,
+                    value: Pattern::Identifier(symbol),
+                } = loc_can_pattern
+                {
+                    let refs = can_output.references;
+                    refs_by_symbol.insert(symbol, (region, refs));
 
-                let refs =
-                    // Functions' references don't count in defs.
-                    // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
-                    // parent commit for the bug this fixed!
-                    if is_closure {
-                        References::new()
-                    } else {
-                        can_output.references.clone()
-                    };
-
-                refs_by_symbol.insert(*symbol, (*region, refs));
-
-                can_defs_by_symbol.insert(
-                    *symbol,
-                    Def {
+                    let def = single_typed_can_def(
+                        loc_can_pattern,
+                        loc_can_expr,
                         expr_var,
-                        // TODO try to remove this .clone()!
-                        loc_pattern: loc_can_pattern.clone(),
-                        loc_expr: Loc {
-                            region: loc_can_expr.region,
-                            // TODO try to remove this .clone()!
-                            value: loc_can_expr.value.clone(),
-                        },
-                        pattern_vars: vars_by_symbol.clone(),
-                        annotation: Some(Annotation {
-                            signature: typ.clone(),
-                            introduced_variables: ann.introduced_variables.clone(),
-                            aliases: ann.aliases.clone(),
-                            region: loc_ann.region,
-                        }),
-                    },
-                );
+                        Loc::at(loc_ann.region, ann),
+                        vars_by_symbol.clone(),
+                    );
+                    can_defs_by_symbol.insert(symbol, def);
+                } else {
+                    for (_, (symbol, region)) in scope.idents() {
+                        if !vars_by_symbol.contains_key(symbol) {
+                            continue;
+                        }
+
+                        let refs = can_output.references.clone();
+
+                        refs_by_symbol.insert(*symbol, (*region, refs));
+
+                        can_defs_by_symbol.insert(
+                            *symbol,
+                            Def {
+                                expr_var,
+                                // TODO try to remove this .clone()!
+                                loc_pattern: loc_can_pattern.clone(),
+                                loc_expr: Loc {
+                                    region: loc_can_expr.region,
+                                    // TODO try to remove this .clone()!
+                                    value: loc_can_expr.value.clone(),
+                                },
+                                pattern_vars: vars_by_symbol.clone(),
+                                annotation: Some(Annotation {
+                                    signature: ann.typ.clone(),
+                                    introduced_variables: ann.introduced_variables.clone(),
+                                    aliases: ann.aliases.clone(),
+                                    region: loc_ann.region,
+                                }),
+                            },
+                        );
+                    }
+                }
             }
         }
         // If we have a pattern, then the def has a body (that is, it's not a
