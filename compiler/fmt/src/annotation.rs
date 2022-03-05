@@ -293,6 +293,9 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
             SpaceBefore(ann, spaces) => {
                 buf.newline();
+
+                buf.indent(indent);
+
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 ann.format_with_options(buf, parens, Newlines::No, indent)
             }
