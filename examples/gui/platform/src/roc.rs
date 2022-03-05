@@ -272,6 +272,38 @@ pub union RocElemEntry {
     pub row_or_col: ManuallyDrop<RocRowOrCol>,
 }
 
-enum Patch {
-    Text(RocStr),
+// enum Patch {
+//     Text(RocStr),
+// }
+
+#[test]
+fn make_text() {
+    let text = RocElem::text("blah");
+
+    assert_eq!(text.tag(), RocElemTag::Text);
+}
+
+#[test]
+fn make_button() {
+    let text = RocElem::text("blah");
+    let button = RocElem::button(ButtonStyles::default(), text);
+
+    assert_eq!(button.tag(), RocElemTag::Button);
+}
+
+#[test]
+fn make_row_with_text() {
+    let text = RocElem::text("");
+    let row = RocElem::row(&[text] as &[_]);
+
+    assert_eq!(row.tag(), RocElemTag::Row);
+}
+
+#[test]
+fn make_row_with_button() {
+    let text = RocElem::text("");
+    let button = RocElem::button(ButtonStyles::default(), text);
+    let row = RocElem::row(&[button] as &[_]);
+
+    assert_eq!(row.tag(), RocElemTag::Row);
 }
