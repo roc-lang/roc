@@ -1639,9 +1639,11 @@ fn instantiate_rigids(
     loc_pattern: &Loc<Pattern>,
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> Type {
-    // find out if rigid type variables first occur in this annotation,
-    // or if they are already introduced in an outer annotation
+    let mut annotation = annotation.clone();
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
+
+    let outside_rigids: Vec<Variable> = ftv.values().copied().collect();
+
     for (name, var) in introduced_vars.var_by_name.iter() {
         use std::collections::hash_map::Entry::*;
 
@@ -1653,29 +1655,33 @@ fn instantiate_rigids(
             Vacant(vacant) => {
                 // It's possible to use this rigid in nested defs
                 vacant.insert(*var);
-                new_rigids.push(*var);
+                // new_rigids.push(*var);
             }
         }
     }
 
-    // wildcards are always freshly introduced in this annotation
-    for (i, wildcard) in introduced_vars.wildcards.iter().enumerate() {
-        ftv.insert(format!("*{}", i).into(), *wildcard);
-        new_rigids.push(*wildcard);
-    }
-
-    let mut annotation = annotation.clone();
+    // Instantiate rigid variables
     if !rigid_substitution.is_empty() {
         annotation.substitute(&rigid_substitution);
     }
 
-    let loc_annotation_ref = Loc::at(loc_pattern.region, &annotation);
-    if let Pattern::Identifier(symbol) = loc_pattern.value {
-        headers.insert(symbol, Loc::at(loc_pattern.region, annotation.clone()));
-    } else if let Some(new_headers) =
-        crate::pattern::headers_from_annotation(&loc_pattern.value, &loc_annotation_ref)
-    {
-        headers.extend(new_headers)
+    if let Some(new_headers) = crate::pattern::headers_from_annotation(
+        &loc_pattern.value,
+        &Loc::at(loc_pattern.region, &annotation),
+    ) {
+        for (symbol, loc_type) in new_headers {
+            for var in loc_type.value.variables() {
+                // a rigid is only new if this annotation is the first occurrence of this rigid
+                if !outside_rigids.contains(&var) {
+                    new_rigids.push(var);
+                }
+            }
+            headers.insert(symbol, loc_type);
+        }
+    }
+
+    for (i, wildcard) in introduced_vars.wildcards.iter().enumerate() {
+        ftv.insert(format!("*{}", i).into(), *wildcard);
     }
 
     annotation
