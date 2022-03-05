@@ -1432,6 +1432,7 @@ impl Subs {
         mapper(self.get_ref_mut(key));
     }
 
+    #[inline(always)]
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
         let l_key = self.utable.get_root_key(key);
 
