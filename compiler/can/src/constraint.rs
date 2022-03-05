@@ -259,16 +259,15 @@ impl Constraints {
         Slice::new(start as _, length as _)
     }
 
-    fn def_types_slice<I>(&mut self, it: I) -> Slice<(Symbol, Loc<Type>)>
+    fn def_types_slice<I>(&mut self, it: I) -> Slice<(Symbol, Loc<Index<Type>>)>
     where
         I: IntoIterator<Item = (Symbol, Loc<Type>)>,
     {
         let start = self.def_types.len();
 
         for (symbol, loc_type) in it {
-            let type_index = Index::new(self.types.len() as _);
             let Loc { region, value } = loc_type;
-            self.types.push(value);
+            let type_index = Index::push_new(&mut self.types, value);
 
             self.def_types.push((symbol, Loc::at(region, type_index)));
         }
@@ -469,7 +468,7 @@ pub enum Constraint {
 pub struct LetConstraint {
     pub rigid_vars: Slice<Variable>,
     pub flex_vars: Slice<Variable>,
-    pub def_types: Slice<(Symbol, Loc<Type>)>,
+    pub def_types: Slice<(Symbol, Loc<Index<Type>>)>,
     pub defs_and_ret_constraint: Index<(Constraint, Constraint)>,
 }
 

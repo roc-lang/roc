@@ -1,10 +1,21 @@
 use std::usize;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct Index<T> {
     index: u32,
     _marker: std::marker::PhantomData<T>,
 }
+
+impl<T> Clone for Index<T> {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index,
+            _marker: self._marker,
+        }
+    }
+}
+
+impl<T> Copy for Index<T> {}
 
 impl<T> std::fmt::Debug for Index<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -33,12 +44,24 @@ impl<T> Index<T> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct Slice<T> {
     start: u32,
     length: u16,
     _marker: std::marker::PhantomData<T>,
 }
+
+impl<T> Clone for Slice<T> {
+    fn clone(&self) -> Self {
+        Self {
+            start: self.start,
+            length: self.length,
+            _marker: self._marker,
+        }
+    }
+}
+
+impl<T> Copy for Slice<T> {}
 
 impl<T> std::fmt::Debug for Slice<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
