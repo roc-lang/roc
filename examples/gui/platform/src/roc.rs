@@ -50,17 +50,28 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 
 #[repr(transparent)]
 #[cfg(target_pointer_width = "64")] // on a 64-bit system, the tag fits in this pointer's spare 3 bits
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ElemId(*const RocElemEntry);
+
+#[repr(transparent)]
+#[cfg(target_pointer_width = "64")] // on a 64-bit system, the tag fits in this pointer's spare 3 bits
 pub struct RocElem {
     entry: *const RocElemEntry,
 }
 
 impl RocElem {
+    #[allow(unused)]
+    pub fn id(&self) -> ElemId {
+        ElemId(self.entry)
+    }
+
     #[cfg(target_pointer_width = "64")]
     pub fn tag(&self) -> RocElemTag {
         // On a 64-bit system, the last 3 bits of the pointer store the tag
         unsafe { mem::transmute::<u8, RocElemTag>((self.entry as u8) & 0b0000_0111) }
     }
 
+    #[allow(unused)]
     pub fn entry(&self) -> &RocElemEntry {
         unsafe { &*self.entry_ptr() }
     }
@@ -72,53 +83,54 @@ impl RocElem {
         cleared as *const RocElemEntry
     }
 
-    fn diff(self, other: RocElem, patches: &mut Vec<(usize, Patch)>, index: usize) {
-        use RocElemTag::*;
+    // fn diff(self, other: RocElem, patches: &mut Vec<(usize, Patch)>, index: usize) {
+    //     use RocElemTag::*;
 
-        let tag = self.tag();
+    //     let tag = self.tag();
 
-        if tag != other.tag() {
-            // They were totally different elem types!
+    //     if tag != other.tag() {
+    //         // They were totally different elem types!
 
-            // TODO should we handle Row -> Col or Col -> Row differently?
-            // Elm doesn't: https://github.com/elm/virtual-dom/blob/5a5bcf48720bc7d53461b3cd42a9f19f119c5503/src/Elm/Kernel/VirtualDom.js#L714
-            return;
-        }
+    //         // TODO should we handle Row -> Col or Col -> Row differently?
+    //         // Elm doesn't: https://github.com/elm/virtual-dom/blob/5a5bcf48720bc7d53461b3cd42a9f19f119c5503/src/Elm/Kernel/VirtualDom.js#L714
+    //         return;
+    //     }
 
-        match tag {
-            Button => unsafe {
-                let button_self = &*self.entry().button;
-                let button_other = &*other.entry().button;
+    //     match tag {
+    //         Button => unsafe {
+    //             let button_self = &*self.entry().button;
+    //             let button_other = &*other.entry().button;
 
-                // TODO compute a diff and patch for the button
-            },
-            Text => unsafe {
-                let str_self = &*self.entry().text;
-                let str_other = &*other.entry().text;
+    //             // TODO compute a diff and patch for the button
+    //         },
+    //         Text => unsafe {
+    //             let str_self = &*self.entry().text;
+    //             let str_other = &*other.entry().text;
 
-                if str_self != str_other {
-                    todo!("fix this");
-                    // let roc_str = other.entry().text;
-                    // let patch = Patch::Text(ManuallyDrop::into_inner(roc_str));
+    //             if str_self != str_other {
+    //                 todo!("fix this");
+    //                 // let roc_str = other.entry().text;
+    //                 // let patch = Patch::Text(ManuallyDrop::into_inner(roc_str));
 
-                    // patches.push((index, patch));
-                }
-            },
-            Row => unsafe {
-                let children_self = &self.entry().row_or_col.children;
-                let children_other = &other.entry().row_or_col.children;
+    //                 // patches.push((index, patch));
+    //             }
+    //         },
+    //         Row => unsafe {
+    //             let children_self = &self.entry().row_or_col.children;
+    //             let children_other = &other.entry().row_or_col.children;
 
-                // TODO diff children
-            },
-            Col => unsafe {
-                let children_self = &self.entry().row_or_col.children;
-                let children_other = &other.entry().row_or_col.children;
+    //             // TODO diff children
+    //         },
+    //         Col => unsafe {
+    //             let children_self = &self.entry().row_or_col.children;
+    //             let children_other = &other.entry().row_or_col.children;
 
-                // TODO diff children
-            },
-        }
-    }
+    //             // TODO diff children
+    //         },
+    //     }
+    // }
 
+    #[allow(unused)]
     pub fn is_focusable(&self) -> bool {
         use RocElemTag::*;
 
@@ -128,6 +140,26 @@ impl RocElem {
         }
     }
 
+    #[allow(unused)]
+    pub fn row<T: Into<RocList<RocElem>>>(children: T) -> RocElem {
+        Self::elem_from_tag(Self::row_or_col(children), RocElemTag::Row)
+    }
+
+    #[allow(unused)]
+    pub fn col<T: Into<RocList<RocElem>>>(children: T) -> RocElem {
+        Self::elem_from_tag(Self::row_or_col(children), RocElemTag::Col)
+    }
+
+    fn row_or_col<T: Into<RocList<RocElem>>>(children: T) -> RocElemEntry {
+        let row_or_col = RocRowOrCol {
+            children: children.into(),
+        };
+        RocElemEntry {
+            row_or_col: ManuallyDrop::new(row_or_col),
+        }
+    }
+
+    #[allow(unused)]
     pub fn button(styles: ButtonStyles, child: RocElem) -> RocElem {
         let button = RocButton {
             child: ManuallyDrop::new(child),
@@ -140,6 +172,7 @@ impl RocElem {
         Self::elem_from_tag(entry, RocElemTag::Button)
     }
 
+    #[allow(unused)]
     pub fn text<T: Into<RocStr>>(into_roc_str: T) -> RocElem {
         let entry = RocElemEntry {
             text: ManuallyDrop::new(into_roc_str.into()),

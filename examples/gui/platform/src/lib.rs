@@ -6,7 +6,6 @@ mod roc;
 use crate::roc::RocElem;
 use core::alloc::Layout;
 use core::mem::MaybeUninit;
-use roc_std::RocStr;
 
 extern "C" {
     #[link_name = "roc__programForHost_1_exposed_generic"]

@@ -1,79 +1,80 @@
-use crate::roc::{RocElem, RocElemTag};
+use crate::roc::{ElemId, RocElem, RocElemTag};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Focus {
-    focused: *const RocElem,
-    focused_ancestors: Vec<(*const RocElem, usize)>,
+    focused: Option<ElemId>,
+    focused_ancestors: Vec<(ElemId, usize)>,
 }
 
 impl Default for Focus {
     fn default() -> Self {
         Self {
-            focused: std::ptr::null(),
+            focused: None,
             focused_ancestors: Vec::new(),
         }
     }
 }
 
 impl Focus {
-    pub fn focused_elem(&self) -> *const RocElem {
+    pub fn focused_elem(&self) -> Option<ElemId> {
         self.focused
     }
 
     /// e.g. the user pressed Tab.
-    pub fn advance(&mut self, root: &RocElem) {
-        if self.focused.is_null() {
-            // Nothing was focused in the first place, so try to focus the root.
-            if root.is_focusable() {
-                self.focused = root as *const RocElem;
-                self.focused_ancestors = Vec::new();
-            } else if let Some((new_ptr, new_ancestors)) =
-                Self::next_focusable_sibling(root, None, None)
-            {
-                // If the root itself is not focusable, use its next focusable sibling.
-                self.focused = new_ptr;
-                self.focused_ancestors = new_ancestors;
+    ///
+    /// This is in contrast to next_local, which advances within a button group.
+    /// For example, if I have three radio buttons in a group, pressing the
+    /// arrow keys will cycle through them over and over without exiting the group -
+    /// whereas pressing Tab will cycle through them once and then exit the group.
+    pub fn next_global(&mut self, root: &RocElem) {
+        match self.focused {
+            Some(focused) => {
+                // while let Some((ancestor_id, index)) = self.focused_ancestors.pop() {
+                //     let ancestor = ancestor_id.elem();
+
+                //     // TODO FIXME - right now this will re-traverse a lot of ground! To prevent this,
+                //     // we should remember past indices searched, and tell the ancestors "hey stop searching when"
+                //     // you reach these indices, because they were already covered previously.
+                //     // One potentially easy way to do this: pass a min_index and max_index, and only look between those!
+                //     //
+                //     // Related idea: instead of doing .pop() here, iterate normally so we can `break;` after storing
+                //     // `new_ancestors = Some(next_ancestors);` - this way, we still have access to the full ancestry, and
+                //     // can maybe even pass it in to make it clear what work has already been done!
+                //     if let Some((new_id, new_ancestors)) =
+                //         Self::next_focusable_sibling(focused, Some(ancestor), Some(index))
+                //     {
+                //         // We found the next element to focus, so record that.
+                //         self.focused = Some(new_id);
+
+                //         // We got a path to the new focusable's ancestor(s), so add them to the path.
+                //         // (This may restore some of the ancestors we've been .pop()-ing as we iterated.)
+                //         self.focused_ancestors.extend(new_ancestors);
+
+                //         return;
+                //     }
+
+                //     // Need to write a bunch of tests for this, especially tests of focus wrapping around - e.g.
+                //     // what happens if it wraps around to a sibling? What happens if it wraps around to something
+                //     // higher up the tree? Lower down the tree? What if nothing is focusable?
+                //     // A separate question: what if we should have a separate text-to-speech concept separate from focus?
+                // }
             }
+            None => {
+                // Nothing was focused in the first place, so try to focus the root.
+                if root.is_focusable() {
+                    self.focused = Some(root.id());
+                    self.focused_ancestors = Vec::new();
+                } else if let Some((new_id, new_ancestors)) =
+                    Self::next_focusable_sibling(root, None, None)
+                {
+                    // If the root itself is not focusable, use its next focusable sibling.
+                    self.focused = Some(new_id);
+                    self.focused_ancestors = new_ancestors;
+                }
 
-            // Regardless of whether we found a focusable Elem, we're done.
-            return;
-        }
-
-        let focused = unsafe { &*self.focused };
-
-        while let Some((ancestor_ptr, index)) = self.focused_ancestors.pop() {
-            let ancestor = unsafe { &*ancestor_ptr };
-
-            // TODO FIXME - right now this will re-traverse a lot of ground! To prevent this,
-            // we should remember past indices searched, and tell the ancestors "hey stop searching when"
-            // you reach these indices, because they were already covered previously.
-            // One potentially easy way to do this: pass a min_index and max_index, and only look between those!
-            //
-            // Related idea: instead of doing .pop() here, iterate normally so we can `break;` after storing
-            // `new_ancestors = Some(next_ancestors);` - this way, we still have access to the full ancestry, and
-            // can maybe even pass it in to make it clear what work has already been done!
-            if let Some((new_ptr, new_ancestors)) =
-                Self::next_focusable_sibling(focused, Some(ancestor), Some(index))
-            {
-                debug_assert!(
-                    !new_ptr.is_null(),
-                    "next_focusable returned a null Elem pointer!"
-                );
-
-                // We found the next element to focus, so record that.
-                self.focused = new_ptr;
-
-                // We got a path to the new focusable's ancestor(s), so add them to the path.
-                // (This may restore some of the ancestors we've been .pop()-ing as we iterated.)
-                self.focused_ancestors.extend(new_ancestors);
-
+                // Regardless of whether we found a focusable Elem, we're done.
                 return;
             }
-
-            // Need to write a bunch of tests for this, especially tests of focus wrapping around - e.g.
-            // what happens if it wraps around to a sibling? What happens if it wraps around to something
-            // higher up the tree? Lower down the tree? What if nothing is focusable?
-            // A separate question: what if we should have a separate text-to-speech concept separate from focus?
         }
     }
 
@@ -84,7 +85,7 @@ impl Focus {
         elem: &RocElem,
         ancestor: Option<&RocElem>,
         opt_index: Option<usize>,
-    ) -> Option<(*const RocElem, Vec<(*const RocElem, usize)>)> {
+    ) -> Option<(ElemId, Vec<(ElemId, usize)>)> {
         use RocElemTag::*;
 
         match elem.tag() {

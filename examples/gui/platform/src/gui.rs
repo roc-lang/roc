@@ -1,5 +1,4 @@
 use crate::{
-    focus::Focus,
     graphics::{
         colors::Rgba,
         lowlevel::buffer::create_rect_buffers,
