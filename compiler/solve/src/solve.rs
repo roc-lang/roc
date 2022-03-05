@@ -3,7 +3,6 @@ use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Constraints, LetConstraint};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
-use roc_collections::soa::{Index, Slice};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -822,23 +821,17 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
         pools: &mut Pools,
         cached_aliases: &mut MutMap<Symbol, Variable>,
         subs: &mut Subs,
-        def_types_slice: Slice<(Symbol, Loc<Index<Type>>)>,
+        def_types_slice: roc_can::constraint::DefTypes,
     ) -> Self {
-        let def_types = &constraints.def_types[def_types_slice.indices()];
+        let types_slice = &constraints.types[def_types_slice.types.indices()];
+        let loc_symbols_slice = &constraints.loc_symbols[def_types_slice.loc_symbols.indices()];
 
-        let mut local_def_vars = Self::with_length(def_types.len());
+        let mut local_def_vars = Self::with_length(types_slice.len());
 
-        for (symbol, loc_type_index) in def_types.iter() {
-            let typ = &constraints.types[loc_type_index.value.index()];
+        for ((symbol, region), typ) in loc_symbols_slice.iter().copied().zip(types_slice) {
             let var = type_to_var(subs, rank, pools, cached_aliases, typ);
 
-            local_def_vars.push((
-                *symbol,
-                Loc {
-                    value: var,
-                    region: loc_type_index.region,
-                },
-            ));
+            local_def_vars.push((symbol, Loc { value: var, region }));
         }
 
         local_def_vars

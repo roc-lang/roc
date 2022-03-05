@@ -11,7 +11,7 @@ pub struct Constraints {
     pub constraints: Vec<Constraint>,
     pub types: Vec<Type>,
     pub variables: Vec<Variable>,
-    pub def_types: Vec<(Symbol, Loc<Index<Type>>)>,
+    pub loc_symbols: Vec<(Symbol, Region)>,
     pub let_constraints: Vec<LetConstraint>,
     pub categories: Vec<Category>,
     pub pattern_categories: Vec<PatternCategory>,
@@ -32,7 +32,7 @@ impl Constraints {
         let constraints = Vec::new();
         let mut types = Vec::new();
         let variables = Vec::new();
-        let def_types = Vec::new();
+        let loc_symbols = Vec::new();
         let let_constraints = Vec::new();
         let mut categories = Vec::with_capacity(16);
         let mut pattern_categories = Vec::with_capacity(16);
@@ -78,7 +78,7 @@ impl Constraints {
             constraints,
             types,
             variables,
-            def_types,
+            loc_symbols,
             let_constraints,
             categories,
             pattern_categories,
@@ -260,28 +260,33 @@ impl Constraints {
         Slice::new(start as _, length as _)
     }
 
-    fn def_types_slice<I>(&mut self, it: I) -> Slice<(Symbol, Loc<Index<Type>>)>
+    fn def_types_slice<I>(&mut self, it: I) -> DefTypes
     where
         I: IntoIterator<Item = (Symbol, Loc<Type>)>,
         I::IntoIter: ExactSizeIterator,
     {
         let it = it.into_iter();
 
-        let start = self.def_types.len();
+        let types_start = self.types.len();
+        let loc_symbols_start = self.loc_symbols.len();
 
         // because we have an ExactSizeIterator, we can reserve space here
-        self.def_types.reserve(it.len());
+        let length = it.len();
+
+        self.types.reserve(length);
+        self.loc_symbols.reserve(length);
 
         for (symbol, loc_type) in it {
             let Loc { region, value } = loc_type;
-            let type_index = Index::push_new(&mut self.types, value);
 
-            self.def_types.push((symbol, Loc::at(region, type_index)));
+            self.types.push(value);
+            self.loc_symbols.push((symbol, region));
         }
 
-        let length = self.def_types.len() - start;
-
-        Slice::new(start as _, length as _)
+        DefTypes {
+            types: Slice::new(types_start as _, length as _),
+            loc_symbols: Slice::new(loc_symbols_start as _, length as _),
+        }
     }
 
     #[inline(always)]
@@ -297,7 +302,7 @@ impl Constraints {
         let let_contraint = LetConstraint {
             rigid_vars: Slice::default(),
             flex_vars: self.variable_slice(flex_vars),
-            def_types: Slice::default(),
+            def_types: DefTypes::default(),
             defs_and_ret_constraint,
         };
 
@@ -323,7 +328,7 @@ impl Constraints {
         let let_contraint = LetConstraint {
             rigid_vars: Slice::default(),
             flex_vars: self.variable_slice(flex_vars),
-            def_types: Slice::default(),
+            def_types: DefTypes::default(),
             defs_and_ret_constraint,
         };
 
@@ -476,11 +481,17 @@ pub enum Constraint {
     ),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct DefTypes {
+    pub types: Slice<Type>,
+    pub loc_symbols: Slice<(Symbol, Region)>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LetConstraint {
     pub rigid_vars: Slice<Variable>,
     pub flex_vars: Slice<Variable>,
-    pub def_types: Slice<(Symbol, Loc<Index<Type>>)>,
+    pub def_types: DefTypes,
     pub defs_and_ret_constraint: Index<(Constraint, Constraint)>,
 }
 
