@@ -8486,6 +8486,8 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
     fn non_exhaustive_with_guard() {
         report_problem_as(
             indoc!(
@@ -8506,7 +8508,7 @@ I need all branches in an `if` to have the same type!
 
                 Other possibilities include:
 
-                    A
+                    A    (note the lack of a guard)
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#

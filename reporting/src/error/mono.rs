@@ -167,7 +167,8 @@ fn pattern_to_doc_help<'b>(
                         TagName::Global("#Guard".into())
                     );
                     debug_assert!(args.len() == 2);
-                    pattern_to_doc_help(alloc, args[1].clone(), in_type_param)
+                    let tag = pattern_to_doc_help(alloc, args[1].clone(), in_type_param);
+                    tag.append("    (note the lack of a guard)")
                 }
                 RenderAs::Record(field_names) => {
                     let mut arg_docs = Vec::with_capacity(args.len());
