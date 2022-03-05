@@ -864,19 +864,19 @@ fn pattern_to_vars_by_symbol(
     }
 }
 
-fn single_typed_can_def(
+fn single_can_def(
     loc_can_pattern: Loc<Pattern>,
     loc_can_expr: Loc<Expr>,
     expr_var: Variable,
-    loc_annotation: Loc<crate::annotation::Annotation>,
+    opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
     pattern_vars: SendMap<Symbol, Variable>,
 ) -> Def {
-    let def_annotation = Annotation {
+    let def_annotation = opt_loc_annotation.map(|loc_annotation| Annotation {
         signature: loc_annotation.value.typ,
         introduced_variables: loc_annotation.value.introduced_variables,
         aliases: loc_annotation.value.aliases,
         region: loc_annotation.region,
-    };
+    });
 
     Def {
         expr_var,
@@ -886,7 +886,7 @@ fn single_typed_can_def(
             value: loc_can_expr.value,
         },
         pattern_vars,
-        annotation: Some(def_annotation),
+        annotation: def_annotation,
     }
 }
 
@@ -1141,11 +1141,11 @@ fn canonicalize_pending_def<'a>(
                     refs_by_symbol.insert(symbol, (region, refs));
                 }
 
-                let def = single_typed_can_def(
+                let def = single_can_def(
                     loc_can_pattern,
                     loc_can_expr,
                     expr_var,
-                    Loc::at(loc_ann.region, type_annotation),
+                    Some(Loc::at(loc_ann.region, type_annotation)),
                     vars_by_symbol.clone(),
                 );
                 can_defs_by_symbol.insert(symbol, def);
@@ -1211,108 +1211,109 @@ fn canonicalize_pending_def<'a>(
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
 
-            // see below: a closure needs a fresh References!
-            let mut is_closure = false;
-
             // First, make sure we are actually assigning an identifier instead of (for example) a tag.
             //
             // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
             // which also implies it's not a self tail call!
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let (
-                &ast::Pattern::Identifier(_name),
-                &Pattern::Identifier(ref defined_symbol),
-                &Closure(ClosureData {
+            if let Loc {
+                region,
+                value: Pattern::Identifier(symbol),
+            } = loc_can_pattern
+            {
+                if let &Closure(ClosureData {
                     function_type,
                     closure_type,
                     closure_ext_var,
                     return_type,
-                    name: ref symbol,
+                    name: ref closure_name,
                     ref arguments,
                     loc_body: ref body,
                     ref captured_symbols,
                     ..
-                }),
-            ) = (
-                &loc_pattern.value,
-                &loc_can_pattern.value,
-                &loc_can_expr.value,
-            ) {
-                is_closure = true;
-
-                // Since everywhere in the code it'll be referred to by its defined name,
-                // remove its generated name from the closure map. (We'll re-insert it later.)
-                let references = env.closures.remove(symbol).unwrap_or_else(|| {
-                    panic!(
-                        "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                        symbol, env.closures
-                    )
-                });
-
-                // Re-insert the closure into the map, under its defined name.
-                // closures don't have a name, and therefore pick a fresh symbol. But in this
-                // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
-                // and we want to reference it by that name.
-                env.closures.insert(*defined_symbol, references);
-
-                // The closure is self tail recursive iff it tail calls itself (by defined name).
-                let is_recursive = match can_output.tail_call {
-                    Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
-                    _ => Recursive::NotRecursive,
-                };
-
-                // Recursion doesn't count as referencing. (If it did, all recursive functions
-                // would result in circular def errors!)
-                refs_by_symbol
-                    .entry(*defined_symbol)
-                    .and_modify(|(_, refs)| {
-                        refs.lookups = refs.lookups.without(defined_symbol);
+                }) = &loc_can_expr.value
+                {
+                    // Since everywhere in the code it'll be referred to by its defined name,
+                    // remove its generated name from the closure map. (We'll re-insert it later.)
+                    let references = env.closures.remove(closure_name).unwrap_or_else(|| {
+                        panic!(
+                            "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
+                            closure_name, env.closures
+                        )
                     });
 
-                loc_can_expr.value = Closure(ClosureData {
-                    function_type,
-                    closure_type,
-                    closure_ext_var,
-                    return_type,
-                    name: *defined_symbol,
-                    captured_symbols: captured_symbols.clone(),
-                    recursive: is_recursive,
-                    arguments: arguments.clone(),
-                    loc_body: body.clone(),
-                });
-            }
+                    // Re-insert the closure into the map, under its defined name.
+                    // closures don't have a name, and therefore pick a fresh symbol. But in this
+                    // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
+                    // and we want to reference it by that name.
+                    env.closures.insert(symbol, references);
 
-            // Store the referenced locals in the refs_by_symbol map, so we can later figure out
-            // which defined names reference each other.
-            for (symbol, region) in bindings_from_patterns(std::iter::once(&loc_can_pattern)) {
-                let refs =
+                    // The closure is self tail recursive iff it tail calls itself (by defined name).
+                    let is_recursive = match can_output.tail_call {
+                        Some(tail_symbol) if tail_symbol == symbol => Recursive::TailRecursive,
+                        _ => Recursive::NotRecursive,
+                    };
+
+                    // Recursion doesn't count as referencing. (If it did, all recursive functions
+                    // would result in circular def errors!)
+                    refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
+                        refs.lookups = refs.lookups.without(&symbol);
+                    });
+
+                    loc_can_expr.value = Closure(ClosureData {
+                        function_type,
+                        closure_type,
+                        closure_ext_var,
+                        return_type,
+                        name: symbol,
+                        captured_symbols: captured_symbols.clone(),
+                        recursive: is_recursive,
+                        arguments: arguments.clone(),
+                        loc_body: body.clone(),
+                    });
+
                     // Functions' references don't count in defs.
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
                     // parent commit for the bug this fixed!
-                    if is_closure {
-                        References::new()
-                    } else {
-                        can_output.references.clone()
-                    };
+                    let refs = References::new();
+                    refs_by_symbol.insert(symbol, (region, refs));
+                } else {
+                    let refs = can_output.references.clone();
+                    refs_by_symbol.insert(symbol, (region, refs));
+                }
 
-                refs_by_symbol.insert(symbol, (region, refs));
-
-                can_defs_by_symbol.insert(
-                    symbol,
-                    Def {
-                        expr_var,
-                        // TODO try to remove this .clone()!
-                        loc_pattern: loc_can_pattern.clone(),
-                        loc_expr: Loc {
-                            // TODO try to remove this .clone()!
-                            region: loc_can_expr.region,
-                            value: loc_can_expr.value.clone(),
-                        },
-                        pattern_vars: vars_by_symbol.clone(),
-                        annotation: None,
-                    },
+                let def = single_can_def(
+                    loc_can_pattern,
+                    loc_can_expr,
+                    expr_var,
+                    None,
+                    vars_by_symbol.clone(),
                 );
+                can_defs_by_symbol.insert(symbol, def);
+            } else {
+                // Store the referenced locals in the refs_by_symbol map, so we can later figure out
+                // which defined names reference each other.
+                for (symbol, region) in bindings_from_patterns(std::iter::once(&loc_can_pattern)) {
+                    let refs = can_output.references.clone();
+                    refs_by_symbol.insert(symbol, (region, refs));
+
+                    can_defs_by_symbol.insert(
+                        symbol,
+                        Def {
+                            expr_var,
+                            // TODO try to remove this .clone()!
+                            loc_pattern: loc_can_pattern.clone(),
+                            loc_expr: Loc {
+                                // TODO try to remove this .clone()!
+                                region: loc_can_expr.region,
+                                value: loc_can_expr.value.clone(),
+                            },
+                            pattern_vars: vars_by_symbol.clone(),
+                            annotation: None,
+                        },
+                    );
+                }
             }
 
             output.union(can_output);
