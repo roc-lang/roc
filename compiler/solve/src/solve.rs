@@ -1,6 +1,5 @@
 use bumpalo::Bump;
-use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::PresenceConstraint;
+use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
@@ -170,18 +169,20 @@ struct State {
 }
 
 pub fn run(
+    constraints: &Constraints,
     env: &Env,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
-    let env = run_in_place(env, problems, &mut subs, constraint);
+    let env = run_in_place(constraints, env, problems, &mut subs, constraint);
 
     (Solved(subs), env)
 }
 
 /// Modify an existing subs in-place instead
 pub fn run_in_place(
+    constraints: &Constraints,
     env: &Env,
     problems: &mut Vec<TypeError>,
     subs: &mut Subs,
@@ -198,6 +199,7 @@ pub fn run_in_place(
 
     let state = solve(
         &arena,
+        constraints,
         env,
         state,
         rank,
@@ -211,24 +213,19 @@ pub fn run_in_place(
     state.env
 }
 
-enum After {
-    CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
-}
-
-enum Work<'a> {
+enum SolveWork<'a> {
     Constraint {
         env: &'a Env,
         rank: Rank,
         constraint: &'a Constraint,
-        after: Option<After>,
     },
-    /// Something to be done after a constraint and all its dependencies are fully solved.
-    After(After),
+    CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
 }
 
 #[allow(clippy::too_many_arguments)]
 fn solve(
     arena: &Bump,
+    constraints: &Constraints,
     env: &Env,
     mut state: State,
     rank: Rank,
@@ -238,35 +235,29 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
-    let mut stack = vec![Work::Constraint {
+    use Constraint::*;
+
+    let initial = SolveWork::Constraint {
         env,
         rank,
         constraint,
-        after: None,
-    }];
+    };
+    let mut stack = vec![initial];
 
     while let Some(work_item) = stack.pop() {
         let (env, rank, constraint) = match work_item {
-            Work::After(After::CheckForInfiniteTypes(def_vars)) => {
+            SolveWork::CheckForInfiniteTypes(def_vars) => {
                 for (symbol, loc_var) in def_vars.iter() {
                     check_for_infinite_type(subs, problems, *symbol, *loc_var);
                 }
                 // No constraint to be solved
                 continue;
             }
-            Work::Constraint {
+            SolveWork::Constraint {
                 env,
                 rank,
                 constraint,
-                after,
-            } => {
-                // Push the `after` on first so that we look at it immediately after finishing all
-                // the children of this constraint.
-                if let Some(after) = after {
-                    stack.push(Work::After(after));
-                }
-                (env, rank, constraint)
-            }
+            } => (env, rank, constraint),
         };
 
         state = match constraint {
@@ -279,7 +270,11 @@ fn solve(
 
                 copy
             }
-            Eq(typ, expectation, category, region) => {
+            Eq(type_index, expectation_index, category_index, region) => {
+                let typ = &constraints.types[type_index.index()];
+                let expectation = &constraints.expectations[expectation_index.index()];
+                let category = &constraints.categories[category_index.index()];
+
                 let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
                 let expected = type_to_var(
                     subs,
@@ -318,7 +313,9 @@ fn solve(
                     }
                 }
             }
-            Store(source, target, _filename, _linenr) => {
+            Store(source_index, target, _filename, _linenr) => {
+                let source = &constraints.types[source_index.index()];
+
                 // a special version of Eq that is used to store types in the AST.
                 // IT DOES NOT REPORT ERRORS!
                 let actual = type_to_var(subs, rank, pools, cached_aliases, source);
@@ -346,7 +343,7 @@ fn solve(
                     }
                 }
             }
-            Lookup(symbol, expectation, region) => {
+            Lookup(symbol, expectation_index, region) => {
                 match env.get_var_by_symbol(symbol) {
                     Some(var) => {
                         // Deep copy the vars associated with this symbol before unifying them.
@@ -371,6 +368,7 @@ fn solve(
                         // is being looked up in this module, then we use our Subs as both
                         // the source and destination.
                         let actual = deep_copy_var_in(subs, rank, pools, var, arena);
+                        let expectation = &constraints.expectations[expectation_index.index()];
 
                         let expected = type_to_var(
                             subs,
@@ -379,6 +377,7 @@ fn solve(
                             cached_aliases,
                             expectation.get_type_ref(),
                         );
+
                         match unify(subs, actual, expected, Mode::EQ) {
                             Success(vars) => {
                                 introduce(subs, rank, pools, &vars);
@@ -416,20 +415,24 @@ fn solve(
                     }
                 }
             }
-            And(sub_constraints) => {
-                for sub_constraint in sub_constraints.iter().rev() {
-                    stack.push(Work::Constraint {
+            And(slice) => {
+                let it = constraints.constraints[slice.indices()].iter().rev();
+                for sub_constraint in it {
+                    stack.push(SolveWork::Constraint {
                         env,
                         rank,
                         constraint: sub_constraint,
-                        after: None,
                     })
                 }
 
                 state
             }
-            Pattern(region, category, typ, expectation)
-            | Present(typ, PresenceConstraint::Pattern(region, category, expectation)) => {
+            Pattern(type_index, expectation_index, category_index, region)
+            | PatternPresence(type_index, expectation_index, category_index, region) => {
+                let typ = &constraints.types[type_index.index()];
+                let expectation = &constraints.pattern_expectations[expectation_index.index()];
+                let category = &constraints.pattern_categories[category_index.index()];
+
                 let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
                 let expected = type_to_var(
                     subs,
@@ -440,7 +443,7 @@ fn solve(
                 );
 
                 let mode = match constraint {
-                    Present(_, _) => Mode::PRESENT,
+                    PatternPresence(..) => Mode::PRESENT,
                     _ => Mode::EQ,
                 };
 
@@ -473,18 +476,28 @@ fn solve(
                     }
                 }
             }
-            Let(let_con) => {
-                match &let_con.ret_constraint {
+            Let(index) => {
+                let let_con = &constraints.let_constraints[index.index()];
+
+                let offset = let_con.defs_and_ret_constraint.index();
+                let defs_constraint = &constraints.constraints[offset];
+                let ret_constraint = &constraints.constraints[offset + 1];
+
+                let flex_vars = &constraints.variables[let_con.flex_vars.indices()];
+                let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
+
+                let def_types = &constraints.def_types[let_con.def_types.indices()];
+
+                match &ret_constraint {
                     True if let_con.rigid_vars.is_empty() => {
-                        introduce(subs, rank, pools, &let_con.flex_vars);
+                        introduce(subs, rank, pools, flex_vars);
 
                         // If the return expression is guaranteed to solve,
                         // solve the assignments themselves and move on.
-                        stack.push(Work::Constraint {
+                        stack.push(SolveWork::Constraint {
                             env,
                             rank,
-                            constraint: &let_con.defs_constraint,
-                            after: None,
+                            constraint: defs_constraint,
                         });
                         state
                     }
@@ -492,6 +505,7 @@ fn solve(
                         // TODO: make into `WorkItem` with `After`
                         let state = solve(
                             arena,
+                            constraints,
                             env,
                             state,
                             rank,
@@ -499,22 +513,22 @@ fn solve(
                             problems,
                             cached_aliases,
                             subs,
-                            &let_con.defs_constraint,
+                            defs_constraint,
                         );
 
                         // Add a variable for each def to new_vars_by_env.
                         let mut local_def_vars =
                             LocalDefVarsVec::with_length(let_con.def_types.len());
 
-                        for (symbol, loc_type) in let_con.def_types.iter() {
-                            let var =
-                                type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
+                        for (symbol, loc_type_index) in def_types.iter() {
+                            let typ = &constraints.types[loc_type_index.value.index()];
+                            let var = type_to_var(subs, rank, pools, cached_aliases, typ);
 
                             local_def_vars.push((
                                 *symbol,
                                 Loc {
                                     value: var,
-                                    region: loc_type.region,
+                                    region: loc_type_index.region,
                                 },
                             ));
                         }
@@ -524,19 +538,16 @@ fn solve(
                             new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                         }
 
-                        stack.push(Work::Constraint {
+                        stack.push(SolveWork::CheckForInfiniteTypes(local_def_vars));
+                        stack.push(SolveWork::Constraint {
                             env: arena.alloc(new_env),
                             rank,
                             constraint: ret_con,
-                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
                         });
 
                         state
                     }
                     ret_con => {
-                        let rigid_vars = &let_con.rigid_vars;
-                        let flex_vars = &let_con.flex_vars;
-
                         // work in the next pool to localize header
                         let next_rank = rank.next();
 
@@ -569,8 +580,8 @@ fn solve(
                         let mut local_def_vars =
                             LocalDefVarsVec::with_length(let_con.def_types.len());
 
-                        for (symbol, loc_type) in let_con.def_types.iter() {
-                            let def_type = &loc_type.value;
+                        for (symbol, loc_type) in def_types.iter() {
+                            let def_type = &constraints.types[loc_type.value.index()];
 
                             let var = type_to_var(subs, next_rank, pools, cached_aliases, def_type);
 
@@ -590,6 +601,7 @@ fn solve(
                             mark,
                         } = solve(
                             arena,
+                            constraints,
                             env,
                             state,
                             next_rank,
@@ -597,7 +609,7 @@ fn solve(
                             problems,
                             cached_aliases,
                             subs,
-                            &let_con.defs_constraint,
+                            defs_constraint,
                         );
 
                         let young_mark = mark;
@@ -668,18 +680,20 @@ fn solve(
 
                         // Now solve the body, using the new vars_by_symbol which includes
                         // the assignments' name-to-variable mappings.
-                        stack.push(Work::Constraint {
+                        stack.push(SolveWork::CheckForInfiniteTypes(local_def_vars));
+                        stack.push(SolveWork::Constraint {
                             env: arena.alloc(new_env),
                             rank,
                             constraint: ret_con,
-                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
                         });
 
                         state_for_ret_con
                     }
                 }
             }
-            Present(typ, PresenceConstraint::IsOpen) => {
+            IsOpenType(type_index) => {
+                let typ = &constraints.types[type_index.index()];
+
                 let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
                 let mut new_desc = subs.get(actual);
                 match new_desc.content {
@@ -701,13 +715,24 @@ fn solve(
                     }
                 }
             }
-            Present(
-                typ,
-                PresenceConstraint::IncludesTag(tag_name, tys, region, pattern_category),
-            ) => {
+            IncludesTag(index) => {
+                let includes_tag = &constraints.includes_tags[index.index()];
+
+                let roc_can::constraint::IncludesTag {
+                    type_index,
+                    tag_name,
+                    types,
+                    pattern_category,
+                    region,
+                } = includes_tag;
+
+                let typ = &constraints.types[type_index.index()];
+                let tys = &constraints.types[types.indices()];
+                let pattern_category = &constraints.pattern_categories[pattern_category.index()];
+
                 let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
                 let tag_ty = Type::TagUnion(
-                    vec![(tag_name.clone(), tys.clone())],
+                    vec![(tag_name.clone(), tys.to_vec())],
                     Box::new(Type::EmptyTagUnion),
                 );
                 let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);

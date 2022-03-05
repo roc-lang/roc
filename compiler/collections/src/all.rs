@@ -161,13 +161,13 @@ where
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Index(usize);
+pub struct HumanIndex(usize);
 
-impl Index {
-    pub const FIRST: Self = Index(0);
+impl HumanIndex {
+    pub const FIRST: Self = HumanIndex(0);
 
     pub fn zero_based(i: usize) -> Self {
-        Index(i)
+        HumanIndex(i)
     }
 
     pub fn to_zero_based(self) -> usize {
@@ -175,7 +175,7 @@ impl Index {
     }
 
     pub fn one_based(i: usize) -> Self {
-        Index(i - 1)
+        HumanIndex(i - 1)
     }
 
     pub fn ordinal(self) -> std::string::String {
