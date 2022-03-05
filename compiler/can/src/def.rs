@@ -1112,6 +1112,12 @@ fn canonicalize_pending_def<'a>(
                     arguments: arguments.clone(),
                     loc_body: body.clone(),
                 });
+
+                // TODO exploit this fact to remove clones below
+                debug_assert_eq!(
+                    vec![*defined_symbol],
+                    scope.idents().map(|t| t.1 .0).filter(|x| vars_by_symbol.contains_key(x)).collect::<Vec<_>>()
+                );
             }
 
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
