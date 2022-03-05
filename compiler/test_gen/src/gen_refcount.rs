@@ -1,5 +1,5 @@
 #[cfg(feature = "gen-wasm")]
-use crate::helpers::wasm::assert_refcounts;
+use crate::helpers::{wasm::assert_refcounts, RefCount::*};
 
 #[allow(unused_imports)]
 use indoc::indoc;
@@ -25,8 +25,8 @@ fn str_inc() {
         ),
         RocList<RocStr>,
         &[
-            3, // s
-            1  // result
+            Live(3), // s
+            Live(1)  // result
         ]
     );
 }
@@ -43,7 +43,7 @@ fn str_dealloc() {
             "#
         ),
         bool,
-        &[0]
+        &[Deallocated]
     );
 }
 
@@ -60,10 +60,10 @@ fn list_int_inc() {
         RocList<RocList<i64>>,
         &[
             // TODO be smarter about coalescing polymorphic list values
-            1, // list0
-            1, // list1
-            1, // list2
-            1  // result
+            Live(1), // list0
+            Live(1), // list1
+            Live(1), // list2
+            Live(1)  // result
         ]
     );
 }
@@ -81,10 +81,10 @@ fn list_int_dealloc() {
         usize,
         &[
             // TODO be smarter about coalescing polymorphic list values
-            0, // list0
-            0, // list1
-            0, // list2
-            0  // result
+            Deallocated, // list0
+            Deallocated, // list1
+            Deallocated, // list2
+            Deallocated  // result
         ]
     );
 }
@@ -102,9 +102,9 @@ fn list_str_inc() {
         ),
         RocList<RocList<RocStr>>,
         &[
-            6, // s
-            2, // list
-            1  // result
+            Live(6), // s
+            Live(2), // list
+            Live(1)  // result
         ]
     );
 }
@@ -122,9 +122,9 @@ fn list_str_dealloc() {
         ),
         usize,
         &[
-            0, // s
-            0, // list
-            0  // result
+            Deallocated, // s
+            Deallocated, // list
+            Deallocated  // result
         ]
     );
 }
@@ -142,7 +142,7 @@ fn struct_inc() {
             "#
         ),
         [(i64, RocStr, RocStr); 2],
-        &[4] // s
+        &[Live(4)] // s
     );
 }
 
@@ -160,7 +160,7 @@ fn struct_dealloc() {
     "#
         ),
         i64,
-        &[0] // s
+        &[Deallocated] // s
     );
 }
 
@@ -186,7 +186,7 @@ fn union_nonrecursive_inc() {
             "#
         ),
         (TwoStr, TwoStr, i64),
-        &[4]
+        &[Live(4)]
     );
 }
 
@@ -209,7 +209,7 @@ fn union_nonrecursive_dec() {
             "#
         ),
         RocStr,
-        &[1] // s
+        &[Live(1)] // s
     );
 }
 
@@ -234,9 +234,9 @@ fn union_recursive_inc() {
         ),
         (Pointer, Pointer),
         &[
-            4, // s
-            4, // sym
-            2, // e
+            Live(4), // s
+            Live(4), // sym
+            Live(2), // e
         ]
     );
 }
@@ -264,9 +264,9 @@ fn union_recursive_dec() {
         ),
         Pointer,
         &[
-            1, // s
-            1, // sym
-            0  // e
+            Live(1),     // s
+            Live(1),     // sym
+            Deallocated  // e
         ]
     );
 }
@@ -300,13 +300,13 @@ fn refcount_different_rosetrees_inc() {
         ),
         (Pointer, Pointer),
         &[
-            2, // s
-            3, // i1
-            2, // s1
-            1, // [i1, i1]
-            1, // i2
-            1, // [s1, s1]
-            1  // s2
+            Live(2), // s
+            Live(3), // i1
+            Live(2), // s1
+            Live(1), // [i1, i1]
+            Live(1), // i2
+            Live(1), // [s1, s1]
+            Live(1)  // s2
         ]
     );
 }
@@ -341,13 +341,13 @@ fn refcount_different_rosetrees_dec() {
         ),
         i64,
         &[
-            0, // s
-            0, // i1
-            0, // s1
-            0, // [i1, i1]
-            0, // i2
-            0, // [s1, s1]
-            0, // s2
+            Deallocated, // s
+            Deallocated, // i1
+            Deallocated, // s1
+            Deallocated, // [i1, i1]
+            Deallocated, // i2
+            Deallocated, // [s1, s1]
+            Deallocated, // s2
         ]
     );
 }
@@ -370,10 +370,10 @@ fn union_linked_list_inc() {
         ),
         (Pointer, Pointer),
         &[
-            6, // s
-            2, // Cons
-            2, // Cons
-            2, // Cons
+            Live(6), // s
+            Live(2), // Cons
+            Live(2), // Cons
+            Live(2), // Cons
         ]
     );
 }
@@ -398,10 +398,10 @@ fn union_linked_list_dec() {
         ),
         RocStr,
         &[
-            1, // s
-            0, // Cons
-            0, // Cons
-            0, // Cons
+            Live(1),     // s
+            Deallocated, // Cons
+            Deallocated, // Cons
+            Deallocated, // Cons
         ]
     );
 }
@@ -434,6 +434,6 @@ fn union_linked_list_long_dec() {
                 "#
         ),
         i64,
-        &[0; 1_000]
+        &[Deallocated; 1_000]
     );
 }

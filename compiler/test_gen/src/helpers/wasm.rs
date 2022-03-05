@@ -6,6 +6,7 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use wasmer::{Memory, WasmPtr};
 
+use super::RefCount;
 use crate::helpers::from_wasmer_memory::FromWasmerMemory;
 use roc_collections::all::{MutMap, MutSet};
 use roc_gen_wasm::wasm32_result::Wasm32Result;
@@ -250,7 +251,7 @@ pub fn assert_wasm_refcounts_help<T>(
     src: &str,
     phantom: PhantomData<T>,
     num_refcounts: usize,
-) -> Result<Vec<u32>, String>
+) -> Result<Vec<RefCount>, String>
 where
     T: FromWasmerMemory + Wasm32Result,
 {
@@ -296,12 +297,15 @@ where
     for i in 0..num_refcounts {
         let rc_ptr = refcount_ptrs[i].get();
         let rc = if rc_ptr.offset() == 0 {
-            // RC pointer has been set to null, which means the value has been freed.
-            // In tests, we simply represent this as zero refcount.
-            0
+            RefCount::Deallocated
         } else {
-            let rc_encoded = rc_ptr.deref(memory).unwrap().get();
-            (rc_encoded - i32::MIN + 1) as u32
+            let rc_encoded: i32 = rc_ptr.deref(memory).unwrap().get();
+            if rc_encoded == 0 {
+                RefCount::Constant
+            } else {
+                let rc = rc_encoded - i32::MIN + 1;
+                RefCount::Live(rc as u32)
+            }
         };
         refcounts.push(rc);
     }
