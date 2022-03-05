@@ -172,6 +172,7 @@ impl Constraints {
         }
     }
 
+    #[inline(always)]
     pub fn equal_types(
         &mut self,
         typ: Type,
@@ -262,8 +263,14 @@ impl Constraints {
     fn def_types_slice<I>(&mut self, it: I) -> Slice<(Symbol, Loc<Index<Type>>)>
     where
         I: IntoIterator<Item = (Symbol, Loc<Type>)>,
+        I::IntoIter: ExactSizeIterator,
     {
+        let it = it.into_iter();
+
         let start = self.def_types.len();
+
+        // because we have an ExactSizeIterator, we can reserve space here
+        self.def_types.reserve(it.len());
 
         for (symbol, loc_type) in it {
             let Loc { region, value } = loc_type;
@@ -277,6 +284,7 @@ impl Constraints {
         Slice::new(start as _, length as _)
     }
 
+    #[inline(always)]
     pub fn exists<I>(&mut self, flex_vars: I, defs_constraint: Constraint) -> Constraint
     where
         I: IntoIterator<Item = Variable>,
@@ -299,6 +307,7 @@ impl Constraints {
         Constraint::Let(let_index)
     }
 
+    #[inline(always)]
     pub fn exists_many<I, C>(&mut self, flex_vars: I, defs_constraint: C) -> Constraint
     where
         I: IntoIterator<Item = Variable>,
@@ -324,6 +333,7 @@ impl Constraints {
         Constraint::Let(let_index)
     }
 
+    #[inline(always)]
     pub fn let_constraint<I1, I2, I3>(
         &mut self,
         rigid_vars: I1,
@@ -336,6 +346,7 @@ impl Constraints {
         I1: IntoIterator<Item = Variable>,
         I2: IntoIterator<Item = Variable>,
         I3: IntoIterator<Item = (Symbol, Loc<Type>)>,
+        I3::IntoIter: ExactSizeIterator,
     {
         let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
@@ -355,6 +366,7 @@ impl Constraints {
         Constraint::Let(let_index)
     }
 
+    #[inline(always)]
     pub fn and_constraint<I>(&mut self, constraints: I) -> Constraint
     where
         I: IntoIterator<Item = Constraint>,
