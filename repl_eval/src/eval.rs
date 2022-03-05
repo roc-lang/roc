@@ -326,9 +326,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
 
             Ok(result)
         }
-        Layout::Builtin(Builtin::Decimal) => {
-            Ok(helper!(RocDec))
-        }
+        Layout::Builtin(Builtin::Decimal) => Ok(helper!(RocDec)),
         Layout::Builtin(Builtin::Str) => {
             let size = layout.stack_size(env.target_info) as usize;
             Ok(

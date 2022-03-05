@@ -1,12 +1,11 @@
 #![crate_type = "lib"]
-#![no_std]
+// #![no_std]
 use core::ffi::c_void;
 use core::fmt;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
-// use roc_error_macros::internal_error;
-// uncomment when we figure out why it fails below.
+use std::io::Write;
 
 mod rc;
 mod roc_list;
@@ -217,9 +216,10 @@ impl RocDec {
     pub const MIN: Self = Self(i128::MIN);
     pub const MAX: Self = Self(i128::MAX);
 
-    pub const DECIMAL_PLACES: u32 = 18;
-
-    pub const ONE_POINT_ZERO: i128 = 10i128.pow(Self::DECIMAL_PLACES);
+    const DECIMAL_PLACES: usize = 18;
+    const ONE_POINT_ZERO: i128 = 10i128.pow(Self::DECIMAL_PLACES as u32);
+    const MAX_DIGITS: usize = 39;
+    const MAX_STR_LENGTH: usize = Self::MAX_DIGITS + 2; // + 2 here to account for the sign & decimal dot
 
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Option<Self> {
@@ -234,7 +234,7 @@ impl RocDec {
         };
 
         let opt_after_point = match parts.next() {
-            Some(answer) if answer.len() <= Self::DECIMAL_PLACES as usize => Some(answer),
+            Some(answer) if answer.len() <= Self::DECIMAL_PLACES => Some(answer),
             _ => None,
         };
 
@@ -250,7 +250,7 @@ impl RocDec {
                     Ok(answer) => {
                         // Translate e.g. the 1 from 0.1 into 10000000000000000000
                         // by "restoring" the elided trailing zeroes to the number!
-                        let trailing_zeroes = Self::DECIMAL_PLACES as usize - after_point.len();
+                        let trailing_zeroes = Self::DECIMAL_PLACES - after_point.len();
                         let lo = answer * 10i128.pow(trailing_zeroes as u32);
 
                         if !before_point.starts_with('-') {
@@ -269,7 +269,7 @@ impl RocDec {
 
         // Calculate the high digits - the ones before the decimal point.
         match before_point.parse::<i128>() {
-            Ok(answer) => match answer.checked_mul(10i128.pow(Self::DECIMAL_PLACES)) {
+            Ok(answer) => match answer.checked_mul(Self::ONE_POINT_ZERO) {
                 Some(hi) => hi.checked_add(lo).map(Self),
                 None => None,
             },
@@ -281,29 +281,56 @@ impl RocDec {
         Self::from_str(val).unwrap().0
     }
 
-    fn to_str_helper(&self, bytes: &mut [u8; 1]) {
-        bytes[0] = 0;
-        // TODO
+    fn to_str_helper(&self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) {
+        if self.0 == 0 {
+            write!(&mut bytes[..], "{}", "0.0").unwrap();
+            return;
+        }
+
+        let is_negative = (self.0 < 0) as usize;
+
+        write!(&mut bytes[..], "{:019}", self.0).unwrap();
+        // By using the :019 format, we're guaranteeing that numbers less than 1, say 0.01234
+        // get their leading zeros placed in bytes for us. i.e. bytes = b"0012340000000000000"
+
+        // If self represents 1234.5678, then bytes is b"1234567800000000000000".
+        let mut i = Self::DECIMAL_PLACES;
+        // Find the last place where we have actual data.
+        while bytes[i] == 0 {
+            i = i - 1;
+        }
+        // At this point i is 21 because bytes[21] is the final '0' in b"1234567800000000000000".
+
+        let decimal_location = i - Self::DECIMAL_PLACES + 1 + is_negative;
+        // decimal_location = 4
+
+        while bytes[i] == ('0' as u8) {
+            bytes[i] = 0;
+            i = i - 1;
+        }
+        // Now i = 7, because bytes[7] = '8', and bytes = b"12345678"
+
+        while i >= decimal_location {
+            bytes[i + 1] = bytes[i];
+        }
+        // Now i = 4, and bytes = b"123455678"
+
+        bytes[i] = '.' as u8;
+        // Finally bytes = b"1234.5678"
     }
 
     pub fn to_str(&self) -> RocStr {
-        let mut bytes: [u8; 1] = [0];
+        let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
         self.to_str_helper(&mut bytes);
-        unsafe {RocStr::from_slice(&bytes) }
+        unsafe { RocStr::from_slice(&bytes) }
     }
-
 }
 
 impl fmt::Display for RocDec {
     fn fmt(&self, fmtr: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut bytes: [u8; 1] = [0];
+        let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
         self.to_str_helper(&mut bytes);
-        match str::from_utf8(&bytes) {
-            Ok(slice) => write!(fmtr, "{}", slice),
-            Err(payload) => panic!("Error in converting RocDec({}) to a string: {}", self.0, payload),
-            // Err(payload) => internal_error!("Error in converting RocDec({}) to a string: {}", self.0, payload),
-            // This raises a compile error: can't find eprintln
-            // Is this because we don't use std?
-        }
+        let result = unsafe { str::from_utf8_unchecked(&bytes) };
+        write!(fmtr, "{}", result)
     }
 }
