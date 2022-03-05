@@ -1504,6 +1504,7 @@ fn generalize(
     }
 }
 
+/// Sort the variables into buckets by rank.
 fn pool_to_rank_table(
     subs: &mut Subs,
     young_mark: Mark,
@@ -1513,11 +1514,14 @@ fn pool_to_rank_table(
     let mut pools = Pools::new(young_rank.into_usize() + 1);
 
     // the vast majority of young variables have young_rank
+    // using `retain` here prevents many `pools.get_mut(young_rank)` lookups
     let mut young_vars = young_vars.to_vec();
     young_vars.retain(|var| {
         let rank = subs.get_rank_set_mark(*var, young_mark);
 
         if rank != young_rank {
+            debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
+
             pools.get_mut(rank).push(*var);
             false
         } else {
