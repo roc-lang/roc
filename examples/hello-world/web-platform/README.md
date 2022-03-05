@@ -1,27 +1,29 @@
 # Hello, World!
 
-To run this website, first modify `hello_world.roc` to use the `web-platform`.
-
-Next, go to the project home directory and run:
+To run this website, first compile either of these identical apps:
 
 ```bash
+# Option A: Compile hello_web.roc
+cargo run -- build --target=wasm32 examples/hello-world/web-platform/hello_web.roc
+
+# Option B: Compile hello_world.roc with `pf: "web-platform"` and move the result
 cargo run -- build --target=wasm32 examples/hello-world/hello_world.roc
-mv examples/hello-world/hello_world.wasm examples/hello-world/website/
+(cd examples/hello-world && mv hello_world.wasm web-platform/hello_web.wasm)
 ```
 
-Then `cd` into the website directory, position the new `.wasm` file,
+Then `cd` into the website directory
 and run any web server that can handle WebAssembly.
-For example with `http-server`:
+For example, with `http-server`:
 
 ```bash
-cd examples/hello-world/website
+cd examples/hello-world/web-platform
 npm install -g http-server
 http-server
 ```
 
 Now open your browser at http://localhost:8080
 
-Some of the above steps can be automated by running `./compile.sh`.
+Some of the above steps can be automated by running `./build.sh`.
 
 ## Design Notes
 
