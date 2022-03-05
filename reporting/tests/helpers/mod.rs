@@ -158,7 +158,7 @@ pub fn can_expr_with<'a>(
     let constraint = constrain_expr(
         &mut constraints,
         &roc_constrain::expr::Env {
-            rigids: ImMap::default(),
+            rigids: MutMap::default(),
             home,
         },
         loc_expr.region,

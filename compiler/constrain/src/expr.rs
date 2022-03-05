@@ -1642,8 +1642,6 @@ fn instantiate_rigids(
     let mut annotation = annotation.clone();
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
 
-    let outside_rigids: Vec<Variable> = ftv.values().copied().collect();
-
     for (name, var) in introduced_vars.var_by_name.iter() {
         use std::collections::hash_map::Entry::*;
 
@@ -1655,9 +1653,25 @@ fn instantiate_rigids(
             Vacant(vacant) => {
                 // It's possible to use this rigid in nested defs
                 vacant.insert(*var);
-                // new_rigids.push(*var);
+                new_rigids.push(*var);
             }
         }
+    }
+
+    // wildcards are always freshly introduced in this annotation
+    for (i, wildcard) in introduced_vars.wildcards.iter().enumerate() {
+        ftv.insert(format!("*{}", i).into(), *wildcard);
+        new_rigids.push(*wildcard);
+    }
+
+    // lambda set vars are always freshly introduced in this annotation
+    for var in introduced_vars.lambda_sets.iter() {
+        new_rigids.push(*var);
+    }
+
+    // lambda set vars are always freshly introduced in this annotation
+    for var in introduced_vars.inferred.iter() {
+        new_rigids.push(*var);
     }
 
     // Instantiate rigid variables
@@ -1670,18 +1684,8 @@ fn instantiate_rigids(
         &Loc::at(loc_pattern.region, &annotation),
     ) {
         for (symbol, loc_type) in new_headers {
-            for var in loc_type.value.variables() {
-                // a rigid is only new if this annotation is the first occurrence of this rigid
-                if !outside_rigids.contains(&var) {
-                    new_rigids.push(var);
-                }
-            }
             headers.insert(symbol, loc_type);
         }
-    }
-
-    for (i, wildcard) in introduced_vars.wildcards.iter().enumerate() {
-        ftv.insert(format!("*{}", i).into(), *wildcard);
     }
 
     annotation
