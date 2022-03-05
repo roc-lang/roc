@@ -3357,6 +3357,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_types",
+ "static_assertions",
  "ven_graph",
 ]
 
@@ -3426,6 +3427,7 @@ dependencies = [
 name = "roc_constrain"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
  "roc_builtins",
  "roc_can",
  "roc_collections",
