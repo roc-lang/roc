@@ -2985,6 +2985,18 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_higher_order_function() {
+        expr_formats_same(indoc!(
+            r#"
+            foo :
+                (Str -> Bool) -> Bool
+
+            42
+            "#
+        ));
+    }
+
+    #[test]
     /// Test that everything under examples/ is formatted correctly
     /// If this test fails on your diff, it probably means you need to re-format the examples.
     /// Try this:

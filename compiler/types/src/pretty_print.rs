@@ -382,7 +382,7 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                 _ => write_parens!(write_parens, buf, {
                     write_symbol(env, *symbol, buf);
 
-                    for var_index in args.into_iter() {
+                    for var_index in args.named_type_arguments() {
                         let var = subs[var_index];
                         buf.push(' ');
                         write_content(

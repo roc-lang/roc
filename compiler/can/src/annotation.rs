@@ -29,6 +29,8 @@ pub struct IntroducedVariables {
     // but a variable can only have one name. Therefore
     // `ftv : SendMap<Variable, Lowercase>`.
     pub wildcards: Vec<Variable>,
+    pub lambda_sets: Vec<Variable>,
+    pub inferred: Vec<Variable>,
     pub var_by_name: SendMap<Lowercase, Variable>,
     pub name_by_var: SendMap<Variable, Lowercase>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,
@@ -44,12 +46,22 @@ impl IntroducedVariables {
         self.wildcards.push(var);
     }
 
+    pub fn insert_inferred(&mut self, var: Variable) {
+        self.inferred.push(var);
+    }
+
+    fn insert_lambda_set(&mut self, var: Variable) {
+        self.lambda_sets.push(var);
+    }
+
     pub fn insert_host_exposed_alias(&mut self, symbol: Symbol, var: Variable) {
         self.host_exposed_aliases.insert(symbol, var);
     }
 
     pub fn union(&mut self, other: &Self) {
         self.wildcards.extend(other.wildcards.iter().cloned());
+        self.lambda_sets.extend(other.lambda_sets.iter().cloned());
+        self.inferred.extend(other.inferred.iter().cloned());
         self.var_by_name.extend(other.var_by_name.clone());
         self.name_by_var.extend(other.name_by_var.clone());
         self.host_exposed_aliases
@@ -280,7 +292,9 @@ fn can_annotation_help(
                 references,
             );
 
-            let closure = Type::Variable(var_store.fresh());
+            let lambda_set = var_store.fresh();
+            introduced_variables.insert_lambda_set(lambda_set);
+            let closure = Type::Variable(lambda_set);
 
             Type::Function(args, Box::new(closure), Box::new(ret))
         }
@@ -326,6 +340,7 @@ fn can_annotation_help(
                     let (type_arguments, lambda_set_variables, actual) =
                         instantiate_and_freshen_alias_type(
                             var_store,
+                            introduced_variables,
                             &alias.type_variables,
                             args,
                             &alias.lambda_set_variables,
@@ -612,6 +627,9 @@ fn can_annotation_help(
             // Inference variables aren't bound to a rigid or a wildcard, so all we have to do is
             // make a fresh unconstrained variable, and let the type solver fill it in for us 🤠
             let var = var_store.fresh();
+
+            introduced_variables.insert_inferred(var);
+
             Type::Variable(var)
         }
         Malformed(string) => {
@@ -628,6 +646,7 @@ fn can_annotation_help(
 
 pub fn instantiate_and_freshen_alias_type(
     var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
     type_variables: &[Loc<(Lowercase, Variable)>],
     type_arguments: Vec<Type>,
     lambda_set_variables: &[LambdaSet],
@@ -657,6 +676,7 @@ pub fn instantiate_and_freshen_alias_type(
         if let Type::Variable(var) = typ.0 {
             let fresh = var_store.fresh();
             substitutions.insert(var, Type::Variable(fresh));
+            introduced_variables.insert_lambda_set(fresh);
             new_lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
         } else {
             unreachable!("at this point there should be only vars in there");
@@ -681,8 +701,12 @@ pub fn freshen_opaque_def(
         .map(|_| Type::Variable(var_store.fresh()))
         .collect();
 
+    // TODO this gets ignored; is that a problem
+    let mut introduced_variables = IntroducedVariables::default();
+
     instantiate_and_freshen_alias_type(
         var_store,
+        &mut introduced_variables,
         &opaque.type_variables,
         fresh_arguments,
         &opaque.lambda_set_variables,

@@ -1,7 +1,9 @@
+use bumpalo::Bump;
 use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::PresenceConstraint;
+use roc_can::constraint::{Constraints, LetConstraint};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
+use roc_collections::soa::{Index, Slice};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -12,7 +14,7 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, Alias, AliasKind, Category, ErrorType, PatternCategory,
+    gather_fields_unsorted_iter, AliasKind, Category, ErrorType, PatternCategory,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
 use std::collections::hash_map::Entry;
@@ -78,8 +80,37 @@ pub enum TypeError {
 
 #[derive(Clone, Debug, Default)]
 pub struct Env {
-    pub vars_by_symbol: MutMap<Symbol, Variable>,
-    pub aliases: MutMap<Symbol, Alias>,
+    symbols: Vec<Symbol>,
+    variables: Vec<Variable>,
+}
+
+impl Env {
+    pub fn vars_by_symbol(&self) -> impl Iterator<Item = (Symbol, Variable)> + '_ {
+        let it1 = self.symbols.iter().copied();
+        let it2 = self.variables.iter().copied();
+
+        it1.zip(it2)
+    }
+
+    fn get_var_by_symbol(&self, symbol: &Symbol) -> Option<Variable> {
+        self.symbols
+            .iter()
+            .position(|s| s == symbol)
+            .map(|index| self.variables[index])
+    }
+
+    fn insert_symbol_var_if_vacant(&mut self, symbol: Symbol, var: Variable) {
+        match self.symbols.iter().position(|s| *s == symbol) {
+            None => {
+                // symbol is not in vars_by_symbol yet; insert it
+                self.symbols.push(symbol);
+                self.variables.push(var);
+            }
+            Some(_) => {
+                // do nothing
+            }
+        }
+    }
 }
 
 const DEFAULT_POOLS: usize = 8;
@@ -140,18 +171,20 @@ struct State {
 }
 
 pub fn run(
+    constraints: &Constraints,
     env: &Env,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
-    let env = run_in_place(env, problems, &mut subs, constraint);
+    let env = run_in_place(constraints, env, problems, &mut subs, constraint);
 
     (Solved(subs), env)
 }
 
 /// Modify an existing subs in-place instead
 pub fn run_in_place(
+    constraints: &Constraints,
     env: &Env,
     problems: &mut Vec<TypeError>,
     subs: &mut Subs,
@@ -163,7 +196,12 @@ pub fn run_in_place(
         mark: Mark::NONE.next(),
     };
     let rank = Rank::toplevel();
+
+    let arena = Bump::new();
+
     let state = solve(
+        &arena,
+        constraints,
         env,
         state,
         rank,
@@ -177,23 +215,34 @@ pub fn run_in_place(
     state.env
 }
 
-enum After {
-    CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
-}
-
 enum Work<'a> {
     Constraint {
-        env: Env,
+        env: &'a Env,
         rank: Rank,
         constraint: &'a Constraint,
-        after: Option<After>,
     },
-    /// Something to be done after a constraint and all its dependencies are fully solved.
-    After(After),
+    CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
+    /// The ret_con part of a let constraint that does NOT introduces rigid and/or flex variables
+    LetConNoVariables {
+        env: &'a Env,
+        rank: Rank,
+        let_con: &'a LetConstraint,
+    },
+    /// The ret_con part of a let constraint that introduces rigid and/or flex variables
+    ///
+    /// These introduced variables must be generalized, hence this variant
+    /// is more complex than `LetConNoVariables`.
+    LetConIntroducesVariables {
+        env: &'a Env,
+        rank: Rank,
+        let_con: &'a LetConstraint,
+    },
 }
 
 #[allow(clippy::too_many_arguments)]
 fn solve(
+    arena: &Bump,
+    constraints: &Constraints,
     env: &Env,
     mut state: State,
     rank: Rank,
@@ -203,48 +252,174 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
-    let mut stack = vec![Work::Constraint {
-        env: env.clone(),
+    let initial = Work::Constraint {
+        env,
         rank,
         constraint,
-        after: None,
-    }];
+    };
+
+    let mut stack = vec![initial];
 
     while let Some(work_item) = stack.pop() {
         let (env, rank, constraint) = match work_item {
-            Work::After(After::CheckForInfiniteTypes(def_vars)) => {
-                for (symbol, loc_var) in def_vars.iter() {
-                    check_for_infinite_type(subs, problems, *symbol, *loc_var);
-                }
-                // No constraint to be solved
-                continue;
-            }
             Work::Constraint {
                 env,
                 rank,
                 constraint,
-                after,
             } => {
-                // Push the `after` on first so that we look at it immediately after finishing all
-                // the children of this constraint.
-                if let Some(after) = after {
-                    stack.push(Work::After(after));
-                }
+                // the default case; actually solve this constraint
                 (env, rank, constraint)
+            }
+            Work::CheckForInfiniteTypes(def_vars) => {
+                // after a LetCon, we must check if any of the variables that we introduced
+                // loop back to themselves after solving the ret_constraint
+                for (symbol, loc_var) in def_vars.iter() {
+                    check_for_infinite_type(subs, problems, *symbol, *loc_var);
+                }
+
+                continue;
+            }
+            Work::LetConNoVariables { env, rank, let_con } => {
+                // NOTE be extremely careful with shadowing here
+                let offset = let_con.defs_and_ret_constraint.index();
+                let ret_constraint = &constraints.constraints[offset + 1];
+
+                // Add a variable for each def to new_vars_by_env.
+                let local_def_vars = LocalDefVarsVec::from_def_types(
+                    constraints,
+                    rank,
+                    pools,
+                    cached_aliases,
+                    subs,
+                    let_con.def_types,
+                );
+
+                let mut new_env = env.clone();
+                for (symbol, loc_var) in local_def_vars.iter() {
+                    new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+                }
+
+                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
+                stack.push(Work::Constraint {
+                    env: arena.alloc(new_env),
+                    rank,
+                    constraint: ret_constraint,
+                });
+
+                continue;
+            }
+            Work::LetConIntroducesVariables { env, rank, let_con } => {
+                // NOTE be extremely careful with shadowing here
+                let offset = let_con.defs_and_ret_constraint.index();
+                let ret_constraint = &constraints.constraints[offset + 1];
+
+                let next_rank = rank.next();
+
+                let mark = state.mark;
+                let saved_env = state.env;
+
+                let young_mark = mark;
+                let visit_mark = young_mark.next();
+                let final_mark = visit_mark.next();
+
+                // Add a variable for each def to local_def_vars.
+                let local_def_vars = LocalDefVarsVec::from_def_types(
+                    constraints,
+                    next_rank,
+                    pools,
+                    cached_aliases,
+                    subs,
+                    let_con.def_types,
+                );
+
+                debug_assert_eq!(
+                    {
+                        let offenders = pools
+                            .get(next_rank)
+                            .iter()
+                            .filter(|var| {
+                                subs.get_rank(**var).into_usize() > next_rank.into_usize()
+                            })
+                            .collect::<Vec<_>>();
+
+                        let result = offenders.len();
+
+                        if result > 0 {
+                            dbg!(&subs, &offenders, &let_con.def_types);
+                        }
+
+                        result
+                    },
+                    0
+                );
+
+                // pop pool
+                generalize(subs, young_mark, visit_mark, next_rank, pools);
+
+                pools.get_mut(next_rank).clear();
+
+                // check that things went well
+                debug_assert!({
+                    // NOTE the `subs.redundant` check is added for the uniqueness
+                    // inference, and does not come from elm. It's unclear whether this is
+                    // a bug with uniqueness inference (something is redundant that
+                    // shouldn't be) or that it just never came up in elm.
+                    let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
+
+                    let failing: Vec<_> = rigid_vars
+                        .iter()
+                        .filter(|&var| !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE)
+                        .collect();
+
+                    if !failing.is_empty() {
+                        println!("Rigids {:?}", &rigid_vars);
+                        println!("Failing {:?}", failing);
+                    }
+
+                    failing.is_empty()
+                });
+
+                let mut new_env = env.clone();
+                for (symbol, loc_var) in local_def_vars.iter() {
+                    new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+                }
+
+                // Note that this vars_by_symbol is the one returned by the
+                // previous call to solve()
+                let state_for_ret_con = State {
+                    env: saved_env,
+                    mark: final_mark,
+                };
+
+                // Now solve the body, using the new vars_by_symbol which includes
+                // the assignments' name-to-variable mappings.
+                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
+                stack.push(Work::Constraint {
+                    env: arena.alloc(new_env),
+                    rank,
+                    constraint: ret_constraint,
+                });
+
+                state = state_for_ret_con;
+
+                continue;
             }
         };
 
         state = match constraint {
             True => state,
             SaveTheEnvironment => {
-                // NOTE deviation: elm only copies the env into the state on SaveTheEnvironment
                 let mut copy = state;
 
-                copy.env = env;
+                copy.env = env.clone();
 
                 copy
             }
-            Eq(typ, expectation, category, region) => {
+            Eq(type_index, expectation_index, category_index, region) => {
+                let typ = &constraints.types[type_index.index()];
+                let expectation = &constraints.expectations[expectation_index.index()];
+                let category = &constraints.categories[category_index.index()];
+
                 let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
                 let expected = type_to_var(
                     subs,
@@ -283,7 +458,9 @@ fn solve(
                     }
                 }
             }
-            Store(source, target, _filename, _linenr) => {
+            Store(source_index, target, _filename, _linenr) => {
+                let source = &constraints.types[source_index.index()];
+
                 // a special version of Eq that is used to store types in the AST.
                 // IT DOES NOT REPORT ERRORS!
                 let actual = type_to_var(subs, rank, pools, cached_aliases, source);
@@ -311,8 +488,8 @@ fn solve(
                     }
                 }
             }
-            Lookup(symbol, expectation, region) => {
-                match env.vars_by_symbol.get(symbol) {
+            Lookup(symbol, expectation_index, region) => {
+                match env.get_var_by_symbol(symbol) {
                     Some(var) => {
                         // Deep copy the vars associated with this symbol before unifying them.
                         // Otherwise, suppose we have this:
@@ -335,7 +512,9 @@ fn solve(
                         // then we copy from that module's Subs into our own. If the value
                         // is being looked up in this module, then we use our Subs as both
                         // the source and destination.
-                        let actual = deep_copy_var(subs, rank, pools, *var);
+                        let actual = deep_copy_var_in(subs, rank, pools, var, arena);
+                        let expectation = &constraints.expectations[expectation_index.index()];
+
                         let expected = type_to_var(
                             subs,
                             rank,
@@ -343,6 +522,7 @@ fn solve(
                             cached_aliases,
                             expectation.get_type_ref(),
                         );
+
                         match unify(subs, actual, expected, Mode::EQ) {
                             Success(vars) => {
                                 introduce(subs, rank, pools, &vars);
@@ -383,20 +563,24 @@ fn solve(
                     }
                 }
             }
-            And(sub_constraints) => {
-                for sub_constraint in sub_constraints.iter().rev() {
+            And(slice) => {
+                let it = constraints.constraints[slice.indices()].iter().rev();
+                for sub_constraint in it {
                     stack.push(Work::Constraint {
-                        env: env.clone(),
+                        env,
                         rank,
                         constraint: sub_constraint,
-                        after: None,
                     })
                 }
 
                 state
             }
-            Pattern(region, category, typ, expectation)
-            | Present(typ, PresenceConstraint::Pattern(region, category, expectation)) => {
+            Pattern(type_index, expectation_index, category_index, region)
+            | PatternPresence(type_index, expectation_index, category_index, region) => {
+                let typ = &constraints.types[type_index.index()];
+                let expectation = &constraints.pattern_expectations[expectation_index.index()];
+                let category = &constraints.pattern_categories[category_index.index()];
+
                 let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
                 let expected = type_to_var(
                     subs,
@@ -407,7 +591,7 @@ fn solve(
                 );
 
                 let mode = match constraint {
-                    Present(_, _) => Mode::PRESENT,
+                    PatternPresence(..) => Mode::PRESENT,
                     _ => Mode::EQ,
                 };
 
@@ -440,225 +624,89 @@ fn solve(
                     }
                 }
             }
-            Let(let_con) => {
-                match &let_con.ret_constraint {
-                    True if let_con.rigid_vars.is_empty() => {
-                        introduce(subs, rank, pools, &let_con.flex_vars);
+            Let(index) => {
+                let let_con = &constraints.let_constraints[index.index()];
 
-                        // If the return expression is guaranteed to solve,
-                        // solve the assignments themselves and move on.
-                        stack.push(Work::Constraint {
-                            env,
-                            rank,
-                            constraint: &let_con.defs_constraint,
-                            after: None,
-                        });
-                        state
+                let offset = let_con.defs_and_ret_constraint.index();
+                let defs_constraint = &constraints.constraints[offset];
+                let ret_constraint = &constraints.constraints[offset + 1];
+
+                let flex_vars = &constraints.variables[let_con.flex_vars.indices()];
+                let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
+
+                if matches!(&ret_constraint, True) && let_con.rigid_vars.is_empty() {
+                    introduce(subs, rank, pools, flex_vars);
+
+                    // If the return expression is guaranteed to solve,
+                    // solve the assignments themselves and move on.
+                    stack.push(Work::Constraint {
+                        env,
+                        rank,
+                        constraint: defs_constraint,
+                    });
+
+                    state
+                } else if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() {
+                    // items are popped from the stack in reverse order. That means that we'll
+                    // first solve then defs_constraint, and then (eventually) the ret_constraint.
+                    //
+                    // Note that the LetConSimple gets the current env and rank,
+                    // and not the env/rank from after solving the defs_constraint
+                    stack.push(Work::LetConNoVariables { env, rank, let_con });
+                    stack.push(Work::Constraint {
+                        env,
+                        rank,
+                        constraint: defs_constraint,
+                    });
+
+                    state
+                } else {
+                    // work in the next pool to localize header
+                    let next_rank = rank.next();
+
+                    // introduce variables
+                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
+                        subs.set_rank(var, next_rank);
                     }
-                    ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
-                        // TODO: make into `WorkItem` with `After`
-                        let state = solve(
-                            &env,
-                            state,
-                            rank,
-                            pools,
-                            problems,
-                            cached_aliases,
-                            subs,
-                            &let_con.defs_constraint,
-                        );
 
-                        // Add a variable for each def to new_vars_by_env.
-                        let mut local_def_vars =
-                            LocalDefVarsVec::with_length(let_con.def_types.len());
-
-                        for (symbol, loc_type) in let_con.def_types.iter() {
-                            let var =
-                                type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
-
-                            local_def_vars.push((
-                                *symbol,
-                                Loc {
-                                    value: var,
-                                    region: loc_type.region,
-                                },
-                            ));
-                        }
-
-                        let mut new_env = env.clone();
-                        for (symbol, loc_var) in local_def_vars.iter() {
-                            match new_env.vars_by_symbol.entry(*symbol) {
-                                Entry::Occupied(_) => {
-                                    // keep the existing value
-                                }
-                                Entry::Vacant(vacant) => {
-                                    vacant.insert(loc_var.value);
-                                }
-                            }
-                        }
-
-                        stack.push(Work::Constraint {
-                            env: new_env,
-                            rank,
-                            constraint: ret_con,
-                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
-                        });
-
-                        state
+                    // determine the next pool
+                    if next_rank.into_usize() < pools.len() {
+                        // Nothing to do, we already accounted for the next rank, no need to
+                        // adjust the pools
+                    } else {
+                        // we should be off by one at this point
+                        debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
+                        pools.extend_to(next_rank.into_usize());
                     }
-                    ret_con => {
-                        let rigid_vars = &let_con.rigid_vars;
-                        let flex_vars = &let_con.flex_vars;
 
-                        // work in the next pool to localize header
-                        let next_rank = rank.next();
+                    let pool: &mut Vec<Variable> = pools.get_mut(next_rank);
 
-                        // introduce variables
-                        for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-                            subs.set_rank(var, next_rank);
-                        }
+                    // Replace the contents of this pool with rigid_vars and flex_vars
+                    pool.clear();
+                    pool.reserve(rigid_vars.len() + flex_vars.len());
+                    pool.extend(rigid_vars.iter());
+                    pool.extend(flex_vars.iter());
 
-                        // determine the next pool
-                        if next_rank.into_usize() < pools.len() {
-                            // Nothing to do, we already accounted for the next rank, no need to
-                            // adjust the pools
-                        } else {
-                            // we should be off by one at this point
-                            debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
-                            pools.extend_to(next_rank.into_usize());
-                        }
+                    // run solver in next pool
 
-                        let pool: &mut Vec<Variable> = pools.get_mut(next_rank);
+                    // items are popped from the stack in reverse order. That means that we'll
+                    // first solve then defs_constraint, and then (eventually) the ret_constraint.
+                    //
+                    // Note that the LetConSimple gets the current env and rank,
+                    // and not the env/rank from after solving the defs_constraint
+                    stack.push(Work::LetConIntroducesVariables { env, rank, let_con });
+                    stack.push(Work::Constraint {
+                        env,
+                        rank: next_rank,
+                        constraint: defs_constraint,
+                    });
 
-                        // Replace the contents of this pool with rigid_vars and flex_vars
-                        pool.clear();
-                        pool.reserve(rigid_vars.len() + flex_vars.len());
-                        pool.extend(rigid_vars.iter());
-                        pool.extend(flex_vars.iter());
-
-                        // run solver in next pool
-
-                        // Add a variable for each def to local_def_vars.
-                        let mut local_def_vars =
-                            LocalDefVarsVec::with_length(let_con.def_types.len());
-
-                        for (symbol, loc_type) in let_con.def_types.iter() {
-                            let def_type = &loc_type.value;
-
-                            let var = type_to_var(subs, next_rank, pools, cached_aliases, def_type);
-
-                            local_def_vars.push((
-                                *symbol,
-                                Loc {
-                                    value: var,
-                                    region: loc_type.region,
-                                },
-                            ));
-                        }
-
-                        // Solve the assignments' constraints first.
-                        // TODO: make into `WorkItem` with `After`
-                        let State {
-                            env: saved_env,
-                            mark,
-                        } = solve(
-                            &env,
-                            state,
-                            next_rank,
-                            pools,
-                            problems,
-                            cached_aliases,
-                            subs,
-                            &let_con.defs_constraint,
-                        );
-
-                        let young_mark = mark;
-                        let visit_mark = young_mark.next();
-                        let final_mark = visit_mark.next();
-
-                        debug_assert_eq!(
-                            {
-                                let offenders = pools
-                                    .get(next_rank)
-                                    .iter()
-                                    .filter(|var| {
-                                        let current_rank =
-                                            subs.get_rank(roc_types::subs::Variable::clone(var));
-
-                                        current_rank.into_usize() > next_rank.into_usize()
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let result = offenders.len();
-
-                                if result > 0 {
-                                    dbg!(&subs, &offenders, &let_con.def_types);
-                                }
-
-                                result
-                            },
-                            0
-                        );
-
-                        // pop pool
-                        generalize(subs, young_mark, visit_mark, next_rank, pools);
-
-                        pools.get_mut(next_rank).clear();
-
-                        // check that things went well
-                        debug_assert!({
-                            // NOTE the `subs.redundant` check is added for the uniqueness
-                            // inference, and does not come from elm. It's unclear whether this is
-                            // a bug with uniqueness inference (something is redundant that
-                            // shouldn't be) or that it just never came up in elm.
-                            let failing: Vec<_> = rigid_vars
-                                .iter()
-                                .filter(|&var| {
-                                    !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE
-                                })
-                                .collect();
-
-                            if !failing.is_empty() {
-                                println!("Rigids {:?}", &rigid_vars);
-                                println!("Failing {:?}", failing);
-                            }
-
-                            failing.is_empty()
-                        });
-
-                        let mut new_env = env.clone();
-                        for (symbol, loc_var) in local_def_vars.iter() {
-                            match new_env.vars_by_symbol.entry(*symbol) {
-                                Entry::Occupied(_) => {
-                                    // keep the existing value
-                                }
-                                Entry::Vacant(vacant) => {
-                                    vacant.insert(loc_var.value);
-                                }
-                            }
-                        }
-
-                        // Note that this vars_by_symbol is the one returned by the
-                        // previous call to solve()
-                        let state_for_ret_con = State {
-                            env: saved_env,
-                            mark: final_mark,
-                        };
-
-                        // Now solve the body, using the new vars_by_symbol which includes
-                        // the assignments' name-to-variable mappings.
-                        stack.push(Work::Constraint {
-                            env: new_env,
-                            rank,
-                            constraint: ret_con,
-                            after: Some(After::CheckForInfiniteTypes(local_def_vars)),
-                        });
-
-                        state_for_ret_con
-                    }
+                    state
                 }
             }
-            Present(typ, PresenceConstraint::IsOpen) => {
+            IsOpenType(type_index) => {
+                let typ = &constraints.types[type_index.index()];
+
                 let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
                 let mut new_desc = subs.get(actual);
                 match new_desc.content {
@@ -680,13 +728,24 @@ fn solve(
                     }
                 }
             }
-            Present(
-                typ,
-                PresenceConstraint::IncludesTag(tag_name, tys, region, pattern_category),
-            ) => {
+            IncludesTag(index) => {
+                let includes_tag = &constraints.includes_tags[index.index()];
+
+                let roc_can::constraint::IncludesTag {
+                    type_index,
+                    tag_name,
+                    types,
+                    pattern_category,
+                    region,
+                } = includes_tag;
+
+                let typ = &constraints.types[type_index.index()];
+                let tys = &constraints.types[types.indices()];
+                let pattern_category = &constraints.pattern_categories[pattern_category.index()];
+
                 let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
                 let tag_ty = Type::TagUnion(
-                    vec![(tag_name.clone(), tys.clone())],
+                    vec![(tag_name.clone(), tys.to_vec())],
                     Box::new(Type::EmptyTagUnion),
                 );
                 let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
@@ -756,24 +815,49 @@ impl<T> LocalDefVarsVec<T> {
     }
 }
 
+impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
+    fn from_def_types(
+        constraints: &Constraints,
+        rank: Rank,
+        pools: &mut Pools,
+        cached_aliases: &mut MutMap<Symbol, Variable>,
+        subs: &mut Subs,
+        def_types_slice: Slice<(Symbol, Loc<Index<Type>>)>,
+    ) -> Self {
+        let def_types = &constraints.def_types[def_types_slice.indices()];
+
+        let mut local_def_vars = Self::with_length(def_types.len());
+
+        for (symbol, loc_type_index) in def_types.iter() {
+            let typ = &constraints.types[loc_type_index.value.index()];
+            let var = type_to_var(subs, rank, pools, cached_aliases, typ);
+
+            local_def_vars.push((
+                *symbol,
+                Loc {
+                    value: var,
+                    region: loc_type_index.region,
+                },
+            ));
+        }
+
+        local_def_vars
+    }
+}
+
 use std::cell::RefCell;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
-    static SCRATCHPAD: RefCell<bumpalo::Bump> = RefCell::new(bumpalo::Bump::with_capacity(4 * 1024));
+    static SCRATCHPAD: RefCell<Option<bumpalo::Bump>> = RefCell::new(Some(bumpalo::Bump::with_capacity(4 * 1024)));
 }
 
 fn take_scratchpad() -> bumpalo::Bump {
-    let mut result = bumpalo::Bump::new();
-    SCRATCHPAD.with(|f| {
-        result = f.replace(bumpalo::Bump::new());
-    });
-
-    result
+    SCRATCHPAD.with(|f| f.take().unwrap())
 }
 
 fn put_scratchpad(scratchpad: bumpalo::Bump) {
     SCRATCHPAD.with(|f| {
-        f.replace(scratchpad);
+        f.replace(Some(scratchpad));
     });
 }
 
@@ -956,7 +1040,7 @@ fn type_to_variable<'a>(
                     return reserved;
                 } else {
                     // for any other rank, we need to copy; it takes care of adjusting the rank
-                    return deep_copy_var(subs, rank, pools, reserved);
+                    return deep_copy_var_in(subs, rank, pools, reserved, arena);
                 }
             }
 
@@ -1024,6 +1108,7 @@ fn type_to_variable<'a>(
     }
 }
 
+#[inline(always)]
 fn alias_to_var<'a>(
     subs: &mut Subs,
     rank: Rank,
@@ -1053,6 +1138,7 @@ fn alias_to_var<'a>(
     }
 }
 
+#[inline(always)]
 fn roc_result_to_var<'a>(
     subs: &mut Subs,
     rank: Rank,
@@ -1801,10 +1887,14 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     }
 }
 
-fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
-    let mut arena = take_scratchpad();
-
-    let mut visited = bumpalo::collections::Vec::with_capacity_in(4 * 1024, &arena);
+fn deep_copy_var_in(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    var: Variable,
+    arena: &Bump,
+) -> Variable {
+    let mut visited = bumpalo::collections::Vec::with_capacity_in(256, arena);
 
     let copy = deep_copy_var_help(subs, rank, pools, &mut visited, var);
 
@@ -1819,9 +1909,6 @@ fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) 
             descriptor.copy = OptVariable::NONE;
         }
     }
-
-    arena.reset();
-    put_scratchpad(arena);
 
     copy
 }
@@ -2061,6 +2148,7 @@ fn deep_copy_var_help(
     }
 }
 
+#[inline(always)]
 fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) -> Variable {
     let descriptor = Descriptor {
         content,

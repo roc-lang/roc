@@ -62,6 +62,7 @@ mod test_reporting {
             output,
             var_store,
             var,
+            constraints,
             constraint,
             home,
             interns,
@@ -79,7 +80,8 @@ mod test_reporting {
         }
 
         let mut unify_problems = Vec::new();
-        let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+        let (_content, mut subs) =
+            infer_expr(subs, &mut unify_problems, &constraints, &constraint, var);
 
         name_all_type_vars(var, &mut subs);
 
@@ -4491,32 +4493,6 @@ mod test_reporting {
     }
 
     #[test]
-    fn record_type_indent_end() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { a: Int
-                }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a record type, but I got stuck here:
-
-                1│  f : { a: Int
-                2│  }
-                    ^
-
-                I need this curly brace to be indented more. Try adding more spaces
-                before it!
-            "#
-            ),
-        )
-    }
-
-    #[test]
     fn record_type_keyword_field_name() {
         report_problem_as(
             indoc!(
@@ -5446,36 +5422,6 @@ mod test_reporting {
                 Note: When I get stuck like this, it usually means that there is a
                 missing parenthesis or bracket somewhere earlier. It could also be a
                 stray keyword or operator.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn list_bad_indent() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = [ 1, 2,
-                ]
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
-
-                I cannot find the end of this list:
-
-                1│  x = [ 1, 2,
-                               ^
-
-                You could change it to something like [ 1, 2, 3 ] or even just [].
-                Anything where there is an open and a close square bracket, and where
-                the elements of the list are separated by commas.
-
-                Note: I may be confused by indentation
             "#
             ),
         )
@@ -6470,38 +6416,6 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn outdented_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Box item : [
-                    Box item,
-                    Items item item
-                ]
-
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a tag union type, but I got stuck here:
-
-                1│  Box item : [
-                2│      Box item,
-                3│      Items item item
-                4│  ]
-                    ^
-
-                I need this square bracket to be indented more. Try adding more spaces
-                before it!
-            "#
-            ),
-        )
-    }
-
-    #[test]
     fn outdented_in_parens() {
         report_problem_as(
             indoc!(
@@ -6526,36 +6440,6 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 I need this parenthesis to be indented more. Try adding more spaces
-                before it!
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn outdented_record() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Box : {
-                    id: Str
-                }
-
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a record type, but I got stuck here:
-
-                1│  Box : {
-                2│      id: Str
-                3│  }
-                    ^
-
-                I need this curly brace to be indented more. Try adding more spaces
                 before it!
             "#
             ),
@@ -8554,6 +8438,50 @@ I need all branches in an `if` to have the same type!
                     $F _
 
                 I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn let_polymorphism_with_scoped_type_variables() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> a
+                f = \x ->
+                    y : a -> a
+                    y = \z -> z
+
+                    n = y 1u8
+                    x1 = y x
+                    (\_ -> x1) n
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                
+                The 1st argument to `y` is not what I expect:
+                
+                6│      n = y 1u8
+                              ^^^
+                
+                This argument is an integer of type:
+                
+                    U8
+                
+                But `y` needs the 1st argument to be:
+                
+                    a
+                
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `U8` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
                 "#
             ),
         )

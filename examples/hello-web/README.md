@@ -3,7 +3,7 @@
 To run, go to the project home directory and run:
 
 ```bash
-$ cargo run -- build --backend=wasm32 examples/hello-web/Hello.roc
+$ cargo run -- build --target=wasm32 examples/hello-web/Hello.roc
 ```
 
 Then `cd` into the example directory and run any web server that can handle WebAssembly.

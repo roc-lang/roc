@@ -1,6 +1,5 @@
-use crate::expr::constrain_decls;
 use roc_builtins::std::StdLib;
-use roc_can::constraint::{Constraint, LetConstraint};
+use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
 use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::symbol::{ModuleId, Symbol};
@@ -17,13 +16,12 @@ pub enum ExposedModuleTypes {
     Valid(MutMap<Symbol, SolvedType>, MutMap<Symbol, Alias>),
 }
 
-pub struct ConstrainedModule {
-    pub unused_imports: MutMap<ModuleId, Region>,
-    pub constraint: Constraint,
-}
-
-pub fn constrain_module(declarations: &[Declaration], home: ModuleId) -> Constraint {
-    constrain_decls(home, declarations)
+pub fn constrain_module(
+    constraints: &mut Constraints,
+    declarations: &[Declaration],
+    home: ModuleId,
+) -> Constraint {
+    crate::expr::constrain_decls(constraints, home, declarations)
 }
 
 #[derive(Debug, Clone)]
@@ -33,11 +31,11 @@ pub struct Import {
 }
 
 pub fn constrain_imported_values(
+    constraints: &mut Constraints,
     imports: Vec<Import>,
     body_con: Constraint,
     var_store: &mut VarStore,
 ) -> (Vec<Variable>, Constraint) {
-    use Constraint::*;
     let mut def_types = SendMap::default();
     let mut rigid_vars = Vec::new();
 
@@ -84,24 +82,19 @@ pub fn constrain_imported_values(
 
     (
         rigid_vars.clone(),
-        Let(Box::new(LetConstraint {
-            rigid_vars,
-            flex_vars: Vec::new(),
-            def_types,
-            defs_constraint: True,
-            ret_constraint: body_con,
-        })),
+        constraints.let_constraint(rigid_vars, [], def_types, Constraint::True, body_con),
     )
 }
 
 /// Run pre_constrain_imports to get imported_symbols and imported_aliases.
 pub fn constrain_imports(
+    constraints: &mut Constraints,
     imported_symbols: Vec<Import>,
     constraint: Constraint,
     var_store: &mut VarStore,
 ) -> Constraint {
     let (_introduced_rigids, constraint) =
-        constrain_imported_values(imported_symbols, constraint, var_store);
+        constrain_imported_values(constraints, imported_symbols, constraint, var_store);
 
     // TODO determine what to do with those rigids
     //    for var in introduced_rigids {
