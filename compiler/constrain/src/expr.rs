@@ -1194,13 +1194,7 @@ fn constrain_when_branch(
 
         // must introduce the headers from the pattern before constraining the guard
         let state_constraints = constraints.and_constraint(state.constraints);
-        let inner = constraints.let_constraint(
-            [],
-            [],
-            SendMap::default(),
-            guard_constraint,
-            ret_constraint,
-        );
+        let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
 
         constraints.let_constraint([], state.vars, state.headers, state_constraints, inner)
     } else {
@@ -1546,13 +1540,7 @@ fn constrain_def(
                     );
 
                     let cons = [
-                        constraints.let_constraint(
-                            [],
-                            [],
-                            SendMap::default(),
-                            Constraint::True,
-                            ret_constraint,
-                        ),
+                        constraints.let_constraint([], [], [], Constraint::True, ret_constraint),
                         // Store type into AST vars. We use Store so errors aren't reported twice
                         constraints.store(signature, expr_var, std::file!(), std::line!()),
                     ];
@@ -1605,7 +1593,7 @@ fn constrain_def_make_constraint(
     let def_con = constraints.let_constraint(
         [],
         new_infer_variables,
-        SendMap::default(), // empty, because our functions have no arguments!
+        [], // empty, because our functions have no arguments!
         and_constraint,
         expr_con,
     );
@@ -1783,8 +1771,8 @@ pub fn rec_defs_help(
                 // TODO investigate if this let can be safely removed
                 let def_con = constraints.let_constraint(
                     [],
-                    [],                 // empty because Roc function defs have no args
-                    SendMap::default(), // empty because Roc function defs have no args
+                    [],               // empty because Roc function defs have no args
+                    [],               // empty because Roc function defs have no args
                     Constraint::True, // I think this is correct, once again because there are no args
                     expr_con,
                 );
@@ -1974,7 +1962,7 @@ pub fn rec_defs_help(
                         rigid_info.constraints.push(constraints.let_constraint(
                             new_rigid_variables,
                             def_pattern_state.vars,
-                            SendMap::default(), // no headers introduced (at this level)
+                            [], // no headers introduced (at this level)
                             def_con,
                             Constraint::True,
                         ));
@@ -1995,7 +1983,7 @@ pub fn rec_defs_help(
                             constraints.let_constraint(
                                 [],
                                 [],
-                                SendMap::default(),
+                                [],
                                 Constraint::True,
                                 ret_constraint,
                             ),
@@ -2009,7 +1997,7 @@ pub fn rec_defs_help(
                         rigid_info.constraints.push(constraints.let_constraint(
                             new_rigid_variables,
                             def_pattern_state.vars,
-                            SendMap::default(), // no headers introduced (at this level)
+                            [], // no headers introduced (at this level)
                             def_con,
                             Constraint::True,
                         ));
