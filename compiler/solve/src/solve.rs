@@ -226,9 +226,7 @@ enum Work<'a> {
     LetConComplex {
         env: &'a Env,
         rank: Rank,
-        next_rank: Rank,
         let_con: &'a LetConstraint,
-        local_def_vars: LocalDefVarsVec<(Symbol, Loc<Variable>)>,
     },
 }
 
@@ -257,12 +255,17 @@ fn solve(
                 env,
                 rank,
                 constraint,
-            } => (env, rank, constraint),
+            } => {
+                // the default case; actually solve this constraint
+                (env, rank, constraint)
+            }
             Work::CheckForInfiniteTypes(def_vars) => {
+                // after a LetCon, we must check if any of the variables that we introduced
+                // loop back to themselves after solving the ret_constraint
                 for (symbol, loc_var) in def_vars.iter() {
                     check_for_infinite_type(subs, problems, *symbol, *loc_var);
                 }
-                // No constraint to be solved
+
                 continue;
             }
             Work::LetConSimple { env, rank, let_con } => {
@@ -288,16 +291,13 @@ fn solve(
                     rank,
                     constraint: &let_con.ret_constraint,
                 });
+
                 continue;
             }
-            Work::LetConComplex {
-                env,
-                rank,
-                next_rank,
-                let_con,
-                local_def_vars,
-            } => {
+            Work::LetConComplex { env, rank, let_con } => {
                 // NOTE be extremely careful with shadowing here
+                let next_rank = rank.next();
+
                 let mark = state.mark;
                 let saved_env = state.env;
 
@@ -307,16 +307,22 @@ fn solve(
                 let visit_mark = young_mark.next();
                 let final_mark = visit_mark.next();
 
+                // Add a variable for each def to local_def_vars.
+                let local_def_vars = LocalDefVarsVec::from_def_types(
+                    next_rank,
+                    pools,
+                    cached_aliases,
+                    subs,
+                    &let_con.def_types,
+                );
+
                 debug_assert_eq!(
                     {
                         let offenders = pools
                             .get(next_rank)
                             .iter()
                             .filter(|var| {
-                                let current_rank =
-                                    subs.get_rank(roc_types::subs::Variable::clone(var));
-
-                                current_rank.into_usize() > next_rank.into_usize()
+                                subs.get_rank(**var).into_usize() > next_rank.into_usize()
                             })
                             .collect::<Vec<_>>();
 
@@ -385,7 +391,6 @@ fn solve(
         state = match constraint {
             True => state,
             SaveTheEnvironment => {
-                // NOTE deviation: elm only copies the env into the state on SaveTheEnvironment
                 let mut copy = state;
 
                 copy.env = env.clone();
@@ -585,85 +590,77 @@ fn solve(
                 }
             }
             Let(let_con) => {
-                match &let_con.ret_constraint {
-                    True if let_con.rigid_vars.is_empty() => {
-                        introduce(subs, rank, pools, &let_con.flex_vars);
+                if matches!(&let_con.ret_constraint, True) && let_con.rigid_vars.is_empty() {
+                    introduce(subs, rank, pools, &let_con.flex_vars);
 
-                        // If the return expression is guaranteed to solve,
-                        // solve the assignments themselves and move on.
-                        stack.push(Work::Constraint {
-                            env,
-                            rank,
-                            constraint: &let_con.defs_constraint,
-                        });
-                        state
+                    // If the return expression is guaranteed to solve,
+                    // solve the assignments themselves and move on.
+                    stack.push(Work::Constraint {
+                        env,
+                        rank,
+                        constraint: &let_con.defs_constraint,
+                    });
+
+                    state
+                } else if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() {
+                    // items are popped from the stack in reverse order. That means that we'll
+                    // first solve then defs_constraint, and then (eventually) the ret_constraint.
+                    //
+                    // Note that the LetConSimple gets the current env and rank,
+                    // and not the env/rank from after solving the defs_constraint
+                    stack.push(Work::LetConSimple { env, rank, let_con });
+                    stack.push(Work::Constraint {
+                        env,
+                        rank,
+                        constraint: &let_con.defs_constraint,
+                    });
+
+                    state
+                } else {
+                    let rigid_vars = &let_con.rigid_vars;
+                    let flex_vars = &let_con.flex_vars;
+
+                    // work in the next pool to localize header
+                    let next_rank = rank.next();
+
+                    // introduce variables
+                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
+                        subs.set_rank(var, next_rank);
                     }
-                    _ if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
-                        stack.push(Work::LetConSimple { env, rank, let_con });
-                        stack.push(Work::Constraint {
-                            env,
-                            rank,
-                            constraint: &let_con.defs_constraint,
-                        });
 
-                        state
+                    // determine the next pool
+                    if next_rank.into_usize() < pools.len() {
+                        // Nothing to do, we already accounted for the next rank, no need to
+                        // adjust the pools
+                    } else {
+                        // we should be off by one at this point
+                        debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
+                        pools.extend_to(next_rank.into_usize());
                     }
-                    _ => {
-                        let rigid_vars = &let_con.rigid_vars;
-                        let flex_vars = &let_con.flex_vars;
 
-                        // work in the next pool to localize header
-                        let next_rank = rank.next();
+                    let pool: &mut Vec<Variable> = pools.get_mut(next_rank);
 
-                        // introduce variables
-                        for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-                            subs.set_rank(var, next_rank);
-                        }
+                    // Replace the contents of this pool with rigid_vars and flex_vars
+                    pool.clear();
+                    pool.reserve(rigid_vars.len() + flex_vars.len());
+                    pool.extend(rigid_vars.iter());
+                    pool.extend(flex_vars.iter());
 
-                        // determine the next pool
-                        if next_rank.into_usize() < pools.len() {
-                            // Nothing to do, we already accounted for the next rank, no need to
-                            // adjust the pools
-                        } else {
-                            // we should be off by one at this point
-                            debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
-                            pools.extend_to(next_rank.into_usize());
-                        }
+                    // run solver in next pool
 
-                        let pool: &mut Vec<Variable> = pools.get_mut(next_rank);
+                    // items are popped from the stack in reverse order. That means that we'll
+                    // first solve then defs_constraint, and then (eventually) the ret_constraint.
+                    //
+                    // Note that the LetConSimple gets the current env and rank,
+                    // and not the env/rank from after solving the defs_constraint
+                    stack.push(Work::LetConComplex { env, rank, let_con });
+                    stack.push(Work::Constraint {
+                        env,
+                        rank: next_rank,
+                        constraint: &let_con.defs_constraint,
+                    });
 
-                        // Replace the contents of this pool with rigid_vars and flex_vars
-                        pool.clear();
-                        pool.reserve(rigid_vars.len() + flex_vars.len());
-                        pool.extend(rigid_vars.iter());
-                        pool.extend(flex_vars.iter());
-
-                        // run solver in next pool
-
-                        // Add a variable for each def to local_def_vars.
-                        let local_def_vars = LocalDefVarsVec::from_def_types(
-                            next_rank,
-                            pools,
-                            cached_aliases,
-                            subs,
-                            &let_con.def_types,
-                        );
-
-                        stack.push(Work::LetConComplex {
-                            env,
-                            rank,
-                            let_con,
-                            local_def_vars,
-                            next_rank,
-                        });
-                        stack.push(Work::Constraint {
-                            env,
-                            rank: next_rank,
-                            constraint: &let_con.defs_constraint,
-                        });
-
-                        state
-                    }
+                    state
                 }
             }
             Present(typ, PresenceConstraint::IsOpen) => {
