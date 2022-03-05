@@ -194,7 +194,7 @@ mod cli_run {
     ) {
         assert_eq!(input_file, None, "Wasm does not support input files");
         let mut flags = flags.to_vec();
-        flags.push("--backend=wasm32");
+        flags.push("--target=wasm32");
 
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags.as_slice()].concat());
         if !compile_out.stderr.is_empty() {
@@ -565,7 +565,7 @@ mod cli_run {
                         &file_name,
                         benchmark.stdin,
                         benchmark.executable_filename,
-                        &["--backend=x86_32"],
+                        &["--target=x86_32"],
                         benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
@@ -575,7 +575,7 @@ mod cli_run {
                         &file_name,
                         benchmark.stdin,
                         benchmark.executable_filename,
-                        &["--backend=x86_32", "--optimize"],
+                        &["--target=x86_32", "--optimize"],
                         benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
