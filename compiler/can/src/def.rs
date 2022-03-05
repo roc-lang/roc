@@ -1147,7 +1147,7 @@ fn canonicalize_pending_def<'a>(
                         pattern_vars: vars_by_symbol.clone(),
                         annotation: Some(Annotation {
                             signature: typ.clone(),
-                            introduced_variables: output.introduced_variables.clone(),
+                            introduced_variables: ann.introduced_variables.clone(),
                             aliases: ann.aliases.clone(),
                             region: loc_ann.region,
                         }),

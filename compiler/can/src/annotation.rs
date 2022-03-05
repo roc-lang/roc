@@ -29,6 +29,7 @@ pub struct IntroducedVariables {
     // but a variable can only have one name. Therefore
     // `ftv : SendMap<Variable, Lowercase>`.
     pub wildcards: Vec<Variable>,
+    pub lambda_sets: Vec<Variable>,
     pub var_by_name: SendMap<Lowercase, Variable>,
     pub name_by_var: SendMap<Variable, Lowercase>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,
@@ -44,12 +45,17 @@ impl IntroducedVariables {
         self.wildcards.push(var);
     }
 
+    fn insert_lambda_set(&mut self, var: Variable) {
+        self.lambda_sets.push(var);
+    }
+
     pub fn insert_host_exposed_alias(&mut self, symbol: Symbol, var: Variable) {
         self.host_exposed_aliases.insert(symbol, var);
     }
 
     pub fn union(&mut self, other: &Self) {
         self.wildcards.extend(other.wildcards.iter().cloned());
+        self.lambda_sets.extend(other.lambda_sets.iter().cloned());
         self.var_by_name.extend(other.var_by_name.clone());
         self.name_by_var.extend(other.name_by_var.clone());
         self.host_exposed_aliases
@@ -280,7 +286,9 @@ fn can_annotation_help(
                 references,
             );
 
-            let closure = Type::Variable(var_store.fresh());
+            let lambda_set = var_store.fresh();
+            introduced_variables.insert_lambda_set(lambda_set);
+            let closure = Type::Variable(lambda_set);
 
             Type::Function(args, Box::new(closure), Box::new(ret))
         }
