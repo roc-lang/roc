@@ -1,5 +1,5 @@
 use crate::ir::DestructType;
-use roc_collections::all::Index;
+use roc_collections::all::HumanIndex;
 use roc_exhaustive::{
     is_useful, Context, Ctor, Error, Guard, Literal, Pattern, RenderAs, TagId, Union,
 };
@@ -189,7 +189,7 @@ fn to_nonredundant_rows(
             return Err(Error::Redundant {
                 overall_region,
                 branch_region: region,
-                index: Index::zero_based(checked_rows.len()),
+                index: HumanIndex::zero_based(checked_rows.len()),
             });
         }
     }
