@@ -1512,13 +1512,20 @@ fn pool_to_rank_table(
 ) -> Pools {
     let mut pools = Pools::new(young_rank.into_usize() + 1);
 
-    // Sort the variables into buckets by rank.
-    for &var in young_vars.iter() {
-        let rank = subs.get_rank_set_mark(var, young_mark);
+    // the vast majority of young variables have young_rank
+    let mut young_vars = young_vars.to_vec();
+    young_vars.retain(|var| {
+        let rank = subs.get_rank_set_mark(*var, young_mark);
 
-        debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
-        pools.get_mut(rank).push(var);
-    }
+        if rank != young_rank {
+            pools.get_mut(rank).push(*var);
+            false
+        } else {
+            true
+        }
+    });
+
+    std::mem::swap(pools.get_mut(young_rank), &mut young_vars);
 
     pools
 }
