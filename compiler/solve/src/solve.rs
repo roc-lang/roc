@@ -367,9 +367,9 @@ fn solve(
                         // then we copy from that module's Subs into our own. If the value
                         // is being looked up in this module, then we use our Subs as both
                         // the source and destination.
-                        let actual = deep_copy_var(subs, rank, pools, var);
-
+                        let actual = deep_copy_var_in(subs, rank, pools, var, arena);
                         let expectation = &constraints.expectations[expectation_index.index()];
+
                         let expected = type_to_var(
                             subs,
                             rank,
@@ -805,21 +805,16 @@ impl<T> LocalDefVarsVec<T> {
 use std::cell::RefCell;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
-    static SCRATCHPAD: RefCell<bumpalo::Bump> = RefCell::new(bumpalo::Bump::with_capacity(4 * 1024));
+    static SCRATCHPAD: RefCell<Option<bumpalo::Bump>> = RefCell::new(Some(bumpalo::Bump::with_capacity(4 * 1024)));
 }
 
 fn take_scratchpad() -> bumpalo::Bump {
-    let mut result = bumpalo::Bump::new();
-    SCRATCHPAD.with(|f| {
-        result = f.replace(bumpalo::Bump::new());
-    });
-
-    result
+    SCRATCHPAD.with(|f| f.take().unwrap())
 }
 
 fn put_scratchpad(scratchpad: bumpalo::Bump) {
     SCRATCHPAD.with(|f| {
-        f.replace(scratchpad);
+        f.replace(Some(scratchpad));
     });
 }
 
@@ -1002,7 +997,7 @@ fn type_to_variable<'a>(
                     return reserved;
                 } else {
                     // for any other rank, we need to copy; it takes care of adjusting the rank
-                    return deep_copy_var(subs, rank, pools, reserved);
+                    return deep_copy_var_in(subs, rank, pools, reserved, arena);
                 }
             }
 
@@ -1070,6 +1065,7 @@ fn type_to_variable<'a>(
     }
 }
 
+#[inline(always)]
 fn alias_to_var<'a>(
     subs: &mut Subs,
     rank: Rank,
@@ -1099,6 +1095,7 @@ fn alias_to_var<'a>(
     }
 }
 
+#[inline(always)]
 fn roc_result_to_var<'a>(
     subs: &mut Subs,
     rank: Rank,
@@ -1847,10 +1844,14 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     }
 }
 
-fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
-    let mut arena = take_scratchpad();
-
-    let mut visited = bumpalo::collections::Vec::with_capacity_in(4 * 1024, &arena);
+fn deep_copy_var_in(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    var: Variable,
+    arena: &Bump,
+) -> Variable {
+    let mut visited = bumpalo::collections::Vec::with_capacity_in(256, arena);
 
     let copy = deep_copy_var_help(subs, rank, pools, &mut visited, var);
 
@@ -1865,9 +1866,6 @@ fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) 
             descriptor.copy = OptVariable::NONE;
         }
     }
-
-    arena.reset();
-    put_scratchpad(arena);
 
     copy
 }
@@ -2107,6 +2105,7 @@ fn deep_copy_var_help(
     }
 }
 
+#[inline(always)]
 fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) -> Variable {
     let descriptor = Descriptor {
         content,
