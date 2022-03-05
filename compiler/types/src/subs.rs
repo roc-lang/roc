@@ -357,6 +357,7 @@ fn subs_fmt_desc(this: &Descriptor, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
     write!(f, " m: {:?}", &this.mark)?;
     write!(f, " c: {:?}", &this.copy)
 }
+//
 
 pub struct SubsFmtContent<'a>(pub &'a Content, pub &'a Subs);
 
@@ -2448,6 +2449,7 @@ fn occurs(
             }
             Alias(_, args, _, _) => {
                 let mut new_seen = seen.to_owned();
+                new_seen.push(root_var);
 
                 for var_index in args.into_iter() {
                     let var = subs[var_index];
