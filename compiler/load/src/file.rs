@@ -3173,6 +3173,8 @@ fn load_module<'a>(
                 Loc::at_zero(ExposedName::new("maxU64")),
                 Loc::at_zero(ExposedName::new("minI128")),
                 Loc::at_zero(ExposedName::new("maxI128")),
+                Loc::at_zero(ExposedName::new("minU128")),
+                Loc::at_zero(ExposedName::new("maxU128")),
                 Loc::at_zero(ExposedName::new("toI8")),
                 Loc::at_zero(ExposedName::new("toI8Checked")),
                 Loc::at_zero(ExposedName::new("toI16")),
@@ -3338,26 +3340,64 @@ fn load_module<'a>(
                 mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 
                 minI8 : I8
+                minI8 = -128i8
+
                 maxI8 : I8
+                maxI8 = 127i8
+
                 minU8 : U8
+                minU8 = 0u8
+
                 maxU8 : U8
+                maxU8 = 255u8
+
                 minI16 : I16
+                minI16 = -32768i16
+
                 maxI16 : I16
+                maxI16 = 32767i16
+
                 minU16 : U16
+                minU16 = 0u16
+
                 maxU16 : U16
+                maxU16 = 65535u16
+
                 minI32 : I32
+                minI32 = -2147483648
+
                 maxI32 : I32
+                maxI32 = 2147483647
+
                 minU32 : U32
+                minU32 = 0
+
                 maxU32 : U32
+                maxU32 = 4294967295
+
                 minI64 : I64
+                minI64 = -9223372036854775808
+
                 maxI64 : I64
+                maxI64 = 9223372036854775807
+
                 minU64 : U64
+                minU64 = 0
+
                 maxU64 : U64
+                maxU64 = 18446744073709551615
 
                 minI128 : I128
+                minI128 = -170141183460469231731687303715884105728
+
                 maxI128 : I128
-                # minU128 : U128
-                # maxU128 : U128
+                maxI128 = 170141183460469231731687303715884105727
+
+                minU128 : U128
+                minU128 = 0
+
+                maxU128 : U128
+                maxU128 = 0340282366920938463463374607431768211455
 
                 toI8 : Int * -> I8
                 toI16 : Int * -> I16
