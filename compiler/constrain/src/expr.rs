@@ -10,7 +10,7 @@ use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
-use roc_collections::all::{HumanIndex, ImMap, MutSet, SendMap};
+use roc_collections::all::{HumanIndex, ImMap, MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -40,7 +40,7 @@ pub struct Env {
     /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
     /// for example `a` in the annotation `identity : a -> a`, we add it to this
     /// map so that expressions within that annotation can share these vars.
-    pub rigids: ImMap<Lowercase, Variable>,
+    pub rigids: MutMap<Lowercase, Variable>,
     pub home: ModuleId,
 }
 
@@ -751,7 +751,7 @@ pub fn constrain_expr(
                 constraints,
                 &Env {
                     home: env.home,
-                    rigids: ImMap::default(),
+                    rigids: MutMap::default(),
                 },
                 region,
                 &loc_expr.value,
@@ -1261,7 +1261,7 @@ pub fn constrain_decls(
 
     let mut env = Env {
         home,
-        rigids: ImMap::default(),
+        rigids: MutMap::default(),
     };
 
     for decl in decls.iter().rev() {
@@ -1329,20 +1329,21 @@ fn constrain_def(
 
     def_pattern_state.vars.push(expr_var);
 
-    let mut new_rigids = Vec::new();
-
-    let expr_con = match &def.annotation {
+    match &def.annotation {
         Some(annotation) => {
             let arity = annotation.signature.arity();
             let rigids = &env.rigids;
             let mut ftv = rigids.clone();
 
-            let signature = instantiate_rigids(
+            let InstantiateRigids {
+                signature,
+                new_rigid_variables,
+                new_infer_variables,
+            } = instantiate_rigids(
                 &annotation.signature,
                 &annotation.introduced_variables,
-                &mut new_rigids,
-                &mut ftv,
                 &def.loc_pattern,
+                &mut ftv,
                 &mut def_pattern_state.headers,
             );
 
@@ -1514,8 +1515,16 @@ fn constrain_def(
                         closure_constraint,
                     ];
 
-                    let and_constraint = constraints.and_constraint(cons);
-                    constraints.exists(vars, and_constraint)
+                    let expr_con = constraints.exists_many(vars, cons);
+
+                    constrain_def_make_constraint(
+                        constraints,
+                        new_rigid_variables,
+                        new_infer_variables,
+                        expr_con,
+                        body_con,
+                        def_pattern_state,
+                    )
                 }
 
                 _ => {
@@ -1540,35 +1549,62 @@ fn constrain_def(
                         // Store type into AST vars. We use Store so errors aren't reported twice
                         constraints.store(signature, expr_var, std::file!(), std::line!()),
                     ];
-                    constraints.and_constraint(cons)
+                    let expr_con = constraints.and_constraint(cons);
+
+                    constrain_def_make_constraint(
+                        constraints,
+                        new_rigid_variables,
+                        new_infer_variables,
+                        expr_con,
+                        body_con,
+                        def_pattern_state,
+                    )
                 }
             }
         }
         None => {
             // no annotation, so no extra work with rigids
 
-            constrain_expr(
+            let expr_con = constrain_expr(
                 constraints,
                 env,
                 def.loc_expr.region,
                 &def.loc_expr.value,
                 NoExpectation(expr_type),
+            );
+
+            constrain_def_make_constraint(
+                constraints,
+                vec![],
+                vec![],
+                expr_con,
+                body_con,
+                def_pattern_state,
             )
         }
-    };
+    }
+}
 
+fn constrain_def_make_constraint(
+    constraints: &mut Constraints,
+    new_rigid_variables: Vec<Variable>,
+    new_infer_variables: Vec<Variable>,
+    expr_con: Constraint,
+    body_con: Constraint,
+    def_pattern_state: PatternState,
+) -> Constraint {
     let and_constraint = constraints.and_constraint(def_pattern_state.constraints);
 
     let def_con = constraints.let_constraint(
         [],
-        [],
+        new_infer_variables,
         SendMap::default(), // empty, because our functions have no arguments!
         and_constraint,
         expr_con,
     );
 
     constraints.let_constraint(
-        new_rigids,
+        new_rigid_variables,
         def_pattern_state.vars,
         def_pattern_state.headers,
         def_con,
@@ -1632,53 +1668,66 @@ fn constrain_closure_size(
     constraints.and_constraint(captured_symbols_constraints)
 }
 
+pub struct InstantiateRigids {
+    pub signature: Type,
+    pub new_rigid_variables: Vec<Variable>,
+    pub new_infer_variables: Vec<Variable>,
+}
+
 fn instantiate_rigids(
     annotation: &Type,
     introduced_vars: &IntroducedVariables,
-    new_rigids: &mut Vec<Variable>,
-    ftv: &mut ImMap<Lowercase, Variable>, // rigids defined before the current annotation
     loc_pattern: &Loc<Pattern>,
+    ftv: &mut MutMap<Lowercase, Variable>, // rigids defined before the current annotation
     headers: &mut SendMap<Symbol, Loc<Type>>,
-) -> Type {
+) -> InstantiateRigids {
     let mut annotation = annotation.clone();
+    let mut new_rigid_variables = Vec::new();
+
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
-
-    let outside_rigids: MutSet<Variable> = ftv.values().copied().collect();
-
     for (name, var) in introduced_vars.var_by_name.iter() {
-        if let Some(existing_rigid) = ftv.get(name) {
-            rigid_substitution.insert(*var, Type::Variable(*existing_rigid));
-        } else {
-            // It's possible to use this rigid in nested defs
-            ftv.insert(name.clone(), *var);
+        use std::collections::hash_map::Entry::*;
+
+        match ftv.entry(name.clone()) {
+            Occupied(occupied) => {
+                let existing_rigid = occupied.get();
+                rigid_substitution.insert(*var, Type::Variable(*existing_rigid));
+            }
+            Vacant(vacant) => {
+                // It's possible to use this rigid in nested defs
+                vacant.insert(*var);
+                new_rigid_variables.push(*var);
+            }
         }
     }
+
+    // wildcards are always freshly introduced in this annotation
+    new_rigid_variables.extend(introduced_vars.wildcards.iter().copied());
+
+    // lambda set vars are always freshly introduced in this annotation
+    new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
+
+    let new_infer_variables = introduced_vars.inferred.clone();
 
     // Instantiate rigid variables
     if !rigid_substitution.is_empty() {
         annotation.substitute(&rigid_substitution);
     }
 
-    if let Some(new_headers) = crate::pattern::headers_from_annotation(
-        &loc_pattern.value,
-        &Loc::at(loc_pattern.region, annotation.clone()),
-    ) {
-        for (symbol, loc_type) in new_headers {
-            for var in loc_type.value.variables() {
-                // a rigid is only new if this annotation is the first occurrence of this rigid
-                if !outside_rigids.contains(&var) {
-                    new_rigids.push(var);
-                }
-            }
-            headers.insert(symbol, loc_type);
-        }
+    let loc_annotation_ref = Loc::at(loc_pattern.region, &annotation);
+    if let Pattern::Identifier(symbol) = loc_pattern.value {
+        headers.insert(symbol, Loc::at(loc_pattern.region, annotation.clone()));
+    } else if let Some(new_headers) =
+        crate::pattern::headers_from_annotation(&loc_pattern.value, &loc_annotation_ref)
+    {
+        headers.extend(new_headers)
     }
 
-    for (i, wildcard) in introduced_vars.wildcards.iter().enumerate() {
-        ftv.insert(format!("*{}", i).into(), *wildcard);
+    InstantiateRigids {
+        signature: annotation,
+        new_rigid_variables,
+        new_infer_variables,
     }
-
-    annotation
 }
 
 fn constrain_recursive_defs(
@@ -1714,7 +1763,6 @@ pub fn rec_defs_help(
 
         def_pattern_state.vars.push(expr_var);
 
-        let mut new_rigids = Vec::new();
         match &def.annotation {
             None => {
                 let expr_con = constrain_expr(
@@ -1743,14 +1791,19 @@ pub fn rec_defs_help(
                 let arity = annotation.signature.arity();
                 let mut ftv = env.rigids.clone();
 
-                let signature = instantiate_rigids(
+                let InstantiateRigids {
+                    signature,
+                    new_rigid_variables,
+                    new_infer_variables,
+                } = instantiate_rigids(
                     &annotation.signature,
                     &annotation.introduced_variables,
-                    &mut new_rigids,
-                    &mut ftv,
                     &def.loc_pattern,
+                    &mut ftv,
                     &mut def_pattern_state.headers,
                 );
+
+                flex_info.vars.extend(new_infer_variables);
 
                 let annotation_expected = FromAnnotation(
                     def.loc_pattern.clone(),
@@ -1909,10 +1962,10 @@ pub fn rec_defs_help(
                         let and_constraint = constraints.and_constraint(cons);
                         let def_con = constraints.exists(vars, and_constraint);
 
-                        rigid_info.vars.extend(&new_rigids);
+                        rigid_info.vars.extend(&new_rigid_variables);
 
                         rigid_info.constraints.push(constraints.let_constraint(
-                            new_rigids,
+                            new_rigid_variables,
                             def_pattern_state.vars,
                             SendMap::default(), // no headers introduced (at this level)
                             def_con,
@@ -1944,10 +1997,10 @@ pub fn rec_defs_help(
                         ];
                         let def_con = constraints.and_constraint(cons);
 
-                        rigid_info.vars.extend(&new_rigids);
+                        rigid_info.vars.extend(&new_rigid_variables);
 
                         rigid_info.constraints.push(constraints.let_constraint(
-                            new_rigids,
+                            new_rigid_variables,
                             def_pattern_state.vars,
                             SendMap::default(), // no headers introduced (at this level)
                             def_con,
