@@ -110,7 +110,7 @@ impl Focus {
 }
 
 #[test]
-fn next_focus_button_root() {
+fn next_global_button_root() {
     use crate::roc::{ButtonStyles, RocElem};
 
     let child = RocElem::text("");
@@ -118,32 +118,55 @@ fn next_focus_button_root() {
     let mut focus = Focus::default();
 
     // At first, nothing should be focused.
-    assert_eq!(focus.focused_elem(), std::ptr::null());
+    assert_eq!(focus.focused_elem(), None);
 
-    focus.advance(&root);
+    focus.next_global(&root);
 
     // Buttons should be focusable, so advancing focus should give the button focus.
-    assert_eq!(focus.focused_elem(), &root as *const RocElem);
+    assert_eq!(focus.focused_elem(), Some(root.id()));
 
     // Since the button is at the root, advancing again should maintain focus on it.
-    focus.advance(&root);
-    assert_eq!(focus.focused_elem(), &root as *const RocElem);
+    focus.next_global(&root);
+    assert_eq!(focus.focused_elem(), Some(root.id()));
 }
 
 #[test]
-fn next_focus_text_root() {
+fn next_global_text_root() {
     let root = RocElem::text("");
     let mut focus = Focus::default();
 
     // At first, nothing should be focused.
-    assert_eq!(focus.focused_elem(), std::ptr::null());
+    assert_eq!(focus.focused_elem(), None);
 
-    focus.advance(&root);
+    focus.next_global(&root);
 
     // Text should not be focusable, so advancing focus should have no effect here.
-    assert_eq!(focus.focused_elem(), std::ptr::null());
+    assert_eq!(focus.focused_elem(), None);
 
     // Just to double-check, advancing a second time should not change this.
-    focus.advance(&root);
-    assert_eq!(focus.focused_elem(), std::ptr::null());
+    focus.next_global(&root);
+    assert_eq!(focus.focused_elem(), None);
+}
+
+#[test]
+fn next_global_row() {
+    use crate::roc::{ButtonStyles, RocElem};
+
+    let child = RocElem::text("");
+    let button = RocElem::button(ButtonStyles::default(), child);
+    let button_id = button.id();
+    let root = RocElem::row(&[button] as &[_]);
+    let mut focus = Focus::default();
+
+    // At first, nothing should be focused.
+    assert_eq!(focus.focused_elem(), None);
+
+    focus.next_global(&root);
+
+    // Buttons should be focusable, so advancing focus should give the first button in the row focus.
+    assert_eq!(focus.focused_elem(), Some(button_id));
+
+    // Since the button is the only element in the row, advancing again should maintain focus on it.
+    focus.next_global(&root);
+    assert_eq!(focus.focused_elem(), Some(button_id));
 }
