@@ -1535,20 +1535,23 @@ fn adjust_rank(
     group_rank: Rank,
     var: Variable,
 ) -> Rank {
-    let (desc_rank, desc_mark) = subs.get_rank_mark(var);
+    let desc = subs.get_ref_mut(var);
+
+    let desc_rank = desc.rank;
+    let desc_mark = desc.mark;
 
     if desc_mark == young_mark {
-        // Mark the variable as visited before adjusting content, as it may be cyclic.
-        subs.set_mark(var, visit_mark);
-
         // SAFETY: in this function (and functions it calls, we ONLY modify rank and mark, never content!
         // hence, we can have an immutable reference to it even though we also have a mutable
         // reference to the Subs as a whole. This prevents a clone of the content, which turns out
         // to be quite expensive.
         let content = {
-            let ptr = &subs.get_ref(var).content as *const _;
+            let ptr = &desc.content as *const _;
             unsafe { &*ptr }
         };
+
+        // Mark the variable as visited before adjusting content, as it may be cyclic.
+        desc.mark = visit_mark;
 
         let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
 
@@ -1562,7 +1565,8 @@ fn adjust_rank(
         let min_rank = group_rank.min(desc_rank);
 
         // TODO from elm-compiler: how can min_rank ever be group_rank?
-        subs.set_rank_mark(var, min_rank, visit_mark);
+        desc.rank = min_rank;
+        desc.mark = visit_mark;
 
         min_rank
     }
