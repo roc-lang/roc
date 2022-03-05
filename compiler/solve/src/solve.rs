@@ -223,6 +223,13 @@ enum Work<'a> {
         rank: Rank,
         let_con: &'a LetConstraint,
     },
+    LetConComplex {
+        env: &'a Env,
+        rank: Rank,
+        next_rank: Rank,
+        let_con: &'a LetConstraint,
+        local_def_vars: LocalDefVarsVec<(Symbol, Loc<Variable>)>,
+    },
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -259,6 +266,8 @@ fn solve(
                 continue;
             }
             Work::LetConSimple { env, rank, let_con } => {
+                // NOTE be extremely careful with shadowing here
+
                 // Add a variable for each def to new_vars_by_env.
                 let local_def_vars = LocalDefVarsVec::from_def_types(
                     rank,
@@ -279,6 +288,96 @@ fn solve(
                     rank,
                     constraint: &let_con.ret_constraint,
                 });
+                continue;
+            }
+            Work::LetConComplex {
+                env,
+                rank,
+                next_rank,
+                let_con,
+                local_def_vars,
+            } => {
+                // NOTE be extremely careful with shadowing here
+                let mark = state.mark;
+                let saved_env = state.env;
+
+                let rigid_vars = &let_con.rigid_vars;
+
+                let young_mark = mark;
+                let visit_mark = young_mark.next();
+                let final_mark = visit_mark.next();
+
+                debug_assert_eq!(
+                    {
+                        let offenders = pools
+                            .get(next_rank)
+                            .iter()
+                            .filter(|var| {
+                                let current_rank =
+                                    subs.get_rank(roc_types::subs::Variable::clone(var));
+
+                                current_rank.into_usize() > next_rank.into_usize()
+                            })
+                            .collect::<Vec<_>>();
+
+                        let result = offenders.len();
+
+                        if result > 0 {
+                            dbg!(&subs, &offenders, &let_con.def_types);
+                        }
+
+                        result
+                    },
+                    0
+                );
+
+                // pop pool
+                generalize(subs, young_mark, visit_mark, next_rank, pools);
+
+                pools.get_mut(next_rank).clear();
+
+                // check that things went well
+                debug_assert!({
+                    // NOTE the `subs.redundant` check is added for the uniqueness
+                    // inference, and does not come from elm. It's unclear whether this is
+                    // a bug with uniqueness inference (something is redundant that
+                    // shouldn't be) or that it just never came up in elm.
+                    let failing: Vec<_> = rigid_vars
+                        .iter()
+                        .filter(|&var| !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE)
+                        .collect();
+
+                    if !failing.is_empty() {
+                        println!("Rigids {:?}", &rigid_vars);
+                        println!("Failing {:?}", failing);
+                    }
+
+                    failing.is_empty()
+                });
+
+                let mut new_env = env.clone();
+                for (symbol, loc_var) in local_def_vars.iter() {
+                    new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+                }
+
+                // Note that this vars_by_symbol is the one returned by the
+                // previous call to solve()
+                let state_for_ret_con = State {
+                    env: saved_env,
+                    mark: final_mark,
+                };
+
+                // Now solve the body, using the new vars_by_symbol which includes
+                // the assignments' name-to-variable mappings.
+                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
+                stack.push(Work::Constraint {
+                    env: arena.alloc(new_env),
+                    rank,
+                    constraint: &let_con.ret_constraint,
+                });
+
+                state = state_for_ret_con;
+
                 continue;
             }
         };
@@ -509,7 +608,7 @@ fn solve(
 
                         state
                     }
-                    ret_con => {
+                    _ => {
                         let rigid_vars = &let_con.rigid_vars;
                         let flex_vars = &let_con.flex_vars;
 
@@ -550,99 +649,20 @@ fn solve(
                             &let_con.def_types,
                         );
 
-                        // Solve the assignments' constraints first.
-                        // TODO: make into `WorkItem` with `After`
-                        let State {
-                            env: saved_env,
-                            mark,
-                        } = solve(
-                            arena,
+                        stack.push(Work::LetConComplex {
                             env,
-                            state,
-                            next_rank,
-                            pools,
-                            problems,
-                            cached_aliases,
-                            subs,
-                            &let_con.defs_constraint,
-                        );
-
-                        let young_mark = mark;
-                        let visit_mark = young_mark.next();
-                        let final_mark = visit_mark.next();
-
-                        debug_assert_eq!(
-                            {
-                                let offenders = pools
-                                    .get(next_rank)
-                                    .iter()
-                                    .filter(|var| {
-                                        let current_rank =
-                                            subs.get_rank(roc_types::subs::Variable::clone(var));
-
-                                        current_rank.into_usize() > next_rank.into_usize()
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let result = offenders.len();
-
-                                if result > 0 {
-                                    dbg!(&subs, &offenders, &let_con.def_types);
-                                }
-
-                                result
-                            },
-                            0
-                        );
-
-                        // pop pool
-                        generalize(subs, young_mark, visit_mark, next_rank, pools);
-
-                        pools.get_mut(next_rank).clear();
-
-                        // check that things went well
-                        debug_assert!({
-                            // NOTE the `subs.redundant` check is added for the uniqueness
-                            // inference, and does not come from elm. It's unclear whether this is
-                            // a bug with uniqueness inference (something is redundant that
-                            // shouldn't be) or that it just never came up in elm.
-                            let failing: Vec<_> = rigid_vars
-                                .iter()
-                                .filter(|&var| {
-                                    !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE
-                                })
-                                .collect();
-
-                            if !failing.is_empty() {
-                                println!("Rigids {:?}", &rigid_vars);
-                                println!("Failing {:?}", failing);
-                            }
-
-                            failing.is_empty()
-                        });
-
-                        let mut new_env = env.clone();
-                        for (symbol, loc_var) in local_def_vars.iter() {
-                            new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
-                        }
-
-                        // Note that this vars_by_symbol is the one returned by the
-                        // previous call to solve()
-                        let state_for_ret_con = State {
-                            env: saved_env,
-                            mark: final_mark,
-                        };
-
-                        // Now solve the body, using the new vars_by_symbol which includes
-                        // the assignments' name-to-variable mappings.
-                        stack.push(Work::CheckForInfiniteTypes(local_def_vars));
-                        stack.push(Work::Constraint {
-                            env: arena.alloc(new_env),
                             rank,
-                            constraint: ret_con,
+                            let_con,
+                            local_def_vars,
+                            next_rank,
+                        });
+                        stack.push(Work::Constraint {
+                            env,
+                            rank: next_rank,
+                            constraint: &let_con.defs_constraint,
                         });
 
-                        state_for_ret_con
+                        state
                     }
                 }
             }
