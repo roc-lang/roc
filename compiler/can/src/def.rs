@@ -913,25 +913,25 @@ fn canonicalize_pending_def<'a>(
         AnnotationOnly(_, loc_can_pattern, loc_ann) => {
             // annotation sans body cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
-            let ann =
+            let type_annotation =
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
 
             // Record all the annotation's references in output.references.lookups
 
-            for symbol in ann.references {
-                output.references.lookups.insert(symbol);
-                output.references.referenced_type_defs.insert(symbol);
+            for symbol in type_annotation.references.iter() {
+                output.references.lookups.insert(*symbol);
+                output.references.referenced_type_defs.insert(*symbol);
             }
 
-            aliases.extend(ann.aliases.clone());
+            aliases.extend(type_annotation.aliases.clone());
 
-            output.introduced_variables.union(&ann.introduced_variables);
+            output
+                .introduced_variables
+                .union(&type_annotation.introduced_variables);
 
             pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
 
-            let typ = ann.typ;
-
-            let arity = typ.arity();
+            let arity = type_annotation.typ.arity();
 
             let problem = match &loc_can_pattern.value {
                 Pattern::Identifier(symbol) => RuntimeError::NoImplementationNamed {
@@ -989,33 +989,44 @@ fn canonicalize_pending_def<'a>(
                 }
             };
 
-            for (_, (symbol, _)) in scope.idents() {
-                if !vars_by_symbol.contains_key(symbol) {
-                    continue;
-                }
-
-                // We could potentially avoid some clones here by using Rc strategically,
-                // but the total amount of cloning going on here should typically be minimal.
-                can_defs_by_symbol.insert(
-                    *symbol,
-                    Def {
-                        expr_var,
-                        // TODO try to remove this .clone()!
-                        loc_pattern: loc_can_pattern.clone(),
-                        loc_expr: Loc {
-                            region: loc_can_expr.region,
-                            // TODO try to remove this .clone()!
-                            value: loc_can_expr.value.clone(),
-                        },
-                        pattern_vars: vars_by_symbol.clone(),
-                        annotation: Some(Annotation {
-                            signature: typ.clone(),
-                            introduced_variables: output.introduced_variables.clone(),
-                            aliases: ann.aliases.clone(),
-                            region: loc_ann.region,
-                        }),
-                    },
+            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
+                let def = single_can_def(
+                    loc_can_pattern,
+                    loc_can_expr,
+                    expr_var,
+                    Some(Loc::at(loc_ann.region, type_annotation)),
+                    vars_by_symbol.clone(),
                 );
+                can_defs_by_symbol.insert(symbol, def);
+            } else {
+                for (_, (symbol, _)) in scope.idents() {
+                    if !vars_by_symbol.contains_key(symbol) {
+                        continue;
+                    }
+
+                    // We could potentially avoid some clones here by using Rc strategically,
+                    // but the total amount of cloning going on here should typically be minimal.
+                    can_defs_by_symbol.insert(
+                        *symbol,
+                        Def {
+                            expr_var,
+                            // TODO try to remove this .clone()!
+                            loc_pattern: loc_can_pattern.clone(),
+                            loc_expr: Loc {
+                                region: loc_can_expr.region,
+                                // TODO try to remove this .clone()!
+                                value: loc_can_expr.value.clone(),
+                            },
+                            pattern_vars: vars_by_symbol.clone(),
+                            annotation: Some(Annotation {
+                                signature: type_annotation.typ.clone(),
+                                introduced_variables: output.introduced_variables.clone(),
+                                aliases: type_annotation.aliases.clone(),
+                                region: loc_ann.region,
+                            }),
+                        },
+                    );
+                }
             }
         }
 
@@ -1073,11 +1084,7 @@ fn canonicalize_pending_def<'a>(
             // which also implies it's not a self tail call!
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let Loc {
-                region,
-                value: Pattern::Identifier(symbol),
-            } = loc_can_pattern
-            {
+            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
                 if let &Closure(ClosureData {
                     function_type,
                     closure_type,
@@ -1138,7 +1145,7 @@ fn canonicalize_pending_def<'a>(
                     refs_by_symbol.insert(symbol, (loc_can_pattern.region, refs));
                 } else {
                     let refs = can_output.references;
-                    refs_by_symbol.insert(symbol, (region, refs));
+                    refs_by_symbol.insert(symbol, (loc_ann.region, refs));
                 }
 
                 let def = single_can_def(
@@ -1217,11 +1224,7 @@ fn canonicalize_pending_def<'a>(
             // which also implies it's not a self tail call!
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let Loc {
-                region,
-                value: Pattern::Identifier(symbol),
-            } = loc_can_pattern
-            {
+            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
                 if let &Closure(ClosureData {
                     function_type,
                     closure_type,
@@ -1277,10 +1280,10 @@ fn canonicalize_pending_def<'a>(
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
                     // parent commit for the bug this fixed!
                     let refs = References::new();
-                    refs_by_symbol.insert(symbol, (region, refs));
+                    refs_by_symbol.insert(symbol, (loc_pattern.region, refs));
                 } else {
                     let refs = can_output.references.clone();
-                    refs_by_symbol.insert(symbol, (region, refs));
+                    refs_by_symbol.insert(symbol, (loc_pattern.region, refs));
                 }
 
                 let def = single_can_def(
