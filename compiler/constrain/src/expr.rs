@@ -1707,6 +1707,11 @@ fn instantiate_rigids(
         annotation.substitute(&rigid_substitution);
     }
 
+    // TODO investigate when we can skip this. It seems to only be required for correctness
+    // for recursive functions. For non-recursive functions the final type is correct, but
+    // alias information is sometimes lost
+    //
+    // Skipping all of this cloning here would be neat!
     let loc_annotation_ref = Loc::at(loc_pattern.region, &annotation);
     if let Pattern::Identifier(symbol) = loc_pattern.value {
         headers.insert(symbol, Loc::at(loc_pattern.region, annotation.clone()));
