@@ -266,6 +266,15 @@ where
     }
 }
 
+impl<T> From<&[T]> for RocList<T>
+where
+    T: ReferenceCount,
+{
+    fn from(slice: &[T]) -> Self {
+        Self::from_slice(slice)
+    }
+}
+
 impl<T> IntoIterator for RocList<T>
 where
     T: ReferenceCount,
