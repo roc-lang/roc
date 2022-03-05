@@ -30,6 +30,7 @@ pub struct IntroducedVariables {
     // `ftv : SendMap<Variable, Lowercase>`.
     pub wildcards: Vec<Variable>,
     pub lambda_sets: Vec<Variable>,
+    pub inferred: Vec<Variable>,
     pub var_by_name: SendMap<Lowercase, Variable>,
     pub name_by_var: SendMap<Variable, Lowercase>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,
@@ -45,6 +46,10 @@ impl IntroducedVariables {
         self.wildcards.push(var);
     }
 
+    pub fn insert_inferred(&mut self, var: Variable) {
+        self.inferred.push(var);
+    }
+
     fn insert_lambda_set(&mut self, var: Variable) {
         self.lambda_sets.push(var);
     }
@@ -56,6 +61,7 @@ impl IntroducedVariables {
     pub fn union(&mut self, other: &Self) {
         self.wildcards.extend(other.wildcards.iter().cloned());
         self.lambda_sets.extend(other.lambda_sets.iter().cloned());
+        self.inferred.extend(other.inferred.iter().cloned());
         self.var_by_name.extend(other.var_by_name.clone());
         self.name_by_var.extend(other.name_by_var.clone());
         self.host_exposed_aliases
@@ -620,6 +626,9 @@ fn can_annotation_help(
             // Inference variables aren't bound to a rigid or a wildcard, so all we have to do is
             // make a fresh unconstrained variable, and let the type solver fill it in for us 🤠
             let var = var_store.fresh();
+
+            introduced_variables.insert_inferred(var);
+
             Type::Variable(var)
         }
         Malformed(string) => {
