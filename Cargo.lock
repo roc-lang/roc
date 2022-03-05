@@ -1709,7 +1709,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46e977036f7f5139d580c7f19ad62df9cb8ebd8410bb569e73585226be80a86f"
 dependencies = [
  "lazy_static",
- "static_assertions",
+ "static_assertions 1.1.0",
 ]
 
 [[package]]
@@ -3648,7 +3648,7 @@ dependencies = [
  "roc_ident",
  "roc_region",
  "snafu",
- "static_assertions",
+ "static_assertions 1.1.0",
 ]
 
 [[package]]
@@ -3671,7 +3671,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
- "static_assertions",
+ "static_assertions 1.1.0",
  "ven_graph",
  "ven_pretty",
 ]
@@ -3707,7 +3707,7 @@ dependencies = [
 name = "roc_region"
 version = "0.1.0"
 dependencies = [
- "static_assertions",
+ "static_assertions 1.1.0",
 ]
 
 [[package]]
@@ -3825,7 +3825,7 @@ dependencies = [
 name = "roc_std"
 version = "0.1.0"
 dependencies = [
- "roc_error_macros",
+ "static_assertions 0.1.1",
 ]
 
 [[package]]
@@ -3851,7 +3851,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_region",
- "static_assertions",
+ "static_assertions 1.1.0",
  "ven_ena",
 ]
 
@@ -4273,6 +4273,12 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
 name = "static_assertions"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f406d6ee68db6796e11ffd7b4d171864c58b7451e79ef9460ea33c287a1f89a7"
+
+[[package]]
+name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
@@ -4559,7 +4565,7 @@ checksum = "1f559b464de2e2bdabcac6a210d12e9b5a5973c251e102c44c585c71d51bd78e"
 dependencies = [
  "cfg-if 1.0.0",
  "rand",
- "static_assertions",
+ "static_assertions 1.1.0",
 ]
 
 [[package]]

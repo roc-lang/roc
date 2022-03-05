@@ -283,18 +283,23 @@ impl RocDec {
 
     fn to_str_helper(&self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) {
         if self.0 == 0 {
-            write!(&mut bytes[..], "{}", "0.0").unwrap();
+            write!(&mut bytes[..], "{}", "0").unwrap();
             return;
         }
 
         let is_negative = (self.0 < 0) as usize;
 
-        write!(&mut bytes[..], "{:019}", self.0).unwrap();
+        static_assertions::const_assert!(Self::DECIMAL_PLACES + 1 == 19);
+        // The :019 in the following write! is computed as Self::DECIMAL_PLACES + 1. If you change
+        // Self::DECIMAL_PLACES, this assert should remind you to change that format string as
+        // well.
+        //
         // By using the :019 format, we're guaranteeing that numbers less than 1, say 0.01234
         // get their leading zeros placed in bytes for us. i.e. bytes = b"0012340000000000000"
+        write!(&mut bytes[..], "{:019}", self.0).unwrap();
 
         // If self represents 1234.5678, then bytes is b"1234567800000000000000".
-        let mut i = Self::DECIMAL_PLACES;
+        let mut i = Self::MAX_STR_LENGTH - 1;
         // Find the last place where we have actual data.
         while bytes[i] == 0 {
             i = i - 1;
@@ -304,18 +309,26 @@ impl RocDec {
         let decimal_location = i - Self::DECIMAL_PLACES + 1 + is_negative;
         // decimal_location = 4
 
-        while bytes[i] == ('0' as u8) {
+        while bytes[i] == ('0' as u8) && i >= decimal_location {
             bytes[i] = 0;
             i = i - 1;
         }
         // Now i = 7, because bytes[7] = '8', and bytes = b"12345678"
 
+        if i < decimal_location {
+            // This means that we've removed trailing zeros and are left with an integer. Our
+            // convention is to print these without a decimal point or trailing zeros, so we're done.
+            return;
+        }
+
         while i >= decimal_location {
             bytes[i + 1] = bytes[i];
+            i = i - 1;
         }
+        bytes[i + 1] = bytes[i];
         // Now i = 4, and bytes = b"123455678"
 
-        bytes[i] = '.' as u8;
+        bytes[decimal_location] = '.' as u8;
         // Finally bytes = b"1234.5678"
     }
 
