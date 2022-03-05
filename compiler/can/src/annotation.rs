@@ -340,6 +340,7 @@ fn can_annotation_help(
                     let (type_arguments, lambda_set_variables, actual) =
                         instantiate_and_freshen_alias_type(
                             var_store,
+                            introduced_variables,
                             &alias.type_variables,
                             args,
                             &alias.lambda_set_variables,
@@ -645,6 +646,7 @@ fn can_annotation_help(
 
 pub fn instantiate_and_freshen_alias_type(
     var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
     type_variables: &[Loc<(Lowercase, Variable)>],
     type_arguments: Vec<Type>,
     lambda_set_variables: &[LambdaSet],
@@ -674,6 +676,7 @@ pub fn instantiate_and_freshen_alias_type(
         if let Type::Variable(var) = typ.0 {
             let fresh = var_store.fresh();
             substitutions.insert(var, Type::Variable(fresh));
+            introduced_variables.insert_lambda_set(fresh);
             new_lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
         } else {
             unreachable!("at this point there should be only vars in there");
@@ -698,8 +701,12 @@ pub fn freshen_opaque_def(
         .map(|_| Type::Variable(var_store.fresh()))
         .collect();
 
+    // TODO this gets ignored; is that a problem
+    let mut introduced_variables = IntroducedVariables::default();
+
     instantiate_and_freshen_alias_type(
         var_store,
+        &mut introduced_variables,
         &opaque.type_variables,
         fresh_arguments,
         &opaque.lambda_set_variables,
