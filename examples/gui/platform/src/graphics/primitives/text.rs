@@ -38,92 +38,92 @@ impl<'a> Default for Text<'a> {
     }
 }
 
-pub fn layout_from_text(text: &Text) -> wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker> {
-    wgpu_glyph::Layout::default().h_align(if text.centered {
-        wgpu_glyph::HorizontalAlign::Center
-    } else {
-        wgpu_glyph::HorizontalAlign::Left
-    })
-}
+// pub fn layout_from_text(text: &Text) -> wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker> {
+//     wgpu_glyph::Layout::default().h_align(if text.centered {
+//         wgpu_glyph::HorizontalAlign::Center
+//     } else {
+//         wgpu_glyph::HorizontalAlign::Left
+//     })
+// }
 
-fn section_from_text<'a>(
-    text: &'a Text,
-    layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
-) -> wgpu_glyph::Section<'a> {
-    Section {
-        screen_position: text.position.into(),
-        bounds: text.area_bounds.into(),
-        layout,
-        ..Section::default()
-    }
-    .add_text(
-        wgpu_glyph::Text::new(text.text)
-            .with_color(text.color)
-            .with_scale(text.size),
-    )
-}
+// fn section_from_text<'a>(
+//     text: &'a Text,
+//     layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
+// ) -> wgpu_glyph::Section<'a> {
+//     Section {
+//         screen_position: text.position.into(),
+//         bounds: text.area_bounds.into(),
+//         layout,
+//         ..Section::default()
+//     }
+//     .add_text(
+//         wgpu_glyph::Text::new(text.text)
+//             .with_color(text.color)
+//             .with_scale(text.size),
+//     )
+// }
 
-pub fn owned_section_from_text(text: &Text) -> OwnedSection {
-    let layout = layout_from_text(text);
+// pub fn owned_section_from_text(text: &Text) -> OwnedSection {
+//     let layout = layout_from_text(text);
 
-    OwnedSection {
-        screen_position: text.position.into(),
-        bounds: text.area_bounds.into(),
-        layout,
-        ..OwnedSection::default()
-    }
-    .add_text(
-        glyph_brush::OwnedText::new(text.text)
-            .with_color(Vector4::from(text.color))
-            .with_scale(text.size),
-    )
-}
+//     OwnedSection {
+//         screen_position: text.position.into(),
+//         bounds: text.area_bounds.into(),
+//         layout,
+//         ..OwnedSection::default()
+//     }
+//     .add_text(
+//         glyph_brush::OwnedText::new(text.text)
+//             .with_color(Vector4::from(text.color))
+//             .with_scale(text.size),
+//     )
+// }
 
-pub fn owned_section_from_glyph_texts(
-    text: Vec<glyph_brush::OwnedText>,
-    screen_position: (f32, f32),
-    area_bounds: (f32, f32),
-    layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
-) -> glyph_brush::OwnedSection {
-    glyph_brush::OwnedSection {
-        screen_position,
-        bounds: area_bounds,
-        layout,
-        text,
-    }
-}
+// pub fn owned_section_from_glyph_texts(
+//     text: Vec<glyph_brush::OwnedText>,
+//     screen_position: (f32, f32),
+//     area_bounds: (f32, f32),
+//     layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
+// ) -> glyph_brush::OwnedSection {
+//     glyph_brush::OwnedSection {
+//         screen_position,
+//         bounds: area_bounds,
+//         layout,
+//         text,
+//     }
+// }
 
-pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) {
-    let layout = layout_from_text(text);
+// pub fn queue_text_draw(text: &Text, glyph_brush: &mut GlyphBrush<()>) {
+//     let layout = layout_from_text(text);
 
-    let section = section_from_text(text, layout);
+//     let section = section_from_text(text, layout);
 
-    glyph_brush.queue(section.clone());
-}
+//     glyph_brush.queue(section.clone());
+// }
 
-fn glyph_to_rect(glyph: &wgpu_glyph::SectionGlyph) -> Rect {
-    let position = glyph.glyph.position;
-    let px_scale = glyph.glyph.scale;
-    let width = glyph_width(&glyph.glyph);
-    let height = px_scale.y;
-    let top_y = glyph_top_y(&glyph.glyph);
+// fn glyph_to_rect(glyph: &wgpu_glyph::SectionGlyph) -> Rect {
+//     let position = glyph.glyph.position;
+//     let px_scale = glyph.glyph.scale;
+//     let width = glyph_width(&glyph.glyph);
+//     let height = px_scale.y;
+//     let top_y = glyph_top_y(&glyph.glyph);
 
-    Rect {
-        pos: [position.x, top_y].into(),
-        width,
-        height,
-    }
-}
+//     Rect {
+//         pos: [position.x, top_y].into(),
+//         width,
+//         height,
+//     }
+// }
 
-pub fn glyph_top_y(glyph: &Glyph) -> f32 {
-    let height = glyph.scale.y;
+// pub fn glyph_top_y(glyph: &Glyph) -> f32 {
+//     let height = glyph.scale.y;
 
-    glyph.position.y - height * 0.75
-}
+//     glyph.position.y - height * 0.75
+// }
 
-pub fn glyph_width(glyph: &Glyph) -> f32 {
-    glyph.scale.x * 0.4765
-}
+// pub fn glyph_width(glyph: &Glyph) -> f32 {
+//     glyph.scale.x * 0.4765
+// }
 
 pub fn build_glyph_brush(
     gpu_device: &wgpu::Device,
