@@ -5526,7 +5526,7 @@ mod solve_expr {
                     @Effect inner
                 "#
             ),
-            r#"a -> Effect [ inner a ]*"#,
+            r#"a -> Effect a"#,
         )
     }
 }
