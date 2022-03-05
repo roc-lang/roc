@@ -1,7 +1,6 @@
 mod focus;
 mod graphics;
 mod gui;
-mod rects_and_texts;
 mod roc;
 
 use crate::roc::RocElem;
