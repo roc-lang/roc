@@ -1659,33 +1659,26 @@ fn instantiate_rigids(
     }
 
     // wildcards are always freshly introduced in this annotation
-    for (i, wildcard) in introduced_vars.wildcards.iter().enumerate() {
-        ftv.insert(format!("*{}", i).into(), *wildcard);
-        new_rigids.push(*wildcard);
-    }
+    new_rigids.extend(introduced_vars.wildcards.iter().copied());
+
+    // inferred vars are always freshly introduced in this annotation
+    new_rigids.extend(introduced_vars.inferred.iter().copied());
 
     // lambda set vars are always freshly introduced in this annotation
-    for var in introduced_vars.lambda_sets.iter() {
-        new_rigids.push(*var);
-    }
-
-    // lambda set vars are always freshly introduced in this annotation
-    for var in introduced_vars.inferred.iter() {
-        new_rigids.push(*var);
-    }
+    new_rigids.extend(introduced_vars.lambda_sets.iter().copied());
 
     // Instantiate rigid variables
     if !rigid_substitution.is_empty() {
         annotation.substitute(&rigid_substitution);
     }
 
-    if let Some(new_headers) = crate::pattern::headers_from_annotation(
-        &loc_pattern.value,
-        &Loc::at(loc_pattern.region, &annotation),
-    ) {
-        for (symbol, loc_type) in new_headers {
-            headers.insert(symbol, loc_type);
-        }
+    let loc_annotation_ref = Loc::at(loc_pattern.region, &annotation);
+    if let Pattern::Identifier(symbol) = loc_pattern.value {
+        headers.insert(symbol, Loc::at(loc_pattern.region, annotation.clone()));
+    } else if let Some(new_headers) =
+        crate::pattern::headers_from_annotation(&loc_pattern.value, &loc_annotation_ref)
+    {
+        headers.extend(new_headers)
     }
 
     annotation
