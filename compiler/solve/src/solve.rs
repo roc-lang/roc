@@ -222,12 +222,17 @@ enum Work<'a> {
         constraint: &'a Constraint,
     },
     CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
-    LetConSimple {
+    /// The ret_con part of a let constraint that does NOT introduces rigid and/or flex variables
+    LetConNoVariables {
         env: &'a Env,
         rank: Rank,
         let_con: &'a LetConstraint,
     },
-    LetConComplex {
+    /// The ret_con part of a let constraint that introduces rigid and/or flex variables
+    ///
+    /// These introduced variables must be generalized, hence this variant
+    /// is more complex than `LetConNoVariables`.
+    LetConIntroducesVariables {
         env: &'a Env,
         rank: Rank,
         let_con: &'a LetConstraint,
@@ -274,7 +279,7 @@ fn solve(
 
                 continue;
             }
-            Work::LetConSimple { env, rank, let_con } => {
+            Work::LetConNoVariables { env, rank, let_con } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
                 let ret_constraint = &constraints.constraints[offset + 1];
@@ -298,17 +303,15 @@ fn solve(
                 stack.push(Work::Constraint {
                     env: arena.alloc(new_env),
                     rank,
-                    constraint: &ret_constraint,
+                    constraint: ret_constraint,
                 });
 
                 continue;
             }
-            Work::LetConComplex { env, rank, let_con } => {
+            Work::LetConIntroducesVariables { env, rank, let_con } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
                 let ret_constraint = &constraints.constraints[offset + 1];
-
-                let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
 
                 let next_rank = rank.next();
 
@@ -361,6 +364,8 @@ fn solve(
                     // inference, and does not come from elm. It's unclear whether this is
                     // a bug with uniqueness inference (something is redundant that
                     // shouldn't be) or that it just never came up in elm.
+                    let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
+
                     let failing: Vec<_> = rigid_vars
                         .iter()
                         .filter(|&var| !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE)
@@ -392,7 +397,7 @@ fn solve(
                 stack.push(Work::Constraint {
                     env: arena.alloc(new_env),
                     rank,
-                    constraint: &ret_constraint,
+                    constraint: ret_constraint,
                 });
 
                 state = state_for_ret_con;
@@ -627,14 +632,14 @@ fn solve(
                 let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
 
                 if matches!(&ret_constraint, True) && let_con.rigid_vars.is_empty() {
-                    introduce(subs, rank, pools, &flex_vars);
+                    introduce(subs, rank, pools, flex_vars);
 
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     stack.push(Work::Constraint {
                         env,
                         rank,
-                        constraint: &defs_constraint,
+                        constraint: defs_constraint,
                     });
 
                     state
@@ -644,11 +649,11 @@ fn solve(
                     //
                     // Note that the LetConSimple gets the current env and rank,
                     // and not the env/rank from after solving the defs_constraint
-                    stack.push(Work::LetConSimple { env, rank, let_con });
+                    stack.push(Work::LetConNoVariables { env, rank, let_con });
                     stack.push(Work::Constraint {
                         env,
                         rank,
-                        constraint: &defs_constraint,
+                        constraint: defs_constraint,
                     });
 
                     state
@@ -686,11 +691,11 @@ fn solve(
                     //
                     // Note that the LetConSimple gets the current env and rank,
                     // and not the env/rank from after solving the defs_constraint
-                    stack.push(Work::LetConComplex { env, rank, let_con });
+                    stack.push(Work::LetConIntroducesVariables { env, rank, let_con });
                     stack.push(Work::Constraint {
                         env,
                         rank: next_rank,
-                        constraint: &defs_constraint,
+                        constraint: defs_constraint,
                     });
 
                     state
