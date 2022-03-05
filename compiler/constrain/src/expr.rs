@@ -1363,7 +1363,7 @@ fn constrain_def(
 
             def_pattern_state.constraints.push(constraints.equal_types(
                 expr_type,
-                annotation_expected.clone(),
+                annotation_expected,
                 Category::Storage(std::file!(), std::line!()),
                 Region::span_across(&annotation.region, &def.loc_expr.region),
             ));
@@ -1528,14 +1528,21 @@ fn constrain_def(
                 }
 
                 _ => {
-                    let expected = annotation_expected;
+                    let annotation_expected = FromAnnotation(
+                        def.loc_pattern.clone(),
+                        arity,
+                        AnnotationSource::TypedBody {
+                            region: annotation.region,
+                        },
+                        signature.clone(),
+                    );
 
                     let ret_constraint = constrain_expr(
                         constraints,
                         env,
                         def.loc_expr.region,
                         &def.loc_expr.value,
-                        expected,
+                        annotation_expected,
                     );
 
                     let cons = [
