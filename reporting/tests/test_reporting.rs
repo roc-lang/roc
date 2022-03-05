@@ -8442,4 +8442,48 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn let_polymorphism_with_scoped_type_variables() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> a
+                f = \x ->
+                    y : a -> a
+                    y = \z -> z
+
+                    n = y 1u8
+                    x1 = y x
+                    (\_ -> x1) n
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                
+                The 1st argument to `y` is not what I expect:
+                
+                6│      n = y 1u8
+                              ^^^
+                
+                This argument is an integer of type:
+                
+                    U8
+                
+                But `y` needs the 1st argument to be:
+                
+                    a
+                
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `U8` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
 }
