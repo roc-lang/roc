@@ -208,9 +208,16 @@ impl RocElem {
     }
 
     fn elem_from_tag(entry: RocElemEntry, tag: RocElemTag) -> Self {
-        let entry_box = Box::new(entry);
-        let entry_ptr = entry_box.as_ref() as *const RocElemEntry;
-        let tagged_ptr = entry_ptr as usize | tag as usize;
+        let tagged_ptr = unsafe {
+            let entry_ptr = roc_alloc(
+                core::mem::size_of_val(&entry),
+                core::mem::align_of_val(&entry) as u32,
+            ) as *mut RocElemEntry;
+
+            *entry_ptr = entry;
+
+            entry_ptr as usize | tag as usize
+        };
 
         Self {
             entry: tagged_ptr as *const RocElemEntry,
