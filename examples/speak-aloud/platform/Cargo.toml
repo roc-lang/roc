@@ -15,7 +15,12 @@ crate-type = ["staticlib", "rlib"]
 name = "host"
 path = "src/main.rs"
 
+[features]
+# This feature is only available on Windows platforms
+tolk = []
+
 [dependencies]
+futures = "0.3"
 libc = "0.2"
 roc_std = { path = "../../../roc_std" }
 tts = "0.20"

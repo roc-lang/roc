@@ -1,4 +1,4 @@
-platform "examples/speak-text"
+platform "examples/speak-aloud"
     requires {} { main : Str }
     exposes []
     packages {}
