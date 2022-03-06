@@ -816,11 +816,6 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<ProcLayout<'a>, RuntimeError> {
-        dbg!(env
-            .subs
-            .get_content_without_compacting(annotation)
-            .clone()
-            .dbg(env.subs));
         let raw_layout = layout_cache
             .raw_from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
