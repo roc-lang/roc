@@ -281,10 +281,10 @@ impl RocDec {
         Self::from_str(val).unwrap().0
     }
 
-    fn to_str_helper(&self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) {
+    fn to_str_helper(&self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> usize {
         if self.0 == 0 {
             write!(&mut bytes[..], "{}", "0").unwrap();
-            return;
+            return 0;
         }
 
         let is_negative = (self.0 < 0) as usize;
@@ -318,9 +318,10 @@ impl RocDec {
         if i < decimal_location {
             // This means that we've removed trailing zeros and are left with an integer. Our
             // convention is to print these without a decimal point or trailing zeros, so we're done.
-            return;
+            return i;
         }
 
+        let ret = i + 1;
         while i >= decimal_location {
             bytes[i + 1] = bytes[i];
             i = i - 1;
@@ -330,20 +331,22 @@ impl RocDec {
 
         bytes[decimal_location] = '.' as u8;
         // Finally bytes = b"1234.5678"
+
+        ret
     }
 
     pub fn to_str(&self) -> RocStr {
         let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
-        self.to_str_helper(&mut bytes);
-        unsafe { RocStr::from_slice(&bytes) }
+        let last_idx = self.to_str_helper(&mut bytes);
+        unsafe { RocStr::from_slice(&bytes[0..last_idx]) }
     }
 }
 
 impl fmt::Display for RocDec {
     fn fmt(&self, fmtr: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
-        self.to_str_helper(&mut bytes);
-        let result = unsafe { str::from_utf8_unchecked(&bytes) };
+        let last_idx = self.to_str_helper(&mut bytes);
+        let result = unsafe { str::from_utf8_unchecked(&bytes[0..last_idx]) };
         write!(fmtr, "{}", result)
     }
 }
