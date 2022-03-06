@@ -137,3 +137,69 @@ fn fmt_text_eof(text: &mut bumpalo::collections::String<'_>) {
         }
     }
 }
+
+#[test]
+fn eof_text_ends_with_newline() {
+    use bumpalo::{collections::String, Bump};
+
+    let arena = Bump::new();
+    let input = "This should be a newline:\n";
+    let mut text = String::from_str_in(input, &arena);
+
+    fmt_text_eof(&mut text);
+
+    // This should be unchanged!
+    assert_eq!(text.as_str(), input);
+}
+
+#[test]
+fn eof_text_ends_with_whitespace() {
+    use bumpalo::{collections::String, Bump};
+
+    let arena = Bump::new();
+    let input = "This should be a newline: \t";
+    let mut text = String::from_str_in(input, &arena);
+
+    fmt_text_eof(&mut text);
+
+    assert_eq!(text.as_str(), "This should be a newline:\n");
+}
+
+#[test]
+fn eof_text_ends_with_whitespace_then_newline() {
+    use bumpalo::{collections::String, Bump};
+
+    let arena = Bump::new();
+    let input = "This should be a newline:  \n";
+    let mut text = String::from_str_in(input, &arena);
+
+    fmt_text_eof(&mut text);
+
+    assert_eq!(text.as_str(), "This should be a newline:\n");
+}
+
+#[test]
+fn eof_text_ends_with_no_whitespace() {
+    use bumpalo::{collections::String, Bump};
+
+    let arena = Bump::new();
+    let input = "This should be a newline:";
+    let mut text = String::from_str_in(input, &arena);
+
+    fmt_text_eof(&mut text);
+
+    assert_eq!(text.as_str(), "This should be a newline:\n");
+}
+
+#[test]
+fn eof_text_is_empty() {
+    use bumpalo::{collections::String, Bump};
+
+    let arena = Bump::new();
+    let input = "";
+    let mut text = String::from_str_in(input, &arena);
+
+    fmt_text_eof(&mut text);
+
+    assert_eq!(text.as_str(), "\n");
+}
