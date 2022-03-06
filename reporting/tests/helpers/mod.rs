@@ -35,10 +35,9 @@ pub fn infer_expr(
     let env = solve::Env::default();
     let (solved, _) = solve::run(constraints, &env, problems, subs, constraint);
 
-    let content = solved
+    let content = *solved
         .inner()
-        .get_content_without_compacting(expr_var)
-        .clone();
+        .get_content_without_compacting(expr_var);
 
     (content, solved.into_inner())
 }

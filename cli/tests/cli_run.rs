@@ -64,15 +64,15 @@ mod cli_run {
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-        let compile_out = run_roc(&[&["check", file.to_str().unwrap()], &flags[..]].concat());
+        let compile_out = run_roc(&[&["check", file.to_str().unwrap()], flags].concat());
         let err = compile_out.stdout.trim();
-        let err = strip_colors(&err);
+        let err = strip_colors(err);
         assert_multiline_str_eq!(err, expected.into());
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
         let flags = &["--check"];
-        let out = run_roc(&[&["format", &file.to_str().unwrap()], &flags[..]].concat());
+        let out = run_roc(&[&["format", file.to_str().unwrap()], &flags[..]].concat());
 
         if expects_success_exit_code {
             assert!(out.status.success());
