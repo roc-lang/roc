@@ -816,6 +816,11 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<ProcLayout<'a>, RuntimeError> {
+        dbg!(env
+            .subs
+            .get_content_without_compacting(annotation)
+            .clone()
+            .dbg(env.subs));
         let raw_layout = layout_cache
             .raw_from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
@@ -3088,6 +3093,53 @@ fn try_make_literal<'a>(
     }
 }
 
+fn accessor_to_closure<'a>(
+    env: &mut Env<'a, '_>,
+    name: Symbol,
+    function_var: Variable,
+    record_var: Variable,
+    closure_var: Variable,
+    closure_ext_var: Variable,
+    ext_var: Variable,
+    field_var: Variable,
+    field: Lowercase,
+) -> ClosureData {
+    // IDEA: convert accessor fromt
+    //
+    // .foo
+    //
+    // into
+    //
+    // (\r -> r.foo)
+    let record_symbol = env.unique_symbol();
+    let body = roc_can::expr::Expr::Access {
+        record_var,
+        ext_var,
+        field_var,
+        loc_expr: Box::new(Loc::at_zero(roc_can::expr::Expr::Var(record_symbol))),
+        field,
+    };
+
+    let loc_body = Loc::at_zero(body);
+
+    let arguments = vec![(
+        record_var,
+        Loc::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
+    )];
+
+    ClosureData {
+        function_type: function_var,
+        closure_type: closure_var,
+        closure_ext_var,
+        return_type: field_var,
+        name,
+        captured_symbols: vec![],
+        recursive: roc_can::expr::Recursive::NotRecursive,
+        arguments,
+        loc_body: Box::new(loc_body),
+    }
+}
+
 pub fn with_hole<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
@@ -3886,40 +3938,36 @@ pub fn with_hole<'a>(
             name,
             function_var,
             record_var,
-            closure_ext_var: _,
+            closure_var,
+            closure_ext_var,
             ext_var,
             field_var,
             field,
         } => {
-            // IDEA: convert accessor fromt
-            //
-            // .foo
-            //
-            // into
-            //
-            // (\r -> r.foo)
-            let record_symbol = env.unique_symbol();
-            let body = roc_can::expr::Expr::Access {
+            let ClosureData {
+                name,
+                function_type,
+                arguments,
+                loc_body,
+                ..
+            } = accessor_to_closure(
+                env,
+                name,
+                function_var,
                 record_var,
+                closure_var,
+                closure_ext_var,
                 ext_var,
                 field_var,
-                loc_expr: Box::new(Loc::at_zero(roc_can::expr::Expr::Var(record_symbol))),
                 field,
-            };
-
-            let loc_body = Loc::at_zero(body);
-
-            let arguments = vec![(
-                record_var,
-                Loc::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
-            )];
+            );
 
             match procs.insert_anonymous(
                 env,
                 name,
-                function_var,
+                function_type,
                 arguments,
-                loc_body,
+                *loc_body,
                 CapturedSymbols::None,
                 field_var,
                 layout_cache,
@@ -5442,6 +5490,38 @@ pub fn from_can<'a>(
                 match def.loc_expr.value {
                     roc_can::expr::Expr::Closure(closure_data) => {
                         register_capturing_closure(env, procs, layout_cache, *symbol, closure_data);
+
+                        return from_can(env, variable, cont.value, procs, layout_cache);
+                    }
+                    roc_can::expr::Expr::Accessor {
+                        name,
+                        function_var,
+                        record_var,
+                        closure_var,
+                        closure_ext_var,
+                        ext_var,
+                        field_var,
+                        field,
+                    } => {
+                        let closure_data = accessor_to_closure(
+                            env,
+                            name,
+                            function_var,
+                            record_var,
+                            closure_var,
+                            closure_ext_var,
+                            ext_var,
+                            field_var,
+                            field,
+                        );
+
+                        register_noncapturing_closure(
+                            env,
+                            procs,
+                            layout_cache,
+                            *symbol,
+                            closure_data,
+                        );
 
                         return from_can(env, variable, cont.value, procs, layout_cache);
                     }

@@ -769,7 +769,8 @@ pub fn constrain_expr(
             function_var,
             field,
             record_var,
-            closure_ext_var: closure_var,
+            closure_var,
+            closure_ext_var,
             ext_var,
             field_var,
         } => {
@@ -795,16 +796,24 @@ pub fn constrain_expr(
 
             let lambda_set = Type::ClosureTag {
                 name: *closure_name,
-                ext: *closure_var,
+                ext: *closure_ext_var,
             };
+
+            let closure_type = Type::Variable(*closure_var);
 
             let function_type = Type::Function(
                 vec![record_type],
-                Box::new(lambda_set),
+                Box::new(closure_type.clone()),
                 Box::new(field_type),
             );
 
             let cons = [
+                constraints.equal_types(
+                    closure_type,
+                    NoExpectation(lambda_set),
+                    category.clone(),
+                    region,
+                ),
                 constraints.equal_types(function_type.clone(), expected, category.clone(), region),
                 constraints.equal_types(
                     function_type,
@@ -816,7 +825,14 @@ pub fn constrain_expr(
             ];
 
             constraints.exists_many(
-                [*record_var, *function_var, *closure_var, field_var, ext_var],
+                [
+                    *record_var,
+                    *function_var,
+                    *closure_var,
+                    *closure_ext_var,
+                    field_var,
+                    ext_var,
+                ],
                 cons,
             )
         }
