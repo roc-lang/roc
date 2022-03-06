@@ -7305,11 +7305,11 @@ I need all branches in an `if` to have the same type!
                                 {}
 
                         The first pattern is trying to match {}:
-        
+
                             {}
-        
+
                         But the expression between `when` and `is` has the type:
-        
+
                             {}
                         "#
                     ), number, $suffix, carets, kind, typ, bad_type),
@@ -8463,20 +8463,20 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-                
+
                 The 1st argument to `y` is not what I expect:
-                
+
                 6│      n = y 1u8
                               ^^^
-                
+
                 This argument is an integer of type:
-                
+
                     U8
-                
+
                 But `y` needs the 1st argument to be:
-                
+
                     a
-                
+
                 Tip: The type annotation uses the type variable `a` to say that this
                 definition can produce any type of value. But in the body I see that
                 it will only produce a `U8` value of a single specific type. Maybe
