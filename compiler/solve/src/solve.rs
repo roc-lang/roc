@@ -1791,7 +1791,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
         match &desc.content {
             RigidVar(name) => {
                 // what it's all about: convert the rigid var into a flex var
-                let name = name.clone();
+                let name = *name;
 
                 // NOTE: we must write to the mutually borrowed `desc` value here
                 // using `subs.set` does not work (unclear why, really)
@@ -1947,7 +1947,7 @@ fn deep_copy_var_help(
         copy: OptVariable::NONE,
     };
 
-    let content = desc.content.clone();
+    let content = desc.content;
 
     // Safety: Here we make a variable that is 1 position out of bounds.
     // The reason is that we can now keep the mutable reference to `desc`
@@ -1964,7 +1964,7 @@ fn deep_copy_var_help(
     desc.mark = Mark::NONE;
     desc.copy = copy.into();
 
-    let actual_copy = subs.fresh(make_descriptor(content.clone()));
+    let actual_copy = subs.fresh(make_descriptor(content));
     debug_assert_eq!(copy, actual_copy);
 
     // Now we recursively copy the content of the variable.

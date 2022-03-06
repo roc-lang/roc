@@ -74,7 +74,7 @@ impl<'a> RawFunctionLayout<'a> {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
-                Self::new_help(env, structure, structure_content.clone())
+                Self::new_help(env, structure, *structure_content)
             }
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(typ, _) => Self::from_var(env, typ),
@@ -207,7 +207,7 @@ impl<'a> RawFunctionLayout<'a> {
             unreachable!("The initial variable of a signature cannot be seen already")
         } else {
             let content = env.subs.get_content_without_compacting(var);
-            Self::new_help(env, var, content.clone())
+            Self::new_help(env, var, *content)
         }
     }
 }
@@ -928,7 +928,7 @@ impl<'a> Layout<'a> {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
-                Self::new_help(env, structure, structure_content.clone())
+                Self::new_help(env, structure, *structure_content)
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
@@ -968,7 +968,7 @@ impl<'a> Layout<'a> {
             Ok(Layout::RecursivePointer)
         } else {
             let content = env.subs.get_content_without_compacting(var);
-            Self::new_help(env, var, content.clone())
+            Self::new_help(env, var, *content)
         }
     }
 

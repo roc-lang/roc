@@ -3405,14 +3405,14 @@ impl StorageSubs {
         use Content::*;
 
         match content {
-            FlexVar(opt_name) => FlexVar(opt_name.clone()),
-            RigidVar(name) => RigidVar(name.clone()),
+            FlexVar(opt_name) => FlexVar(*opt_name),
+            RigidVar(name) => RigidVar(*name),
             RecursionVar {
                 structure,
                 opt_name,
             } => RecursionVar {
                 structure: Self::offset_variable(offsets, *structure),
-                opt_name: opt_name.clone(),
+                opt_name: *opt_name,
             },
             Structure(flat_type) => Structure(Self::offset_flat_type(offsets, flat_type)),
             Alias(symbol, alias_variables, actual, kind) => Alias(
