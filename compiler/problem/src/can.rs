@@ -84,6 +84,16 @@ pub enum Problem {
         def_region: Region,
         differing_recursion_region: Region,
     },
+    InvalidExtensionType {
+        region: Region,
+        kind: ExtensionTypeKind,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExtensionTypeKind {
+    Record,
+    TagUnion,
 }
 
 #[derive(Clone, Debug, PartialEq)]

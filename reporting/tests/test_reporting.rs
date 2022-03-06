@@ -8515,4 +8515,54 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn invalid_record_extension_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Nat }U32
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INVALID_EXTENSION_TYPE ──────────────────────────────────────────────────────
+
+                This record extension type is invalid:
+
+                1│  f : { x : Nat }U32
+                                   ^^^
+
+                Note: A record extension variable can only contain a type variable or
+                another record.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_tag_extension_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ A ]U32
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INVALID_EXTENSION_TYPE ──────────────────────────────────────────────────────
+
+                This tag union extension type is invalid:
+
+                1│  f : [ A ]U32
+                             ^^^
+
+                Note: A tag union extension variable can only contain a type variable
+                or another tag union.
+                "#
+            ),
+        )
+    }
 }

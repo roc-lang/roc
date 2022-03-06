@@ -375,7 +375,8 @@ fn can_annotation_help(
         As(
             loc_inner,
             _spaces,
-            alias_header @ TypeHeader {
+            alias_header
+            @ TypeHeader {
                 name,
                 vars: loc_vars,
             },
@@ -520,19 +521,16 @@ fn can_annotation_help(
         }
 
         Record { fields, ext } => {
-            let ext_type = match ext {
-                Some(loc_ann) => can_annotation_help(
-                    env,
-                    &loc_ann.value,
-                    region,
-                    scope,
-                    var_store,
-                    introduced_variables,
-                    local_aliases,
-                    references,
-                ),
-                None => Type::EmptyRec,
-            };
+            let ext_type = can_extension_type(
+                env,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+                ext,
+                roc_problem::can::ExtensionTypeKind::Record,
+            );
 
             if fields.is_empty() {
                 match ext {
@@ -561,19 +559,16 @@ fn can_annotation_help(
             }
         }
         TagUnion { tags, ext, .. } => {
-            let ext_type = match ext {
-                Some(loc_ann) => can_annotation_help(
-                    env,
-                    &loc_ann.value,
-                    loc_ann.region,
-                    scope,
-                    var_store,
-                    introduced_variables,
-                    local_aliases,
-                    references,
-                ),
-                None => Type::EmptyTagUnion,
-            };
+            let ext_type = can_extension_type(
+                env,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+                ext,
+                roc_problem::can::ExtensionTypeKind::TagUnion,
+            );
 
             if tags.is_empty() {
                 match ext {
@@ -641,6 +636,74 @@ fn can_annotation_help(
 
             Type::Variable(var)
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn can_extension_type<'a>(
+    env: &mut Env,
+    scope: &mut Scope,
+    var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
+    local_aliases: &mut SendMap<Symbol, Alias>,
+    references: &mut MutSet<Symbol>,
+    opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
+    ext_problem_kind: roc_problem::can::ExtensionTypeKind,
+) -> Type {
+    fn valid_record_ext_type(typ: &Type) -> bool {
+        // Include erroneous types so that we don't overreport errors.
+        matches!(
+            typ,
+            Type::EmptyRec | Type::Record(..) | Type::Variable(..) | Type::Erroneous(..)
+        )
+    }
+    fn valid_tag_ext_type(typ: &Type) -> bool {
+        matches!(
+            typ,
+            Type::EmptyTagUnion | Type::TagUnion(..) | Type::Variable(..) | Type::Erroneous(..)
+        )
+    }
+
+    use roc_problem::can::ExtensionTypeKind;
+
+    let (empty_ext_type, valid_extension_type): (_, fn(&Type) -> bool) = match ext_problem_kind {
+        ExtensionTypeKind::Record => (Type::EmptyRec, valid_record_ext_type),
+        ExtensionTypeKind::TagUnion => (Type::EmptyTagUnion, valid_tag_ext_type),
+    };
+
+    match opt_ext {
+        Some(loc_ann) => {
+            let ext_type = can_annotation_help(
+                env,
+                &loc_ann.value,
+                loc_ann.region,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+            );
+            if valid_extension_type(&ext_type) {
+                ext_type
+            } else {
+                // Report an error but mark the extension variable to be inferred
+                // so that we're as permissive as possible.
+                //
+                // THEORY: invalid extension types can appear in this position. Otherwise
+                // they would be caught as errors during unification.
+                env.problem(roc_problem::can::Problem::InvalidExtensionType {
+                    region: loc_ann.region,
+                    kind: ext_problem_kind,
+                });
+
+                let var = var_store.fresh();
+
+                introduced_variables.insert_inferred(var);
+
+                Type::Variable(var)
+            }
+        }
+        None => empty_ext_type,
     }
 }
 
