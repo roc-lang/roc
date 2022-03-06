@@ -918,6 +918,25 @@ impl RegisterVariable {
             _ => Deferred,
         }
     }
+
+    #[inline(always)]
+    fn with_stack<'a>(
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+        arena: &'_ bumpalo::Bump,
+        typ: &'a Type,
+        stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+    ) -> Variable {
+        match Self::from_type(subs, rank, pools, arena, typ) {
+            Self::Direct(var) => var,
+            Self::Deferred => {
+                let var = subs.fresh_unnamed_flex_var();
+                stack.push(TypeToVar::Defer(typ, var));
+                var
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1137,7 +1156,7 @@ fn type_to_variable<'a>(
                 };
 
                 let alias_variable = if let Symbol::RESULT_RESULT = *symbol {
-                    roc_result_to_var(subs, rank, pools, arena, actual)
+                    roc_result_to_var(subs, rank, pools, arena, actual, &mut stack)
                 } else {
                     helper!(actual)
                 };
@@ -1217,8 +1236,9 @@ fn roc_result_to_var<'a>(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    arena: &'a bumpalo::Bump,
-    result_type: &Type,
+    arena: &'_ bumpalo::Bump,
+    result_type: &'a Type,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> Variable {
     match result_type {
         Type::TagUnion(tags, ext) => {
@@ -1230,8 +1250,10 @@ fn roc_result_to_var<'a>(
                 debug_assert_eq!(ok, &subs.tag_names[1]);
 
                 if let ([err_type], [ok_type]) = (err_args.as_slice(), ok_args.as_slice()) {
-                    let err_var = type_to_variable(subs, rank, pools, arena, err_type);
-                    let ok_var = type_to_variable(subs, rank, pools, arena, ok_type);
+                    let err_var =
+                        RegisterVariable::with_stack(subs, rank, pools, arena, err_type, stack);
+                    let ok_var =
+                        RegisterVariable::with_stack(subs, rank, pools, arena, ok_type, stack);
 
                     let start = subs.variables.len() as u32;
                     let err_slice = SubsSlice::new(start, 1);
@@ -1382,24 +1404,11 @@ fn insert_tags_fast_path<'a>(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    arena: &'a bumpalo::Bump,
+    arena: &'_ bumpalo::Bump,
     tags: &'a [(TagName, Vec<Type>)],
-    stack: &mut bumpalo::collections::Vec<'a, TypeToVar<'a>>,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
     let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-
-    macro_rules! helper {
-        ($typ:expr) => {{
-            match RegisterVariable::from_type(subs, rank, pools, arena, $typ) {
-                RegisterVariable::Direct(var) => var,
-                RegisterVariable::Deferred => {
-                    let var = subs.fresh_unnamed_flex_var();
-                    stack.push(TypeToVar::Defer($typ, var));
-                    var
-                }
-            }
-        }};
-    }
 
     match find_tag_name_run(tags, subs) {
         Some(new_tag_names) => {
@@ -1410,7 +1419,8 @@ fn insert_tags_fast_path<'a>(
                 let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
                 let it = (new_variables.indices()).zip(arguments);
                 for (target_index, argument) in it {
-                    let var = helper!(argument);
+                    let var =
+                        RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
                     subs.variables[target_index] = var;
                 }
 
@@ -1431,7 +1441,8 @@ fn insert_tags_fast_path<'a>(
                 let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
                 let it = (new_variables.indices()).zip(arguments);
                 for (target_index, argument) in it {
-                    let var = helper!(argument);
+                    let var =
+                        RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
                     subs.variables[target_index] = var;
                 }
 
@@ -1448,29 +1459,16 @@ fn insert_tags_slow_path<'a>(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    arena: &'a bumpalo::Bump,
+    arena: &'_ bumpalo::Bump,
     tags: &'a [(TagName, Vec<Type>)],
     mut tag_vars: bumpalo::collections::Vec<(TagName, VariableSubsSlice)>,
-    stack: &mut bumpalo::collections::Vec<'a, TypeToVar<'a>>,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
-    macro_rules! helper {
-        ($typ:expr) => {{
-            match RegisterVariable::from_type(subs, rank, pools, arena, $typ) {
-                RegisterVariable::Direct(var) => var,
-                RegisterVariable::Deferred => {
-                    let var = subs.fresh_unnamed_flex_var();
-                    stack.push(TypeToVar::Defer($typ, var));
-                    var
-                }
-            }
-        }};
-    }
-
     for (tag, tag_argument_types) in tags {
         let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
 
         for (i, arg) in (new_slice.indices()).zip(tag_argument_types) {
-            let var = helper!(arg);
+            let var = RegisterVariable::with_stack(subs, rank, pools, arena, arg, stack);
             subs.variables[i] = var;
         }
 
@@ -1486,10 +1484,10 @@ fn type_to_union_tags<'a>(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    arena: &'a bumpalo::Bump,
+    arena: &'_ bumpalo::Bump,
     tags: &'a [(TagName, Vec<Type>)],
-    ext: &Type,
-    stack: &mut bumpalo::collections::Vec<'a, TypeToVar<'a>>,
+    ext: &'a Type,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> (UnionTags, Variable) {
     use bumpalo::collections::Vec;
 
@@ -1509,7 +1507,7 @@ fn type_to_union_tags<'a>(
     } else {
         let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
 
-        let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
+        let temp_ext_var = RegisterVariable::with_stack(subs, rank, pools, arena, ext, stack);
         let (it, ext) =
             roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext_var);
 
