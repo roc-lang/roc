@@ -284,7 +284,7 @@ impl RocDec {
     fn to_str_helper(&self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> usize {
         if self.0 == 0 {
             write!(&mut bytes[..], "{}", "0").unwrap();
-            return 0;
+            return 1;
         }
 
         let is_negative = (self.0 < 0) as usize;
@@ -318,7 +318,7 @@ impl RocDec {
         if i < decimal_location {
             // This means that we've removed trailing zeros and are left with an integer. Our
             // convention is to print these without a decimal point or trailing zeros, so we're done.
-            return i;
+            return i + 1;
         }
 
         let ret = i + 1;
@@ -332,7 +332,7 @@ impl RocDec {
         bytes[decimal_location] = '.' as u8;
         // Finally bytes = b"1234.5678"
 
-        ret
+        ret + 1
     }
 
     pub fn to_str(&self) -> RocStr {
