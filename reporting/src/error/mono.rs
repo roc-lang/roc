@@ -136,6 +136,8 @@ fn pattern_to_doc<'b>(
     pattern_to_doc_help(alloc, pattern, false)
 }
 
+const AFTER_TAG_INDENT: &str = "    ";
+
 fn pattern_to_doc_help<'b>(
     alloc: &'b RocDocAllocator<'b>,
     pattern: roc_exhaustive::Pattern,
@@ -168,7 +170,13 @@ fn pattern_to_doc_help<'b>(
                     );
                     debug_assert!(args.len() == 2);
                     let tag = pattern_to_doc_help(alloc, args[1].clone(), in_type_param);
-                    tag.append("    (note the lack of a guard)")
+                    alloc.concat(vec![
+                        tag,
+                        alloc.text(AFTER_TAG_INDENT),
+                        alloc.text("(note the lack of an "),
+                        alloc.keyword("if"),
+                        alloc.text(" clause)"),
+                    ])
                 }
                 RenderAs::Record(field_names) => {
                     let mut arg_docs = Vec::with_capacity(args.len());

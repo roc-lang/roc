@@ -8508,7 +8508,7 @@ I need all branches in an `if` to have the same type!
 
                 Other possibilities include:
 
-                    A    (note the lack of a guard)
+                    A    (note the lack of an if clause)
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#
