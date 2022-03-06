@@ -5,6 +5,7 @@ use build::{BuildOutcome, BuiltFile};
 use bumpalo::Bump;
 use clap::{App, AppSettings, Arg, ArgMatches};
 use roc_build::link::LinkType;
+use roc_error_macros::user_error;
 use roc_load::file::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use std::env;
@@ -31,8 +32,9 @@ pub const CMD_FORMAT: &str = "format";
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
+pub const FLAG_OPT_SIZE: &str = "opt-size";
 pub const FLAG_LIB: &str = "lib";
-pub const FLAG_BACKEND: &str = "backend";
+pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINK: &str = "roc-linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
@@ -40,7 +42,6 @@ pub const FLAG_VALGRIND: &str = "valgrind";
 pub const FLAG_CHECK: &str = "check";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
-pub const BACKEND: &str = "BACKEND";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
@@ -62,18 +63,23 @@ pub fn build_app<'a>() -> App<'a> {
                     .required(false),
             )
             .arg(
+                Arg::new(FLAG_OPT_SIZE)
+                    .long(FLAG_OPT_SIZE)
+                    .about("Optimize your compiled Roc program to have a small binary size. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
                 Arg::new(FLAG_DEV)
                     .long(FLAG_DEV)
                     .about("Make compilation as fast as possible. (Runtime performance may suffer)")
                     .required(false),
             )
             .arg(
-                Arg::new(FLAG_BACKEND)
-                    .long(FLAG_BACKEND)
-                    .about("Choose a different backend")
-                    // .requires(BACKEND)
-                .default_value(Backend::default().as_str())
-                    .possible_values(Backend::OPTIONS)
+                Arg::new(FLAG_TARGET)
+                    .long(FLAG_TARGET)
+                    .about("Choose a different target")
+                .default_value(Target::default().as_str())
+                    .possible_values(Target::OPTIONS)
                     .required(false),
             )
             .arg(
@@ -166,12 +172,18 @@ pub fn build_app<'a>() -> App<'a> {
                 .requires(ROC_FILE)
                 .required(false),
         )
-            .arg(
-                Arg::new(FLAG_DEV)
-                    .long(FLAG_DEV)
-                    .about("Make compilation as fast as possible. (Runtime performance may suffer)")
-                    .required(false),
-            )
+        .arg(
+            Arg::new(FLAG_OPT_SIZE)
+                .long(FLAG_OPT_SIZE)
+                .about("Optimize your compiled Roc program to have a small binary size. (Optimization takes time to complete.)")
+                .required(false),
+        )
+        .arg(
+            Arg::new(FLAG_DEV)
+                .long(FLAG_DEV)
+                .about("Make compilation as fast as possible. (Runtime performance may suffer)")
+                .required(false),
+        )
         .arg(
             Arg::new(FLAG_DEBUG)
                 .long(FLAG_DEBUG)
@@ -198,12 +210,11 @@ pub fn build_app<'a>() -> App<'a> {
                 .required(false),
         )
         .arg(
-            Arg::new(FLAG_BACKEND)
-                .long(FLAG_BACKEND)
-                .about("Choose a different backend")
-                // .requires(BACKEND)
-                .default_value(Backend::default().as_str())
-                .possible_values(Backend::OPTIONS)
+            Arg::new(FLAG_TARGET)
+                .long(FLAG_TARGET)
+                .about("Choose a different target")
+                .default_value(Target::default().as_str())
+                .possible_values(Target::OPTIONS)
                 .required(false),
         )
         .arg(
@@ -259,12 +270,12 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     use std::str::FromStr;
     use BuildConfig::*;
 
-    let backend = match matches.value_of(FLAG_BACKEND) {
-        Some(name) => Backend::from_str(name).unwrap(),
-        None => Backend::default(),
+    let target = match matches.value_of(FLAG_TARGET) {
+        Some(name) => Target::from_str(name).unwrap(),
+        None => Target::default(),
     };
 
-    let target = backend.to_triple();
+    let triple = target.to_triple();
 
     let arena = Bump::new();
     let filename = matches.value_of(ROC_FILE).unwrap();
@@ -272,12 +283,14 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let original_cwd = std::env::current_dir()?;
     let opt_level = match (
         matches.is_present(FLAG_OPTIMIZE),
+        matches.is_present(FLAG_OPT_SIZE),
         matches.is_present(FLAG_DEV),
     ) {
-        (true, false) => OptLevel::Optimize,
-        (true, true) => panic!("development cannot be optimized!"),
-        (false, true) => OptLevel::Development,
-        (false, false) => OptLevel::Normal,
+        (true, false, false) => OptLevel::Optimize,
+        (false, true, false) => OptLevel::Size,
+        (false, false, true) => OptLevel::Development,
+        (false, false, false) => OptLevel::Normal,
+        _ => user_error!("build can be only one of `--dev`, `--optimize`, or `--opt-size`"),
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
@@ -290,10 +303,10 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let surgically_link = matches.is_present(FLAG_LINK);
     let precompiled = matches.is_present(FLAG_PRECOMPILED);
 
-    if surgically_link && !roc_linker::supported(&link_type, &target) {
+    if surgically_link && !roc_linker::supported(&link_type, &triple) {
         panic!(
             "Link type, {:?}, with target, {}, not supported by roc linker",
-            link_type, target
+            link_type, triple
         );
     }
 
@@ -322,7 +335,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let target_valgrind = matches.is_present(FLAG_VALGRIND);
     let res_binary_path = build_file(
         &arena,
-        &target,
+        &triple,
         src_dir,
         path,
         opt_level,
@@ -361,7 +374,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                     Ok(outcome.status_code())
                 }
                 BuildAndRun { roc_file_arg_index } => {
-                    let mut cmd = match target.architecture {
+                    let mut cmd = match triple.architecture {
                         Architecture::Wasm32 => {
                             // If possible, report the generated executable name relative to the current dir.
                             let generated_filename = binary_path
@@ -382,7 +395,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                         _ => Command::new(&binary_path),
                     };
 
-                    if let Architecture::Wasm32 = target.architecture {
+                    if let Architecture::Wasm32 = triple.architecture {
                         cmd.arg(binary_path);
                     }
 
@@ -487,43 +500,43 @@ fn run_with_wasmer(_wasm_path: &std::path::Path, _args: &[String]) {
     println!("Running wasm files not support");
 }
 
-enum Backend {
+enum Target {
     Host,
     X86_32,
     X86_64,
     Wasm32,
 }
 
-impl Default for Backend {
+impl Default for Target {
     fn default() -> Self {
-        Backend::Host
+        Target::Host
     }
 }
 
-impl Backend {
+impl Target {
     const fn as_str(&self) -> &'static str {
         match self {
-            Backend::Host => "host",
-            Backend::X86_32 => "x86_32",
-            Backend::X86_64 => "x86_64",
-            Backend::Wasm32 => "wasm32",
+            Target::Host => "host",
+            Target::X86_32 => "x86_32",
+            Target::X86_64 => "x86_64",
+            Target::Wasm32 => "wasm32",
         }
     }
 
     /// NOTE keep up to date!
     const OPTIONS: &'static [&'static str] = &[
-        Backend::Host.as_str(),
-        Backend::X86_32.as_str(),
-        Backend::X86_64.as_str(),
-        Backend::Wasm32.as_str(),
+        Target::Host.as_str(),
+        Target::X86_32.as_str(),
+        Target::X86_64.as_str(),
+        Target::Wasm32.as_str(),
     ];
 
     fn to_triple(&self) -> Triple {
         let mut triple = Triple::unknown();
 
         match self {
-            Backend::Host => Triple::host(),
-            Backend::X86_32 => {
+            Target::Host => Triple::host(),
+            Target::X86_32 => {
                 triple.architecture = Architecture::X86_32(X86_32Architecture::I386);
                 triple.binary_format = BinaryFormat::Elf;
 
@@ -532,13 +545,13 @@ impl Backend {
 
                 triple
             }
-            Backend::X86_64 => {
+            Target::X86_64 => {
                 triple.architecture = Architecture::X86_64;
                 triple.binary_format = BinaryFormat::Elf;
 
                 triple
             }
-            Backend::Wasm32 => {
+            Target::Wasm32 => {
                 triple.architecture = Architecture::Wasm32;
                 triple.binary_format = BinaryFormat::Wasm;
 
@@ -548,21 +561,21 @@ impl Backend {
     }
 }
 
-impl std::fmt::Display for Backend {
+impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
     }
 }
 
-impl std::str::FromStr for Backend {
+impl std::str::FromStr for Target {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "host" => Ok(Backend::Host),
-            "x86_32" => Ok(Backend::X86_32),
-            "x86_64" => Ok(Backend::X86_64),
-            "wasm32" => Ok(Backend::Wasm32),
+            "host" => Ok(Target::Host),
+            "x86_32" => Ok(Target::X86_32),
+            "x86_64" => Ok(Target::X86_64),
+            "wasm32" => Ok(Target::Wasm32),
             _ => Err(()),
         }
     }

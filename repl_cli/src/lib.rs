@@ -20,6 +20,7 @@ use roc_parse::parser::{EExpr, ELambda, SyntaxError};
 use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{compile_to_mono, format_answer, ReplOutput};
 use roc_repl_eval::{ReplApp, ReplAppMemory};
+use roc_std::RocStr;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
@@ -183,7 +184,8 @@ impl ReplAppMemory for CliMemory {
     deref_number!(deref_f64, f64);
 
     fn deref_str(&self, addr: usize) -> &str {
-        unsafe { *(addr as *const &'static str) }
+        let reference: &RocStr = unsafe { std::mem::transmute(addr) };
+        reference.as_str()
     }
 }
 

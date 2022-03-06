@@ -40,6 +40,8 @@ pub struct Uppercase(IdentStr);
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct ForeignSymbol(IdentStr);
 
+pub type TagIdIntType = u16;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TagName {
     /// Global tags have no module, but tend to be short strings (since they're

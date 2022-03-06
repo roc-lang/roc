@@ -41,6 +41,11 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             operating_system: OperatingSystem::Darwin,
             ..
         } => "x86_64-unknown-darwin10",
+        Triple {
+            architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Windows,
+            ..
+        } => "x86_64-pc-windows-gnu",
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
@@ -114,6 +119,8 @@ pub fn target_machine(
 pub fn convert_opt_level(level: OptLevel) -> OptimizationLevel {
     match level {
         OptLevel::Development | OptLevel::Normal => OptimizationLevel::None,
+        // Default is O2/Os. If we want Oz, we have to explicitly turn of loop vectorization as well.
+        OptLevel::Size => OptimizationLevel::Default,
         OptLevel::Optimize => OptimizationLevel::Aggressive,
     }
 }

@@ -154,12 +154,18 @@ fn canonicalize_field<'a>(
             let (loc_can_expr, output) =
                 expr_to_expr2(env, scope, &loc_expr.value, loc_expr.region);
 
-            Ok(CanonicalField::LabelAndValue {
-                label: label.value,
-                value_expr: loc_can_expr,
-                value_output: output,
-                var: field_var,
-            })
+            match loc_can_expr {
+                Expr2::RuntimeError() => Ok(CanonicalField::InvalidLabelOnly {
+                    label: label.value,
+                    var: field_var,
+                }),
+                _ => Ok(CanonicalField::LabelAndValue {
+                    label: label.value,
+                    value_expr: loc_can_expr,
+                    value_output: output,
+                    var: field_var,
+                }),
+            }
         }
 
         OptionalValue(label, _, loc_expr) => Err(CanonicalizeFieldProblem::InvalidOptionalValue {

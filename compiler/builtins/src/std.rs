@@ -1056,6 +1056,19 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(result_type(flex(TVAR1), list_was_empty.clone())),
     );
 
+    // replace : List elem, Nat, elem -> { list: List elem, value: elem }
+    add_top_level_function_type!(
+        Symbol::LIST_REPLACE,
+        vec![list_type(flex(TVAR1)), nat_type(), flex(TVAR1)],
+        Box::new(SolvedType::Record {
+            fields: vec![
+                ("list".into(), RecordField::Required(list_type(flex(TVAR1)))),
+                ("value".into(), RecordField::Required(flex(TVAR1))),
+            ],
+            ext: Box::new(SolvedType::EmptyRecord),
+        }),
+    );
+
     // set : List elem, Nat, elem -> List elem
     add_top_level_function_type!(
         Symbol::LIST_SET,

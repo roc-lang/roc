@@ -27,7 +27,8 @@ fn main() {
     }
 
     // "." is relative to where "build.rs" is
-    let build_script_dir_path = fs::canonicalize(Path::new(".")).unwrap();
+    // dunce can be removed once ziglang/zig#5109 is fixed
+    let build_script_dir_path = dunce::canonicalize(Path::new(".")).unwrap();
     let bitcode_path = build_script_dir_path.join("bitcode");
 
     // LLVM .bc FILES
@@ -49,12 +50,17 @@ fn main() {
     );
 
     // OBJECT FILES
+    #[cfg(windows)]
+    const BUILTINS_HOST_FILE: &str = "builtins-host.obj";
+
+    #[cfg(not(windows))]
+    const BUILTINS_HOST_FILE: &str = "builtins-host.o";
 
     generate_object_file(
         &bitcode_path,
         "BUILTINS_HOST_O",
         "object",
-        "builtins-host.o",
+        BUILTINS_HOST_FILE,
     );
 
     generate_object_file(
@@ -102,8 +108,8 @@ fn generate_object_file(
 
     println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
 
-    // we store this .o file in rust's `target` folder
-    run_command(&bitcode_path, "mv", &[src_obj, dest_obj]);
+    // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
+    fs::copy(src_obj, dest_obj).expect("Failed to copy object file.");
 }
 
 fn generate_bc_file(

@@ -10,8 +10,8 @@ crate-type = ["cdylib"]
 roc_builtins = {path = "../compiler/builtins"}
 
 [dependencies]
-bumpalo = {version = "3.8.0", features = ["collections"]}
-futures = {version = "0.3.17", optional = true}
+bumpalo = { version = "3.8.0", features = ["collections"] }
+futures = { version = "0.3.17", optional = true }
 js-sys = "0.3.56"
 wasm-bindgen = "0.2.79"
 wasm-bindgen-futures = "0.4.29"
