@@ -16,7 +16,6 @@ use roc_types::types::{
     gather_fields_unsorted_iter, AliasKind, Category, ErrorType, PatternCategory,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
-use std::collections::hash_map::Entry;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
@@ -858,14 +857,84 @@ fn type_to_var(
     _: &mut MutMap<Symbol, Variable>,
     typ: &Type,
 ) -> Variable {
-    let mut arena = take_scratchpad();
+    if let Type::Variable(var) = typ {
+        *var
+    } else {
+        let mut arena = take_scratchpad();
 
-    let var = type_to_variable(subs, rank, pools, &arena, typ);
+        // let var = type_to_variable(subs, rank, pools, &arena, typ);
+        let var = type_to_variable(subs, rank, pools, &arena, typ);
 
-    arena.reset();
-    put_scratchpad(arena);
+        arena.reset();
+        put_scratchpad(arena);
 
-    var
+        var
+    }
+}
+
+enum RegisterVariable {
+    /// Based on the Type, we already know what variable this will be
+    Direct(Variable),
+    /// This Type needs more complicated Content. We reserve a Variable
+    /// for it, but put a placeholder Content in subs
+    Deferred,
+}
+
+impl RegisterVariable {
+    fn from_type(
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+        arena: &'_ bumpalo::Bump,
+        typ: &Type,
+    ) -> Self {
+        use RegisterVariable::*;
+
+        match typ {
+            Variable(var) => Direct(*var),
+            EmptyRec => Direct(Variable::EMPTY_RECORD),
+            EmptyTagUnion => Direct(Variable::EMPTY_TAG_UNION),
+            Type::Alias { symbol, .. } => {
+                if let Some(reserved) = Variable::get_reserved(*symbol) {
+                    if rank.is_none() {
+                        // reserved variables are stored with rank NONE
+                        return Direct(reserved);
+                    } else {
+                        // for any other rank, we need to copy; it takes care of adjusting the rank
+                        let copied = deep_copy_var_in(subs, rank, pools, reserved, arena);
+                        return Direct(copied);
+                    }
+                }
+
+                Deferred
+            }
+            _ => Deferred,
+        }
+    }
+
+    #[inline(always)]
+    fn with_stack<'a>(
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+        arena: &'_ bumpalo::Bump,
+        typ: &'a Type,
+        stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+    ) -> Variable {
+        match Self::from_type(subs, rank, pools, arena, typ) {
+            Self::Direct(var) => var,
+            Self::Deferred => {
+                let var = subs.fresh_unnamed_flex_var();
+                stack.push(TypeToVar::Defer(typ, var));
+                var
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum TypeToVar<'a> {
+    Defer(&'a Type, Variable),
 }
 
 fn type_to_variable<'a>(
@@ -877,255 +946,282 @@ fn type_to_variable<'a>(
 ) -> Variable {
     use bumpalo::collections::Vec;
 
-    match typ {
-        Variable(var) => *var,
-        RangedNumber(typ, vars) => {
-            let ty_var = type_to_variable(subs, rank, pools, arena, typ);
-            let vars = VariableSubsSlice::insert_into_subs(subs, vars.iter().copied());
-            let content = Content::RangedNumber(ty_var, vars);
+    let mut stack = Vec::with_capacity_in(8, arena);
 
-            register(subs, rank, pools, content)
-        }
-        Apply(symbol, arguments, _) => {
-            let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-            for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                let var = type_to_variable(subs, rank, pools, arena, var_index);
-                subs.variables[target_index] = var;
-            }
-
-            let flat_type = FlatType::Apply(*symbol, new_arguments);
-            let content = Content::Structure(flat_type);
-
-            register(subs, rank, pools, content)
-        }
-        EmptyRec => Variable::EMPTY_RECORD,
-        EmptyTagUnion => Variable::EMPTY_TAG_UNION,
-
-        ClosureTag { name, ext } => {
-            let tag_name = TagName::Closure(*name);
-            let tag_names = SubsSlice::new(subs.tag_names.len() as u32, 1);
-
-            subs.tag_names.push(tag_name);
-
-            // the first VariableSubsSlice in the array is a zero-length slice
-            let union_tags = UnionTags::from_slices(tag_names, SubsSlice::new(0, 1));
-
-            let content = Content::Structure(FlatType::TagUnion(union_tags, *ext));
-
-            register(subs, rank, pools, content)
-        }
-
-        // This case is important for the rank of boolean variables
-        Function(arguments, closure_type, ret_type) => {
-            let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-            for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                let var = type_to_variable(subs, rank, pools, arena, var_index);
-                subs.variables[target_index] = var;
-            }
-
-            let ret_var = type_to_variable(subs, rank, pools, arena, ret_type);
-            let closure_var = type_to_variable(subs, rank, pools, arena, closure_type);
-            let content = Content::Structure(FlatType::Func(new_arguments, closure_var, ret_var));
-
-            register(subs, rank, pools, content)
-        }
-        Record(fields, ext) => {
-            // An empty fields is inefficient (but would be correct)
-            // If hit, try to turn the value into an EmptyRecord in canonicalization
-            debug_assert!(!fields.is_empty() || !ext.is_empty_record());
-
-            let mut field_vars = Vec::with_capacity_in(fields.len(), arena);
-
-            for (field, field_type) in fields {
-                let field_var =
-                    field_type.map(|typ| type_to_variable(subs, rank, pools, arena, typ));
-
-                field_vars.push((field.clone(), field_var));
-            }
-
-            let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
-
-            let (it, new_ext_var) =
-                gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var)
-                    .expect("Something ended up weird in this record type");
-
-            let it = it
-                .into_iter()
-                .map(|(field, field_type)| (field.clone(), field_type));
-
-            field_vars.extend(it);
-            insertion_sort_by(&mut field_vars, RecordFields::compare);
-
-            let record_fields = RecordFields::insert_into_subs(subs, field_vars);
-
-            let content = Content::Structure(FlatType::Record(record_fields, new_ext_var));
-
-            register(subs, rank, pools, content)
-        }
-        TagUnion(tags, ext) => {
-            // An empty tags is inefficient (but would be correct)
-            // If hit, try to turn the value into an EmptyTagUnion in canonicalization
-            debug_assert!(!tags.is_empty() || !ext.is_empty_tag_union());
-
-            let (union_tags, ext) = type_to_union_tags(subs, rank, pools, arena, tags, ext);
-            let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
-
-            register(subs, rank, pools, content)
-        }
-        FunctionOrTagUnion(tag_name, symbol, ext) => {
-            let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
-
-            let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
-                subs,
-                UnionTags::default(),
-                temp_ext_var,
-            );
-
-            for _ in it {
-                unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
-            }
-
-            let slice = SubsIndex::new(subs.tag_names.len() as u32);
-            subs.tag_names.push(tag_name.clone());
-
-            let content = Content::Structure(FlatType::FunctionOrTagUnion(slice, *symbol, ext));
-
-            register(subs, rank, pools, content)
-        }
-        RecursiveTagUnion(rec_var, tags, ext) => {
-            // An empty tags is inefficient (but would be correct)
-            // If hit, try to turn the value into an EmptyTagUnion in canonicalization
-            debug_assert!(!tags.is_empty() || !ext.is_empty_tag_union());
-
-            let (union_tags, ext) = type_to_union_tags(subs, rank, pools, arena, tags, ext);
-            let content =
-                Content::Structure(FlatType::RecursiveTagUnion(*rec_var, union_tags, ext));
-
-            let tag_union_var = register(subs, rank, pools, content);
-
-            register_with_known_var(
-                subs,
-                *rec_var,
-                rank,
-                pools,
-                Content::RecursionVar {
-                    opt_name: None,
-                    structure: tag_union_var,
-                },
-            );
-
-            tag_union_var
-        }
-
-        Type::Alias {
-            symbol,
-            type_arguments,
-            actual,
-            lambda_set_variables,
-            kind,
-        } => {
-            if let Some(reserved) = Variable::get_reserved(*symbol) {
-                if rank.is_none() {
-                    // reserved variables are stored with rank NONE
-                    return reserved;
-                } else {
-                    // for any other rank, we need to copy; it takes care of adjusting the rank
-                    return deep_copy_var_in(subs, rank, pools, reserved, arena);
+    macro_rules! helper {
+        ($typ:expr) => {{
+            match RegisterVariable::from_type(subs, rank, pools, arena, $typ) {
+                RegisterVariable::Direct(var) => var,
+                RegisterVariable::Deferred => {
+                    let var = subs.fresh_unnamed_flex_var();
+                    stack.push(TypeToVar::Defer($typ, var));
+                    var
                 }
             }
+        }};
+    }
 
-            let alias_variables = alias_to_var(
-                subs,
-                rank,
-                pools,
-                arena,
-                type_arguments,
-                lambda_set_variables,
-            );
+    let result = helper!(typ);
 
-            let alias_variable = if let Symbol::RESULT_RESULT = *symbol {
-                roc_result_to_var(subs, rank, pools, arena, actual)
-            } else {
-                type_to_variable(subs, rank, pools, arena, actual)
-            };
-            let content = Content::Alias(*symbol, alias_variables, alias_variable, *kind);
+    while let Some(TypeToVar::Defer(typ, destination)) = stack.pop() {
+        match typ {
+            Variable(_) | EmptyRec | EmptyTagUnion => {
+                unreachable!("This variant should never be deferred!")
+            }
+            RangedNumber(typ, vars) => {
+                let ty_var = helper!(typ);
+                let vars = VariableSubsSlice::insert_into_subs(subs, vars.iter().copied());
+                let content = Content::RangedNumber(ty_var, vars);
 
-            register(subs, rank, pools, content)
-        }
-        HostExposedAlias {
-            name: symbol,
-            type_arguments,
-            actual: alias_type,
-            actual_var,
-            lambda_set_variables,
-            ..
-        } => {
-            let alias_variables = alias_to_var(
-                subs,
-                rank,
-                pools,
-                arena,
-                type_arguments,
-                lambda_set_variables,
-            );
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
+            Apply(symbol, arguments, _) => {
+                let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+                for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
+                    let var = helper!(var_index);
+                    subs.variables[target_index] = var;
+                }
 
-            let alias_variable = type_to_variable(subs, rank, pools, arena, alias_type);
-            // TODO(opaques): I think host-exposed aliases should always be structural
-            // (when does it make sense to give a host an opaque type?)
-            let content = Content::Alias(
-                *symbol,
-                alias_variables,
-                alias_variable,
-                AliasKind::Structural,
-            );
-            let result = register(subs, rank, pools, content);
+                let flat_type = FlatType::Apply(*symbol, new_arguments);
+                let content = Content::Structure(flat_type);
 
-            // We only want to unify the actual_var with the alias once
-            // if it's already redirected (and therefore, redundant)
-            // don't do it again
-            if !subs.redundant(*actual_var) {
-                let descriptor = subs.get(result);
-                subs.union(result, *actual_var, descriptor);
+                register_with_known_var(subs, destination, rank, pools, content)
             }
 
-            result
-        }
-        Erroneous(problem) => {
-            let content = Content::Structure(FlatType::Erroneous(Box::new(problem.clone())));
+            ClosureTag { name, ext } => {
+                let tag_name = TagName::Closure(*name);
+                let tag_names = SubsSlice::new(subs.tag_names.len() as u32, 1);
 
-            register(subs, rank, pools, content)
-        }
+                subs.tag_names.push(tag_name);
+
+                // the first VariableSubsSlice in the array is a zero-length slice
+                let union_tags = UnionTags::from_slices(tag_names, SubsSlice::new(0, 1));
+
+                let content = Content::Structure(FlatType::TagUnion(union_tags, *ext));
+
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
+            // This case is important for the rank of boolean variables
+            Function(arguments, closure_type, ret_type) => {
+                let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+                for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
+                    let var = helper!(var_index);
+                    subs.variables[target_index] = var;
+                }
+
+                let ret_var = helper!(ret_type);
+                let closure_var = helper!(closure_type);
+                let content =
+                    Content::Structure(FlatType::Func(new_arguments, closure_var, ret_var));
+
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
+            Record(fields, ext) => {
+                // An empty fields is inefficient (but would be correct)
+                // If hit, try to turn the value into an EmptyRecord in canonicalization
+                debug_assert!(!fields.is_empty() || !ext.is_empty_record());
+
+                let mut field_vars = Vec::with_capacity_in(fields.len(), arena);
+
+                for (field, field_type) in fields {
+                    let field_var = {
+                        use roc_types::types::RecordField::*;
+                        match &field_type {
+                            Optional(t) => Optional(helper!(t)),
+                            Required(t) => Required(helper!(t)),
+                            Demanded(t) => Demanded(helper!(t)),
+                        }
+                    };
+
+                    field_vars.push((field.clone(), field_var));
+                }
+
+                let temp_ext_var = helper!(ext);
+
+                let (it, new_ext_var) =
+                    gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var)
+                        .expect("Something ended up weird in this record type");
+
+                let it = it
+                    .into_iter()
+                    .map(|(field, field_type)| (field.clone(), field_type));
+
+                field_vars.extend(it);
+                insertion_sort_by(&mut field_vars, RecordFields::compare);
+
+                let record_fields = RecordFields::insert_into_subs(subs, field_vars);
+
+                let content = Content::Structure(FlatType::Record(record_fields, new_ext_var));
+
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
+
+            TagUnion(tags, ext) => {
+                // An empty tags is inefficient (but would be correct)
+                // If hit, try to turn the value into an EmptyTagUnion in canonicalization
+                debug_assert!(!tags.is_empty() || !ext.is_empty_tag_union());
+
+                let (union_tags, ext) =
+                    type_to_union_tags(subs, rank, pools, arena, tags, ext, &mut stack);
+                let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
+
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
+            FunctionOrTagUnion(tag_name, symbol, ext) => {
+                let temp_ext_var = helper!(ext);
+
+                let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
+                    subs,
+                    UnionTags::default(),
+                    temp_ext_var,
+                );
+
+                for _ in it {
+                    unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
+                }
+
+                let slice = SubsIndex::new(subs.tag_names.len() as u32);
+                subs.tag_names.push(tag_name.clone());
+
+                let content = Content::Structure(FlatType::FunctionOrTagUnion(slice, *symbol, ext));
+
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
+            RecursiveTagUnion(rec_var, tags, ext) => {
+                // An empty tags is inefficient (but would be correct)
+                // If hit, try to turn the value into an EmptyTagUnion in canonicalization
+                debug_assert!(!tags.is_empty() || !ext.is_empty_tag_union());
+
+                let (union_tags, ext) =
+                    type_to_union_tags(subs, rank, pools, arena, tags, ext, &mut stack);
+                let content =
+                    Content::Structure(FlatType::RecursiveTagUnion(*rec_var, union_tags, ext));
+
+                let tag_union_var = destination;
+                register_with_known_var(subs, tag_union_var, rank, pools, content);
+
+                register_with_known_var(
+                    subs,
+                    *rec_var,
+                    rank,
+                    pools,
+                    Content::RecursionVar {
+                        opt_name: None,
+                        structure: tag_union_var,
+                    },
+                );
+
+                tag_union_var
+            }
+
+            Type::Alias {
+                symbol,
+                type_arguments,
+                actual,
+                lambda_set_variables,
+                kind,
+            } => {
+                debug_assert!(Variable::get_reserved(*symbol).is_none());
+
+                let alias_variables = {
+                    let length = type_arguments.len() + lambda_set_variables.len();
+                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
+
+                    for (target_index, (_, arg_type)) in
+                        (new_variables.indices()).zip(type_arguments)
+                    {
+                        let copy_var = helper!(arg_type);
+                        subs.variables[target_index] = copy_var;
+                    }
+
+                    let it = (new_variables.indices().skip(type_arguments.len()))
+                        .zip(lambda_set_variables);
+                    for (target_index, ls) in it {
+                        let copy_var = helper!(&ls.0);
+                        subs.variables[target_index] = copy_var;
+                    }
+
+                    AliasVariables {
+                        variables_start: new_variables.start,
+                        type_variables_len: type_arguments.len() as _,
+                        all_variables_len: length as _,
+                    }
+                };
+
+                let alias_variable = if let Symbol::RESULT_RESULT = *symbol {
+                    roc_result_to_var(subs, rank, pools, arena, actual, &mut stack)
+                } else {
+                    helper!(actual)
+                };
+                let content = Content::Alias(*symbol, alias_variables, alias_variable, *kind);
+
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
+            HostExposedAlias {
+                name: symbol,
+                type_arguments,
+                actual: alias_type,
+                actual_var,
+                lambda_set_variables,
+                ..
+            } => {
+                let alias_variables = {
+                    let length = type_arguments.len() + lambda_set_variables.len();
+                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
+
+                    for (target_index, (_, arg_type)) in
+                        (new_variables.indices()).zip(type_arguments)
+                    {
+                        let copy_var = helper!(arg_type);
+                        subs.variables[target_index] = copy_var;
+                    }
+
+                    let it = (new_variables.indices().skip(type_arguments.len()))
+                        .zip(lambda_set_variables);
+                    for (target_index, ls) in it {
+                        let copy_var = helper!(&ls.0);
+                        subs.variables[target_index] = copy_var;
+                    }
+
+                    AliasVariables {
+                        variables_start: new_variables.start,
+                        type_variables_len: type_arguments.len() as _,
+                        all_variables_len: length as _,
+                    }
+                };
+
+                // cannot use helper! here because this variable may be involved in unification below
+                let alias_variable = type_to_variable(subs, rank, pools, arena, alias_type);
+                // TODO(opaques): I think host-exposed aliases should always be structural
+                // (when does it make sense to give a host an opaque type?)
+                let content = Content::Alias(
+                    *symbol,
+                    alias_variables,
+                    alias_variable,
+                    AliasKind::Structural,
+                );
+                // let result = register(subs, rank, pools, content);
+                let result = register_with_known_var(subs, destination, rank, pools, content);
+
+                // We only want to unify the actual_var with the alias once
+                // if it's already redirected (and therefore, redundant)
+                // don't do it again
+                if !subs.redundant(*actual_var) {
+                    let descriptor = subs.get(result);
+                    subs.union(result, *actual_var, descriptor);
+                }
+
+                result
+            }
+            Erroneous(problem) => {
+                let content = Content::Structure(FlatType::Erroneous(Box::new(problem.clone())));
+
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
+        };
     }
-}
 
-#[inline(always)]
-fn alias_to_var<'a>(
-    subs: &mut Subs,
-    rank: Rank,
-    pools: &mut Pools,
-    arena: &'a bumpalo::Bump,
-    type_arguments: &[(roc_module::ident::Lowercase, Type)],
-    lambda_set_variables: &[roc_types::types::LambdaSet],
-) -> AliasVariables {
-    let length = type_arguments.len() + lambda_set_variables.len();
-    let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
-
-    for (target_index, (_, arg_type)) in (new_variables.indices()).zip(type_arguments) {
-        let copy_var = type_to_variable(subs, rank, pools, arena, arg_type);
-        subs.variables[target_index] = copy_var;
-    }
-
-    let it = (new_variables.indices().skip(type_arguments.len())).zip(lambda_set_variables);
-    for (target_index, ls) in it {
-        let copy_var = type_to_variable(subs, rank, pools, arena, &ls.0);
-        subs.variables[target_index] = copy_var;
-    }
-
-    AliasVariables {
-        variables_start: new_variables.start,
-        type_variables_len: type_arguments.len() as _,
-        all_variables_len: length as _,
-    }
+    result
 }
 
 #[inline(always)]
@@ -1133,8 +1229,9 @@ fn roc_result_to_var<'a>(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    arena: &'a bumpalo::Bump,
-    result_type: &Type,
+    arena: &'_ bumpalo::Bump,
+    result_type: &'a Type,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> Variable {
     match result_type {
         Type::TagUnion(tags, ext) => {
@@ -1146,8 +1243,10 @@ fn roc_result_to_var<'a>(
                 debug_assert_eq!(ok, &subs.tag_names[1]);
 
                 if let ([err_type], [ok_type]) = (err_args.as_slice(), ok_args.as_slice()) {
-                    let err_var = type_to_variable(subs, rank, pools, arena, err_type);
-                    let ok_var = type_to_variable(subs, rank, pools, arena, ok_type);
+                    let err_var =
+                        RegisterVariable::with_stack(subs, rank, pools, arena, err_type, stack);
+                    let ok_var =
+                        RegisterVariable::with_stack(subs, rank, pools, arena, ok_type, stack);
 
                     let start = subs.variables.len() as u32;
                     let err_slice = SubsSlice::new(start, 1);
@@ -1238,16 +1337,16 @@ fn sort_and_deduplicate<T>(tag_vars: &mut bumpalo::collections::Vec<(TagName, T)
 fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsSlice<TagName>> {
     use std::cmp::Ordering;
 
-    let tag_name = slice.get(0)?.0.clone();
+    let tag_name = &slice.get(0)?.0;
 
     let mut result = None;
 
     // the `SubsSlice<TagName>` that inserting `slice` into subs would give
     let bigger_slice = SubsSlice::new(subs.tag_names.len() as _, slice.len() as _);
 
-    match subs.tag_name_cache.entry(tag_name) {
-        Entry::Occupied(mut occupied) => {
-            let subs_slice = *occupied.get();
+    match subs.tag_name_cache.get_mut(tag_name) {
+        Some(occupied) => {
+            let subs_slice = *occupied;
 
             let prefix_slice = SubsSlice::new(subs_slice.start, slice.len() as _);
 
@@ -1281,12 +1380,12 @@ fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsS
                 }
                 Ordering::Greater => {
                     // switch to the bigger slice that is not inserted yet, but will be soon
-                    occupied.insert(bigger_slice);
+                    *occupied = bigger_slice;
                 }
             }
         }
-        Entry::Vacant(vacant) => {
-            vacant.insert(bigger_slice);
+        None => {
+            subs.tag_name_cache.push(tag_name, bigger_slice);
         }
     }
 
@@ -1298,8 +1397,9 @@ fn insert_tags_fast_path<'a>(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    arena: &'a bumpalo::Bump,
-    tags: &[(TagName, Vec<Type>)],
+    arena: &'_ bumpalo::Bump,
+    tags: &'a [(TagName, Vec<Type>)],
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
     let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
 
@@ -1312,7 +1412,8 @@ fn insert_tags_fast_path<'a>(
                 let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
                 let it = (new_variables.indices()).zip(arguments);
                 for (target_index, argument) in it {
-                    let var = type_to_variable(subs, rank, pools, arena, argument);
+                    let var =
+                        RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
                     subs.variables[target_index] = var;
                 }
 
@@ -1333,7 +1434,8 @@ fn insert_tags_fast_path<'a>(
                 let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
                 let it = (new_variables.indices()).zip(arguments);
                 for (target_index, argument) in it {
-                    let var = type_to_variable(subs, rank, pools, arena, argument);
+                    let var =
+                        RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
                     subs.variables[target_index] = var;
                 }
 
@@ -1350,15 +1452,16 @@ fn insert_tags_slow_path<'a>(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    arena: &'a bumpalo::Bump,
-    tags: &[(TagName, Vec<Type>)],
+    arena: &'_ bumpalo::Bump,
+    tags: &'a [(TagName, Vec<Type>)],
     mut tag_vars: bumpalo::collections::Vec<(TagName, VariableSubsSlice)>,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
     for (tag, tag_argument_types) in tags {
         let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
 
         for (i, arg) in (new_slice.indices()).zip(tag_argument_types) {
-            let var = type_to_variable(subs, rank, pools, arena, arg);
+            let var = RegisterVariable::with_stack(subs, rank, pools, arena, arg, stack);
             subs.variables[i] = var;
         }
 
@@ -1374,39 +1477,39 @@ fn type_to_union_tags<'a>(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    arena: &'a bumpalo::Bump,
-    tags: &[(TagName, Vec<Type>)],
-    ext: &Type,
+    arena: &'_ bumpalo::Bump,
+    tags: &'a [(TagName, Vec<Type>)],
+    ext: &'a Type,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> (UnionTags, Variable) {
     use bumpalo::collections::Vec;
 
     let sorted = tags.len() == 1 || sorted_no_duplicates(tags);
 
     if ext.is_empty_tag_union() {
-        let ext = type_to_variable(subs, rank, pools, arena, &Type::EmptyTagUnion);
-        // let ext = Variable::EMPTY_TAG_UNION;
+        let ext = Variable::EMPTY_TAG_UNION;
 
         let union_tags = if sorted {
-            insert_tags_fast_path(subs, rank, pools, arena, tags)
+            insert_tags_fast_path(subs, rank, pools, arena, tags, stack)
         } else {
             let tag_vars = Vec::with_capacity_in(tags.len(), arena);
-            insert_tags_slow_path(subs, rank, pools, arena, tags, tag_vars)
+            insert_tags_slow_path(subs, rank, pools, arena, tags, tag_vars, stack)
         };
 
         (union_tags, ext)
     } else {
         let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
 
-        let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
+        let temp_ext_var = RegisterVariable::with_stack(subs, rank, pools, arena, ext, stack);
         let (it, ext) =
             roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext_var);
 
         tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
 
         let union_tags = if tag_vars.is_empty() && sorted {
-            insert_tags_fast_path(subs, rank, pools, arena, tags)
+            insert_tags_fast_path(subs, rank, pools, arena, tags, stack)
         } else {
-            insert_tags_slow_path(subs, rank, pools, arena, tags, tag_vars)
+            insert_tags_slow_path(subs, rank, pools, arena, tags, tag_vars, stack)
         };
 
         (union_tags, ext)
@@ -2175,7 +2278,7 @@ fn register_with_known_var(
     rank: Rank,
     pools: &mut Pools,
     content: Content,
-) {
+) -> Variable {
     let descriptor = Descriptor {
         content,
         rank,
@@ -2186,4 +2289,6 @@ fn register_with_known_var(
     subs.set(var, descriptor);
 
     pools.get_mut(rank).push(var);
+
+    var
 }
