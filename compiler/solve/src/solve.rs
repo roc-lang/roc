@@ -1321,16 +1321,16 @@ fn sort_and_deduplicate<T>(tag_vars: &mut bumpalo::collections::Vec<(TagName, T)
 fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsSlice<TagName>> {
     use std::cmp::Ordering;
 
-    let tag_name = slice.get(0)?.0.clone();
+    let tag_name = &slice.get(0)?.0;
 
     let mut result = None;
 
     // the `SubsSlice<TagName>` that inserting `slice` into subs would give
     let bigger_slice = SubsSlice::new(subs.tag_names.len() as _, slice.len() as _);
 
-    match subs.tag_name_cache.entry(tag_name) {
-        Entry::Occupied(mut occupied) => {
-            let subs_slice = *occupied.get();
+    match subs.tag_name_cache.get_mut(tag_name) {
+        Some(occupied) => {
+            let subs_slice = *occupied;
 
             let prefix_slice = SubsSlice::new(subs_slice.start, slice.len() as _);
 
@@ -1364,12 +1364,12 @@ fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsS
                 }
                 Ordering::Greater => {
                     // switch to the bigger slice that is not inserted yet, but will be soon
-                    occupied.insert(bigger_slice);
+                    *occupied = bigger_slice;
                 }
             }
         }
-        Entry::Vacant(vacant) => {
-            vacant.insert(bigger_slice);
+        None => {
+            subs.tag_name_cache.push(tag_name, bigger_slice);
         }
     }
 
