@@ -3,6 +3,7 @@ use core::ffi::c_void;
 use core::mem::{self, ManuallyDrop};
 use roc_std::{ReferenceCount, RocList, RocStr};
 use std::ffi::CStr;
+use std::fmt::Debug;
 use std::os::raw::c_char;
 
 #[no_mangle]
@@ -57,6 +58,31 @@ pub struct ElemId(*const RocElemEntry);
 #[cfg(target_pointer_width = "64")] // on a 64-bit system, the tag fits in this pointer's spare 3 bits
 pub struct RocElem {
     entry: *const RocElemEntry,
+}
+
+impl Debug for RocElem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use RocElemTag::*;
+
+        match self.tag() {
+            Button => unsafe { &*self.entry().button }.fmt(f),
+            Text => unsafe { &*self.entry().text }.fmt(f),
+            Row => {
+                let row_or_col = unsafe { &*self.entry().row_or_col };
+
+                f.debug_struct("RocRow")
+                    .field("children", &row_or_col.children)
+                    .finish()
+            }
+            Col => {
+                let row_or_col = unsafe { &*self.entry().row_or_col };
+
+                f.debug_struct("RocCol")
+                    .field("children", &row_or_col.children)
+                    .finish()
+            }
+        }
+    }
 }
 
 impl RocElem {
@@ -203,6 +229,7 @@ pub enum RocElemTag {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct RocButton {
     pub child: ManuallyDrop<RocElem>,
     pub styles: ButtonStyles,
