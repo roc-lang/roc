@@ -8,7 +8,7 @@ use roc_can::def::{Declaration, Def};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
-use roc_can::expr::{ClosureData, Field, WhenBranch};
+use roc_can::expr::{AccessorData, ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{HumanIndex, ImMap, MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
@@ -762,15 +762,16 @@ pub fn constrain_expr(
                 [constraint, eq, record_con],
             )
         }
-        Accessor {
+        Accessor(AccessorData {
             name: closure_name,
             function_var,
             field,
             record_var,
-            closure_ext_var: closure_var,
+            closure_var,
+            closure_ext_var,
             ext_var,
             field_var,
-        } => {
+        }) => {
             let ext_var = *ext_var;
             let ext_type = Variable(ext_var);
             let field_var = *field_var;
@@ -793,16 +794,24 @@ pub fn constrain_expr(
 
             let lambda_set = Type::ClosureTag {
                 name: *closure_name,
-                ext: *closure_var,
+                ext: *closure_ext_var,
             };
+
+            let closure_type = Type::Variable(*closure_var);
 
             let function_type = Type::Function(
                 vec![record_type],
-                Box::new(lambda_set),
+                Box::new(closure_type.clone()),
                 Box::new(field_type),
             );
 
             let cons = [
+                constraints.equal_types(
+                    closure_type,
+                    NoExpectation(lambda_set),
+                    category.clone(),
+                    region,
+                ),
                 constraints.equal_types(function_type.clone(), expected, category.clone(), region),
                 constraints.equal_types(
                     function_type,
@@ -814,7 +823,14 @@ pub fn constrain_expr(
             ];
 
             constraints.exists_many(
-                [*record_var, *function_var, *closure_var, field_var, ext_var],
+                [
+                    *record_var,
+                    *function_var,
+                    *closure_var,
+                    *closure_ext_var,
+                    field_var,
+                    ext_var,
+                ],
                 cons,
             )
         }

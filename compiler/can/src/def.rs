@@ -1085,7 +1085,7 @@ fn canonicalize_pending_def<'a>(
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
             if let Pattern::Identifier(symbol) = loc_can_pattern.value {
-                if let &Closure(ClosureData {
+                if let Closure(ClosureData {
                     function_type,
                     closure_type,
                     closure_ext_var,
@@ -1095,7 +1095,7 @@ fn canonicalize_pending_def<'a>(
                     loc_body: ref body,
                     ref captured_symbols,
                     ..
-                }) = &loc_can_expr.value
+                }) = loc_can_expr.value
                 {
                     // Since everywhere in the code it'll be referred to by its defined name,
                     // remove its generated name from the closure map. (We'll re-insert it later.)
@@ -1225,7 +1225,7 @@ fn canonicalize_pending_def<'a>(
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
             if let Pattern::Identifier(symbol) = loc_can_pattern.value {
-                if let &Closure(ClosureData {
+                if let Closure(ClosureData {
                     function_type,
                     closure_type,
                     closure_ext_var,
@@ -1235,7 +1235,7 @@ fn canonicalize_pending_def<'a>(
                     loc_body: ref body,
                     ref captured_symbols,
                     ..
-                }) = &loc_can_expr.value
+                }) = loc_can_expr.value
                 {
                     // Since everywhere in the code it'll be referred to by its defined name,
                     // remove its generated name from the closure map. (We'll re-insert it later.)
