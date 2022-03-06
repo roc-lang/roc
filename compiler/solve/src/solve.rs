@@ -1504,6 +1504,7 @@ fn generalize(
     }
 }
 
+/// Sort the variables into buckets by rank.
 fn pool_to_rank_table(
     subs: &mut Subs,
     young_mark: Mark,
@@ -1512,13 +1513,23 @@ fn pool_to_rank_table(
 ) -> Pools {
     let mut pools = Pools::new(young_rank.into_usize() + 1);
 
-    // Sort the variables into buckets by rank.
-    for &var in young_vars.iter() {
-        let rank = subs.get_rank_set_mark(var, young_mark);
+    // the vast majority of young variables have young_rank
+    // using `retain` here prevents many `pools.get_mut(young_rank)` lookups
+    let mut young_vars = young_vars.to_vec();
+    young_vars.retain(|var| {
+        let rank = subs.get_rank_set_mark(*var, young_mark);
 
-        debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
-        pools.get_mut(rank).push(var);
-    }
+        if rank != young_rank {
+            debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
+
+            pools.get_mut(rank).push(*var);
+            false
+        } else {
+            true
+        }
+    });
+
+    std::mem::swap(pools.get_mut(young_rank), &mut young_vars);
 
     pools
 }
@@ -1532,20 +1543,23 @@ fn adjust_rank(
     group_rank: Rank,
     var: Variable,
 ) -> Rank {
-    let (desc_rank, desc_mark) = subs.get_rank_mark(var);
+    let desc = subs.get_ref_mut(var);
+
+    let desc_rank = desc.rank;
+    let desc_mark = desc.mark;
 
     if desc_mark == young_mark {
-        // Mark the variable as visited before adjusting content, as it may be cyclic.
-        subs.set_mark(var, visit_mark);
-
         // SAFETY: in this function (and functions it calls, we ONLY modify rank and mark, never content!
         // hence, we can have an immutable reference to it even though we also have a mutable
         // reference to the Subs as a whole. This prevents a clone of the content, which turns out
         // to be quite expensive.
         let content = {
-            let ptr = &subs.get_ref(var).content as *const _;
+            let ptr = &desc.content as *const _;
             unsafe { &*ptr }
         };
+
+        // Mark the variable as visited before adjusting content, as it may be cyclic.
+        desc.mark = visit_mark;
 
         let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
 
@@ -1559,7 +1573,8 @@ fn adjust_rank(
         let min_rank = group_rank.min(desc_rank);
 
         // TODO from elm-compiler: how can min_rank ever be group_rank?
-        subs.set_rank_mark(var, min_rank, visit_mark);
+        desc.rank = min_rank;
+        desc.mark = visit_mark;
 
         min_rank
     }

@@ -1432,6 +1432,7 @@ impl Subs {
         mapper(self.get_ref_mut(key));
     }
 
+    #[inline(always)]
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
         let l_key = self.utable.get_root_key(key);
 
@@ -1454,7 +1455,7 @@ impl Subs {
     }
 
     pub fn occurs(&self, var: Variable) -> Result<(), (Variable, Vec<Variable>)> {
-        occurs(self, &ImSet::default(), var)
+        occurs(self, &[], var)
     }
 
     pub fn mark_tag_union_recursive(
@@ -2380,7 +2381,7 @@ fn is_empty_record(subs: &Subs, mut var: Variable) -> bool {
 
 fn occurs(
     subs: &Subs,
-    seen: &ImSet<Variable>,
+    seen: &[Variable],
     input_var: Variable,
 ) -> Result<(), (Variable, Vec<Variable>)> {
     use self::Content::*;
@@ -2395,9 +2396,9 @@ fn occurs(
             FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => Ok(()),
 
             Structure(flat_type) => {
-                let mut new_seen = seen.clone();
+                let mut new_seen = seen.to_owned();
 
-                new_seen.insert(root_var);
+                new_seen.push(root_var);
 
                 match flat_type {
                     Apply(_, args) => {
@@ -2446,8 +2447,8 @@ fn occurs(
                 }
             }
             Alias(_, args, _, _) => {
-                let mut new_seen = seen.clone();
-                new_seen.insert(root_var);
+                let mut new_seen = seen.to_owned();
+                new_seen.push(root_var);
 
                 for var_index in args.into_iter() {
                     let var = subs[var_index];
@@ -2457,8 +2458,8 @@ fn occurs(
                 Ok(())
             }
             RangedNumber(typ, _range_vars) => {
-                let mut new_seen = seen.clone();
-                new_seen.insert(root_var);
+                let mut new_seen = seen.to_owned();
+                new_seen.push(root_var);
 
                 short_circuit_help(subs, root_var, &new_seen, *typ)?;
                 // _range_vars excluded because they are not explicitly part of the type.
@@ -2469,10 +2470,11 @@ fn occurs(
     }
 }
 
+#[inline(always)]
 fn short_circuit<'a, T>(
     subs: &Subs,
     root_key: Variable,
-    seen: &ImSet<Variable>,
+    seen: &[Variable],
     iter: T,
 ) -> Result<(), (Variable, Vec<Variable>)>
 where
@@ -2485,10 +2487,11 @@ where
     Ok(())
 }
 
+#[inline(always)]
 fn short_circuit_help(
     subs: &Subs,
     root_key: Variable,
-    seen: &ImSet<Variable>,
+    seen: &[Variable],
     var: Variable,
 ) -> Result<(), (Variable, Vec<Variable>)> {
     if let Err((v, mut vec)) = occurs(subs, seen, var) {
