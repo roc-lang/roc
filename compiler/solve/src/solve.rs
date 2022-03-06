@@ -1466,8 +1466,7 @@ fn type_to_union_tags<'a>(
     let sorted = tags.len() == 1 || sorted_no_duplicates(tags);
 
     if ext.is_empty_tag_union() {
-        let ext = type_to_variable(subs, rank, pools, arena, &Type::EmptyTagUnion);
-        // let ext = Variable::EMPTY_TAG_UNION;
+        let ext = Variable::EMPTY_TAG_UNION;
 
         let union_tags = if sorted {
             insert_tags_fast_path(subs, rank, pools, arena, tags)
