@@ -14,7 +14,7 @@ use crate::helpers::wasm::assert_evals_to;
 use indoc::indoc;
 
 #[cfg(test)]
-use roc_std::RocList;
+use roc_std::{RocList, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
@@ -1057,4 +1057,20 @@ fn call_with_bad_record_runtime_error() {
                 get {b: ""}
             "#
     ))
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn generalized_accessor() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            returnFoo = .foo
+
+            returnFoo { foo: "foo" }
+            "#
+        ),
+        RocStr::from("foo"),
+        RocStr
+    );
 }

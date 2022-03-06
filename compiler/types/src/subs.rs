@@ -1,5 +1,5 @@
 use crate::types::{name_type_var, AliasKind, ErrorType, Problem, RecordField, TypeExt};
-use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
@@ -68,8 +68,50 @@ pub struct Subs {
     pub field_names: Vec<Lowercase>,
     pub record_fields: Vec<RecordField<()>>,
     pub variable_slices: Vec<VariableSubsSlice>,
-    pub tag_name_cache: MutMap<TagName, SubsSlice<TagName>>,
+    pub tag_name_cache: TagNameCache,
     pub problems: Vec<Problem>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TagNameCache {
+    globals: Vec<Uppercase>,
+    globals_slices: Vec<SubsSlice<TagName>>,
+    /// Currently private tags and closure tags; in the future just closure tags
+    symbols: Vec<Symbol>,
+    symbols_slices: Vec<SubsSlice<TagName>>,
+}
+
+impl TagNameCache {
+    pub fn get_mut(&mut self, tag_name: &TagName) -> Option<&mut SubsSlice<TagName>> {
+        match tag_name {
+            TagName::Global(uppercase) => {
+                // force into block
+                match self.globals.iter().position(|u| u == uppercase) {
+                    Some(index) => Some(&mut self.globals_slices[index]),
+                    None => None,
+                }
+            }
+            TagName::Private(symbol) | TagName::Closure(symbol) => {
+                match self.symbols.iter().position(|s| s == symbol) {
+                    Some(index) => Some(&mut self.symbols_slices[index]),
+                    None => None,
+                }
+            }
+        }
+    }
+
+    pub fn push(&mut self, tag_name: &TagName, slice: SubsSlice<TagName>) {
+        match tag_name {
+            TagName::Global(uppercase) => {
+                self.globals.push(uppercase.clone());
+                self.globals_slices.push(slice);
+            }
+            TagName::Private(symbol) | TagName::Closure(symbol) => {
+                self.symbols.push(*symbol);
+                self.symbols_slices.push(slice);
+            }
+        }
+    }
 }
 
 impl Default for Subs {
@@ -1257,7 +1299,7 @@ impl Subs {
             // store an empty slice at the first position
             // used for "TagOrFunction"
             variable_slices: vec![VariableSubsSlice::default()],
-            tag_name_cache: MutMap::default(),
+            tag_name_cache: TagNameCache::default(),
             problems: Vec::new(),
         };
 

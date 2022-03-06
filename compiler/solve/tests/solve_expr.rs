@@ -5529,4 +5529,18 @@ mod solve_expr {
             r#"a -> Effect a"#,
         )
     }
+
+    #[test]
+    fn generalized_accessor_function_applied() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                returnFoo = .foo
+
+                returnFoo { foo: "foo" }
+                "#
+            ),
+            "Str",
+        )
+    }
 }
