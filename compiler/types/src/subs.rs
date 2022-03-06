@@ -1334,7 +1334,8 @@ impl Subs {
     }
 
     pub fn rigid_var(&mut self, var: Variable, name: Lowercase) {
-        let content = Content::RigidVar(name);
+        let name_index = SubsIndex::push_new(&mut self.field_names, name);
+        let content = Content::RigidVar(name_index);
         let desc = Descriptor::from(content);
 
         self.set(var, desc);
@@ -1691,19 +1692,19 @@ roc_error_macros::assert_sizeof_aarch64!((Variable, Option<Lowercase>), 4 * 8);
 roc_error_macros::assert_sizeof_wasm!((Variable, Option<Lowercase>), 4 * 4);
 roc_error_macros::assert_sizeof_default!((Variable, Option<Lowercase>), 4 * 8);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Content {
     /// A type variable which the user did not name in an annotation,
     ///
     /// When we auto-generate a type var name, e.g. the "a" in (a -> a), we
     /// change the Option in here from None to Some.
-    FlexVar(Option<Lowercase>),
+    FlexVar(Option<SubsIndex<Lowercase>>),
     /// name given in a user-written annotation
-    RigidVar(Lowercase),
+    RigidVar(SubsIndex<Lowercase>),
     /// name given to a recursion variable
     RecursionVar {
         structure: Variable,
-        opt_name: Option<Lowercase>,
+        opt_name: Option<SubsIndex<Lowercase>>,
     },
     Structure(FlatType),
     Alias(Symbol, AliasVariables, Variable, AliasKind),
@@ -2701,18 +2702,23 @@ fn get_var_names(
         match desc.content {
             Error | FlexVar(None) => taken_names,
 
-            FlexVar(Some(name)) => {
-                add_name(subs, 0, name, var, |name| FlexVar(Some(name)), taken_names)
-            }
+            FlexVar(Some(name_index)) => add_name(
+                subs,
+                0,
+                name_index,
+                var,
+                |name| FlexVar(Some(name)),
+                taken_names,
+            ),
 
             RecursionVar {
                 opt_name,
                 structure,
             } => match opt_name {
-                Some(name) => add_name(
+                Some(name_index) => add_name(
                     subs,
                     0,
-                    name,
+                    name_index,
                     var,
                     |name| RecursionVar {
                         opt_name: Some(name),
@@ -2723,7 +2729,7 @@ fn get_var_names(
                 None => taken_names,
             },
 
-            RigidVar(name) => add_name(subs, 0, name, var, RigidVar, taken_names),
+            RigidVar(name_index) => add_name(subs, 0, name_index, var, RigidVar, taken_names),
 
             Alias(_, args, _, _) => args.into_iter().fold(taken_names, |answer, arg_var| {
                 get_var_names(subs, subs[arg_var], answer)
@@ -2813,14 +2819,16 @@ fn get_var_names(
 fn add_name<F>(
     subs: &mut Subs,
     index: usize,
-    given_name: Lowercase,
+    given_name_index: SubsIndex<Lowercase>,
     var: Variable,
     content_from_name: F,
     taken_names: ImMap<Lowercase, Variable>,
 ) -> ImMap<Lowercase, Variable>
 where
-    F: FnOnce(Lowercase) -> Content,
+    F: FnOnce(SubsIndex<Lowercase>) -> Content,
 {
+    let given_name = subs.field_names[given_name_index.index as usize].clone();
+
     let indexed_name = if index == 0 {
         given_name.clone()
     } else {
@@ -2832,7 +2840,9 @@ where
     match taken_names.get(&indexed_name) {
         None => {
             if indexed_name != given_name {
-                subs.set_content(var, content_from_name(indexed_name.clone()));
+                let indexed_name_index =
+                    SubsIndex::push_new(&mut subs.field_names, indexed_name.clone());
+                subs.set_content(var, content_from_name(indexed_name_index));
             }
 
             let mut answer = taken_names.clone();
@@ -2848,7 +2858,7 @@ where
                 add_name(
                     subs,
                     index + 1,
-                    given_name,
+                    given_name_index,
                     var,
                     content_from_name,
                     taken_names,
@@ -2859,25 +2869,12 @@ where
 }
 
 fn var_to_err_type(subs: &mut Subs, state: &mut ErrorTypeState, var: Variable) -> ErrorType {
-    let mut desc = subs.get(var);
+    let desc = subs.get(var);
 
     if desc.mark == Mark::OCCURS {
         ErrorType::Infinite
     } else {
         subs.set_mark(var, Mark::OCCURS);
-
-        if false {
-            // useful for debugging
-            match desc.content {
-                Content::FlexVar(_) => {
-                    desc.content = Content::FlexVar(Some(format!("{:?}", var).into()));
-                }
-                Content::RigidVar(_) => {
-                    desc.content = Content::RigidVar(format!("{:?}", var).into());
-                }
-                _ => {}
-            }
-        }
 
         let err_type = content_to_err_type(subs, state, var, desc.content);
 
@@ -2898,15 +2895,20 @@ fn content_to_err_type(
     match content {
         Structure(flat_type) => flat_type_to_err_type(subs, state, flat_type),
 
-        FlexVar(Some(name)) => ErrorType::FlexVar(name),
+        FlexVar(Some(name_index)) => {
+            let name = subs.field_names[name_index.index as usize].clone();
+            ErrorType::FlexVar(name)
+        }
 
         FlexVar(opt_name) => {
             let name = match opt_name {
-                Some(name) => name,
+                Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
+                    // set the name so when this variable occurs elsewhere in the type it gets the same name
                     let name = get_fresh_var_name(state);
+                    let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
 
-                    subs.set_content(var, FlexVar(Some(name.clone())));
+                    subs.set_content(var, FlexVar(Some(name_index)));
 
                     name
                 }
@@ -2915,15 +2917,19 @@ fn content_to_err_type(
             ErrorType::FlexVar(name)
         }
 
-        RigidVar(name) => ErrorType::RigidVar(name),
+        RigidVar(name_index) => {
+            let name = subs.field_names[name_index.index as usize].clone();
+            ErrorType::RigidVar(name)
+        }
 
         RecursionVar { opt_name, .. } => {
             let name = match opt_name {
-                Some(name) => name,
+                Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
                     let name = get_fresh_var_name(state);
+                    let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
 
-                    subs.set_content(var, FlexVar(Some(name.clone())));
+                    subs.set_content(var, FlexVar(Some(name_index)));
 
                     name
                 }

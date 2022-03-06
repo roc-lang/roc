@@ -1351,11 +1351,16 @@ fn unify_zip_slices(
 }
 
 #[inline(always)]
-fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content) -> Outcome {
+fn unify_rigid(
+    subs: &mut Subs,
+    ctx: &Context,
+    name: &SubsIndex<Lowercase>,
+    other: &Content,
+) -> Outcome {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            merge(subs, ctx, RigidVar(name.clone()))
+            merge(subs, ctx, RigidVar(*name))
         }
         RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _, _) | RangedNumber(..) => {
             if !ctx.mode.contains(Mode::RIGID_AS_FLEX) {
@@ -1378,13 +1383,13 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
 fn unify_flex(
     subs: &mut Subs,
     ctx: &Context,
-    opt_name: &Option<Lowercase>,
+    opt_name: &Option<SubsIndex<Lowercase>>,
     other: &Content,
 ) -> Outcome {
     match other {
         FlexVar(None) => {
             // If both are flex, and only left has a name, keep the name around.
-            merge(subs, ctx, FlexVar(opt_name.clone()))
+            merge(subs, ctx, FlexVar(*opt_name))
         }
 
         FlexVar(Some(_))
@@ -1408,7 +1413,7 @@ fn unify_recursion(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    opt_name: &Option<Lowercase>,
+    opt_name: &Option<SubsIndex<Lowercase>>,
     structure: Variable,
     other: &Content,
 ) -> Outcome {
