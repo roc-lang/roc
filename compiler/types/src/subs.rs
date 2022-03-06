@@ -357,7 +357,6 @@ fn subs_fmt_desc(this: &Descriptor, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
     write!(f, " m: {:?}", &this.mark)?;
     write!(f, " c: {:?}", &this.copy)
 }
-//
 
 pub struct SubsFmtContent<'a>(pub &'a Content, pub &'a Subs);
 
