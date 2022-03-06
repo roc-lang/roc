@@ -69,6 +69,7 @@ pub struct Subs {
     pub record_fields: Vec<RecordField<()>>,
     pub variable_slices: Vec<VariableSubsSlice>,
     pub tag_name_cache: MutMap<TagName, SubsSlice<TagName>>,
+    pub problems: Vec<Problem>,
 }
 
 impl Default for Subs {
@@ -283,6 +284,14 @@ impl<T> SubsIndex<T> {
             index: start,
             _marker: std::marker::PhantomData,
         }
+    }
+
+    pub fn push_new(vector: &mut Vec<T>, value: T) -> Self {
+        let index = Self::new(vector.len() as _);
+
+        vector.push(value);
+
+        index
     }
 }
 
@@ -1241,14 +1250,15 @@ impl Subs {
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
-            variables: Default::default(),
+            variables: Vec::new(),
             tag_names,
-            field_names: Default::default(),
-            record_fields: Default::default(),
+            field_names: Vec::new(),
+            record_fields: Vec::new(),
             // store an empty slice at the first position
             // used for "TagOrFunction"
             variable_slices: vec![VariableSubsSlice::default()],
             tag_name_cache: MutMap::default(),
+            problems: Vec::new(),
         };
 
         // NOTE the utable does not (currently) have a with_capacity; using this as the next-best thing
@@ -1817,7 +1827,7 @@ impl Content {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum FlatType {
     Apply(Symbol, VariableSubsSlice),
     Func(VariableSubsSlice, Variable, Variable),
@@ -1825,7 +1835,7 @@ pub enum FlatType {
     TagUnion(UnionTags, Variable),
     FunctionOrTagUnion(SubsIndex<TagName>, Symbol, Variable),
     RecursiveTagUnion(Variable, UnionTags, Variable),
-    Erroneous(Box<Problem>),
+    Erroneous(SubsIndex<Problem>),
     EmptyRecord,
     EmptyTagUnion,
 }
@@ -3140,8 +3150,9 @@ fn flat_type_to_err_type(
             }
         }
 
-        Erroneous(problem) => {
-            state.problems.push(*problem);
+        Erroneous(problem_index) => {
+            let problem = subs.problems[problem_index.index as usize].clone();
+            state.problems.push(problem);
 
             ErrorType::Error
         }
@@ -3255,6 +3266,7 @@ struct StorageSubsOffsets {
     field_names: u32,
     record_fields: u32,
     variable_slices: u32,
+    problems: u32,
 }
 
 impl StorageSubs {
@@ -3274,6 +3286,7 @@ impl StorageSubs {
             field_names: self.subs.field_names.len() as u32,
             record_fields: self.subs.record_fields.len() as u32,
             variable_slices: self.subs.variable_slices.len() as u32,
+            problems: self.subs.problems.len() as u32,
         };
 
         let offsets = StorageSubsOffsets {
@@ -3283,6 +3296,7 @@ impl StorageSubs {
             field_names: target.field_names.len() as u32,
             record_fields: target.record_fields.len() as u32,
             variable_slices: target.variable_slices.len() as u32,
+            problems: target.problems.len() as u32,
         };
 
         // The first Variable::NUM_RESERVED_VARS are the same in every subs,
@@ -3327,6 +3341,7 @@ impl StorageSubs {
         target.tag_names.extend(self.subs.tag_names);
         target.field_names.extend(self.subs.field_names);
         target.record_fields.extend(self.subs.record_fields);
+        target.problems.extend(self.subs.problems);
 
         debug_assert_eq!(
             target.utable.len(),
@@ -3343,6 +3358,7 @@ impl StorageSubs {
             Self::offset_variable(&offsets, v)
         }
     }
+
     fn offset_flat_type(offsets: &StorageSubsOffsets, flat_type: &FlatType) -> FlatType {
         match flat_type {
             FlatType::Apply(symbol, arguments) => {
@@ -3371,7 +3387,9 @@ impl StorageSubs {
                 Self::offset_union_tags(offsets, *union_tags),
                 Self::offset_variable(offsets, *ext),
             ),
-            FlatType::Erroneous(problem) => FlatType::Erroneous(problem.clone()),
+            FlatType::Erroneous(problem) => {
+                FlatType::Erroneous(Self::offset_problem(offsets, *problem))
+            }
             FlatType::EmptyRecord => FlatType::EmptyRecord,
             FlatType::EmptyTagUnion => FlatType::EmptyTagUnion,
         }
@@ -3457,6 +3475,15 @@ impl StorageSubs {
         slice.start += offsets.variables;
 
         slice
+    }
+
+    fn offset_problem(
+        offsets: &StorageSubsOffsets,
+        mut problem_index: SubsIndex<Problem>,
+    ) -> SubsIndex<Problem> {
+        problem_index.index += offsets.problems;
+
+        problem_index
     }
 }
 

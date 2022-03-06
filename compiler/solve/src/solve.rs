@@ -1091,7 +1091,8 @@ fn type_to_variable<'a>(
             result
         }
         Erroneous(problem) => {
-            let content = Content::Structure(FlatType::Erroneous(Box::new(problem.clone())));
+            let problem_index = SubsIndex::push_new(&mut subs.problems, problem.clone());
+            let content = Content::Structure(FlatType::Erroneous(problem_index));
 
             register(subs, rank, pools, content)
         }

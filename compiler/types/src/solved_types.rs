@@ -401,7 +401,10 @@ impl SolvedType {
             }
             EmptyRecord => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Erroneous(problem) => SolvedType::Erroneous(*problem.clone()),
+            Erroneous(problem_index) => {
+                let problem = subs.problems[problem_index.index as usize].clone();
+                SolvedType::Erroneous(problem)
+            }
         }
     }
 }
