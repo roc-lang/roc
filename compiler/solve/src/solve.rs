@@ -17,7 +17,6 @@ use roc_types::types::{
     gather_fields_unsorted_iter, AliasKind, Category, ErrorType, PatternCategory,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
-use std::collections::hash_map::Entry;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
