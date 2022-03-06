@@ -136,6 +136,8 @@ fn pattern_to_doc<'b>(
     pattern_to_doc_help(alloc, pattern, false)
 }
 
+const AFTER_TAG_INDENT: &str = "    ";
+
 fn pattern_to_doc_help<'b>(
     alloc: &'b RocDocAllocator<'b>,
     pattern: roc_exhaustive::Pattern,
@@ -160,7 +162,22 @@ fn pattern_to_doc_help<'b>(
         },
         Ctor(union, tag_id, args) => {
             match union.render_as {
-                RenderAs::Guard => panic!("can this happen? inform Folkert"),
+                RenderAs::Guard => {
+                    // #Guard <fake-condition-tag> <unexhausted-pattern>
+                    debug_assert_eq!(
+                        union.alternatives[tag_id.0 as usize].name,
+                        TagName::Global("#Guard".into())
+                    );
+                    debug_assert!(args.len() == 2);
+                    let tag = pattern_to_doc_help(alloc, args[1].clone(), in_type_param);
+                    alloc.concat(vec![
+                        tag,
+                        alloc.text(AFTER_TAG_INDENT),
+                        alloc.text("(note the lack of an "),
+                        alloc.keyword("if"),
+                        alloc.text(" clause)"),
+                    ])
+                }
                 RenderAs::Record(field_names) => {
                     let mut arg_docs = Vec::with_capacity(args.len());
 

@@ -8486,4 +8486,33 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn non_exhaustive_with_guard() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : [A]
+                when x is
+                    A if True -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                2│>  when x is
+                3│>      A if True -> ""
+
+                Other possibilities include:
+
+                    A    (note the lack of an if clause)
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
 }
