@@ -120,7 +120,7 @@ fn fmt_text_eof(text: &mut bumpalo::collections::String<'_>) {
     match last_whitespace {
         Some('\n') => {
             // There may have been more whitespace after this newline; remove it!
-            text.truncate(last_whitespace_index + 1);
+            text.truncate(last_whitespace_index + '\n'.len_utf8());
         }
         Some(_) => {
             // There's some whitespace at the end of this file, but the first
