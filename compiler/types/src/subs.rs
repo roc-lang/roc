@@ -736,8 +736,8 @@ impl Variable {
 
     /// # Safety
     ///
-    /// This should only ever be called from tests!
-    pub unsafe fn unsafe_test_debug_variable(v: u32) -> Self {
+    /// It is not guaranteed that the variable is in bounds.
+    pub unsafe fn from_index(v: u32) -> Self {
         debug_assert!(v >= Self::NUM_RESERVED_VARS as u32);
         Variable(v)
     }
