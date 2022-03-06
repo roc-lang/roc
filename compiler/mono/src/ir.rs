@@ -3093,53 +3093,6 @@ fn try_make_literal<'a>(
     }
 }
 
-fn accessor_to_closure<'a>(
-    env: &mut Env<'a, '_>,
-    name: Symbol,
-    function_var: Variable,
-    record_var: Variable,
-    closure_var: Variable,
-    closure_ext_var: Variable,
-    ext_var: Variable,
-    field_var: Variable,
-    field: Lowercase,
-) -> ClosureData {
-    // IDEA: convert accessor fromt
-    //
-    // .foo
-    //
-    // into
-    //
-    // (\r -> r.foo)
-    let record_symbol = env.unique_symbol();
-    let body = roc_can::expr::Expr::Access {
-        record_var,
-        ext_var,
-        field_var,
-        loc_expr: Box::new(Loc::at_zero(roc_can::expr::Expr::Var(record_symbol))),
-        field,
-    };
-
-    let loc_body = Loc::at_zero(body);
-
-    let arguments = vec![(
-        record_var,
-        Loc::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
-    )];
-
-    ClosureData {
-        function_type: function_var,
-        closure_type: closure_var,
-        closure_ext_var,
-        return_type: field_var,
-        name,
-        captured_symbols: vec![],
-        recursive: roc_can::expr::Recursive::NotRecursive,
-        arguments,
-        loc_body: Box::new(loc_body),
-    }
-}
-
 pub fn with_hole<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
@@ -3934,33 +3887,17 @@ pub fn with_hole<'a>(
             stmt
         }
 
-        Accessor {
-            name,
-            function_var,
-            record_var,
-            closure_var,
-            closure_ext_var,
-            ext_var,
-            field_var,
-            field,
-        } => {
+        Accessor(accessor_data) => {
+            let field_var = accessor_data.field_var;
+            let fresh_record_symbol = env.unique_symbol();
+
             let ClosureData {
                 name,
                 function_type,
                 arguments,
                 loc_body,
                 ..
-            } = accessor_to_closure(
-                env,
-                name,
-                function_var,
-                record_var,
-                closure_var,
-                closure_ext_var,
-                ext_var,
-                field_var,
-                field,
-            );
+            } = accessor_data.to_closure_data(fresh_record_symbol);
 
             match procs.insert_anonymous(
                 env,
@@ -3975,7 +3912,7 @@ pub fn with_hole<'a>(
                 Ok(_) => {
                     let raw_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, function_var, env.subs)
+                        layout_cache.raw_from_var(env.arena, function_type, env.subs)
                     );
 
                     match raw_layout {
@@ -5493,34 +5430,14 @@ pub fn from_can<'a>(
 
                         return from_can(env, variable, cont.value, procs, layout_cache);
                     }
-                    roc_can::expr::Expr::Accessor {
-                        name,
-                        function_var,
-                        record_var,
-                        closure_var,
-                        closure_ext_var,
-                        ext_var,
-                        field_var,
-                        field,
-                    } => {
-                        let closure_data = accessor_to_closure(
-                            env,
-                            name,
-                            function_var,
-                            record_var,
-                            closure_var,
-                            closure_ext_var,
-                            ext_var,
-                            field_var,
-                            field,
-                        );
-
+                    roc_can::expr::Expr::Accessor(accessor_data) => {
+                        let fresh_record_symbol = env.unique_symbol();
                         register_noncapturing_closure(
                             env,
                             procs,
                             layout_cache,
                             *symbol,
-                            closure_data,
+                            accessor_data.to_closure_data(fresh_record_symbol),
                         );
 
                         return from_can(env, variable, cont.value, procs, layout_cache);

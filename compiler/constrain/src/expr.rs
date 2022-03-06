@@ -8,7 +8,7 @@ use roc_can::def::{Declaration, Def};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
-use roc_can::expr::{ClosureData, Field, WhenBranch};
+use roc_can::expr::{AccessorData, ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{HumanIndex, ImMap, MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
@@ -764,7 +764,7 @@ pub fn constrain_expr(
                 [constraint, eq, record_con],
             )
         }
-        Accessor {
+        Accessor(AccessorData {
             name: closure_name,
             function_var,
             field,
@@ -773,7 +773,7 @@ pub fn constrain_expr(
             closure_ext_var,
             ext_var,
             field_var,
-        } => {
+        }) => {
             let ext_var = *ext_var;
             let ext_type = Variable(ext_var);
             let field_var = *field_var;
