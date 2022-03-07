@@ -30,7 +30,6 @@ pub fn mark_node_to_html(
 
             let css_class = match syn_high_style {
                 Operator => "operator",
-                Comma => "comma",
                 String => "string",
                 FunctionName => "function-name",
                 FunctionArgName => "function-arg-name",
@@ -47,6 +46,7 @@ pub fn mark_node_to_html(
                 DocsComment => "docs-comment",
                 UppercaseIdent => "uppercase-ident",
                 LowercaseIdent => "lowercase-ident",
+                Keyword => "keyword-ident",
             };
 
             write_html_to_buf(content, css_class, buf);

@@ -1,2 +1,2 @@
-mod tokenizer;
+pub mod tokenizer;
 pub mod highlight_parser;

@@ -245,6 +245,14 @@ impl MarkupNode {
     }
 }
 
+pub fn make_nested_mn(children_ids: Vec<MarkNodeId>, newlines_at_end: usize) -> MarkupNode {
+    MarkupNode::Nested {
+        children_ids,
+        parent_id_opt: None,
+        newlines_at_end,
+    }
+}
+
 pub fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
     pool_str.as_str(env.pool).to_owned()
 }
@@ -256,6 +264,7 @@ pub const LEFT_SQUARE_BR: &str = "[ ";
 pub const RIGHT_SQUARE_BR: &str = " ]";
 pub const COLON: &str = ": ";
 pub const COMMA: &str = ", ";
+pub const DOT: &str = ".";
 pub const STRING_QUOTES: &str = "\"\"";
 pub const EQUALS: &str = " = ";
 pub const ARROW: &str = " -> ";

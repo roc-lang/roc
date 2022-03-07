@@ -14,7 +14,7 @@ use crate::{
     syntax_highlight::HighlightStyle,
 };
 
-use super::{mark_id_ast_id_map::MarkIdAstIdMap, convert::from_def2::add_node, common_nodes::assign_mn};
+use super::{mark_id_ast_id_map::MarkIdAstIdMap, convert::from_def2::add_node, common_nodes::new_assign_mn};
 
 // represents for example: `main = "Hello, World!"`
 pub fn assignment_mark_node<'a>(
@@ -39,7 +39,7 @@ pub fn assignment_mark_node<'a>(
 
     let equals_mn_id = add_node(new_equals_mn(), ast_node_id, mark_node_pool, mark_id_ast_id_map);
 
-    Ok(assign_mn(val_name_mn_id, equals_mn_id, expr_mark_node_id))
+    Ok(new_assign_mn(val_name_mn_id, equals_mn_id, expr_mark_node_id))
 }
 
 pub fn tld_w_comments_mark_node(

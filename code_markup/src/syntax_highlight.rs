@@ -6,7 +6,6 @@ use crate::colors::{from_hsb, RgbaTup};
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug, Deserialize, Serialize)]
 pub enum HighlightStyle {
     Operator, // =+-<>...
-    Comma,
     String,
     FunctionName,
     FunctionArgName,
@@ -23,6 +22,7 @@ pub enum HighlightStyle {
     DocsComment,
     UppercaseIdent, // TODO remove other HighlightStyle subtypes of UppercaseIdent?
     LowercaseIdent, // TODO remove other HighlightStyle subtypes of LowercaseIdent?
+    Keyword, // if, else, when
 }
 
 pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
@@ -33,7 +33,6 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
     let mut highlight_map = HashMap::new();
     [
         (Operator, from_hsb(185, 50, 75)),
-        (Comma, from_hsb(258, 50, 90)),
         (String, from_hsb(346, 65, 97)),
         (FunctionName, almost_white),
         (FunctionArgName, from_hsb(225, 50, 100)),
@@ -50,6 +49,7 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
         (DocsComment, from_hsb(258, 50, 90)), // TODO check color
         (UppercaseIdent, almost_white),
         (LowercaseIdent, from_hsb(225, 50, 100)),
+        (Keyword, almost_white),
     ]
     .iter()
     .for_each(|tup| {

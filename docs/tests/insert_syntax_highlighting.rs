@@ -98,7 +98,7 @@ mod insert_doc_syntax_highlighting {
     fn top_level_def_val_num() {
         expect_html_def(
             r#"myVal = 0"#,
-            "<span class=\"syntax-lowercase-ident\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-number\">0</span>\n\n\n",
+            "<span class=\"syntax-lowercase-ident\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-number\">0</span>\n\n",
         );
     }
 
