@@ -796,11 +796,10 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
 
         Decimal(int) => {
             let (upper_bits, lower_bits) = int.as_bits();
-            env
-            .context
-            .i128_type()
-            .const_int_arbitrary_precision(&[lower_bits, upper_bits as u64])
-            .into()
+            env.context
+                .i128_type()
+                .const_int_arbitrary_precision(&[lower_bits, upper_bits as u64])
+                .into()
         }
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
