@@ -8,7 +8,7 @@ use roc_can::def::{Declaration, Def};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
-use roc_can::expr::{ClosureData, Field, WhenBranch};
+use roc_can::expr::{AccessorData, ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{HumanIndex, ImMap, MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
@@ -100,7 +100,6 @@ pub fn constrain_expr(
             if fields.is_empty() {
                 constrain_empty_record(constraints, region, expected)
             } else {
-                let mut field_exprs = SendMap::default();
                 let mut field_types = SendMap::default();
                 let mut field_vars = Vec::with_capacity(fields.len());
 
@@ -115,7 +114,6 @@ pub fn constrain_expr(
                         constrain_field(constraints, env, field_var, &*loc_field_expr);
 
                     field_vars.push(field_var);
-                    field_exprs.insert(label.clone(), loc_field_expr);
                     field_types.insert(label.clone(), RecordField::Required(field_type));
 
                     rec_constraints.push(field_con);
@@ -764,15 +762,16 @@ pub fn constrain_expr(
                 [constraint, eq, record_con],
             )
         }
-        Accessor {
+        Accessor(AccessorData {
             name: closure_name,
             function_var,
             field,
             record_var,
-            closure_ext_var: closure_var,
+            closure_var,
+            closure_ext_var,
             ext_var,
             field_var,
-        } => {
+        }) => {
             let ext_var = *ext_var;
             let ext_type = Variable(ext_var);
             let field_var = *field_var;
@@ -795,16 +794,24 @@ pub fn constrain_expr(
 
             let lambda_set = Type::ClosureTag {
                 name: *closure_name,
-                ext: *closure_var,
+                ext: *closure_ext_var,
             };
+
+            let closure_type = Type::Variable(*closure_var);
 
             let function_type = Type::Function(
                 vec![record_type],
-                Box::new(lambda_set),
+                Box::new(closure_type.clone()),
                 Box::new(field_type),
             );
 
             let cons = [
+                constraints.equal_types(
+                    closure_type,
+                    NoExpectation(lambda_set),
+                    category.clone(),
+                    region,
+                ),
                 constraints.equal_types(function_type.clone(), expected, category.clone(), region),
                 constraints.equal_types(
                     function_type,
@@ -816,7 +823,14 @@ pub fn constrain_expr(
             ];
 
             constraints.exists_many(
-                [*record_var, *function_var, *closure_var, field_var, ext_var],
+                [
+                    *record_var,
+                    *function_var,
+                    *closure_var,
+                    *closure_ext_var,
+                    field_var,
+                    ext_var,
+                ],
                 cons,
             )
         }
@@ -1194,13 +1208,7 @@ fn constrain_when_branch(
 
         // must introduce the headers from the pattern before constraining the guard
         let state_constraints = constraints.and_constraint(state.constraints);
-        let inner = constraints.let_constraint(
-            [],
-            [],
-            SendMap::default(),
-            guard_constraint,
-            ret_constraint,
-        );
+        let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
 
         constraints.let_constraint([], state.vars, state.headers, state_constraints, inner)
     } else {
@@ -1363,7 +1371,7 @@ fn constrain_def(
 
             def_pattern_state.constraints.push(constraints.equal_types(
                 expr_type,
-                annotation_expected.clone(),
+                annotation_expected,
                 Category::Storage(std::file!(), std::line!()),
                 Region::span_across(&annotation.region, &def.loc_expr.region),
             ));
@@ -1528,24 +1536,25 @@ fn constrain_def(
                 }
 
                 _ => {
-                    let expected = annotation_expected;
+                    let annotation_expected = FromAnnotation(
+                        def.loc_pattern.clone(),
+                        arity,
+                        AnnotationSource::TypedBody {
+                            region: annotation.region,
+                        },
+                        signature.clone(),
+                    );
 
                     let ret_constraint = constrain_expr(
                         constraints,
                         env,
                         def.loc_expr.region,
                         &def.loc_expr.value,
-                        expected,
+                        annotation_expected,
                     );
 
                     let cons = [
-                        constraints.let_constraint(
-                            [],
-                            [],
-                            SendMap::default(),
-                            Constraint::True,
-                            ret_constraint,
-                        ),
+                        constraints.let_constraint([], [], [], Constraint::True, ret_constraint),
                         // Store type into AST vars. We use Store so errors aren't reported twice
                         constraints.store(signature, expr_var, std::file!(), std::line!()),
                     ];
@@ -1598,7 +1607,7 @@ fn constrain_def_make_constraint(
     let def_con = constraints.let_constraint(
         [],
         new_infer_variables,
-        SendMap::default(), // empty, because our functions have no arguments!
+        [], // empty, because our functions have no arguments!
         and_constraint,
         expr_con,
     );
@@ -1714,6 +1723,11 @@ fn instantiate_rigids(
         annotation.substitute(&rigid_substitution);
     }
 
+    // TODO investigate when we can skip this. It seems to only be required for correctness
+    // for recursive functions. For non-recursive functions the final type is correct, but
+    // alias information is sometimes lost
+    //
+    // Skipping all of this cloning here would be neat!
     let loc_annotation_ref = Loc::at(loc_pattern.region, &annotation);
     if let Pattern::Identifier(symbol) = loc_pattern.value {
         headers.insert(symbol, Loc::at(loc_pattern.region, annotation.clone()));
@@ -1776,8 +1790,8 @@ pub fn rec_defs_help(
                 // TODO investigate if this let can be safely removed
                 let def_con = constraints.let_constraint(
                     [],
-                    [],                 // empty because Roc function defs have no args
-                    SendMap::default(), // empty because Roc function defs have no args
+                    [],               // empty because Roc function defs have no args
+                    [],               // empty because Roc function defs have no args
                     Constraint::True, // I think this is correct, once again because there are no args
                     expr_con,
                 );
@@ -1967,7 +1981,7 @@ pub fn rec_defs_help(
                         rigid_info.constraints.push(constraints.let_constraint(
                             new_rigid_variables,
                             def_pattern_state.vars,
-                            SendMap::default(), // no headers introduced (at this level)
+                            [], // no headers introduced (at this level)
                             def_con,
                             Constraint::True,
                         ));
@@ -1988,7 +2002,7 @@ pub fn rec_defs_help(
                             constraints.let_constraint(
                                 [],
                                 [],
-                                SendMap::default(),
+                                [],
                                 Constraint::True,
                                 ret_constraint,
                             ),
@@ -2002,7 +2016,7 @@ pub fn rec_defs_help(
                         rigid_info.constraints.push(constraints.let_constraint(
                             new_rigid_variables,
                             def_pattern_state.vars,
-                            SendMap::default(), // no headers introduced (at this level)
+                            [], // no headers introduced (at this level)
                             def_con,
                             Constraint::True,
                         ));

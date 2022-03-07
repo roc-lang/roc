@@ -7305,11 +7305,11 @@ I need all branches in an `if` to have the same type!
                                 {}
 
                         The first pattern is trying to match {}:
-        
+
                             {}
-        
+
                         But the expression between `when` and `is` has the type:
-        
+
                             {}
                         "#
                     ), number, $suffix, carets, kind, typ, bad_type),
@@ -8463,25 +8463,104 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-                
+
                 The 1st argument to `y` is not what I expect:
-                
+
                 6│      n = y 1u8
                               ^^^
-                
+
                 This argument is an integer of type:
-                
+
                     U8
-                
+
                 But `y` needs the 1st argument to be:
-                
+
                     a
-                
+
                 Tip: The type annotation uses the type variable `a` to say that this
                 definition can produce any type of value. But in the body I see that
                 it will only produce a `U8` value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
                 to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn non_exhaustive_with_guard() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : [A]
+                when x is
+                    A if True -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                2│>  when x is
+                3│>      A if True -> ""
+
+                Other possibilities include:
+
+                    A    (note the lack of an if clause)
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_record_extension_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Nat }U32
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INVALID_EXTENSION_TYPE ──────────────────────────────────────────────────────
+
+                This record extension type is invalid:
+
+                1│  f : { x : Nat }U32
+                                   ^^^
+
+                Note: A record extension variable can only contain a type variable or
+                another record.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_tag_extension_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ A ]Str
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INVALID_EXTENSION_TYPE ──────────────────────────────────────────────────────
+
+                This tag union extension type is invalid:
+
+                1│  f : [ A ]Str
+                             ^^^
+
+                Note: A tag union extension variable can only contain a type variable
+                or another tag union.
                 "#
             ),
         )

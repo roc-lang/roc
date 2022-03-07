@@ -177,7 +177,10 @@ fn to_nonredundant_rows(
             vec![Pattern::Ctor(
                 union,
                 tag_id,
-                vec![simplify(&loc_pat.value), guard_pattern],
+                // NB: ordering the guard pattern first seems to be better at catching
+                // non-exhaustive constructors in the second argument; see the paper to see if
+                // there is a way to improve this in general.
+                vec![guard_pattern, simplify(&loc_pat.value)],
             )]
         } else {
             vec![simplify(&loc_pat.value)]
