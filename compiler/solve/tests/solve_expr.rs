@@ -5543,4 +5543,34 @@ mod solve_expr {
             "Str",
         )
     }
+
+    #[test]
+    fn record_extension_variable_is_alias() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Other a b : { y: a, z: b }
+
+                f : { x : Str }(Other Str Str)
+                f
+                "#
+            ),
+            r#"{ x : Str, y : Str, z : Str }"#,
+        )
+    }
+
+    #[test]
+    fn tag_extension_variable_is_alias() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Other : [ B, C ]
+
+                f : [ A ]Other
+                f
+                "#
+            ),
+            r#"[ A, B, C ]"#,
+        )
+    }
 }
