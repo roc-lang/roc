@@ -1,15 +1,16 @@
 use peg::error::ParseError;
 use roc_code_markup::markup::attribute::Attributes;
-use roc_code_markup::markup::common_nodes::{new_equals_mn, new_dot_mn, new_assign_mn, new_module_name_mn_id, new_module_var_mn, if_mn, then_mn, else_mn, new_if_expr_mn};
-use roc_code_markup::slow_pool::{SlowPool, MarkNodeId};
-use roc_code_markup::{syntax_highlight::HighlightStyle};
+use roc_code_markup::markup::common_nodes::{
+    else_mn, if_mn, new_assign_mn, new_dot_mn, new_equals_mn, new_if_expr_mn,
+    new_module_name_mn_id, new_module_var_mn, then_mn,
+};
 use roc_code_markup::markup::nodes::MarkupNode;
+use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
+use roc_code_markup::syntax_highlight::HighlightStyle;
 
-use crate::tokenizer::{Token, TokenTable, full_tokenize};
+use crate::tokenizer::{full_tokenize, Token, TokenTable};
 
-
-
- type T = Token;
+type T = Token;
 
 // Inspired by https://ziglang.org/documentation/0.7.1/#Grammar
 // license information can be found in the LEGAL_DETAILS file in
@@ -36,7 +37,7 @@ HOW TO ADD NEW RULES:
 - we finsih up by adding a test: `test_highlight_if_expr`
 ```
 */
-peg::parser!{
+peg::parser! {
     grammar highlightparser(t_table: &TokenTable, code_str: &str, mn_pool: &mut SlowPool) for [T] {
 
       pub rule full_expr() -> MarkNodeId =
@@ -103,7 +104,7 @@ peg::parser!{
           mod_name_id:module_name() dot_id:dot() ident_id:lowercase_ident() {
             mn_pool.add(
               new_module_var_mn(mod_name_id, dot_id, ident_id)
-            ) 
+            )
           }
 
       rule module_name() -> MarkNodeId =
@@ -138,142 +139,140 @@ peg::parser!{
 
       rule end_of_file() =
         ![_]
-      
+
     }
 }
-fn merge_ids(
-  mn_id: MarkNodeId,
-  other_mn_id: Vec<MarkNodeId>
-) -> Vec<MarkNodeId> {
-  let mut ids = vec![mn_id];
-  let mut rest_ids: Vec<usize> = other_mn_id;
+fn merge_ids(mn_id: MarkNodeId, other_mn_id: Vec<MarkNodeId>) -> Vec<MarkNodeId> {
+    let mut ids = vec![mn_id];
+    let mut rest_ids: Vec<usize> = other_mn_id;
 
-  ids.append(&mut rest_ids);
+    ids.append(&mut rest_ids);
 
-  ids
+    ids
 }
 
 fn flatten_tups(tup_vec: Vec<(MarkNodeId, MarkNodeId)>) -> Vec<MarkNodeId> {
-  tup_vec.iter().flat_map(|(a,b)| vec![*a, *b]).collect()
+    tup_vec.iter().flat_map(|(a, b)| vec![*a, *b]).collect()
 }
 
 fn add_new_mn(
-  text: &str,
-  highlight_style: HighlightStyle,
-  mark_node_pool: &mut SlowPool,
+    text: &str,
+    highlight_style: HighlightStyle,
+    mark_node_pool: &mut SlowPool,
 ) -> MarkNodeId {
-  let m_node = MarkupNode::Text {
-      content: text.to_owned(),
-      syn_high_style: highlight_style,
-      attributes: Attributes::default(),
-      parent_id_opt: None,
-      newlines_at_end: 0,
-  };
-  mark_node_pool.add(m_node)
+    let m_node = MarkupNode::Text {
+        content: text.to_owned(),
+        syn_high_style: highlight_style,
+        attributes: Attributes::default(),
+        parent_id_opt: None,
+        newlines_at_end: 0,
+    };
+    mark_node_pool.add(m_node)
 }
 
-pub fn highlight_expr(code_str: &str, mark_node_pool: &mut SlowPool) -> Result<MarkNodeId, ParseError<usize>> {
-  let token_table = full_tokenize(code_str);
+pub fn highlight_expr(
+    code_str: &str,
+    mark_node_pool: &mut SlowPool,
+) -> Result<MarkNodeId, ParseError<usize>> {
+    let token_table = full_tokenize(code_str);
 
-  highlightparser::full_expr(&token_table.tokens, &token_table, code_str, mark_node_pool)
+    highlightparser::full_expr(&token_table.tokens, &token_table, code_str, mark_node_pool)
 }
 
-pub fn highlight_defs(code_str: &str, mark_node_pool: &mut SlowPool) -> Result<Vec<MarkNodeId>, ParseError<usize>> {
-  let token_table = full_tokenize(code_str);
+pub fn highlight_defs(
+    code_str: &str,
+    mark_node_pool: &mut SlowPool,
+) -> Result<Vec<MarkNodeId>, ParseError<usize>> {
+    let token_table = full_tokenize(code_str);
 
-  highlightparser::module_defs(&token_table.tokens, &token_table, code_str, mark_node_pool)
+    highlightparser::module_defs(&token_table.tokens, &token_table, code_str, mark_node_pool)
 }
 
 #[cfg(test)]
 pub mod highlight_tests {
-    use roc_code_markup::{slow_pool::{SlowPool}, markup::nodes::{node_to_string_w_children}};
+    use roc_code_markup::{markup::nodes::node_to_string_w_children, slow_pool::SlowPool};
 
-    use crate::highlight_parser::{highlight_expr, highlight_defs};
+    use crate::highlight_parser::{highlight_defs, highlight_expr};
 
-  fn test_highlight_expr(input: &str, expected_output: &str) {
-    let mut mark_node_pool = SlowPool::default();
+    fn test_highlight_expr(input: &str, expected_output: &str) {
+        let mut mark_node_pool = SlowPool::default();
 
-    let mark_id = highlight_expr(input, &mut mark_node_pool).unwrap();
+        let mark_id = highlight_expr(input, &mut mark_node_pool).unwrap();
 
-    let mut str_buffer = String::new();
+        let mut str_buffer = String::new();
 
-    node_to_string_w_children(
-      mark_id,
-      &mut str_buffer,
-      &mark_node_pool
-    );
+        node_to_string_w_children(mark_id, &mut str_buffer, &mark_node_pool);
 
-    assert_eq!(
-      &str_buffer,
-      expected_output
-    );
-  }
-
-  #[test]
-  fn test_highlight() {
-    test_highlight_expr("0","0");
-  }
-
-  #[test]
-  fn test_highlight_module_var() {
-    test_highlight_expr("Foo.Bar.var","Foo.Bar.var");
-  }
-
-  #[test]
-  fn test_highlight_if_expr() {
-    test_highlight_expr("if booly then 42 else 31415", "if booly then 42 else 31415\n")
-  }
-
-  #[test]
-  fn test_highlight_defs() {
-    let mut mark_node_pool = SlowPool::default();
-
-    let mut str_buffer = String::new();
-
-    node_to_string_w_children(
-      *highlight_defs("a = 0", &mut mark_node_pool).unwrap()
-              .get(0).unwrap(),
-      &mut str_buffer,
-      &mark_node_pool
-    );
-
-    assert_eq!(
-      &str_buffer,
-      "a = 0\n\n"
-    );
-  }
-
-  /*#[test]
-  fn test_highlight_defs() {
-    let mut mark_node_pool = SlowPool::default();
-
-    let res = 
-      highlight_defs(
-        r#"0
-1"#,
-        &mut mark_node_pool
-      );
-
-    assert!(
-      all_highlight_style(res, HighlightStyle::Number, 2, &mark_node_pool)
-    );
-  }
-
-  fn all_highlight_style(parse_res: Result<Vec<MarkNodeId>, ParseError<usize>>, highlight_style: HighlightStyle, expected_len: usize, mark_node_pool: &SlowPool) -> bool {
-    let node_vec = parse_res
-      .unwrap();
-
-    assert_eq!(node_vec.len(), expected_len); 
-      
-    node_vec
-    .iter()
-    .all(|m_node| has_highlight_style(mark_node_pool.get(*m_node), highlight_style))
-  }
-
-  fn has_highlight_style(mark_node: &MarkupNode, highlight_style: HighlightStyle) -> bool {
-    match *mark_node {
-      MarkupNode::Text { syn_high_style, .. } => syn_high_style == highlight_style,
-      _ => false,
+        assert_eq!(&str_buffer, expected_output);
     }
-  }*/
+
+    #[test]
+    fn test_highlight() {
+        test_highlight_expr("0", "0");
+    }
+
+    #[test]
+    fn test_highlight_module_var() {
+        test_highlight_expr("Foo.Bar.var", "Foo.Bar.var");
+    }
+
+    #[test]
+    fn test_highlight_if_expr() {
+        test_highlight_expr(
+            "if booly then 42 else 31415",
+            "if booly then 42 else 31415\n",
+        )
+    }
+
+    #[test]
+    fn test_highlight_defs() {
+        let mut mark_node_pool = SlowPool::default();
+
+        let mut str_buffer = String::new();
+
+        node_to_string_w_children(
+            *highlight_defs("a = 0", &mut mark_node_pool)
+                .unwrap()
+                .get(0)
+                .unwrap(),
+            &mut str_buffer,
+            &mark_node_pool,
+        );
+
+        assert_eq!(&str_buffer, "a = 0\n\n");
+    }
+
+    /*#[test]
+      fn test_highlight_defs() {
+        let mut mark_node_pool = SlowPool::default();
+
+        let res =
+          highlight_defs(
+            r#"0
+    1"#,
+            &mut mark_node_pool
+          );
+
+        assert!(
+          all_highlight_style(res, HighlightStyle::Number, 2, &mark_node_pool)
+        );
+      }
+
+      fn all_highlight_style(parse_res: Result<Vec<MarkNodeId>, ParseError<usize>>, highlight_style: HighlightStyle, expected_len: usize, mark_node_pool: &SlowPool) -> bool {
+        let node_vec = parse_res
+          .unwrap();
+
+        assert_eq!(node_vec.len(), expected_len);
+
+        node_vec
+        .iter()
+        .all(|m_node| has_highlight_style(mark_node_pool.get(*m_node), highlight_style))
+      }
+
+      fn has_highlight_style(mark_node: &MarkupNode, highlight_style: HighlightStyle) -> bool {
+        match *mark_node {
+          MarkupNode::Text { syn_high_style, .. } => syn_high_style == highlight_style,
+          _ => false,
+        }
+      }*/
 }

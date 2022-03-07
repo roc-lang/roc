@@ -14,7 +14,9 @@ use crate::{
     syntax_highlight::HighlightStyle,
 };
 
-use super::{mark_id_ast_id_map::MarkIdAstIdMap, convert::from_def2::add_node, common_nodes::new_assign_mn};
+use super::{
+    common_nodes::new_assign_mn, convert::from_def2::add_node, mark_id_ast_id_map::MarkIdAstIdMap,
+};
 
 // represents for example: `main = "Hello, World!"`
 pub fn assignment_mark_node<'a>(
@@ -37,9 +39,18 @@ pub fn assignment_mark_node<'a>(
 
     let val_name_mn_id = add_node(val_name_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map);
 
-    let equals_mn_id = add_node(new_equals_mn(), ast_node_id, mark_node_pool, mark_id_ast_id_map);
+    let equals_mn_id = add_node(
+        new_equals_mn(),
+        ast_node_id,
+        mark_node_pool,
+        mark_id_ast_id_map,
+    );
 
-    Ok(new_assign_mn(val_name_mn_id, equals_mn_id, expr_mark_node_id))
+    Ok(new_assign_mn(
+        val_name_mn_id,
+        equals_mn_id,
+        expr_mark_node_id,
+    ))
 }
 
 pub fn tld_w_comments_mark_node(
@@ -54,7 +65,7 @@ pub fn tld_w_comments_mark_node(
         new_comments_mn(comments, 1),
         ast_node_id,
         mark_node_pool,
-        mark_id_ast_id_map
+        mark_id_ast_id_map,
     );
 
     let children_ids = if comments_before {

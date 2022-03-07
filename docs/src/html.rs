@@ -1,11 +1,7 @@
 use roc_code_markup::{markup::nodes::MarkupNode, slow_pool::SlowPool};
 
 // determine appropriate css class for MarkupNode
-pub fn mark_node_to_html(
-    mark_node: &MarkupNode,
-    mark_node_pool: &SlowPool,
-    buf: &mut String,
-) {
+pub fn mark_node_to_html(mark_node: &MarkupNode, mark_node_pool: &SlowPool, buf: &mut String) {
     let mut additional_newlines = 0;
 
     match mark_node {

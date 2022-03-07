@@ -1003,9 +1003,7 @@ pub fn handle_new_char_expr(
             match expr_ref {
                 Expr2::SmallInt { .. } => update_int(ed_model, curr_mark_node_id, ch)?,
                 _ => {
-                    let prev_ast_node_id = ed_model
-                        .mark_id_ast_id_map
-                        .get(prev_mark_node_id)?;
+                    let prev_ast_node_id = ed_model.mark_id_ast_id_map.get(prev_mark_node_id)?;
 
                     match prev_ast_node_id {
                         ASTNodeId::ADefId(_) => InputOutcome::Ignored,
@@ -1026,9 +1024,7 @@ pub fn handle_new_char_expr(
             let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
 
             if let Some(mark_parent_id) = mark_parent_id_opt {
-                let parent_ast_id = ed_model
-                    .mark_id_ast_id_map
-                    .get(mark_parent_id)?;
+                let parent_ast_id = ed_model.mark_id_ast_id_map.get(mark_parent_id)?;
 
                 match parent_ast_id {
                     ASTNodeId::ADefId(_) => InputOutcome::Ignored,
@@ -1046,9 +1042,7 @@ pub fn handle_new_char_expr(
                 let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
 
                 if let Some(mark_parent_id) = mark_parent_id_opt {
-                    let parent_ast_id = ed_model
-                        .mark_id_ast_id_map
-                        .get(mark_parent_id)?;
+                    let parent_ast_id = ed_model.mark_id_ast_id_map.get(mark_parent_id)?;
 
                     match parent_ast_id {
                         ASTNodeId::ADefId(_) => InputOutcome::Ignored,

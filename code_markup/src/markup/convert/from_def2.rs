@@ -1,7 +1,9 @@
 use crate::{
     markup::{
         common_nodes::new_blank_mn_w_nls,
-        top_level_def::{assignment_mark_node, tld_w_comments_mark_node}, mark_id_ast_id_map::MarkIdAstIdMap, nodes::MarkupNode,
+        mark_id_ast_id_map::MarkIdAstIdMap,
+        nodes::MarkupNode,
+        top_level_def::{assignment_mark_node, tld_w_comments_mark_node},
     },
     slow_pool::{MarkNodeId, SlowPool},
 };
@@ -58,23 +60,33 @@ pub fn def2_to_markup<'a>(
                 0,
             )?;
 
-            let tld_mn =
-                assignment_mark_node(*identifier_id, expr_mn_id, ast_node_id, mark_node_pool, mark_id_ast_id_map, env)?;
+            let tld_mn = assignment_mark_node(
+                *identifier_id,
+                expr_mn_id,
+                ast_node_id,
+                mark_node_pool,
+                mark_id_ast_id_map,
+                env,
+            )?;
 
             add_node(tld_mn, ast_node_id, mark_node_pool, mark_id_ast_id_map)
         }
-        Def2::Blank => {
-            add_node(
-                new_blank_mn_w_nls(2),
-                ast_node_id,
-                mark_node_pool,
-                mark_id_ast_id_map
-            )
-        },
+        Def2::Blank => add_node(
+            new_blank_mn_w_nls(2),
+            ast_node_id,
+            mark_node_pool,
+            mark_id_ast_id_map,
+        ),
         Def2::CommentsBefore { comments, def_id } => {
             let inner_def = env.pool.get(*def_id);
-            let inner_def_mark_node_id =
-                def2_to_markup(env, inner_def, *def_id, mark_node_pool, mark_id_ast_id_map, interns)?;
+            let inner_def_mark_node_id = def2_to_markup(
+                env,
+                inner_def,
+                *def_id,
+                mark_node_pool,
+                mark_id_ast_id_map,
+                interns,
+            )?;
 
             let full_mark_node = tld_w_comments_mark_node(
                 comments.clone(),
@@ -85,12 +97,23 @@ pub fn def2_to_markup<'a>(
                 true,
             )?;
 
-            add_node(full_mark_node, ast_node_id, mark_node_pool, mark_id_ast_id_map)
+            add_node(
+                full_mark_node,
+                ast_node_id,
+                mark_node_pool,
+                mark_id_ast_id_map,
+            )
         }
         Def2::CommentsAfter { def_id, comments } => {
             let inner_def = env.pool.get(*def_id);
-            let inner_def_mark_node_id =
-                def2_to_markup(env, inner_def, *def_id, mark_node_pool, mark_id_ast_id_map, interns)?;
+            let inner_def_mark_node_id = def2_to_markup(
+                env,
+                inner_def,
+                *def_id,
+                mark_node_pool,
+                mark_id_ast_id_map,
+                interns,
+            )?;
 
             let full_mark_node = tld_w_comments_mark_node(
                 comments.clone(),
@@ -101,7 +124,12 @@ pub fn def2_to_markup<'a>(
                 false,
             )?;
 
-            add_node(full_mark_node, ast_node_id, mark_node_pool, mark_id_ast_id_map)
+            add_node(
+                full_mark_node,
+                ast_node_id,
+                mark_node_pool,
+                mark_id_ast_id_map,
+            )
         }
     };
 

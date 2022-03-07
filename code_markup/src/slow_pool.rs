@@ -1,4 +1,4 @@
-use crate::markup::{nodes::MarkupNode, mark_id_ast_id_map::MarkIdAstIdMap};
+use crate::markup::{mark_id_ast_id_map::MarkIdAstIdMap, nodes::MarkupNode};
 
 pub type MarkNodeId = usize;
 
@@ -37,11 +37,10 @@ impl SlowPool {
         let mut ret_str = String::new();
 
         for (mark_node_id, node) in self.nodes.iter().enumerate() {
-            let ast_node_id_str =
-                match mark_id_ast_id_map.get(mark_node_id) {
-                    Ok(ast_id) => format!("{:?}", ast_id),
-                    Err(err) => format!("{:?}", err)
-                };
+            let ast_node_id_str = match mark_id_ast_id_map.get(mark_node_id) {
+                Ok(ast_id) => format!("{:?}", ast_id),
+                Err(err) => format!("{:?}", err),
+            };
             let ast_node_id: String = ast_node_id_str
                 .chars()
                 .filter(|c| c.is_ascii_digit())
@@ -55,16 +54,14 @@ impl SlowPool {
                 child_str = format!("children: {:?}", node_children);
             }
 
-            ret_str.push_str(
-                &format!(
-                    "{}: {} ({}) ast_id {:?} {}",
-                    mark_node_id,
-                    node.node_type_as_string(),
-                    node.get_content(),
-                    ast_node_id.parse::<usize>().unwrap(),
-                    child_str
-                )
-            );
+            ret_str.push_str(&format!(
+                "{}: {} ({}) ast_id {:?} {}",
+                mark_node_id,
+                node.node_type_as_string(),
+                node.get_content(),
+                ast_node_id.parse::<usize>().unwrap(),
+                child_str
+            ));
         }
 
         ret_str

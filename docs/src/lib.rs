@@ -1,14 +1,14 @@
 extern crate pulldown_cmark;
 extern crate roc_load;
-use bumpalo::{Bump};
-use docs_error::{DocsResult, DocsError};
+use bumpalo::Bump;
+use docs_error::{DocsError, DocsResult};
 use html::mark_node_to_html;
 use roc_builtins::std::StdLib;
 use roc_can::scope::Scope;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::slow_pool::SlowPool;
 use roc_collections::all::MutMap;
-use roc_highlight::highlight_parser::{highlight_expr, highlight_defs};
+use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::DocEntry::DocDef;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
@@ -16,7 +16,7 @@ use roc_load::file::{LoadedModule, LoadingProblem};
 use roc_module::symbol::{IdentIds, Interns, ModuleId};
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::state::State;
-use roc_region::all::{Region};
+use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -109,9 +109,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &
 }
 
 // converts plain-text code to highlighted html
-pub fn syntax_highlight_expr<'a>(
-    code_str: &'a str,
-) -> DocsResult<String> {
+pub fn syntax_highlight_expr(code_str: &str) -> DocsResult<String> {
     let trimmed_code_str = code_str.trim_end().trim();
     let mut mark_node_pool = SlowPool::default();
 
@@ -120,18 +118,16 @@ pub fn syntax_highlight_expr<'a>(
     match highlight_expr(trimmed_code_str, &mut mark_node_pool) {
         Ok(root_mark_node_id) => {
             let root_mark_node = mark_node_pool.get(root_mark_node_id);
-            mark_node_to_html(&root_mark_node, &mark_node_pool, &mut highlighted_html_str);
-            
+            mark_node_to_html(root_mark_node, &mark_node_pool, &mut highlighted_html_str);
+
             Ok(highlighted_html_str)
-        },
+        }
         Err(err) => Err(DocsError::from(err)),
     }
 }
 
 // converts plain-text code to highlighted html
-pub fn syntax_highlight_top_level_defs<'a>(
-    code_str: &'a str,
-) -> DocsResult<String> {
+pub fn syntax_highlight_top_level_defs(code_str: &str) -> DocsResult<String> {
     let trimmed_code_str = code_str.trim_end().trim();
 
     let mut mark_node_pool = SlowPool::default();
@@ -140,14 +136,17 @@ pub fn syntax_highlight_top_level_defs<'a>(
 
     match highlight_defs(trimmed_code_str, &mut mark_node_pool) {
         Ok(mark_node_id_vec) => {
-            let def_mark_nodes: Vec<&MarkupNode> = mark_node_id_vec.iter().map(|mn_id| mark_node_pool.get(*mn_id)).collect();
+            let def_mark_nodes: Vec<&MarkupNode> = mark_node_id_vec
+                .iter()
+                .map(|mn_id| mark_node_pool.get(*mn_id))
+                .collect();
 
             for mn in def_mark_nodes {
                 mark_node_to_html(mn, &mark_node_pool, &mut highlighted_html_str)
             }
-            
+
             Ok(highlighted_html_str)
-        },
+        }
         Err(err) => Err(DocsError::from(err)),
     }
 }

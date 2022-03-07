@@ -217,7 +217,12 @@ impl GridNodeMap {
         if node.is_nested() {
             let (start_pos, end_pos) = self.get_nested_start_end_pos(node_id, ed_model)?;
 
-            Ok((start_pos, end_pos, ed_model.mark_id_ast_id_map.get(node_id)?, node_id))
+            Ok((
+                start_pos,
+                end_pos,
+                ed_model.mark_id_ast_id_map.get(node_id)?,
+                node_id,
+            ))
         } else {
             let (first_node_index, last_node_index) = first_last_index_of(node_id, line)?;
 
@@ -232,9 +237,7 @@ impl GridNodeMap {
 
             for i in (0..first_node_index).rev() {
                 let prev_pos_node_id = *slice_get(i, line)?;
-                let prev_ast_node_id = ed_model
-                    .mark_id_ast_id_map
-                    .get(prev_pos_node_id)?;
+                let prev_ast_node_id = ed_model.mark_id_ast_id_map.get(prev_pos_node_id)?;
 
                 if prev_ast_node_id == curr_ast_node_id {
                     if pos_extra_subtract > 0 {
@@ -253,9 +256,7 @@ impl GridNodeMap {
 
             for i in last_node_index..line.len() {
                 let next_pos_node_id = slice_get(i, line)?;
-                let next_ast_node_id = ed_model
-                    .mark_id_ast_id_map
-                    .get(*next_pos_node_id)?;
+                let next_ast_node_id = ed_model.mark_id_ast_id_map.get(*next_pos_node_id)?;
 
                 if next_ast_node_id == curr_ast_node_id {
                     if pos_extra_add > 0 {
@@ -269,8 +270,11 @@ impl GridNodeMap {
                 }
             }
 
-            let correct_mark_node_id =
-                GridNodeMap::get_top_node_with_expr_id(curr_node_id, &ed_model.mark_node_pool, &ed_model.mark_id_ast_id_map)?;
+            let correct_mark_node_id = GridNodeMap::get_top_node_with_expr_id(
+                curr_node_id,
+                &ed_model.mark_node_pool,
+                &ed_model.mark_id_ast_id_map,
+            )?;
 
             Ok((
                 TextPos {

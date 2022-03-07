@@ -2,7 +2,7 @@ use peg::error::ParseError;
 use roc_ast::ast_error::ASTError;
 use roc_module::module_err::ModuleError;
 use roc_parse::parser::SyntaxError;
-use snafu::{Snafu};
+use snafu::Snafu;
 
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
@@ -28,7 +28,9 @@ pub type DocsResult<T, E = DocsError> = std::result::Result<T, E>;
 
 impl<'a> From<SyntaxError<'a>> for DocsError {
     fn from(syntax_err: SyntaxError) -> Self {
-        Self::WrapSyntaxError { msg: format!("{:?}", syntax_err) }
+        Self::WrapSyntaxError {
+            msg: format!("{:?}", syntax_err),
+        }
     }
 }
 
@@ -46,6 +48,8 @@ impl From<ModuleError> for DocsError {
 
 impl From<ParseError<usize>> for DocsError {
     fn from(peg_parse_err: ParseError<usize>) -> Self {
-        Self::WrapPegParseError { source: peg_parse_err }
+        Self::WrapPegParseError {
+            source: peg_parse_err,
+        }
     }
 }

@@ -58,7 +58,6 @@ pub fn add_blank_child(
 
     let trip_result: EdResult<(ExprId, ExprId, MarkNodeId)> = if let Some(parent_id) = parent_id_opt
     {
-
         let list_ast_node_id = ed_model.mark_id_ast_id_map.get(parent_id)?;
         let list_ast_node = ed_model.module.env.pool.get(list_ast_node_id.to_expr_id()?);
 

@@ -46,13 +46,12 @@ pub fn build_debug_graphics(
         .with_scale(config.debug_font_size);
 
     let mark_node_pool_text = glyph_brush::OwnedText::new(
-        format!(
-                "{}",
-                ed_model.mark_node_pool.debug_string(&ed_model.mark_id_ast_id_map)
-            )
-        )
-        .with_color(colors::to_slice(from_hsb(110, 45, 82)))
-        .with_scale(config.debug_font_size);
+        ed_model
+            .mark_node_pool
+            .debug_string(&ed_model.mark_id_ast_id_map),
+    )
+    .with_color(colors::to_slice(from_hsb(110, 45, 82)))
+    .with_scale(config.debug_font_size);
 
     let mut ast_node_text_str = "AST:\n".to_owned();
 

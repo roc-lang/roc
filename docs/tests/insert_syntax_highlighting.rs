@@ -8,13 +8,9 @@ mod insert_doc_syntax_highlighting {
 
     use roc_docs::{syntax_highlight_expr, syntax_highlight_top_level_defs};
 
-
     fn expect_html(code_str: &str, want: &str, use_expr: bool) {
-
         if use_expr {
-            match syntax_highlight_expr(
-                code_str,
-            ) {
+            match syntax_highlight_expr(code_str) {
                 Ok(highlighted_code_str) => {
                     assert_eq!(highlighted_code_str, want);
                 }
@@ -23,9 +19,7 @@ mod insert_doc_syntax_highlighting {
                 }
             };
         } else {
-            match syntax_highlight_top_level_defs(
-                code_str,
-            ) {
+            match syntax_highlight_top_level_defs(code_str) {
                 Ok(highlighted_code_str) => {
                     assert_eq!(highlighted_code_str, want);
                 }

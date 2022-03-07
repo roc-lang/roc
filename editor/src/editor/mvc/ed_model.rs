@@ -164,7 +164,11 @@ impl<'a> EdModel<'a> {
             if let Some(parent_id) = curr_mark_node.get_parent_id_opt() {
                 let parent = self.mark_node_pool.get(parent_id);
                 let ast_node_id = self.mark_id_ast_id_map.get(curr_mark_node_id)?;
-                Ok(parent.get_child_indices(curr_mark_node_id, ast_node_id, &self.mark_id_ast_id_map)?)
+                Ok(parent.get_child_indices(
+                    curr_mark_node_id,
+                    ast_node_id,
+                    &self.mark_id_ast_id_map,
+                )?)
             } else {
                 MissingParent {
                     node_id: curr_mark_node_id,

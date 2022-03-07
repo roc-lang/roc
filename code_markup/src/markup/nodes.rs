@@ -4,7 +4,10 @@ use crate::{
     syntax_highlight::HighlightStyle,
 };
 
-use super::{attribute::Attributes, common_nodes::new_comma_mn, mark_id_ast_id_map::{MarkIdAstIdMap}, convert::from_def2::add_node};
+use super::{
+    attribute::Attributes, common_nodes::new_comma_mn, convert::from_def2::add_node,
+    mark_id_ast_id_map::MarkIdAstIdMap,
+};
 
 use crate::markup_error::{ExpectedTextNode, NestedNodeMissingChild, NestedNodeRequired};
 use itertools::Itertools;
@@ -74,7 +77,7 @@ impl MarkupNode {
         &self,
         mark_node_id: MarkNodeId,
         ast_node_id: ASTNodeId,
-        mark_id_ast_id_map: &MarkIdAstIdMap
+        mark_id_ast_id_map: &MarkIdAstIdMap,
     ) -> MarkResult<(usize, usize)> {
         match self {
             MarkupNode::Nested { children_ids, .. } => {
@@ -449,9 +452,7 @@ pub fn join_mark_nodes_spaces(
 }
 
 // put comma mark nodes between each node in mark_nodes
-pub fn join_mark_nodes_commas(
-    mark_nodes: Vec<MarkupNode>,
-) -> Vec<MarkupNode> {
+pub fn join_mark_nodes_commas(mark_nodes: Vec<MarkupNode>) -> Vec<MarkupNode> {
     let join_nodes: Vec<MarkupNode> = (0..(mark_nodes.len() - 1))
         .map(|_| new_comma_mn())
         .collect();
