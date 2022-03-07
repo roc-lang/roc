@@ -6143,6 +6143,10 @@ fn run_low_level<'a, 'ctx, 'env>(
             unreachable!("these are higher order, and are handled elsewhere")
         }
 
+        BoxExpr | UnboxExpr => {
+            unreachable!("The {:?} operation is turned into mono Expr", op)
+        }
+
         PtrCast | RefCountInc | RefCountDec => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }

@@ -1198,6 +1198,12 @@ define_builtins! {
         13 SET_WALK_USER_FUNCTION: "#walk_user_function"
         14 SET_CONTAINS: "contains"
     }
+    8 BOX: "Box" => {
+        0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
+        1 BOX_BOX_FUNCTION: "box" // Box.box
+        2 BOX_UNBOX: "unbox"
 
-    num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    }
+
+    num_modules: 9 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

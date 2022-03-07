@@ -1011,6 +1011,10 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         ExpectTrue => arena.alloc_slice_copy(&[irrelevant]),
 
+        BoxExpr | UnboxExpr => {
+            unreachable!("These lowlevel operations are turned into mono Expr's")
+        }
+
         PtrCast | RefCountInc | RefCountDec => {
             unreachable!("Only inserted *after* borrow checking: {:?}", op);
         }
