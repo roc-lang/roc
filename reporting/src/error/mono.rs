@@ -156,8 +156,7 @@ fn pattern_to_doc_help<'b>(
             Bit(false) => alloc.text("False"),
             Byte(b) => alloc.text(b.to_string()),
             Float(f) => alloc.text(f.to_string()),
-            // TODO: Proper Dec.to_str
-            Decimal(d) => alloc.text(d.0.to_string()),
+            Decimal(d) => alloc.text(d.to_string()),
             Str(s) => alloc.string(s.into()),
         },
         Ctor(union, tag_id, args) => {

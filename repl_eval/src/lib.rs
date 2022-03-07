@@ -50,7 +50,7 @@ pub trait ReplAppMemory {
 
     fn deref_dec(&self, addr: usize) -> RocDec {
         let bits = self.deref_i128(addr);
-        RocDec(bits)
+        RocDec::new(bits)
     }
 
     fn deref_str(&self, addr: usize) -> &str;
