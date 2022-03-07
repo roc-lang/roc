@@ -763,7 +763,7 @@ impl<
                 });
             }
             _ if layout.stack_size(self.target_info) == 0 => {}
-            _ if layout.safe_to_memcpy() => {
+            _ if layout.safe_to_memcpy() && layout.stack_size(self.target_info) > 8 => {
                 let (from_offset, size) = self.stack_offset_and_size(sym);
                 debug_assert!(from_offset % 8 == 0);
                 debug_assert!(size % 8 == 0);
@@ -1032,10 +1032,9 @@ impl<
                     let base_offset = self.claim_stack_size(8);
                     self.symbol_storage_map.insert(
                         *symbol,
-                        Stack(ReferencedPrimitive {
+                        Stack(Primitive {
                             base_offset,
-                            size: 8,
-                            sign_extend: false,
+                            reg: None,
                         }),
                     );
                     self.allocation_map
@@ -1081,17 +1080,41 @@ impl<
                 Reg(_) => {
                     internal_error!("Register storage is not allowed for jumping to joinpoint")
                 }
-                Stack(ReferencedPrimitive { base_offset, .. } | Complex { base_offset, .. }) => {
+                Stack(Complex { base_offset, .. }) => {
                     // TODO: This might be better not to call.
                     // Maybe we want a more memcpy like method to directly get called here.
                     // That would also be capable of asserting the size.
                     // Maybe copy stack to stack or something.
                     self.copy_symbol_to_stack_offset(buf, *base_offset, sym, layout);
                 }
+                Stack(Primitive {
+                    base_offset,
+                    reg: None,
+                }) => match layout {
+                    single_register_integers!() => {
+                        let reg = self.load_to_general_reg(buf, sym);
+                        ASM::mov_base32_reg64(buf, *base_offset, reg);
+                    }
+                    single_register_floats!() => {
+                        let reg = self.load_to_float_reg(buf, sym);
+                        ASM::mov_base32_freg64(buf, *base_offset, reg);
+                    }
+                    _ => {
+                        internal_error!(
+                            "cannot load non-primitive layout ({:?}) to primitive stack location",
+                            layout
+                        );
+                    }
+                },
                 NoData => {}
-                Stack(Primitive { .. }) => {
+                Stack(Primitive { reg: Some(_), .. }) => {
                     internal_error!(
-                        "Primitive stack storage is not allowed for jumping to joinpoint"
+                        "primitives with register storage are not allowed for jumping to joinpoint"
+                    )
+                }
+                Stack(ReferencedPrimitive { .. }) => {
+                    internal_error!(
+                        "referenced primitive stack storage is not allowed for jumping to joinpoint"
                     )
                 }
             }
