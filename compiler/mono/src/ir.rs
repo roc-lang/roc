@@ -1505,6 +1505,14 @@ pub enum Expr<'a> {
     },
     EmptyArray,
 
+    ExprBox {
+        symbol: Symbol,
+    },
+
+    ExprUnbox {
+        symbol: Symbol,
+    },
+
     Reuse {
         symbol: Symbol,
         update_tag_id: bool,
@@ -1682,6 +1690,10 @@ impl<'a> Expr<'a> {
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure)),
+
+            ExprBox { symbol, .. } => alloc.text("Box ").append(symbol_to_doc(alloc, *symbol)),
+
+            ExprUnbox { symbol, .. } => alloc.text("Unbox ").append(symbol_to_doc(alloc, *symbol)),
 
             UnionAtIndex {
                 tag_id,
@@ -6178,6 +6190,14 @@ fn substitute_in_expr<'a>(
             } else {
                 None
             }
+        }
+
+        ExprBox { symbol } => {
+            substitute(subs, *symbol).map(|new_symbol| ExprBox { symbol: new_symbol })
+        }
+
+        ExprUnbox { symbol } => {
+            substitute(subs, *symbol).map(|new_symbol| ExprUnbox { symbol: new_symbol })
         }
 
         StructAtIndex {

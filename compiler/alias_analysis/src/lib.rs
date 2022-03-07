@@ -1511,6 +1511,7 @@ fn expr_spec<'a>(
 
             builder.add_make_named(block, MOD_APP, type_name, tag_value_id)
         }
+        ExprBox { .. } | ExprUnbox { .. } => todo!(),
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         UnionAtIndex {
             index,
