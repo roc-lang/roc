@@ -3,10 +3,8 @@ app "speak-aloud"
     imports []
     provides [ main ] to pf
 
-greeting =
-    hi = "Hello"
+main =
+    greeting = "Hello"
     catchPhrase = "Roc 'n Roll"
 
-    "\(hi), lets \(catchPhrase)!"
-
-main = greeting
+    "\(greeting), let's \(catchPhrase)!"
