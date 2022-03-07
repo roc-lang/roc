@@ -1536,7 +1536,7 @@ impl<'a> Literal<'a> {
             Int(lit) => alloc.text(format!("{}i64", lit)),
             U128(lit) => alloc.text(format!("{}u128", lit)),
             Float(lit) => alloc.text(format!("{}f64", lit)),
-            Decimal(lit) => alloc.text(format!("{}Dec", lit)),
+            Decimal(lit) => alloc.text(format!("{}dec", lit)),
             Bool(lit) => alloc.text(format!("{}", lit)),
             Byte(lit) => alloc.text(format!("{}u8", lit)),
             Str(lit) => alloc.text(format!("{:?}", lit)),
