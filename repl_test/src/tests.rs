@@ -994,6 +994,7 @@ fn issue_2588_record_with_function_and_nonfunction() {
     )
 }
 
+#[test]
 fn opaque_apply() {
     expect_success(
         indoc!(
