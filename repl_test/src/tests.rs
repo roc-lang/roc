@@ -1037,3 +1037,17 @@ fn opaque_pattern_and_call() {
         r#"Package {} A : F {} [ A ]*"#,
     )
 }
+
+#[test]
+fn dec_in_repl() {
+    expect_success(
+        indoc!(
+            r#"
+            x: Dec
+            x=1.23
+            x
+            "#
+        ),
+        r#"1.23 : Dec"#,
+    )
+}
