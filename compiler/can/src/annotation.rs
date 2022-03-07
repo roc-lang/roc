@@ -682,7 +682,7 @@ fn can_extension_type<'a>(
                 local_aliases,
                 references,
             );
-            if valid_extension_type(&ext_type) {
+            if valid_extension_type(&ext_type.shallow_dealias()) {
                 ext_type
             } else {
                 // Report an error but mark the extension variable to be inferred

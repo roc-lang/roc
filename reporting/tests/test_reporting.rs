@@ -8546,7 +8546,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                f : [ A ]U32
+                f : [ A ]Str
                 f
                 "#
             ),
@@ -8556,7 +8556,7 @@ I need all branches in an `if` to have the same type!
 
                 This tag union extension type is invalid:
 
-                1│  f : [ A ]U32
+                1│  f : [ A ]Str
                              ^^^
 
                 Note: A tag union extension variable can only contain a type variable
