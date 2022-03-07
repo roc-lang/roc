@@ -11,13 +11,13 @@ use tts::{Backends, Tts};
 
 /// Trait to implement async support for [`Tts`].
 trait TtsExt {
-    fn speak_async<'a>(&mut self, text: &'a str, interrupt: bool) -> SpeakAsync<'a>;
+    fn speak_async<'a>(self, text: &'a str, interrupt: bool) -> SpeakAsync<'a>;
 }
 
 impl TtsExt for Tts {
-    fn speak_async<'a>(&mut self, text: &'a str, interrupt: bool) -> SpeakAsync<'a> {
+    fn speak_async<'a>(mut self, text: &'a str, interrupt: bool) -> SpeakAsync<'a> {
         SpeakAsync {
-            tts: self.clone(),
+            tts: self,
             text,
             interrupt,
             first_call: Rc::new(RefCell::new(true)),
