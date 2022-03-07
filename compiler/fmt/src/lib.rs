@@ -15,7 +15,7 @@ use bumpalo::{collections::String, Bump};
 pub struct Buf<'a> {
     text: String<'a>,
     spaces_to_flush: usize,
-    pub beginning_of_line: bool, // TODO remove pub
+    beginning_of_line: bool,
 }
 
 impl<'a> Buf<'a> {
