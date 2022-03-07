@@ -7,6 +7,7 @@ license = "UPL-1.0"
 edition = "2018"
 
 [dependencies]
+roc_alias_analysis = { path = "../alias_analysis" }
 roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
 roc_builtins = { path = "../builtins" }

@@ -1,5 +1,5 @@
 use crate::solve;
-use roc_can::constraint::Constraint;
+use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -12,13 +12,14 @@ pub struct SolvedModule {
     pub solved_types: MutMap<Symbol, SolvedType>,
     pub aliases: MutMap<Symbol, Alias>,
     pub exposed_symbols: Vec<Symbol>,
-    pub exposed_vars_by_symbol: MutMap<Symbol, Variable>,
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub problems: Vec<solve::TypeError>,
 }
 
 pub fn run_solve(
+    constraints: &Constraints,
+    constraint: ConstraintSoa,
     rigid_variables: MutMap<Variable, Lowercase>,
-    constraint: Constraint,
     var_store: VarStore,
 ) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
     let env = solve::Env::default();
@@ -34,14 +35,14 @@ pub fn run_solve(
     let mut problems = Vec::new();
 
     // Run the solver to populate Subs.
-    let (solved_subs, solved_env) = solve::run(&env, &mut problems, subs, &constraint);
+    let (solved_subs, solved_env) = solve::run(constraints, &env, &mut problems, subs, &constraint);
 
     (solved_subs, solved_env, problems)
 }
 
 pub fn make_solved_types(
     solved_subs: &Solved<Subs>,
-    exposed_vars_by_symbol: &MutMap<Symbol, Variable>,
+    exposed_vars_by_symbol: &[(Symbol, Variable)],
 ) -> MutMap<Symbol, SolvedType> {
     let mut solved_types = MutMap::default();
 

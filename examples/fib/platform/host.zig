@@ -79,11 +79,11 @@ pub export fn main() u8 {
 
     const result = roc__mainForHost_1_exposed(10);
 
-    stdout.print("{d}\n", .{result}) catch unreachable;
-
     // end time
     var ts2: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
+
+    stdout.print("{d}\n", .{result}) catch unreachable;
 
     const delta = to_seconds(ts2) - to_seconds(ts1);
 

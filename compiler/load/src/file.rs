@@ -5,14 +5,14 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::std::StdLib;
-use roc_can::constraint::Constraint;
+use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
-    constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
+    constrain_imports, constrain_module, pre_constrain_imports, ConstrainableImports,
+    ExposedModuleTypes, Import, SubsByModule,
 };
-use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, PackageQualified,
@@ -229,6 +229,7 @@ fn start_phase<'a>(
                     module,
                     ident_ids,
                     module_timing,
+                    constraints,
                     constraint,
                     var_store,
                     imported_modules,
@@ -241,6 +242,7 @@ fn start_phase<'a>(
                     module,
                     ident_ids,
                     module_timing,
+                    constraints,
                     constraint,
                     var_store,
                     imported_modules,
@@ -391,7 +393,8 @@ struct ConstrainedModule {
     module: Module,
     declarations: Vec<Declaration>,
     imported_modules: MutMap<ModuleId, Region>,
-    constraint: Constraint,
+    constraints: Constraints,
+    constraint: ConstraintSoa,
     ident_ids: IdentIds,
     var_store: VarStore,
     dep_idents: MutMap<ModuleId, IdentIds>,
@@ -502,7 +505,7 @@ enum Msg<'a> {
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
-        exposed_vars_by_symbol: MutMap<Symbol, Variable>,
+        exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
         exposed_values: Vec<Symbol>,
         dep_idents: MutMap<ModuleId, IdentIds>,
@@ -728,7 +731,8 @@ enum BuildTask<'a> {
         ident_ids: IdentIds,
         imported_symbols: Vec<Import>,
         module_timing: ModuleTiming,
-        constraint: Constraint,
+        constraints: Constraints,
+        constraint: ConstraintSoa,
         var_store: VarStore,
         declarations: Vec<Declaration>,
         dep_idents: MutMap<ModuleId, IdentIds>,
@@ -2131,7 +2135,7 @@ fn finish(
     solved: Solved<Subs>,
     exposed_values: Vec<Symbol>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
-    exposed_vars_by_symbol: MutMap<Symbol, Variable>,
+    exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     dep_idents: MutMap<ModuleId, IdentIds>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
@@ -3027,7 +3031,8 @@ impl<'a> BuildTask<'a> {
         module: Module,
         ident_ids: IdentIds,
         module_timing: ModuleTiming,
-        constraint: Constraint,
+        constraints: Constraints,
+        constraint: ConstraintSoa,
         var_store: VarStore,
         imported_modules: MutMap<ModuleId, Region>,
         exposed_types: &mut SubsByModule,
@@ -3057,6 +3062,7 @@ impl<'a> BuildTask<'a> {
             module,
             ident_ids,
             imported_symbols,
+            constraints,
             constraint,
             var_store,
             declarations,
@@ -3073,7 +3079,8 @@ fn run_solve<'a>(
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
     imported_symbols: Vec<Import>,
-    constraint: Constraint,
+    mut constraints: Constraints,
+    constraint: ConstraintSoa,
     mut var_store: VarStore,
     decls: Vec<Declaration>,
     dep_idents: MutMap<ModuleId, IdentIds>,
@@ -3084,7 +3091,12 @@ fn run_solve<'a>(
 
     // Finish constraining the module by wrapping the existing Constraint
     // in the ones we just computed. We can do this off the main thread.
-    let constraint = constrain_imports(imported_symbols, constraint, &mut var_store);
+    let constraint = constrain_imports(
+        &mut constraints,
+        imported_symbols,
+        constraint,
+        &mut var_store,
+    );
 
     let constrain_end = SystemTime::now();
 
@@ -3097,15 +3109,16 @@ fn run_solve<'a>(
         ..
     } = module;
 
-    if false {
-        debug_assert!(constraint.validate(), "{:?}", &constraint);
-    }
+    // TODO
+    // if false { debug_assert!(constraint.validate(), "{:?}", &constraint); }
 
     let (solved_subs, solved_env, problems) =
-        roc_solve::module::run_solve(rigid_variables, constraint, var_store);
+        roc_solve::module::run_solve(&constraints, constraint, rigid_variables, var_store);
 
-    let mut exposed_vars_by_symbol: MutMap<Symbol, Variable> = solved_env.vars_by_symbol();
-    exposed_vars_by_symbol.retain(|k, _| exposed_symbols.contains(k));
+    let exposed_vars_by_symbol: Vec<_> = solved_env
+        .vars_by_symbol()
+        .filter(|(k, _)| exposed_symbols.contains(k))
+        .collect();
 
     let solved_types = roc_solve::module::make_solved_types(&solved_subs, &exposed_vars_by_symbol);
 
@@ -3245,7 +3258,9 @@ fn canonicalize_and_constrain<'a>(
                 }
             };
 
-            let constraint = constrain_module(&module_output.declarations, module_id);
+            let mut constraints = Constraints::new();
+            let constraint =
+                constrain_module(&mut constraints, &module_output.declarations, module_id);
 
             let module = Module {
                 module_id,
@@ -3261,6 +3276,7 @@ fn canonicalize_and_constrain<'a>(
                 declarations: module_output.declarations,
                 imported_modules,
                 var_store,
+                constraints,
                 constraint,
                 ident_ids: module_output.ident_ids,
                 dep_idents,
@@ -3743,6 +3759,7 @@ fn run_task<'a>(
             module,
             module_timing,
             imported_symbols,
+            constraints,
             constraint,
             var_store,
             ident_ids,
@@ -3754,6 +3771,7 @@ fn run_task<'a>(
             ident_ids,
             module_timing,
             imported_symbols,
+            constraints,
             constraint,
             var_store,
             declarations,

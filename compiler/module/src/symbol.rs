@@ -884,6 +884,10 @@ define_builtins! {
 
         // used in dev backend
         26 DEV_TMP: "#dev_tmp"
+        27 DEV_TMP2: "#dev_tmp2"
+        28 DEV_TMP3: "#dev_tmp3"
+        29 DEV_TMP4: "#dev_tmp4"
+        30 DEV_TMP5: "#dev_tmp5"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -1142,6 +1146,7 @@ define_builtins! {
         55 LIST_SORT_ASC: "sortAsc"
         56 LIST_SORT_DESC: "sortDesc"
         57 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
+        58 LIST_REPLACE: "replace"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

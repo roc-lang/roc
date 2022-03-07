@@ -46,6 +46,10 @@ pub fn link(
             operating_system: OperatingSystem::Darwin,
             ..
         } => link_macos(target, output_path, input_paths, link_type),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            ..
+        } => link_windows(target, output_path, input_paths, link_type),
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
@@ -1047,6 +1051,15 @@ fn link_wasm32(
         .spawn()?;
 
     Ok((child, output_path))
+}
+
+fn link_windows(
+    _target: &Triple,
+    _output_path: PathBuf,
+    _input_paths: &[&str],
+    _link_type: LinkType,
+) -> io::Result<(Child, PathBuf)> {
+    todo!("Add windows support to the surgical linker. See issue #2608.")
 }
 
 #[cfg(feature = "llvm")]

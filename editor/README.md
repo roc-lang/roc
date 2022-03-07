@@ -1,4 +1,7 @@
 
+
+## :construction: Work In Progress :construction:
+
 The editor is a work in progress, only a limited subset of Roc expressions are currently supported.
 
 Unlike most editors, we use projectional or structural editing to edit the [Abstract Syntax Tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree) directly. This will allow for cool features like excellent auto-complete, refactoring and never needing to format your code.
@@ -67,6 +70,7 @@ Important folders/files outside the editor folder:
 - ast/src/lang/core/expr
 - ast/src/lang/core/ast.rs
 - ast/src/lang/env.rs
+
 
 ## Contributing
 

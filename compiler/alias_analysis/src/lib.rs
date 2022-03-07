@@ -8,11 +8,11 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
-use crate::ir::{
+use roc_mono::ir::{
     Call, CallType, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement, Literal,
     ModifyRc, OptLevel, Proc, Stmt,
 };
-use crate::layout::{Builtin, Layout, RawFunctionLayout, UnionLayout};
+use roc_mono::layout::{Builtin, Layout, RawFunctionLayout, UnionLayout};
 
 // just using one module for now
 pub const MOD_APP: ModName = ModName(b"UserApp");
@@ -110,7 +110,7 @@ fn bytes_as_ascii(bytes: &[u8]) -> String {
 
 pub fn spec_program<'a, I>(
     opt_level: OptLevel,
-    entry_point: crate::ir::EntryPoint<'a>,
+    entry_point: roc_mono::ir::EntryPoint<'a>,
     procs: I,
 ) -> Result<morphic_lib::Solutions>
 where
@@ -266,7 +266,7 @@ fn terrible_hack(builder: &mut FuncDefBuilder, block: BlockId, type_id: TypeId) 
 }
 
 fn build_entry_point(
-    layout: crate::ir::ProcLayout,
+    layout: roc_mono::ir::ProcLayout,
     func_name: FuncName,
     host_exposed_functions: &[([u8; SIZE], &[Layout])],
 ) -> Result<FuncDef> {
@@ -363,7 +363,7 @@ fn proc_spec<'a>(proc: &Proc<'a>) -> Result<(FuncDef, MutSet<UnionLayout<'a>>)> 
 #[derive(Default)]
 struct Env<'a> {
     symbols: MutMap<Symbol, ValueId>,
-    join_points: MutMap<crate::ir::JoinPointId, morphic_lib::ContinuationId>,
+    join_points: MutMap<roc_mono::ir::JoinPointId, morphic_lib::ContinuationId>,
     type_names: MutSet<UnionLayout<'a>>,
 }
 
@@ -711,7 +711,7 @@ fn call_spec(
             passed_function,
             ..
         }) => {
-            use crate::low_level::HigherOrder::*;
+            use roc_mono::low_level::HigherOrder::*;
 
             let array = passed_function.specialization_id.to_bytes();
             let spec_var = CalleeSpecVar(&array);
@@ -1196,7 +1196,7 @@ fn lowlevel_spec(
     block: BlockId,
     layout: &Layout,
     op: &LowLevel,
-    update_mode: crate::ir::UpdateModeId,
+    update_mode: roc_mono::ir::UpdateModeId,
     arguments: &[Symbol],
 ) -> Result<ValueId> {
     use LowLevel::*;
@@ -1258,22 +1258,21 @@ fn lowlevel_spec(
 
             builder.add_bag_get(block, bag)
         }
-        ListSet => {
+        ListReplaceUnsafe => {
             let list = env.symbols[&arguments[0]];
             let to_insert = env.symbols[&arguments[2]];
 
             let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
             let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
 
-            // decrement the overwritten element
-            let overwritten = builder.add_bag_get(block, bag)?;
-            let _unit = builder.add_recursive_touch(block, overwritten)?;
-
-            let _unit = builder.add_update(block, update_mode_var, cell)?;
+            let _unit1 = builder.add_touch(block, cell)?;
+            let _unit2 = builder.add_update(block, update_mode_var, cell)?;
 
             builder.add_bag_insert(block, bag, to_insert)?;
 
-            with_new_heap_cell(builder, block, bag)
+            let old_value = builder.add_bag_get(block, bag)?;
+            let new_list = with_new_heap_cell(builder, block, bag)?;
+            builder.add_make_tuple(block, &[new_list, old_value])
         }
         ListSwap => {
             let list = env.symbols[&arguments[0]];
