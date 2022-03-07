@@ -12,13 +12,18 @@ rm -rf build/
 cp -r public/ build/
 
 pushd build
+
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
 wget https://github.com/rtfeldman/elm-css/files/8037422/roc-source-code.zip
 
 # grab the pre-compiled REPL and copy it to Netlify's server; if it's not there, fail the build.
-wget https://github.com/brian-carroll/mock-repl/files/8167902/roc_repl_wasm.tar.gz
-tar xzvf roc_repl_wasm.tar.gz
-rm roc_repl_wasm.tar.gz
+wget https://github.com/brian-carroll/mock-repl/archive/refs/heads/deploy.zip
+unzip deploy.zip
+mv mock-repl-deploy/* .
+rmdir mock-repl-deploy
+rm deploy.zip
+
+# Copy REPL webpage source files
 cp -r ../../repl_www/public/* .
 
 popd

@@ -1,4 +1,7 @@
-use roc_collections::all::{Index, MutMap};
+//! Exhaustiveness checking, based on "Warning for pattern matching" (Luc Maranget, 2007).
+//! http://moscova.inria.fr/~maranget/papers/warn/warn.pdf
+
+use roc_collections::all::{HumanIndex, MutMap};
 use roc_module::ident::{Lowercase, TagIdIntType, TagName};
 use roc_region::all::Region;
 use roc_std::RocDec;
@@ -70,7 +73,7 @@ pub enum Error {
     Redundant {
         overall_region: Region,
         branch_region: Region,
-        index: Index,
+        index: HumanIndex,
     },
 }
 

@@ -11,7 +11,7 @@ use crate::helpers::wasm::{assert_evals_to, expect_runtime_error_panic};
 use indoc::indoc;
 
 #[cfg(test)]
-use roc_std::RocList;
+use roc_std::{RocList, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
@@ -272,7 +272,7 @@ fn empty_record() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn i64_record2_literal() {
     assert_evals_to!(
         indoc!(
@@ -299,7 +299,7 @@ fn i64_record2_literal() {
 //     );
 // }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn f64_record2_literal() {
     assert_evals_to!(
         indoc!(
@@ -401,7 +401,7 @@ fn bool_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record() {
     assert_evals_to!(
         indoc!(
@@ -652,7 +652,7 @@ fn optional_field_empty_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_2() {
     assert_evals_to!(
         indoc!(
@@ -666,7 +666,7 @@ fn return_record_2() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_3() {
     assert_evals_to!(
         indoc!(
@@ -680,7 +680,7 @@ fn return_record_3() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_4() {
     assert_evals_to!(
         indoc!(
@@ -694,7 +694,7 @@ fn return_record_4() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_5() {
     assert_evals_to!(
         indoc!(
@@ -708,7 +708,7 @@ fn return_record_5() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_6() {
     assert_evals_to!(
         indoc!(
@@ -722,7 +722,7 @@ fn return_record_6() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_7() {
     assert_evals_to!(
         indoc!(
@@ -792,7 +792,7 @@ fn return_record_float_float_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_nested_record() {
     assert_evals_to!(
         indoc!(
@@ -1071,4 +1071,19 @@ fn call_with_bad_record_runtime_error() {
                 get {b: ""}
             "#
     ))
+}
+
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn generalized_accessor() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            returnFoo = .foo
+
+            returnFoo { foo: "foo" }
+            "#
+        ),
+        RocStr::from("foo"),
+        RocStr
+    );
 }

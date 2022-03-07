@@ -64,15 +64,15 @@ mod cli_run {
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-        let compile_out = run_roc(&[&["check", file.to_str().unwrap()], &flags[..]].concat());
+        let compile_out = run_roc(&[&["check", file.to_str().unwrap()], flags].concat());
         let err = compile_out.stdout.trim();
-        let err = strip_colors(&err);
+        let err = strip_colors(err);
         assert_multiline_str_eq!(err, expected.into());
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
         let flags = &["--check"];
-        let out = run_roc(&[&["format", &file.to_str().unwrap()], &flags[..]].concat());
+        let out = run_roc(&[&["format", file.to_str().unwrap()], &flags[..]].concat());
 
         if expects_success_exit_code {
             assert!(out.status.success());
@@ -194,7 +194,7 @@ mod cli_run {
     ) {
         assert_eq!(input_file, None, "Wasm does not support input files");
         let mut flags = flags.to_vec();
-        flags.push("--backend=wasm32");
+        flags.push("--target=wasm32");
 
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags.as_slice()].concat());
         if !compile_out.stderr.is_empty() {
@@ -565,7 +565,7 @@ mod cli_run {
                         &file_name,
                         benchmark.stdin,
                         benchmark.executable_filename,
-                        &["--backend=x86_32"],
+                        &["--target=x86_32"],
                         benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
@@ -575,7 +575,7 @@ mod cli_run {
                         &file_name,
                         benchmark.stdin,
                         benchmark.executable_filename,
-                        &["--backend=x86_32", "--optimize"],
+                        &["--target=x86_32", "--optimize"],
                         benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,

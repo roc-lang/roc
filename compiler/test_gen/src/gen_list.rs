@@ -19,7 +19,7 @@ use indoc::indoc;
 use roc_std::{RocList, RocStr};
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_list_construction() {
     let list = RocList::from_slice(&[1i64; 23]);
     assert_eq!(&list, &list);

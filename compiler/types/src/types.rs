@@ -2,7 +2,7 @@ use crate::pretty_print::Parens;
 use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
-use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
+use roc_collections::all::{HumanIndex, ImMap, ImSet, MutSet, SendMap};
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
@@ -722,10 +722,11 @@ impl Type {
 
     /// a shallow dealias, continue until the first constructor is not an alias.
     pub fn shallow_dealias(&self) -> &Self {
-        match self {
-            Type::Alias { actual, .. } => actual.shallow_dealias(),
-            _ => self,
+        let mut result = self;
+        while let Type::Alias { actual, .. } = result {
+            result = actual;
         }
+        result
     }
 
     pub fn instantiate_aliases(
@@ -1203,14 +1204,14 @@ pub struct TagUnionStructure<'a> {
 pub enum PReason {
     TypedArg {
         opt_name: Option<Symbol>,
-        index: Index,
+        index: HumanIndex,
     },
     WhenMatch {
-        index: Index,
+        index: HumanIndex,
     },
     TagArg {
         tag_name: TagName,
-        index: Index,
+        index: HumanIndex,
     },
     PatternGuard,
     OptionalField,
@@ -1219,12 +1220,12 @@ pub enum PReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationSource {
     TypedIfBranch {
-        index: Index,
+        index: HumanIndex,
         num_branches: usize,
         region: Region,
     },
     TypedWhenBranch {
-        index: Index,
+        index: HumanIndex,
         region: Region,
     },
     TypedBody {
@@ -1246,7 +1247,7 @@ impl AnnotationSource {
 pub enum Reason {
     FnArg {
         name: Option<Symbol>,
-        arg_index: Index,
+        arg_index: HumanIndex,
     },
     FnCall {
         name: Option<Symbol>,
@@ -1254,28 +1255,28 @@ pub enum Reason {
     },
     LowLevelOpArg {
         op: LowLevel,
-        arg_index: Index,
+        arg_index: HumanIndex,
     },
     ForeignCallArg {
         foreign_symbol: ForeignSymbol,
-        arg_index: Index,
+        arg_index: HumanIndex,
     },
     FloatLiteral,
     IntLiteral,
     NumLiteral,
     StrInterpolation,
     WhenBranch {
-        index: Index,
+        index: HumanIndex,
     },
     WhenGuard,
     ExpectCondition,
     IfCondition,
     IfBranch {
-        index: Index,
+        index: HumanIndex,
         total_branches: usize,
     },
     ElemInList {
-        index: Index,
+        index: HumanIndex,
     },
     RecordUpdateValue(Lowercase),
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Region>),
