@@ -138,17 +138,7 @@ pub enum Expr {
         field: Lowercase,
     },
     /// field accessor as a function, e.g. (.foo) expr
-    Accessor {
-        /// accessors are desugared to closures; they need to have a name
-        /// so the closure can have a correct lambda set
-        name: Symbol,
-        function_var: Variable,
-        record_var: Variable,
-        closure_ext_var: Variable,
-        ext_var: Variable,
-        field_var: Variable,
-        field: Lowercase,
-    },
+    Accessor(AccessorData),
 
     Update {
         record_var: Variable,
@@ -215,6 +205,70 @@ pub struct ClosureData {
     pub recursive: Recursive,
     pub arguments: Vec<(Variable, Loc<Pattern>)>,
     pub loc_body: Box<Loc<Expr>>,
+}
+
+/// A record accessor like `.foo`, which is equivalent to `\r -> r.foo`
+/// Accessors are desugared to closures; they need to have a name
+/// so the closure can have a correct lambda set.
+///
+/// We distinguish them from closures so we can have better error messages
+/// during constraint generation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccessorData {
+    pub name: Symbol,
+    pub function_var: Variable,
+    pub record_var: Variable,
+    pub closure_var: Variable,
+    pub closure_ext_var: Variable,
+    pub ext_var: Variable,
+    pub field_var: Variable,
+    pub field: Lowercase,
+}
+
+impl AccessorData {
+    pub fn to_closure_data(self, record_symbol: Symbol) -> ClosureData {
+        let AccessorData {
+            name,
+            function_var,
+            record_var,
+            closure_var,
+            closure_ext_var,
+            ext_var,
+            field_var,
+            field,
+        } = self;
+
+        // IDEA: convert accessor from
+        //
+        // .foo
+        //
+        // into
+        //
+        // (\r -> r.foo)
+        let body = Expr::Access {
+            record_var,
+            ext_var,
+            field_var,
+            loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol))),
+            field,
+        };
+
+        let loc_body = Loc::at_zero(body);
+
+        let arguments = vec![(record_var, Loc::at_zero(Pattern::Identifier(record_symbol)))];
+
+        ClosureData {
+            function_type: function_var,
+            closure_type: closure_var,
+            closure_ext_var,
+            return_type: field_var,
+            name,
+            captured_symbols: vec![],
+            recursive: Recursive::NotRecursive,
+            arguments,
+            loc_body: Box::new(loc_body),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -735,15 +789,16 @@ pub fn canonicalize_expr<'a>(
             )
         }
         ast::Expr::AccessorFunction(field) => (
-            Accessor {
+            Accessor(AccessorData {
                 name: env.gen_unique_symbol(),
                 function_var: var_store.fresh(),
                 record_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
+                closure_var: var_store.fresh(),
                 closure_ext_var: var_store.fresh(),
                 field_var: var_store.fresh(),
                 field: (*field).into(),
-            },
+            }),
             Output::default(),
         ),
         ast::Expr::GlobalTag(tag) => {

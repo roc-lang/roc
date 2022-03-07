@@ -1,5 +1,5 @@
 use crate::types::{name_type_var, AliasKind, ErrorType, Problem, RecordField, TypeExt};
-use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
@@ -68,7 +68,49 @@ pub struct Subs {
     pub field_names: Vec<Lowercase>,
     pub record_fields: Vec<RecordField<()>>,
     pub variable_slices: Vec<VariableSubsSlice>,
-    pub tag_name_cache: MutMap<TagName, SubsSlice<TagName>>,
+    pub tag_name_cache: TagNameCache,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TagNameCache {
+    globals: Vec<Uppercase>,
+    globals_slices: Vec<SubsSlice<TagName>>,
+    /// Currently private tags and closure tags; in the future just closure tags
+    symbols: Vec<Symbol>,
+    symbols_slices: Vec<SubsSlice<TagName>>,
+}
+
+impl TagNameCache {
+    pub fn get_mut(&mut self, tag_name: &TagName) -> Option<&mut SubsSlice<TagName>> {
+        match tag_name {
+            TagName::Global(uppercase) => {
+                // force into block
+                match self.globals.iter().position(|u| u == uppercase) {
+                    Some(index) => Some(&mut self.globals_slices[index]),
+                    None => None,
+                }
+            }
+            TagName::Private(symbol) | TagName::Closure(symbol) => {
+                match self.symbols.iter().position(|s| s == symbol) {
+                    Some(index) => Some(&mut self.symbols_slices[index]),
+                    None => None,
+                }
+            }
+        }
+    }
+
+    pub fn push(&mut self, tag_name: &TagName, slice: SubsSlice<TagName>) {
+        match tag_name {
+            TagName::Global(uppercase) => {
+                self.globals.push(uppercase.clone());
+                self.globals_slices.push(slice);
+            }
+            TagName::Private(symbol) | TagName::Closure(symbol) => {
+                self.symbols.push(*symbol);
+                self.symbols_slices.push(slice);
+            }
+        }
+    }
 }
 
 impl Default for Subs {
@@ -1248,7 +1290,7 @@ impl Subs {
             // store an empty slice at the first position
             // used for "TagOrFunction"
             variable_slices: vec![VariableSubsSlice::default()],
-            tag_name_cache: MutMap::default(),
+            tag_name_cache: TagNameCache::default(),
         };
 
         // NOTE the utable does not (currently) have a with_capacity; using this as the next-best thing
@@ -1432,6 +1474,7 @@ impl Subs {
         mapper(self.get_ref_mut(key));
     }
 
+    #[inline(always)]
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
         let l_key = self.utable.get_root_key(key);
 
@@ -1454,7 +1497,7 @@ impl Subs {
     }
 
     pub fn occurs(&self, var: Variable) -> Result<(), (Variable, Vec<Variable>)> {
-        occurs(self, &ImSet::default(), var)
+        occurs(self, &[], var)
     }
 
     pub fn mark_tag_union_recursive(
@@ -2380,7 +2423,7 @@ fn is_empty_record(subs: &Subs, mut var: Variable) -> bool {
 
 fn occurs(
     subs: &Subs,
-    seen: &ImSet<Variable>,
+    seen: &[Variable],
     input_var: Variable,
 ) -> Result<(), (Variable, Vec<Variable>)> {
     use self::Content::*;
@@ -2395,9 +2438,9 @@ fn occurs(
             FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => Ok(()),
 
             Structure(flat_type) => {
-                let mut new_seen = seen.clone();
+                let mut new_seen = seen.to_owned();
 
-                new_seen.insert(root_var);
+                new_seen.push(root_var);
 
                 match flat_type {
                     Apply(_, args) => {
@@ -2446,8 +2489,8 @@ fn occurs(
                 }
             }
             Alias(_, args, _, _) => {
-                let mut new_seen = seen.clone();
-                new_seen.insert(root_var);
+                let mut new_seen = seen.to_owned();
+                new_seen.push(root_var);
 
                 for var_index in args.into_iter() {
                     let var = subs[var_index];
@@ -2457,8 +2500,8 @@ fn occurs(
                 Ok(())
             }
             RangedNumber(typ, _range_vars) => {
-                let mut new_seen = seen.clone();
-                new_seen.insert(root_var);
+                let mut new_seen = seen.to_owned();
+                new_seen.push(root_var);
 
                 short_circuit_help(subs, root_var, &new_seen, *typ)?;
                 // _range_vars excluded because they are not explicitly part of the type.
@@ -2469,10 +2512,11 @@ fn occurs(
     }
 }
 
+#[inline(always)]
 fn short_circuit<'a, T>(
     subs: &Subs,
     root_key: Variable,
-    seen: &ImSet<Variable>,
+    seen: &[Variable],
     iter: T,
 ) -> Result<(), (Variable, Vec<Variable>)>
 where
@@ -2485,10 +2529,11 @@ where
     Ok(())
 }
 
+#[inline(always)]
 fn short_circuit_help(
     subs: &Subs,
     root_key: Variable,
-    seen: &ImSet<Variable>,
+    seen: &[Variable],
     var: Variable,
 ) -> Result<(), (Variable, Vec<Variable>)> {
     if let Err((v, mut vec)) = occurs(subs, seen, var) {

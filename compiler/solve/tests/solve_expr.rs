@@ -5509,4 +5509,38 @@ mod solve_expr {
             r#"Id [ A, B, C { a : Str }e ] -> Str"#,
         )
     }
+
+    #[test]
+    fn lambda_set_within_alias_is_quantified() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ effectAlways ] to "./platform"
+
+                Effect a : [ @Effect ({} -> a) ]
+
+                effectAlways : a -> Effect a
+                effectAlways = \x ->
+                    inner = \{} -> x
+
+                    @Effect inner
+                "#
+            ),
+            r#"a -> Effect a"#,
+        )
+    }
+
+    #[test]
+    fn generalized_accessor_function_applied() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                returnFoo = .foo
+
+                returnFoo { foo: "foo" }
+                "#
+            ),
+            "Str",
+        )
+    }
 }

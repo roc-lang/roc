@@ -519,11 +519,11 @@ fn four_element_record() {
     );
 }
 
-// #[test]
-// fn multiline_string() {
-//     // If a string contains newlines, format it as a multiline string in the output
-//     expect_success(r#""\n\nhi!\n\n""#, "\"\"\"\n\nhi!\n\n\"\"\"");
-// }
+#[test]
+fn multiline_string() {
+    // If a string contains newlines, format it as a multiline string in the output
+    expect_success(r#""\n\nhi!\n\n""#, "\"\n\nhi!\n\n\" : Str");
+}
 
 #[test]
 fn list_of_3_field_records() {
@@ -994,6 +994,7 @@ fn issue_2588_record_with_function_and_nonfunction() {
     )
 }
 
+#[test]
 fn opaque_apply() {
     expect_success(
         indoc!(

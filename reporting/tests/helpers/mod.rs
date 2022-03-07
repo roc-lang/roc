@@ -1,7 +1,7 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
-use roc_can::constraint::Constraint;
+use roc_can::constraint::{Constraint, Constraints};
 use roc_can::env::Env;
 use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Expr, Output};
@@ -28,11 +28,12 @@ pub fn test_home() -> ModuleId {
 pub fn infer_expr(
     subs: Subs,
     problems: &mut Vec<solve::TypeError>,
+    constraints: &Constraints,
     constraint: &Constraint,
     expr_var: Variable,
 ) -> (Content, Subs) {
     let env = solve::Env::default();
-    let (solved, _) = solve::run(&env, problems, subs, constraint);
+    let (solved, _) = solve::run(constraints, &env, problems, subs, constraint);
 
     let content = solved
         .inner()
@@ -96,6 +97,7 @@ pub struct CanExprOut {
     pub var_store: VarStore,
     pub var: Variable,
     pub constraint: Constraint,
+    pub constraints: Constraints,
 }
 
 #[derive(Debug)]
@@ -152,9 +154,11 @@ pub fn can_expr_with<'a>(
         &loc_expr.value,
     );
 
+    let mut constraints = Constraints::new();
     let constraint = constrain_expr(
+        &mut constraints,
         &roc_constrain::expr::Env {
-            rigids: ImMap::default(),
+            rigids: MutMap::default(),
             home,
         },
         loc_expr.region,
@@ -174,7 +178,7 @@ pub fn can_expr_with<'a>(
 
     //load builtin values
     let (_introduced_rigids, constraint) =
-        constrain_imported_values(imports, constraint, &mut var_store);
+        constrain_imported_values(&mut constraints, imports, constraint, &mut var_store);
 
     let mut all_ident_ids = MutMap::default();
 
@@ -200,6 +204,7 @@ pub fn can_expr_with<'a>(
         interns,
         var,
         constraint,
+        constraints,
     })
 }
 

@@ -11,15 +11,21 @@ cd $SCRIPT_RELATIVE_DIR
 rm -rf build/
 cp -r public/ build/
 
-# Build the repl page
-mkdir -p build/repl
-pushd ..
-repl_www/build.sh www/build/repl
-popd
+pushd build
 
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
-pushd build
 wget https://github.com/rtfeldman/elm-css/files/8037422/roc-source-code.zip
+
+# grab the pre-compiled REPL and copy it to Netlify's server; if it's not there, fail the build.
+wget https://github.com/brian-carroll/mock-repl/archive/refs/heads/deploy.zip
+unzip deploy.zip
+mv mock-repl-deploy/* .
+rmdir mock-repl-deploy
+rm deploy.zip
+
+# Copy REPL webpage source files
+cp -r ../../repl_www/public/* .
+
 popd
 
 # pushd ..

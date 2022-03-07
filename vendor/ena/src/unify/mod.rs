@@ -470,7 +470,7 @@ where
         K1: Into<K>,
     {
         let id = id.into();
-        let id = self.get_root_key_without_compacting(id);
+        let id = self.get_root_key(id);
         self.value_mut(id)
     }
 

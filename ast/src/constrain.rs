@@ -1,7 +1,7 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::{BumpMap, BumpMapDefault, Index, SendMap};
+use roc_collections::all::{BumpMap, BumpMapDefault, HumanIndex, SendMap};
 use roc_module::{
     ident::{Lowercase, TagName},
     symbol::Symbol,
@@ -163,7 +163,7 @@ pub fn constrain_expr<'a>(
 
                     let elem_expected = Expected::ForReason(
                         Reason::ElemInList {
-                            index: Index::zero_based(index),
+                            index: HumanIndex::zero_based(index),
                         },
                         list_elem_type.shallow_clone(),
                         region,
@@ -339,7 +339,7 @@ pub fn constrain_expr<'a>(
 
                 let reason = Reason::FnArg {
                     name: opt_symbol,
-                    arg_index: Index::zero_based(index),
+                    arg_index: HumanIndex::zero_based(index),
                 };
 
                 let expected_arg = Expected::ForReason(reason, arg_type.shallow_clone(), region);
@@ -538,7 +538,7 @@ pub fn constrain_expr<'a>(
                                 name.clone(),
                                 arity,
                                 AnnotationSource::TypedIfBranch {
-                                    index: Index::zero_based(index),
+                                    index: HumanIndex::zero_based(index),
                                     num_branches,
                                     region: ann_source.region(),
                                 },
@@ -559,7 +559,7 @@ pub fn constrain_expr<'a>(
                             name,
                             arity,
                             AnnotationSource::TypedIfBranch {
-                                index: Index::zero_based(branches.len()),
+                                index: HumanIndex::zero_based(branches.len()),
                                 num_branches,
                                 region: ann_source.region(),
                             },
@@ -596,7 +596,7 @@ pub fn constrain_expr<'a>(
                             body,
                             Expected::ForReason(
                                 Reason::IfBranch {
-                                    index: Index::zero_based(index),
+                                    index: HumanIndex::zero_based(index),
                                     total_branches: branches.len(),
                                 },
                                 Type2::Variable(*expr_var),
@@ -616,7 +616,7 @@ pub fn constrain_expr<'a>(
                         final_else_expr,
                         Expected::ForReason(
                             Reason::IfBranch {
-                                index: Index::zero_based(branches.len()),
+                                index: HumanIndex::zero_based(branches.len()),
                                 total_branches: branches.len() + 1,
                             },
                             Type2::Variable(*expr_var),
@@ -691,7 +691,7 @@ pub fn constrain_expr<'a>(
                             when_branch,
                             PExpected::ForReason(
                                 PReason::WhenMatch {
-                                    index: Index::zero_based(index),
+                                    index: HumanIndex::zero_based(index),
                                 },
                                 cond_type.shallow_clone(),
                                 pattern_region,
@@ -700,7 +700,7 @@ pub fn constrain_expr<'a>(
                                 name.clone(),
                                 *arity,
                                 AnnotationSource::TypedWhenBranch {
-                                    index: Index::zero_based(index),
+                                    index: HumanIndex::zero_based(index),
                                     region: ann_source.region(),
                                 },
                                 typ.shallow_clone(),
@@ -733,14 +733,14 @@ pub fn constrain_expr<'a>(
                             when_branch,
                             PExpected::ForReason(
                                 PReason::WhenMatch {
-                                    index: Index::zero_based(index),
+                                    index: HumanIndex::zero_based(index),
                                 },
                                 cond_type.shallow_clone(),
                                 pattern_region,
                             ),
                             Expected::ForReason(
                                 Reason::WhenBranch {
-                                    index: Index::zero_based(index),
+                                    index: HumanIndex::zero_based(index),
                                 },
                                 branch_type.shallow_clone(),
                                 // TODO: when_branch.value.region,
@@ -1065,7 +1065,7 @@ pub fn constrain_expr<'a>(
 
                 let reason = Reason::LowLevelOpArg {
                     op: *op,
-                    arg_index: Index::zero_based(index),
+                    arg_index: HumanIndex::zero_based(index),
                 };
                 let expected_arg =
                     Expected::ForReason(reason, arg_type.shallow_clone(), Region::zero());
@@ -1681,7 +1681,7 @@ fn constrain_tag_pattern<'a>(
         let expected = PExpected::ForReason(
             PReason::TagArg {
                 tag_name: tag_name.clone(),
-                index: Index::zero_based(index),
+                index: HumanIndex::zero_based(index),
             },
             pattern_type,
             region,

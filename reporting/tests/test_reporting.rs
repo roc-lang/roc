@@ -62,6 +62,7 @@ mod test_reporting {
             output,
             var_store,
             var,
+            constraints,
             constraint,
             home,
             interns,
@@ -79,7 +80,8 @@ mod test_reporting {
         }
 
         let mut unify_problems = Vec::new();
-        let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+        let (_content, mut subs) =
+            infer_expr(subs, &mut unify_problems, &constraints, &constraint, var);
 
         name_all_type_vars(var, &mut subs);
 
@@ -8434,6 +8436,79 @@ I need all branches in an `if` to have the same type!
                 Other possibilities include:
 
                     $F _
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn let_polymorphism_with_scoped_type_variables() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> a
+                f = \x ->
+                    y : a -> a
+                    y = \z -> z
+
+                    n = y 1u8
+                    x1 = y x
+                    (\_ -> x1) n
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                
+                The 1st argument to `y` is not what I expect:
+                
+                6│      n = y 1u8
+                              ^^^
+                
+                This argument is an integer of type:
+                
+                    U8
+                
+                But `y` needs the 1st argument to be:
+                
+                    a
+                
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `U8` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn non_exhaustive_with_guard() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : [A]
+                when x is
+                    A if True -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                2│>  when x is
+                3│>      A if True -> ""
+
+                Other possibilities include:
+
+                    A    (note the lack of an if clause)
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#
