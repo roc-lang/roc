@@ -14,7 +14,7 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds};
+use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, UnionLayout};
 
 mod generic64;
 mod object_builder;
@@ -233,7 +233,7 @@ trait Backend<'a> {
     fn build_jump(
         &mut self,
         id: &JoinPointId,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     );
@@ -277,13 +277,7 @@ trait Backend<'a> {
                             self.load_literal_symbols(arguments);
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                         } else {
-                            self.build_inline_builtin(
-                                sym,
-                                *func_sym,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            )
+                            self.build_builtin(sym, *func_sym, arguments, arg_layouts, ret_layout)
                         }
                     }
 
@@ -320,6 +314,29 @@ trait Backend<'a> {
                 structure,
             } => {
                 self.load_struct_at_index(sym, structure, *index, field_layouts);
+            }
+            Expr::UnionAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => {
+                self.load_union_at_index(sym, structure, *tag_id, *index, union_layout);
+            }
+            Expr::GetTagId {
+                structure,
+                union_layout,
+            } => {
+                self.get_tag_id(sym, structure, union_layout);
+            }
+            Expr::Tag {
+                tag_layout,
+                tag_id,
+                arguments,
+                ..
+            } => {
+                self.load_literal_symbols(arguments);
+                self.tag(sym, arguments, tag_layout, *tag_id);
             }
             x => todo!("the expression, {:?}", x),
         }
@@ -501,6 +518,23 @@ trait Backend<'a> {
                 );
                 self.build_num_to_float(sym, &args[0], &arg_layouts[0], ret_layout)
             }
+            LowLevel::NumLte => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumLte: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumLte: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::Builtin(Builtin::Bool),
+                    *ret_layout,
+                    "NumLte: expected to have return layout of type Bool"
+                );
+                self.build_num_lte(sym, &args[0], &args[1], &arg_layouts[0])
+            }
             LowLevel::NumGte => {
                 debug_assert_eq!(
                     2,
@@ -525,6 +559,30 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::ListLen => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "ListLen: expected to have exactly one argument"
+                );
+                self.build_list_len(sym, &args[0])
+            }
+            LowLevel::ListGetUnsafe => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "ListGetUnsafe: expected to have exactly two arguments"
+                );
+                self.build_list_get_unsafe(sym, &args[0], &args[1], ret_layout)
+            }
+            LowLevel::ListReplaceUnsafe => {
+                debug_assert_eq!(
+                    3,
+                    args.len(),
+                    "ListReplaceUnsafe: expected to have exactly three arguments"
+                );
+                self.build_list_replace_unsafe(sym, args, arg_layouts, ret_layout)
+            }
             LowLevel::StrConcat => self.build_fn_call(
                 sym,
                 bitcode::STR_CONCAT.to_string(),
@@ -558,8 +616,9 @@ trait Backend<'a> {
         }
     }
 
-    // inlines simple builtin functions that do not map directly to a low level
-    fn build_inline_builtin(
+    /// Builds a builtin functions that do not map directly to a low level
+    /// If the builtin is simple enough, it will be inlined.
+    fn build_builtin(
         &mut self,
         sym: &Symbol,
         func_sym: Symbol,
@@ -585,6 +644,14 @@ trait Backend<'a> {
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
+            Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE => {
+                // TODO: This is probably simple enough to be worth inlining.
+                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
+                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                // Now that the arguments are needed, load them if they are literals.
+                self.load_literal_symbols(args);
+                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
+            }
             _ => todo!("the function, {:?}", func_sym),
         }
     }
@@ -595,7 +662,7 @@ trait Backend<'a> {
         &mut self,
         dst: &Symbol,
         fn_name: String,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     );
@@ -633,6 +700,15 @@ trait Backend<'a> {
         ret_layout: &Layout<'a>,
     );
 
+    /// build_num_lte stores the result of `src1 <= src2` into dst.
+    fn build_num_lte(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    );
+
     /// build_num_gte stores the result of `src1 >= src2` into dst.
     fn build_num_gte(
         &mut self,
@@ -640,6 +716,27 @@ trait Backend<'a> {
         src1: &Symbol,
         src2: &Symbol,
         arg_layout: &Layout<'a>,
+    );
+
+    /// build_list_len returns the length of a list.
+    fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);
+
+    /// build_list_get_unsafe loads the element from the list at the index.
+    fn build_list_get_unsafe(
+        &mut self,
+        dst: &Symbol,
+        list: &Symbol,
+        index: &Symbol,
+        ret_layout: &Layout<'a>,
+    );
+
+    /// build_list_replace_unsafe returns the old element and new list with the list having the new element inserted.
+    fn build_list_replace_unsafe(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
+        ret_layout: &Layout<'a>,
     );
 
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
@@ -675,6 +772,28 @@ trait Backend<'a> {
         structure: &Symbol,
         index: u64,
         field_layouts: &'a [Layout<'a>],
+    );
+
+    /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
+    fn load_union_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        tag_id: TagIdIntType,
+        index: u64,
+        union_layout: &UnionLayout<'a>,
+    );
+
+    /// get_tag_id loads the tag id from a the union.
+    fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>);
+
+    /// tag sets the tag for a union.
+    fn tag(
+        &mut self,
+        sym: &Symbol,
+        args: &'a [Symbol],
+        tag_layout: &UnionLayout<'a>,
+        tag_id: TagIdIntType,
     );
 
     /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
@@ -831,15 +950,16 @@ trait Backend<'a> {
                 parameters,
                 body: continuation,
                 remainder,
-                id,
+                id: JoinPointId(sym),
                 ..
             } => {
-                join_map.insert(*id, parameters);
+                self.set_last_seen(*sym, stmt);
+                join_map.insert(JoinPointId(*sym), parameters);
                 for param in *parameters {
                     self.set_last_seen(param.symbol, stmt);
                 }
-                self.scan_ast(continuation);
                 self.scan_ast(remainder);
+                self.scan_ast(continuation);
             }
             Stmt::Jump(JoinPointId(sym), symbols) => {
                 if let Some(parameters) = join_map.get(&JoinPointId(*sym)) {
@@ -848,7 +968,6 @@ trait Backend<'a> {
                         self.set_last_seen(param.symbol, stmt);
                     }
                 }
-                self.set_last_seen(*sym, stmt);
                 for sym in *symbols {
                     self.set_last_seen(*sym, stmt);
                 }
