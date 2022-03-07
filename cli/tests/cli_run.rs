@@ -256,6 +256,17 @@ mod cli_run {
 
                             return;
                         }
+                        "speak-aloud" => {
+                            // Since this one involves playing sound, we do `roc build` on it but don't run it.
+                            if cfg!(target_os = "linux") {
+                                // The surgical linker can successfully link this on Linux, but the legacy linker errors!
+                                build_example(&file_name, &["--optimize", "--roc-linker"]);
+                            } else {
+                                build_example(&file_name, &["--optimize"]);
+                            }
+
+                            return;
+                        },
                         _ => {}
                     }
 
@@ -426,6 +437,14 @@ mod cli_run {
             stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
             input_file: None,
             expected_ending: "Hello Worldfoo!\n",
+            use_valgrind: true,
+        },
+        speak_aloud:"speak-aloud" => Example {
+            filename: "Speak.roc",
+            executable_filename: "speak-aloud",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"",
             use_valgrind: true,
         },
         // custom_malloc:"custom-malloc" => Example {

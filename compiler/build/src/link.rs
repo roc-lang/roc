@@ -961,6 +961,8 @@ fn link_macos(
         "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/",
         // These frameworks are needed for GUI examples to work
         "-framework",
+        "AVFoundation",
+        "-framework",
         "AudioUnit",
         "-framework",
         "Cocoa",
