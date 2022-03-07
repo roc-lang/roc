@@ -91,9 +91,115 @@ impl<'a> Buf<'a> {
         }
     }
 
-    pub fn trim_end(&mut self) {
-        while self.text.ends_with(char::is_whitespace) {
-            self.text.truncate(self.text.len() - 1);
+    /// Ensures the text ends in a newline with no whitespace preceding it.
+    pub fn fmt_end_of_file(&mut self) {
+        fmt_text_eof(&mut self.text)
+    }
+}
+
+/// Ensures the text ends in a newline with no whitespace preceding it.
+fn fmt_text_eof(text: &mut bumpalo::collections::String<'_>) {
+    let mut chars_rev = text.chars().rev();
+    let mut last_whitespace = None;
+    let mut last_whitespace_index = text.len();
+
+    // Keep going until we either run out of characters or encounter one
+    // that isn't whitespace.
+    loop {
+        match chars_rev.next() {
+            Some(ch) if ch.is_whitespace() => {
+                last_whitespace = Some(ch);
+                last_whitespace_index -= 1;
+            }
+            _ => {
+                break;
+            }
         }
     }
+
+    match last_whitespace {
+        Some('\n') => {
+            // There may have been more whitespace after this newline; remove it!
+            text.truncate(last_whitespace_index + '\n'.len_utf8());
+        }
+        Some(_) => {
+            // There's some whitespace at the end of this file, but the first
+            // whitespace char after the last non-whitespace char isn't a newline.
+            // So replace that whitespace char (and everything after it) with a newline.
+            text.replace_range(last_whitespace_index.., "\n");
+        }
+        None => {
+            debug_assert!(last_whitespace_index == text.len());
+            debug_assert!(!text.ends_with(char::is_whitespace));
+
+            // This doesn't end in whitespace at all, so add a newline.
+            text.push('\n');
+        }
+    }
+}
+
+#[test]
+fn eof_text_ends_with_newline() {
+    use bumpalo::{collections::String, Bump};
+
+    let arena = Bump::new();
+    let input = "This should be a newline:\n";
+    let mut text = String::from_str_in(input, &arena);
+
+    fmt_text_eof(&mut text);
+
+    // This should be unchanged!
+    assert_eq!(text.as_str(), input);
+}
+
+#[test]
+fn eof_text_ends_with_whitespace() {
+    use bumpalo::{collections::String, Bump};
+
+    let arena = Bump::new();
+    let input = "This should be a newline: \t";
+    let mut text = String::from_str_in(input, &arena);
+
+    fmt_text_eof(&mut text);
+
+    assert_eq!(text.as_str(), "This should be a newline:\n");
+}
+
+#[test]
+fn eof_text_ends_with_whitespace_then_newline() {
+    use bumpalo::{collections::String, Bump};
+
+    let arena = Bump::new();
+    let input = "This should be a newline:  \n";
+    let mut text = String::from_str_in(input, &arena);
+
+    fmt_text_eof(&mut text);
+
+    assert_eq!(text.as_str(), "This should be a newline:\n");
+}
+
+#[test]
+fn eof_text_ends_with_no_whitespace() {
+    use bumpalo::{collections::String, Bump};
+
+    let arena = Bump::new();
+    let input = "This should be a newline:";
+    let mut text = String::from_str_in(input, &arena);
+
+    fmt_text_eof(&mut text);
+
+    assert_eq!(text.as_str(), "This should be a newline:\n");
+}
+
+#[test]
+fn eof_text_is_empty() {
+    use bumpalo::{collections::String, Bump};
+
+    let arena = Bump::new();
+    let input = "";
+    let mut text = String::from_str_in(input, &arena);
+
+    fmt_text_eof(&mut text);
+
+    assert_eq!(text.as_str(), "\n");
 }
