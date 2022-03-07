@@ -428,6 +428,14 @@ mod cli_run {
             expected_ending: "Hello Worldfoo!\n",
             use_valgrind: true,
         },
+        speak_aloud:"speak-aloud" => Example {
+            filename: "Speak.roc",
+            executable_filename: "speak-aloud",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"\n",
+            use_valgrind: true,
+        },
         // custom_malloc:"custom-malloc" => Example {
         //     filename: "Main.roc",
         //     executable_filename: "custom-malloc-example",
