@@ -22,7 +22,7 @@ use storage::StorageManager;
 // TODO: on all number functions double check and deal with over/underflow.
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<GeneralReg, FloatReg>>:
-    Sized
+    Sized + Copy
 {
     const BASE_PTR_REG: GeneralReg;
     const STACK_PTR_REG: GeneralReg;
@@ -109,7 +109,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
 /// Thus, some backends will need to use mulitiple instructions to preform a single one of this calls.
 /// Generally, I prefer explicit sources, as opposed to dst being one of the sources. Ex: `x = x + y` would be `add x, x, y` instead of `add x, y`.
 /// dst should always come before sources.
-pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized {
+pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
     fn abs_freg64_freg64(
         buf: &mut Vec<'_, u8>,

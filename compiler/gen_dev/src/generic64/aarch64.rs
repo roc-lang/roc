@@ -66,10 +66,12 @@ impl RegTrait for AArch64FloatReg {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct AArch64Assembler {}
 
 // AArch64Call may need to eventually be split by OS,
 // but I think with how we use it, they may all be the same.
+#[derive(Copy, Clone)]
 pub struct AArch64Call {}
 
 const STACK_ALIGNMENT: u8 = 16;

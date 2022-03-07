@@ -76,6 +76,7 @@ enum Storage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     NoData,
 }
 
+#[derive(Clone)]
 pub struct StorageManager<
     'a,
     GeneralReg: RegTrait,
@@ -179,27 +180,6 @@ impl<
         self.free_stack_chunks.clear();
         self.stack_size = 0;
         self.fn_call_stack_size = 0;
-    }
-
-    pub fn clone(&self) -> Self {
-        Self {
-            phantom_asm: PhantomData,
-            phantom_cc: PhantomData,
-            env: self.env,
-            target_info: self.target_info,
-            symbol_storage_map: self.symbol_storage_map.clone(),
-            allocation_map: self.allocation_map.clone(),
-            join_param_map: self.join_param_map.clone(),
-            general_free_regs: self.general_free_regs.clone(),
-            general_used_regs: self.general_used_regs.clone(),
-            general_used_callee_saved_regs: self.general_used_callee_saved_regs.clone(),
-            float_free_regs: self.float_free_regs.clone(),
-            float_used_regs: self.float_used_regs.clone(),
-            float_used_callee_saved_regs: self.float_used_callee_saved_regs.clone(),
-            free_stack_chunks: self.free_stack_chunks.clone(),
-            stack_size: self.stack_size,
-            fn_call_stack_size: self.fn_call_stack_size,
-        }
     }
 
     pub fn target_info(&self) -> TargetInfo {

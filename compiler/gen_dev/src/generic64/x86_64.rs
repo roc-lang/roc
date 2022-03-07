@@ -64,8 +64,11 @@ impl RegTrait for X86_64FloatReg {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct X86_64Assembler {}
+#[derive(Copy, Clone)]
 pub struct X86_64WindowsFastcall {}
+#[derive(Copy, Clone)]
 pub struct X86_64SystemV {}
 
 const STACK_ALIGNMENT: u8 = 16;
