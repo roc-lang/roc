@@ -1,3 +1,4 @@
+use futures::task::{LocalSpawn, LocalSpawnExt, Spawn};
 use std::cell::RefCell;
 use std::ops::DerefMut;
 use std::pin::Pin;
@@ -90,5 +91,7 @@ pub fn speak(text: &str) {
 
     // Speak text
     futures::executor::block_on(tts.speak_async(text, false))
-        .expect(&format!(r#"Failed to speak "{}""#, text));
+        .unwrap_or_else(|_| panic!(r#"Failed to speak "{}""#, text));
+
+    println!(r#"Done speaking "{}""#, text);
 }
