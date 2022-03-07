@@ -406,7 +406,7 @@ async fn create_device(
     let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference,
-                compatible_surface: Some(&surface),
+                compatible_surface: Some(surface),
                 force_fallback_adapter,
             })
             .await
