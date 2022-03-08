@@ -637,9 +637,8 @@ impl<'a> WasmBackend<'a> {
 
                 match lit {
                     Literal::Decimal(decimal) => {
-                        let lower_bits = (decimal.0 & 0xffff_ffff_ffff_ffff) as i64;
-                        let upper_bits = (decimal.0 >> 64) as i64;
-                        write128(lower_bits, upper_bits);
+                        let (upper_bits, lower_bits) = decimal.as_bits();
+                        write128(lower_bits as i64, upper_bits);
                     }
                     Literal::Int(x) => {
                         let lower_bits = (*x & 0xffff_ffff_ffff_ffff) as i64;

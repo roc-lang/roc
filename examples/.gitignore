@@ -1,10 +1,6 @@
-app
-*.o
 *.dSYM
 libhost.a
-roc_app.ll
-roc_app.bc
+libapp.so
 dynhost
 preprocessedhost
 metadata
-libapp.so

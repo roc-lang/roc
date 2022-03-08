@@ -135,7 +135,7 @@ impl<'a> Hash for Test<'a> {
             IsDecimal(v) => {
                 // TODO: Is this okay?
                 state.write_u8(6);
-                v.0.hash(state);
+                v.hash(state);
             }
             IsU128(v) => {
                 state.write_u8(7);
@@ -906,7 +906,7 @@ fn to_relevant_branch_help<'a>(
         },
 
         DecimalLiteral(dec) => match test {
-            IsDecimal(test_dec) if dec.0 == test_dec.0 => {
+            IsDecimal(test_dec) if dec.eq(test_dec) => {
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
@@ -1396,7 +1396,7 @@ fn test_to_equality<'a>(
         }
 
         Test::IsDecimal(test_dec) => {
-            let lhs = Expr::Literal(Literal::Int(test_dec.0));
+            let lhs = Expr::Literal(Literal::Decimal(test_dec));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, *cond_layout, lhs));
 
