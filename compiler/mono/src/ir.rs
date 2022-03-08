@@ -4628,6 +4628,18 @@ pub fn with_hole<'a>(
                     let xs = arg_symbols[0];
                     match_on_closure_argument!(ListFindUnsafe, [xs])
                 }
+                BoxExpr => {
+                    debug_assert_eq!(arg_symbols.len(), 1);
+                    let x = arg_symbols[0];
+
+                    Stmt::Let(assigned, Expr::ExprBox { symbol: x }, layout, hole)
+                }
+                UnboxExpr => {
+                    debug_assert_eq!(arg_symbols.len(), 1);
+                    let x = arg_symbols[0];
+
+                    Stmt::Let(assigned, Expr::ExprUnbox { symbol: x }, layout, hole)
+                }
                 _ => {
                     let call = self::Call {
                         call_type: CallType::LowLevel {

@@ -589,6 +589,12 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             modify_refcount_builtin(env, layout_ids, mode, when_recursive, layout, builtin)
         }
 
+        Boxed(inner) => {
+            let function = modify_refcount_boxed(env, layout_ids, mode, inner);
+
+            Some(function)
+        }
+
         Union(variant) => {
             use UnionLayout::*;
 
@@ -885,6 +891,73 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     builder.build_unconditional_branch(cont_block);
 
     builder.position_at_end(cont_block);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
+fn modify_refcount_boxed<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
+    inner_layout: &Layout<'a>,
+) -> FunctionValue<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let (_, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_boxed",
+        "decrement_boxed",
+        inner_layout,
+        mode,
+    );
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let basic_type = basic_type_from_layout(env, &Layout::Boxed(&inner_layout));
+            let function_value = build_header(env, basic_type, mode, &fn_name);
+
+            modify_refcount_box_help(env, mode, inner_layout, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+
+    function
+}
+
+fn modify_refcount_box_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    mode: Mode,
+    inner_layout: &Layout<'a>,
+    fn_val: FunctionValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Add a basic block for the entry point
+    let entry = ctx.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, fn_val);
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    let boxed = arg_val.into_pointer_value();
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, boxed);
+    let call_mode = mode_to_call_mode(fn_val, mode);
+    let boxed_layout = Layout::Boxed(&inner_layout);
+    refcount_ptr.modify(call_mode, &boxed_layout, env);
 
     // this function returns void
     builder.build_return(None);

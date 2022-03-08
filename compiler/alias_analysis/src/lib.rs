@@ -1706,6 +1706,13 @@ fn layout_spec_help(
                 }
             }
         }
+
+        Boxed(inner_layout) => {
+            let inner_type = layout_spec_help(builder, inner_layout, when_recursive)?;
+            let cell_type = builder.add_heap_cell_type();
+
+            builder.add_tuple_type(&[cell_type, inner_type])
+        }
         RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!()

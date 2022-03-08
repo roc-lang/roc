@@ -746,6 +746,8 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
 
+            Layout::Boxed(_) => todo!(),
+
             Layout::RecursivePointer => {
                 internal_error!(
                     "Tried to apply `==` to RecursivePointer values {:?}",

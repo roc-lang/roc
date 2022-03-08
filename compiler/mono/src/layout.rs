@@ -250,6 +250,7 @@ pub enum Layout<'a> {
         field_order_hash: FieldOrderHash,
         field_layouts: &'a [Layout<'a>],
     },
+    Boxed(&'a Layout<'a>),
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
     RecursivePointer,
@@ -997,7 +998,7 @@ impl<'a> Layout<'a> {
                 }
             }
             LambdaSet(lambda_set) => lambda_set.runtime_representation().safe_to_memcpy(),
-            RecursivePointer => {
+            Boxed(_) | RecursivePointer => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
@@ -1066,6 +1067,7 @@ impl<'a> Layout<'a> {
                 .runtime_representation()
                 .stack_size_without_alignment(target_info),
             RecursivePointer => target_info.ptr_width() as u32,
+            Boxed(_) => target_info.ptr_width() as u32,
         }
     }
 
@@ -1114,6 +1116,7 @@ impl<'a> Layout<'a> {
                 .alignment_bytes(target_info),
             Layout::Builtin(builtin) => builtin.alignment_bytes(target_info),
             Layout::RecursivePointer => target_info.ptr_width() as u32,
+            Layout::Boxed(_) => target_info.ptr_width() as u32,
         }
     }
 
@@ -1126,6 +1129,7 @@ impl<'a> Layout<'a> {
                 .runtime_representation()
                 .allocation_alignment_bytes(target_info),
             Layout::RecursivePointer => unreachable!("should be looked up to get an actual layout"),
+            Layout::Boxed(inner) => inner.allocation_alignment_bytes(target_info),
         }
     }
 
@@ -1172,6 +1176,7 @@ impl<'a> Layout<'a> {
             }
             LambdaSet(lambda_set) => lambda_set.runtime_representation().contains_refcounted(),
             RecursivePointer => true,
+            Boxed(_) => true,
         }
     }
 
@@ -1196,6 +1201,10 @@ impl<'a> Layout<'a> {
             Union(union_layout) => union_layout.to_doc(alloc, parens),
             LambdaSet(lambda_set) => lambda_set.runtime_representation().to_doc(alloc, parens),
             RecursivePointer => alloc.text("*self"),
+            Boxed(inner) => alloc
+                .text("Boxed(")
+                .append(inner.to_doc(alloc, parens))
+                .append(")"),
         }
     }
 
