@@ -29,11 +29,6 @@ use crate::{
     PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME, TARGET_INFO,
 };
 
-/// The memory address where the constants data will be loaded during module instantiation.
-/// We avoid address zero and anywhere near it. They're valid addresses but maybe bug-prone.
-/// Follow Emscripten's example by leaving 1kB unused (though 4 bytes would probably do!)
-const CONST_SEGMENT_BASE_ADDR: u32 = 1024;
-
 pub struct WasmBackend<'a> {
     pub env: &'a Env<'a>,
     interns: &'a mut Interns,
@@ -57,7 +52,6 @@ pub struct WasmBackend<'a> {
 }
 
 impl<'a> WasmBackend<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: &'a Env<'a>,
         interns: &'a mut Interns,
@@ -78,8 +72,10 @@ impl<'a> WasmBackend<'a> {
             index: STACK_POINTER_GLOBAL_ID,
         });
 
-        // TODO: Examine the actual address ranges of every preloaded data segment in case they are not simply sequential
-        let next_constant_addr = CONST_SEGMENT_BASE_ADDR + module.data.bytes.len() as u32;
+        // The preloaded binary has a global to tell us where its data section ends
+        // Note: We need this to account for zero data (.bss), which doesn't have an explicit DataSegment!
+        let data_end_idx = module.export.globals_lookup["__data_end".as_bytes()];
+        let next_constant_addr = module.global.parse_u32_at_index(data_end_idx);
 
         WasmBackend {
             env,

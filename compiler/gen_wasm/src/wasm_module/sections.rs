@@ -12,7 +12,8 @@ use super::dead_code::{
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
 use super::serialize::{
-    parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes, MAX_SIZE_ENCODED_U32,
+    parse_string_bytes, parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes,
+    MAX_SIZE_ENCODED_U32,
 };
 use super::{CodeBuilder, ValueType};
 
@@ -565,6 +566,26 @@ pub enum ConstExpr {
     F64(f64),
 }
 
+impl ConstExpr {
+    fn parse_u32(bytes: &[u8], cursor: &mut usize) -> u32 {
+        let err = || internal_error!("Invalid ConstExpr. Expected i32.");
+
+        if bytes[*cursor] != OpCode::I32CONST as u8 {
+            err();
+        }
+        *cursor += 1;
+
+        let value = parse_u32_or_panic(bytes, cursor);
+
+        if bytes[*cursor] != OpCode::END as u8 {
+            err();
+        }
+        *cursor += 1;
+
+        value
+    }
+}
+
 impl Serialize for ConstExpr {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
@@ -586,6 +607,15 @@ impl Serialize for ConstExpr {
             }
         }
         buffer.append_u8(OpCode::END as u8);
+    }
+}
+
+impl SkipBytes for ConstExpr {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        while bytes[*cursor] != OpCode::END as u8 {
+            OpCode::skip_bytes(bytes, cursor);
+        }
+        *cursor += 1;
     }
 }
 
@@ -611,16 +641,14 @@ pub struct GlobalSection<'a> {
 }
 
 impl<'a> GlobalSection<'a> {
-    pub fn new(arena: &'a Bump, globals: &[Global]) -> Self {
-        let capacity = 13 * globals.len();
-        let mut bytes = Vec::with_capacity_in(capacity, arena);
-        for global in globals {
-            global.serialize(&mut bytes);
+    pub fn parse_u32_at_index(&self, index: u32) -> u32 {
+        let mut cursor = 0;
+        for _ in 0..index {
+            GlobalType::skip_bytes(&self.bytes, &mut cursor);
+            ConstExpr::skip_bytes(&self.bytes, &mut cursor);
         }
-        GlobalSection {
-            count: globals.len() as u32,
-            bytes,
-        }
+        GlobalType::skip_bytes(&self.bytes, &mut cursor);
+        ConstExpr::parse_u32(&self.bytes, &mut cursor)
     }
 
     pub fn append(&mut self, global: Global) {
@@ -666,15 +694,15 @@ pub struct Export<'a> {
 }
 
 impl<'a> Export<'a> {
-    fn parse_type(bytes: &[u8], cursor: &mut usize) -> ExportType {
-        String::skip_bytes(bytes, cursor); // name
+    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Self {
+        let name = parse_string_bytes(arena, bytes, cursor);
 
         let ty = ExportType::from(bytes[*cursor]);
         *cursor += 1;
 
-        u32::skip_bytes(bytes, cursor); // index
+        let index = parse_u32_or_panic(bytes, cursor);
 
-        ty
+        Export { name, ty, index }
     }
 }
 
@@ -690,7 +718,10 @@ impl Serialize for Export<'_> {
 pub struct ExportSection<'a> {
     pub count: u32,
     pub bytes: Vec<'a, u8>,
+    /// List of exported functions to keep during dead-code-elimination
     pub function_indices: Vec<'a, u32>,
+    /// name -> index
+    pub globals_lookup: MutMap<&'a [u8], u32>,
 }
 
 impl<'a> ExportSection<'a> {
@@ -713,6 +744,7 @@ impl<'a> ExportSection<'a> {
             count: 0,
             bytes: Vec::with_capacity_in(256, arena),
             function_indices: Vec::with_capacity_in(4, arena),
+            globals_lookup: MutMap::default(),
         }
     }
 
@@ -725,11 +757,14 @@ impl<'a> ExportSection<'a> {
         let mut body_cursor = 0;
         for _ in 0..num_exports {
             let export_start = body_cursor;
-            let export_type = Export::parse_type(body_bytes, &mut body_cursor);
-            if matches!(export_type, ExportType::Global) {
+            let export = Export::parse(arena, body_bytes, &mut body_cursor);
+            if matches!(export.ty, ExportType::Global) {
                 let global_bytes = &body_bytes[export_start..body_cursor];
                 export_section.bytes.extend_from_slice(global_bytes);
                 export_section.count += 1;
+                export_section
+                    .globals_lookup
+                    .insert(export.name, export.index);
             }
         }
 
@@ -1146,10 +1181,7 @@ impl<'a> NameSection<'a> {
         cursor: &mut usize,
         section_end: usize,
     ) {
-        // Custom section name
-        let section_name_len = parse_u32_or_panic(module_bytes, cursor);
-        let section_name_end = *cursor + section_name_len as usize;
-        let section_name = &module_bytes[*cursor..section_name_end];
+        let section_name = parse_string_bytes(arena, module_bytes, cursor);
         if section_name != Self::NAME.as_bytes() {
             internal_error!(
                 "Expected Custom section {:?}, found {:?}",
@@ -1157,7 +1189,6 @@ impl<'a> NameSection<'a> {
                 std::str::from_utf8(section_name)
             );
         }
-        *cursor = section_name_end;
 
         // Find function names subsection
         let mut found_function_names = false;
@@ -1182,10 +1213,7 @@ impl<'a> NameSection<'a> {
         let num_entries = parse_u32_or_panic(module_bytes, cursor) as usize;
         for _ in 0..num_entries {
             let fn_index = parse_u32_or_panic(module_bytes, cursor);
-            let name_len = parse_u32_or_panic(module_bytes, cursor);
-            let name_end = *cursor + name_len as usize;
-            let name_bytes: &[u8] = &module_bytes[*cursor..name_end];
-            *cursor = name_end;
+            let name_bytes = parse_string_bytes(arena, module_bytes, cursor);
 
             self.functions
                 .insert(arena.alloc_slice_copy(name_bytes), fn_index);
