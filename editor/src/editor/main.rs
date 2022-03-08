@@ -517,14 +517,14 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String) 
 
 // returns path and content of app file
 fn init_new_roc_project(project_dir_path_str: &str) -> (PathStr, String) {
-    let orig_platform_path = Path::new("./examples/hello-c/platform");
+    let orig_platform_path = Path::new("./examples/hello-world/c-platform");
 
     let project_dir_path = Path::new(project_dir_path_str);
 
     let roc_file_path_str = vec![project_dir_path_str, "/UntitledApp.roc"].join("");
     let roc_file_path = Path::new("./new-roc-project/UntitledApp.roc");
 
-    let project_platform_path_str = vec![project_dir_path_str, "/platform"].join("");
+    let project_platform_path_str = vec![project_dir_path_str, "/c-platform"].join("");
     let project_platform_path = Path::new(&project_platform_path_str);
 
     if !project_dir_path.exists() {
