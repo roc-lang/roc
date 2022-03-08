@@ -329,7 +329,7 @@ mod cli_run {
             executable_filename: "hello_world",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!",
+            expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
         hello_c:"hello-world/c-platform" => Example {
@@ -337,7 +337,7 @@ mod cli_run {
             executable_filename: "hello_c",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!",
+            expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
         hello_zig:"hello-world/zig-platform" => Example {
@@ -345,7 +345,7 @@ mod cli_run {
             executable_filename: "hello_zig",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!",
+            expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
         hello_rust:"hello-world/rust-platform" => Example {
@@ -353,7 +353,7 @@ mod cli_run {
             executable_filename: "hello_rust",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!",
+            expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
         hello_swift:"hello-world/swift-platform" => Example {
@@ -361,7 +361,7 @@ mod cli_run {
             executable_filename: "hello_swift",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!",
+            expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
         hello_web:"hello-world/web-platform" => Example {
@@ -369,7 +369,7 @@ mod cli_run {
             executable_filename: "hello_web",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!",
+            expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
         fib:"algorithms" => Example {

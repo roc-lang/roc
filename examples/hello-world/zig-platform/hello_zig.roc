@@ -3,4 +3,4 @@ app "hello_zig"
     imports []
     provides [ main ] to pf
 
-main = "Hello, World!"
+main = "Hello, World!\n"

@@ -15,7 +15,7 @@ cargo run --release hello_world.roc
 ## Design Notes
 
 This demonstrates the basic design of hosts: Roc code gets compiled into a pure
-function (in this case, a thunk that always returns `"Hello, World!"`) and
+function (in this case, a thunk that always returns `"Hello, World!\n"`) and
 then the host calls that function. Fundamentally, that's the whole idea! The host
 might not even have a `main` - it could be a library, a plugin, anything.
 Everything else is built on this basic "hosts calling linked pure functions" design.
