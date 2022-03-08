@@ -3230,3 +3230,19 @@ fn issue_2322() {
         i64
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn box_and_unbox_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box (Str.concat "Leverage " "agile frameworks to provide a robust synopsis for high level overviews"))
+            "#
+        ),
+        RocStr::from(
+            "Leverage agile frameworks to provide a robust synopsis for high level overviews"
+        ),
+        RocStr
+    )
+}
