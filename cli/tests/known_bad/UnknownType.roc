@@ -3,9 +3,9 @@ interface Package
     imports []
 
 
-Type : [ Constructor UnkownType ]
+Type : [ Constructor UnknownType ]
 
-insertHelper : UnkownType, Type -> Type
+insertHelper : UnknownType, Type -> Type
 insertHelper = \h, m ->
     when m is
         Constructor h2 -> Constructor h 
