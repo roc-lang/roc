@@ -1626,6 +1626,15 @@ fn layout_from_flat_type<'a>(
                 Symbol::LIST_LIST => list_layout_from_elem(env, args[0]),
                 Symbol::DICT_DICT => dict_layout_from_key_value(env, args[0], args[1]),
                 Symbol::SET_SET => dict_layout_from_key_value(env, args[0], Variable::EMPTY_RECORD),
+                Symbol::BOX_BOX_TYPE => {
+                    // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
+                    debug_assert_eq!(args.len(), 1);
+
+                    let inner_var = args[0];
+                    let inner_layout = Layout::from_var(env, inner_var)?;
+
+                    Ok(Layout::Boxed(env.arena.alloc(inner_layout)))
+                }
                 _ => {
                     panic!(
                         "TODO layout_from_flat_type for Apply({:?}, {:?})",
