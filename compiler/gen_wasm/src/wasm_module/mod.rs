@@ -11,12 +11,10 @@ pub use linking::SymInfo;
 use roc_error_macros::internal_error;
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
-use crate::wasm_module::serialize::SkipBytes;
-
 use self::linking::{LinkingSection, RelocationSection};
 use self::sections::{
-    CodeSection, DataSection, ExportSection, FunctionSection, GlobalSection, ImportSection,
-    MemorySection, NameSection, OpaqueSection, Section, SectionId, TypeSection,
+    CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
+    ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId, TypeSection,
 };
 use self::serialize::{SerialBuffer, Serialize};
 
@@ -32,7 +30,7 @@ pub struct WasmModule<'a> {
     pub global: GlobalSection<'a>,
     pub export: ExportSection<'a>,
     pub start: OpaqueSection<'a>,
-    pub element: OpaqueSection<'a>,
+    pub element: ElementSection<'a>,
     pub code: CodeSection<'a>,
     pub data: DataSection<'a>,
     pub names: NameSection<'a>,
@@ -66,6 +64,7 @@ impl<'a> WasmModule<'a> {
         self.element.serialize(buffer);
         self.code.serialize(buffer);
         self.data.serialize(buffer);
+        self.names.serialize(buffer);
     }
 
     /// Serialize the module to bytes
@@ -118,6 +117,7 @@ impl<'a> WasmModule<'a> {
             + self.element.size()
             + self.code.size()
             + self.data.size()
+            + self.names.size()
     }
 
     pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Self {
@@ -132,18 +132,33 @@ impl<'a> WasmModule<'a> {
         let mut types = TypeSection::preload(arena, bytes, &mut cursor);
         types.parse_offsets();
 
-        let import = ImportSection::preload(arena, bytes, &mut cursor);
+        let mut import = ImportSection::preload(arena, bytes, &mut cursor);
+        let imported_fn_signatures = import.parse(arena);
+
         let function = FunctionSection::preload(arena, bytes, &mut cursor);
+        let defined_fn_signatures = function.parse(arena);
+
         let table = OpaqueSection::preload(SectionId::Table, arena, bytes, &mut cursor);
+
         let memory = MemorySection::preload(arena, bytes, &mut cursor);
+
         let global = GlobalSection::preload(arena, bytes, &mut cursor);
 
-        ExportSection::skip_bytes(bytes, &mut cursor);
-        let export = ExportSection::empty(arena);
+        let export = ExportSection::preload_globals(arena, bytes, &mut cursor);
 
         let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
-        let element = OpaqueSection::preload(SectionId::Element, arena, bytes, &mut cursor);
-        let code = CodeSection::preload(arena, bytes, &mut cursor, import.function_count);
+
+        let element = ElementSection::preload(arena, bytes, &mut cursor);
+        let indirect_callees = element.indirect_callees(arena);
+
+        let code = CodeSection::preload(
+            arena,
+            bytes,
+            &mut cursor,
+            &imported_fn_signatures,
+            &defined_fn_signatures,
+            &indirect_callees,
+        );
 
         let data = DataSection::preload(arena, bytes, &mut cursor);
 

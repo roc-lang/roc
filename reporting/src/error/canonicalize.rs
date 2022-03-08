@@ -1,7 +1,9 @@
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
-use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
+use roc_problem::can::{
+    BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
+};
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
 use std::path::PathBuf;
 
@@ -33,6 +35,7 @@ const OPAQUE_NOT_DEFINED: &str = "OPAQUE TYPE NOT DEFINED";
 const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE TYPE DECLARED OUTSIDE SCOPE";
 const OPAQUE_NOT_APPLIED: &str = "OPAQUE TYPE NOT APPLIED";
 const OPAQUE_OVER_APPLIED: &str = "OPAQUE TYPE APPLIED TO TOO MANY ARGS";
+const INVALID_EXTENSION_TYPE: &str = "INVALID_EXTENSION_TYPE";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -490,6 +493,34 @@ pub fn can_problem<'b>(
             ]);
 
             title = NESTED_DATATYPE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::InvalidExtensionType { region, kind } => {
+            let (kind_str, can_only_contain) = match kind {
+                ExtensionTypeKind::Record => ("record", "a type variable or another record"),
+                ExtensionTypeKind::TagUnion => {
+                    ("tag union", "a type variable or another tag union")
+                }
+            };
+
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This "),
+                    alloc.text(kind_str),
+                    alloc.reflow(" extension type is invalid:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat(vec![
+                    alloc.note("A "),
+                    alloc.reflow(kind_str),
+                    alloc.reflow(" extension variable can only contain "),
+                    alloc.reflow(can_only_contain),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            title = INVALID_EXTENSION_TYPE.to_string();
             severity = Severity::RuntimeError;
         }
     };

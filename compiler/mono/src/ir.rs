@@ -1536,8 +1536,7 @@ impl<'a> Literal<'a> {
             Int(lit) => alloc.text(format!("{}i64", lit)),
             U128(lit) => alloc.text(format!("{}u128", lit)),
             Float(lit) => alloc.text(format!("{}f64", lit)),
-            // TODO: Add proper Dec.to_str
-            Decimal(lit) => alloc.text(format!("{}Dec", lit.0)),
+            Decimal(lit) => alloc.text(format!("{}dec", lit)),
             Bool(lit) => alloc.text(format!("{}", lit)),
             Byte(lit) => alloc.text(format!("{}u8", lit)),
             Str(lit) => alloc.text(format!("{:?}", lit)),
@@ -3882,44 +3881,24 @@ pub fn with_hole<'a>(
             stmt
         }
 
-        Accessor {
-            name,
-            function_var,
-            record_var,
-            closure_ext_var: _,
-            ext_var,
-            field_var,
-            field,
-        } => {
-            // IDEA: convert accessor fromt
-            //
-            // .foo
-            //
-            // into
-            //
-            // (\r -> r.foo)
-            let record_symbol = env.unique_symbol();
-            let body = roc_can::expr::Expr::Access {
-                record_var,
-                ext_var,
-                field_var,
-                loc_expr: Box::new(Loc::at_zero(roc_can::expr::Expr::Var(record_symbol))),
-                field,
-            };
+        Accessor(accessor_data) => {
+            let field_var = accessor_data.field_var;
+            let fresh_record_symbol = env.unique_symbol();
 
-            let loc_body = Loc::at_zero(body);
-
-            let arguments = vec![(
-                record_var,
-                Loc::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
-            )];
+            let ClosureData {
+                name,
+                function_type,
+                arguments,
+                loc_body,
+                ..
+            } = accessor_data.to_closure_data(fresh_record_symbol);
 
             match procs.insert_anonymous(
                 env,
                 name,
-                function_var,
+                function_type,
                 arguments,
-                loc_body,
+                *loc_body,
                 CapturedSymbols::None,
                 field_var,
                 layout_cache,
@@ -3927,7 +3906,7 @@ pub fn with_hole<'a>(
                 Ok(_) => {
                     let raw_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, function_var, env.subs)
+                        layout_cache.raw_from_var(env.arena, function_type, env.subs)
                     );
 
                     match raw_layout {
@@ -5442,6 +5421,18 @@ pub fn from_can<'a>(
                 match def.loc_expr.value {
                     roc_can::expr::Expr::Closure(closure_data) => {
                         register_capturing_closure(env, procs, layout_cache, *symbol, closure_data);
+
+                        return from_can(env, variable, cont.value, procs, layout_cache);
+                    }
+                    roc_can::expr::Expr::Accessor(accessor_data) => {
+                        let fresh_record_symbol = env.unique_symbol();
+                        register_noncapturing_closure(
+                            env,
+                            procs,
+                            layout_cache,
+                            *symbol,
+                            accessor_data.to_closure_data(fresh_record_symbol),
+                        );
 
                         return from_can(env, variable, cont.value, procs, layout_cache);
                     }

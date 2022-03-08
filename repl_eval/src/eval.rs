@@ -13,6 +13,7 @@ use roc_mono::layout::{
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
+use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 
@@ -280,6 +281,15 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
 ) -> Result<Expr<'a>, ToAstProblem> {
     let (newtype_containers, content) = unroll_newtypes(env, content);
     let content = unroll_aliases(env, content);
+
+    macro_rules! helper {
+        ($ty:ty) => {
+            app.call_function(main_fn_name, |_, num: $ty| {
+                num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+            })
+        };
+    }
+
     let result = match layout {
         Layout::Builtin(Builtin::Bool) => Ok(app
             .call_function(main_fn_name, |mem: &A::Memory, num: bool| {
@@ -287,14 +297,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             })),
         Layout::Builtin(Builtin::Int(int_width)) => {
             use IntWidth::*;
-
-            macro_rules! helper {
-                ($ty:ty) => {
-                    app.call_function(main_fn_name, |_, num: $ty| {
-                        num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-                    })
-                };
-            }
 
             let result = match int_width {
                 U8 | I8 => {
@@ -318,14 +320,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         Layout::Builtin(Builtin::Float(float_width)) => {
             use FloatWidth::*;
 
-            macro_rules! helper {
-                ($ty:ty) => {
-                    app.call_function(main_fn_name, |_, num: $ty| {
-                        num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-                    })
-                };
-            }
-
             let result = match float_width {
                 F32 => helper!(f32),
                 F64 => helper!(f64),
@@ -334,6 +328,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
 
             Ok(result)
         }
+        Layout::Builtin(Builtin::Decimal) => Ok(helper!(RocDec)),
         Layout::Builtin(Builtin::Str) => {
             let size = layout.stack_size(env.target_info) as usize;
             Ok(
@@ -1249,5 +1244,9 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
 fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_> {
-    Expr::Num(arena.alloc(format!("{}", num)))
+    use std::fmt::Write;
+
+    let mut string = bumpalo::collections::String::with_capacity_in(64, arena);
+    write!(string, "{}", num).unwrap();
+    Expr::Num(string.into_bump_str())
 }

@@ -35,7 +35,7 @@ pub enum Parens {
 /// we also want to show newlines. By default the formatter
 /// takes care of inserting newlines, but sometimes the user's
 /// newlines are taken into account.
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Newlines {
     No,
     Yes,

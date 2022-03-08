@@ -1,4 +1,4 @@
-platform "examples/hello-world"
+platform "gui"
     requires {} { render : Elem }
     exposes []
     packages {}

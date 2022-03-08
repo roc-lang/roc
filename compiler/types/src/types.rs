@@ -722,10 +722,11 @@ impl Type {
 
     /// a shallow dealias, continue until the first constructor is not an alias.
     pub fn shallow_dealias(&self) -> &Self {
-        match self {
-            Type::Alias { actual, .. } => actual.shallow_dealias(),
-            _ => self,
+        let mut result = self;
+        while let Type::Alias { actual, .. } = result {
+            result = actual;
         }
+        result
     }
 
     pub fn instantiate_aliases(

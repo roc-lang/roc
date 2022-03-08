@@ -884,6 +884,10 @@ define_builtins! {
 
         // used in dev backend
         26 DEV_TMP: "#dev_tmp"
+        27 DEV_TMP2: "#dev_tmp2"
+        28 DEV_TMP3: "#dev_tmp3"
+        29 DEV_TMP4: "#dev_tmp4"
+        30 DEV_TMP5: "#dev_tmp5"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num"  // the Num.Num type alias

@@ -1179,13 +1179,6 @@ fn type_to_variable<'a>(
                         subs.variables[target_index] = copy_var;
                     }
 
-                    let it = (new_variables.indices().skip(type_arguments.len()))
-                        .zip(lambda_set_variables);
-                    for (target_index, ls) in it {
-                        let copy_var = helper!(&ls.0);
-                        subs.variables[target_index] = copy_var;
-                    }
-
                     AliasVariables {
                         variables_start: new_variables.start,
                         type_variables_len: type_arguments.len() as _,
@@ -1217,7 +1210,8 @@ fn type_to_variable<'a>(
                 result
             }
             Erroneous(problem) => {
-                let content = Content::Structure(FlatType::Erroneous(Box::new(problem.clone())));
+                let problem_index = SubsIndex::push_new(&mut subs.problems, problem.clone());
+                let content = Content::Structure(FlatType::Erroneous(problem_index));
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
@@ -1603,6 +1597,7 @@ fn generalize(
     }
 }
 
+/// Sort the variables into buckets by rank.
 fn pool_to_rank_table(
     subs: &mut Subs,
     young_mark: Mark,
@@ -1612,11 +1607,14 @@ fn pool_to_rank_table(
     let mut pools = Pools::new(young_rank.into_usize() + 1);
 
     // the vast majority of young variables have young_rank
+    // using `retain` here prevents many `pools.get_mut(young_rank)` lookups
     let mut young_vars = young_vars.to_vec();
     young_vars.retain(|var| {
         let rank = subs.get_rank_set_mark(*var, young_mark);
 
         if rank != young_rank {
+            debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
+
             pools.get_mut(rank).push(*var);
             false
         } else {
@@ -1892,7 +1890,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
         match &desc.content {
             RigidVar(name) => {
                 // what it's all about: convert the rigid var into a flex var
-                let name = name.clone();
+                let name = *name;
 
                 // NOTE: we must write to the mutually borrowed `desc` value here
                 // using `subs.set` does not work (unclear why, really)
@@ -2030,7 +2028,8 @@ fn deep_copy_var_help(
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
-    let desc = subs.get_without_compacting(var);
+    let subs_len = subs.len();
+    let desc = subs.get_ref_mut(var);
 
     if let Some(copy) = desc.copy.into_variable() {
         return copy;
@@ -2048,7 +2047,12 @@ fn deep_copy_var_help(
     };
 
     let content = desc.content;
-    let copy = subs.fresh(make_descriptor(content.clone()));
+
+    // Safety: Here we make a variable that is 1 position out of bounds.
+    // The reason is that we can now keep the mutable reference to `desc`
+    // Below, we actually push a new variable onto subs meaning the `copy`
+    // variable is in-bounds before it is ever used.
+    let copy = unsafe { Variable::from_index(subs_len as u32) };
 
     pools.get_mut(max_rank).push(copy);
 
@@ -2056,15 +2060,11 @@ fn deep_copy_var_help(
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    subs.set(
-        var,
-        Descriptor {
-            content: content.clone(),
-            rank: desc.rank,
-            mark: Mark::NONE,
-            copy: copy.into(),
-        },
-    );
+    desc.mark = Mark::NONE;
+    desc.copy = copy.into();
+
+    let actual_copy = subs.fresh(make_descriptor(content));
+    debug_assert_eq!(copy, actual_copy);
 
     // Now we recursively copy the content of the variable.
     // We have already marked the variable as copied, so we

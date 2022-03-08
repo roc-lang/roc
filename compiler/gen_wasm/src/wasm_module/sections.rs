@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
@@ -10,7 +12,8 @@ use super::dead_code::{
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
 use super::serialize::{
-    parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes, MAX_SIZE_ENCODED_U32,
+    parse_string_bytes, parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes,
+    MAX_SIZE_ENCODED_U32,
 };
 use super::{CodeBuilder, ValueType};
 
@@ -377,20 +380,19 @@ impl<'a> ImportSection<'a> {
         self.count += 1;
     }
 
-    fn update_function_count(&mut self) {
-        let mut f_count = 0;
+    pub fn parse(&mut self, arena: &'a Bump) -> Vec<'a, u32> {
+        let mut fn_signatures = bumpalo::vec![in arena];
         let mut cursor = 0;
         while cursor < self.bytes.len() {
-            String::skip_bytes(&self.bytes, &mut cursor);
-            String::skip_bytes(&self.bytes, &mut cursor);
+            String::skip_bytes(&self.bytes, &mut cursor); // import namespace
+            String::skip_bytes(&self.bytes, &mut cursor); // import name
 
             let type_id = ImportTypeId::from(self.bytes[cursor]);
             cursor += 1;
 
             match type_id {
                 ImportTypeId::Func => {
-                    f_count += 1;
-                    u32::skip_bytes(&self.bytes, &mut cursor);
+                    fn_signatures.push(parse_u32_or_panic(&self.bytes, &mut cursor));
                 }
                 ImportTypeId::Table => {
                     TableType::skip_bytes(&self.bytes, &mut cursor);
@@ -404,17 +406,16 @@ impl<'a> ImportSection<'a> {
             }
         }
 
-        self.function_count = f_count;
+        self.function_count = fn_signatures.len() as u32;
+        fn_signatures
     }
 
     pub fn from_count_and_bytes(count: u32, bytes: Vec<'a, u8>) -> Self {
-        let mut created = ImportSection {
+        ImportSection {
             bytes,
             count,
             function_count: 0,
-        };
-        created.update_function_count();
-        created
+        }
     }
 }
 
@@ -441,6 +442,16 @@ impl<'a> FunctionSection<'a> {
     pub fn add_sig(&mut self, sig_id: u32) {
         self.bytes.encode_u32(sig_id);
         self.count += 1;
+    }
+
+    pub fn parse(&self, arena: &'a Bump) -> Vec<'a, u32> {
+        let count = self.count as usize;
+        let mut signatures = Vec::with_capacity_in(count, arena);
+        let mut cursor = 0;
+        for _ in 0..count {
+            signatures.push(parse_u32_or_panic(&self.bytes, &mut cursor));
+        }
+        signatures
     }
 }
 
@@ -555,6 +566,26 @@ pub enum ConstExpr {
     F64(f64),
 }
 
+impl ConstExpr {
+    fn parse_u32(bytes: &[u8], cursor: &mut usize) -> u32 {
+        let err = || internal_error!("Invalid ConstExpr. Expected i32.");
+
+        if bytes[*cursor] != OpCode::I32CONST as u8 {
+            err();
+        }
+        *cursor += 1;
+
+        let value = parse_u32_or_panic(bytes, cursor);
+
+        if bytes[*cursor] != OpCode::END as u8 {
+            err();
+        }
+        *cursor += 1;
+
+        value
+    }
+}
+
 impl Serialize for ConstExpr {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
@@ -576,6 +607,15 @@ impl Serialize for ConstExpr {
             }
         }
         buffer.append_u8(OpCode::END as u8);
+    }
+}
+
+impl SkipBytes for ConstExpr {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        while bytes[*cursor] != OpCode::END as u8 {
+            OpCode::skip_bytes(bytes, cursor);
+        }
+        *cursor += 1;
     }
 }
 
@@ -601,16 +641,14 @@ pub struct GlobalSection<'a> {
 }
 
 impl<'a> GlobalSection<'a> {
-    pub fn new(arena: &'a Bump, globals: &[Global]) -> Self {
-        let capacity = 13 * globals.len();
-        let mut bytes = Vec::with_capacity_in(capacity, arena);
-        for global in globals {
-            global.serialize(&mut bytes);
+    pub fn parse_u32_at_index(&self, index: u32) -> u32 {
+        let mut cursor = 0;
+        for _ in 0..index {
+            GlobalType::skip_bytes(&self.bytes, &mut cursor);
+            ConstExpr::skip_bytes(&self.bytes, &mut cursor);
         }
-        GlobalSection {
-            count: globals.len() as u32,
-            bytes,
-        }
+        GlobalType::skip_bytes(&self.bytes, &mut cursor);
+        ConstExpr::parse_u32(&self.bytes, &mut cursor)
     }
 
     pub fn append(&mut self, global: Global) {
@@ -636,11 +674,36 @@ pub enum ExportType {
     Global = 3,
 }
 
+impl From<u8> for ExportType {
+    fn from(x: u8) -> Self {
+        match x {
+            0 => Self::Func,
+            1 => Self::Table,
+            2 => Self::Mem,
+            3 => Self::Global,
+            _ => internal_error!("invalid ExportType {:2x?}", x),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Export<'a> {
     pub name: &'a [u8],
     pub ty: ExportType,
     pub index: u32,
+}
+
+impl<'a> Export<'a> {
+    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Self {
+        let name = parse_string_bytes(arena, bytes, cursor);
+
+        let ty = ExportType::from(bytes[*cursor]);
+        *cursor += 1;
+
+        let index = parse_u32_or_panic(bytes, cursor);
+
+        Export { name, ty, index }
+    }
 }
 
 impl Serialize for Export<'_> {
@@ -655,7 +718,10 @@ impl Serialize for Export<'_> {
 pub struct ExportSection<'a> {
     pub count: u32,
     pub bytes: Vec<'a, u8>,
+    /// List of exported functions to keep during dead-code-elimination
     pub function_indices: Vec<'a, u32>,
+    /// name -> index
+    pub globals_lookup: MutMap<&'a [u8], u32>,
 }
 
 impl<'a> ExportSection<'a> {
@@ -673,18 +739,36 @@ impl<'a> ExportSection<'a> {
         section_size(&self.bytes)
     }
 
-    pub fn empty(arena: &'a Bump) -> Self {
+    fn empty(arena: &'a Bump) -> Self {
         ExportSection {
             count: 0,
             bytes: Vec::with_capacity_in(256, arena),
             function_indices: Vec::with_capacity_in(4, arena),
+            globals_lookup: MutMap::default(),
         }
     }
-}
 
-impl SkipBytes for ExportSection<'_> {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        parse_section(Self::ID, bytes, cursor);
+    /// Preload from object file. Keep only the Global exports, ignore the rest.
+    pub fn preload_globals(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+        let (num_exports, body_bytes) = parse_section(Self::ID, module_bytes, cursor);
+
+        let mut export_section = ExportSection::empty(arena);
+
+        let mut body_cursor = 0;
+        for _ in 0..num_exports {
+            let export_start = body_cursor;
+            let export = Export::parse(arena, body_bytes, &mut body_cursor);
+            if matches!(export.ty, ExportType::Global) {
+                let global_bytes = &body_bytes[export_start..body_cursor];
+                export_section.bytes.extend_from_slice(global_bytes);
+                export_section.count += 1;
+                export_section
+                    .globals_lookup
+                    .insert(export.name, export.index);
+            }
+        }
+
+        export_section
     }
 }
 
@@ -696,6 +780,122 @@ impl<'a> Serialize for ExportSection<'a> {
             buffer.append_slice(&self.bytes);
             update_section_size(buffer, header_indices);
         }
+    }
+}
+
+/*******************************************************************
+ *
+ * Element section
+ *
+ * Elements are entries in tables (see Table section)
+ * For example, Wasm uses a function table instead of function pointers,
+ * and each entry in that function table is an element.
+ * The call_indirect instruction uses element indices to refer to functions.
+ * This section therefore enumerates all indirectly-called functions.
+ *
+ *******************************************************************/
+
+#[repr(u8)]
+enum ElementSegmentFormatId {
+    /// Currently only supporting the original Wasm MVP format since it's the only one in wide use.
+    /// There are newer formats for other table types, with complex encodings to preserve backward compatibility
+    /// (Already going down the same path as x86!)
+    ActiveImplicitTableIndex = 0x00,
+}
+
+#[derive(Debug)]
+struct ElementSegment<'a> {
+    offset: ConstExpr,
+    fn_indices: Vec<'a, u32>,
+}
+
+impl<'a> ElementSegment<'a> {
+    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Self {
+        // In practice we only need the original MVP format
+        let format_id = bytes[*cursor];
+        debug_assert!(format_id == ElementSegmentFormatId::ActiveImplicitTableIndex as u8);
+        *cursor += 1;
+
+        // The table index offset is encoded as a ConstExpr, but only I32 makes sense
+        let const_expr_opcode = bytes[*cursor];
+        debug_assert!(const_expr_opcode == OpCode::I32CONST as u8);
+        *cursor += 1;
+        let offset = parse_u32_or_panic(bytes, cursor);
+        debug_assert!(bytes[*cursor] == OpCode::END as u8);
+        *cursor += 1;
+
+        let num_elems = parse_u32_or_panic(bytes, cursor);
+        let mut fn_indices = Vec::with_capacity_in(num_elems as usize, arena);
+        for _ in 0..num_elems {
+            let fn_idx = parse_u32_or_panic(bytes, cursor);
+
+            fn_indices.push(fn_idx);
+        }
+
+        ElementSegment {
+            offset: ConstExpr::I32(offset as i32),
+            fn_indices,
+        }
+    }
+
+    fn size(&self) -> usize {
+        let variant_id = 1;
+        let constexpr_opcode = 1;
+        let constexpr_value = MAX_SIZE_ENCODED_U32;
+        let vec_len = MAX_SIZE_ENCODED_U32;
+        let vec_contents = MAX_SIZE_ENCODED_U32 * self.fn_indices.len();
+        variant_id + constexpr_opcode + constexpr_value + vec_len + vec_contents
+    }
+}
+
+impl<'a> Serialize for ElementSegment<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_u8(ElementSegmentFormatId::ActiveImplicitTableIndex as u8);
+        self.offset.serialize(buffer);
+        self.fn_indices.serialize(buffer);
+    }
+}
+
+#[derive(Debug)]
+pub struct ElementSection<'a> {
+    segments: Vec<'a, ElementSegment<'a>>,
+}
+
+impl<'a> ElementSection<'a> {
+    const ID: SectionId = SectionId::Element;
+
+    pub fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+        let (num_segments, body_bytes) = parse_section(Self::ID, module_bytes, cursor);
+
+        let mut segments = Vec::with_capacity_in(num_segments as usize, arena);
+
+        let mut body_cursor = 0;
+        for _ in 0..num_segments {
+            let seg = ElementSegment::parse(arena, body_bytes, &mut body_cursor);
+            segments.push(seg);
+        }
+
+        ElementSection { segments }
+    }
+
+    pub fn size(&self) -> usize {
+        self.segments.iter().map(|seg| seg.size()).sum()
+    }
+
+    pub fn indirect_callees(&self, arena: &'a Bump) -> Vec<'a, u32> {
+        let mut result = bumpalo::vec![in arena];
+        for segment in self.segments.iter() {
+            result.extend_from_slice(&segment.fn_indices);
+        }
+        result
+    }
+}
+
+impl<'a> Serialize for ElementSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        let header_indices = write_section_header(buffer, Self::ID);
+        self.segments.serialize(buffer);
+        update_section_size(buffer, header_indices);
     }
 }
 
@@ -742,14 +942,21 @@ impl<'a> CodeSection<'a> {
         arena: &'a Bump,
         module_bytes: &[u8],
         cursor: &mut usize,
-        import_fn_count: u32,
+        import_signatures: &[u32],
+        function_signatures: &[u32],
+        indirect_callees: &[u32],
     ) -> Self {
         let (preloaded_count, initial_bytes) = parse_section(SectionId::Code, module_bytes, cursor);
         let preloaded_bytes = arena.alloc_slice_copy(initial_bytes);
 
         // TODO: Try to move this call_graph preparation to platform build time
-        let dead_code_metadata =
-            parse_preloads_call_graph(arena, preloaded_count, initial_bytes, import_fn_count);
+        let dead_code_metadata = parse_preloads_call_graph(
+            arena,
+            initial_bytes,
+            import_signatures,
+            function_signatures,
+            indirect_callees,
+        );
 
         CodeSection {
             preloaded_count,
@@ -850,7 +1057,7 @@ impl Serialize for DataSegment<'_> {
 #[derive(Debug)]
 pub struct DataSection<'a> {
     count: u32,
-    bytes: Vec<'a, u8>,
+    pub bytes: Vec<'a, u8>, // public so backend.rs can calculate addr of first string
 }
 
 impl<'a> DataSection<'a> {
@@ -928,8 +1135,8 @@ enum NameSubSections {
     LocalNames = 2,
 }
 
-#[derive(Debug, Default)]
 pub struct NameSection<'a> {
+    pub bytes: Vec<'a, u8>,
     pub functions: MutMap<&'a [u8], u32>,
 }
 
@@ -938,13 +1145,6 @@ impl<'a> NameSection<'a> {
     const NAME: &'static str = "name";
 
     pub fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
-        let functions = MutMap::default();
-        let mut section = NameSection { functions };
-        section.parse_help(arena, module_bytes, cursor);
-        section
-    }
-
-    fn parse_help(&mut self, arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) {
         // Custom section ID
         let section_id_byte = module_bytes[*cursor];
         if section_id_byte != Self::ID as u8 {
@@ -958,21 +1158,37 @@ impl<'a> NameSection<'a> {
         *cursor += 1;
 
         // Section size
-        let section_size = parse_u32_or_panic(module_bytes, cursor);
-        let section_end = *cursor + section_size as usize;
+        let section_size = parse_u32_or_panic(module_bytes, cursor) as usize;
+        let section_end = *cursor + section_size;
 
-        // Custom section name
-        let section_name_len = parse_u32_or_panic(module_bytes, cursor);
-        let section_name_end = *cursor + section_name_len as usize;
-        let section_name = &module_bytes[*cursor..section_name_end];
+        let mut bytes = Vec::with_capacity_in(section_size, arena);
+        bytes.extend_from_slice(&module_bytes[*cursor..section_end]);
+        let functions = MutMap::default();
+        let mut section = NameSection { bytes, functions };
+
+        section.parse_body(arena, module_bytes, cursor, section_end);
+        section
+    }
+
+    pub fn size(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn parse_body(
+        &mut self,
+        arena: &'a Bump,
+        module_bytes: &[u8],
+        cursor: &mut usize,
+        section_end: usize,
+    ) {
+        let section_name = parse_string_bytes(arena, module_bytes, cursor);
         if section_name != Self::NAME.as_bytes() {
             internal_error!(
-                "Expected Custon section {:?}, found {:?}",
+                "Expected Custom section {:?}, found {:?}",
                 Self::NAME,
                 std::str::from_utf8(section_name)
             );
         }
-        *cursor = section_name_end;
 
         // Find function names subsection
         let mut found_function_names = false;
@@ -997,14 +1213,42 @@ impl<'a> NameSection<'a> {
         let num_entries = parse_u32_or_panic(module_bytes, cursor) as usize;
         for _ in 0..num_entries {
             let fn_index = parse_u32_or_panic(module_bytes, cursor);
-            let name_len = parse_u32_or_panic(module_bytes, cursor);
-            let name_end = *cursor + name_len as usize;
-            let name_bytes: &[u8] = &module_bytes[*cursor..name_end];
-            *cursor = name_end;
+            let name_bytes = parse_string_bytes(arena, module_bytes, cursor);
 
             self.functions
                 .insert(arena.alloc_slice_copy(name_bytes), fn_index);
         }
+    }
+}
+
+impl<'a> Serialize for NameSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        if !self.bytes.is_empty() {
+            let header_indices = write_section_header(buffer, Self::ID);
+            buffer.append_slice(&self.bytes);
+            update_section_size(buffer, header_indices);
+        }
+    }
+}
+
+impl<'a> Debug for NameSection<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "NameSection")?;
+
+        // We want to display index->name because it matches the binary format and looks nicer.
+        // But our hashmap is name->index because that's what code gen wants to look up.
+        let mut by_index = std::vec::Vec::with_capacity(self.functions.len());
+        for (name, index) in self.functions.iter() {
+            by_index.push((*index, name));
+        }
+        by_index.sort_unstable();
+
+        for (index, name) in by_index.iter() {
+            let name_str = unsafe { std::str::from_utf8_unchecked(name) };
+            writeln!(f, "  {:4}: {}", index, name_str)?;
+        }
+
+        Ok(())
     }
 }
 
