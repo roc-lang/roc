@@ -26,6 +26,8 @@ main = "Hello, world!"
 
 "#;
 
+pub const PLATFORM_NAME: &str = "c-platform";
+
 pub const PLATFORM_STR: &str = r#"
 platform "test-platform"
     requires {} { main : Str }
