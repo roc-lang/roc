@@ -900,24 +900,26 @@ fn modify_refcount_boxed<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
-    inner_layout: &Layout<'a>,
+    inner_layout: &'a Layout<'a>,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let boxed_layout = env.arena.alloc(Layout::Boxed(inner_layout));
 
     let (_, fn_name) = function_name_from_mode(
         layout_ids,
         &env.interns,
         "increment_boxed",
         "decrement_boxed",
-        inner_layout,
+        boxed_layout,
         mode,
     );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, &Layout::Boxed(&inner_layout));
+            let basic_type = basic_type_from_layout(env, boxed_layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_box_help(env, mode, inner_layout, function_value);
@@ -952,11 +954,12 @@ fn modify_refcount_box_help<'a, 'ctx, 'env>(
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
 
     let boxed = arg_val.into_pointer_value();
     let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, boxed);
     let call_mode = mode_to_call_mode(fn_val, mode);
-    let boxed_layout = Layout::Boxed(&inner_layout);
+    let boxed_layout = Layout::Boxed(inner_layout);
     refcount_ptr.modify(call_mode, &boxed_layout, env);
 
     // this function returns void

@@ -1126,7 +1126,29 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             ..
         } => build_tag(env, scope, union_layout, *tag_id, arguments, None, parent),
 
-        ExprBox { .. } | ExprUnbox { .. } => todo!(),
+        ExprBox { symbol } => {
+            let (value, layout) = load_symbol_and_layout(scope, symbol);
+            let basic_type = basic_type_from_layout(env, layout);
+            let allocation = reserve_with_refcount_help(
+                env,
+                basic_type,
+                layout.stack_size(env.target_info),
+                layout.alignment_bytes(env.target_info),
+            );
+
+            env.builder.build_store(allocation, value);
+
+            allocation.into()
+        }
+
+        ExprUnbox { symbol } => {
+            let value = load_symbol(scope, symbol);
+
+            debug_assert!(value.is_pointer_value());
+
+            env.builder
+                .build_load(value.into_pointer_value(), "load_boxed_value")
+        }
 
         Reset { symbol, .. } => {
             let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
