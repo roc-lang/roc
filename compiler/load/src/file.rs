@@ -1264,7 +1264,6 @@ fn state_thread_step<'a>(
                     // This is where most of the main thread's work gets done.
                     // Everything up to this point has been setting up the threading
                     // system which lets this logic work efficiently.
-                    let constrained_ident_ids = state.constrained_ident_ids.clone();
                     let arc_modules = state.arc_modules.clone();
 
                     let res_state = update(
@@ -1288,8 +1287,13 @@ fn state_thread_step<'a>(
                                 .into_inner()
                                 .into_module_ids();
 
-                            let buf =
-                                to_parse_problem_report(problem, module_ids, constrained_ident_ids);
+                            // if parsing failed, this module did not add anything to IdentIds
+                            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                            let buf = to_parse_problem_report(
+                                problem,
+                                module_ids,
+                                root_exposed_ident_ids,
+                            );
                             Err(LoadingProblem::FormattedReport(buf))
                         }
                         Err(e) => Err(e),
