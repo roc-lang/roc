@@ -1,4 +1,4 @@
-platform "examples/cli"
+platform "false-interpreter"
     requires {} { main : Str -> Task {} [] }
     exposes []
     packages {}

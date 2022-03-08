@@ -210,7 +210,7 @@ impl<T, E> Drop for RocResult<T, E> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct RocDec(pub i128);
+pub struct RocDec(i128);
 
 impl RocDec {
     pub const MIN: Self = Self(i128::MIN);
@@ -220,6 +220,16 @@ impl RocDec {
     const ONE_POINT_ZERO: i128 = 10i128.pow(Self::DECIMAL_PLACES as u32);
     const MAX_DIGITS: usize = 39;
     const MAX_STR_LENGTH: usize = Self::MAX_DIGITS + 2; // + 2 here to account for the sign & decimal dot
+
+    pub fn new(bits: i128) -> Self {
+        Self(bits)
+    }
+
+    pub fn as_bits(&self) -> (i64, u64) {
+        let lower_bits = self.0 as u64;
+        let upper_bits = (self.0 >> 64) as i64;
+        (upper_bits, lower_bits)
+    }
 
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Option<Self> {

@@ -1,22 +1,22 @@
 Platform {
     header: PlatformHeader {
-        name: @9-23 PackageName(
-            "examples/cli",
+        name: @9-14 PackageName(
+            "cli",
         ),
         requires: PlatformRequires {
             rigids: [],
-            signature: @41-58 TypedIdent {
-                ident: @41-45 "main",
+            signature: @32-49 TypedIdent {
+                ident: @32-36 "main",
                 spaces_before_colon: [],
-                ann: @48-58 Apply(
+                ann: @39-49 Apply(
                     "",
                     "Task",
                     [
-                        @53-55 Record {
+                        @44-46 Record {
                             fields: [],
                             ext: None,
                         },
-                        @56-58 TagUnion {
+                        @47-49 TagUnion {
                             ext: None,
                             tags: [],
                         },
@@ -27,19 +27,19 @@ Platform {
         exposes: [],
         packages: [],
         imports: [
-            @119-132 Module(
+            @110-123 Module(
                 ModuleName(
                     "Task",
                 ),
                 [
-                    @126-130 ExposedName(
+                    @117-121 ExposedName(
                         "Task",
                     ),
                 ],
             ),
         ],
         provides: [
-            @150-161 ExposedName(
+            @141-152 ExposedName(
                 "mainForHost",
             ),
         ],

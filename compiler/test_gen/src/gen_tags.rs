@@ -1222,7 +1222,7 @@ fn applied_tag_function_linked_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = "")]
+#[should_panic(expected = "")] // TODO: this only panics because it returns 0 instead of 1!
 fn tag_must_be_its_own_type() {
     assert_evals_to!(
         indoc!(
