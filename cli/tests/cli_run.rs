@@ -926,47 +926,6 @@ mod cli_run {
     }
 
     #[test]
-    fn unknown_type() {
-        check_compile_error(
-            &known_bad_file("UnknownType.roc"),
-            &[],
-            indoc!(
-                r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
-
-                I cannot find a `UnkownType` value
-
-                6│  Type : [ Constructor UnkownType ]
-                                         ^^^^^^^^^^
-
-                Did you mean one of these?
-
-                    Type
-                    Unsigned8
-                    Unsigned32
-                    Unsigned16
-
-
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
-
-                I cannot find a `UnkownType` value
-
-                8│  insertHelper : UnkownType, Type -> Type
-                                                       ^^^^
-
-                Did you mean one of these?
-
-                    Type
-                    Unsigned8
-                    Unsigned32
-                    Unsigned16
-
-                ────────────────────────────────────────────────────────────────────────────────"#
-            ),
-        );
-    }
-
-    #[test]
     fn format_check_good() {
         check_format_check_as_expected(&fixture_file("format", "Formatted.roc"), true);
     }
