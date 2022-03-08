@@ -530,10 +530,10 @@ fn eq_tag_fields<'a>(
 }
 
 fn eq_boxed<'a>(
-    root: &mut CodeGenHelp<'a>,
-    ident_ids: &mut IdentIds,
-    ctx: &mut Context<'a>,
-    inner_layout: &'a Layout<'a>,
+    _root: &mut CodeGenHelp<'a>,
+    _ident_ids: &mut IdentIds,
+    _ctx: &mut Context<'a>,
+    _inner_layout: &'a Layout<'a>,
 ) -> Stmt<'a> {
     todo!()
 }
