@@ -1511,7 +1511,16 @@ fn expr_spec<'a>(
 
             builder.add_make_named(block, MOD_APP, type_name, tag_value_id)
         }
-        ExprBox { .. } | ExprUnbox { .. } => todo!(),
+        ExprBox { symbol } => {
+            let value_id = env.symbols[symbol];
+
+            with_new_heap_cell(builder, block, value_id)
+        }
+        ExprUnbox { symbol } => {
+            let tuple_id = env.symbols[symbol];
+
+            builder.add_get_tuple_field(block, tuple_id, BOX_VALUE_INDEX)
+        }
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         UnionAtIndex {
             index,
@@ -1794,6 +1803,10 @@ const LIST_BAG_INDEX: u32 = 1;
 
 const DICT_CELL_INDEX: u32 = LIST_CELL_INDEX;
 const DICT_BAG_INDEX: u32 = LIST_BAG_INDEX;
+
+#[allow(dead_code)]
+const BOX_CELL_INDEX: u32 = LIST_CELL_INDEX;
+const BOX_VALUE_INDEX: u32 = LIST_BAG_INDEX;
 
 const TAG_CELL_INDEX: u32 = 0;
 const TAG_DATA_INDEX: u32 = 1;
