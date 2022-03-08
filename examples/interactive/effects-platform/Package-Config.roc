@@ -1,9 +1,9 @@
-platform "benchmarks"
+platform "effects"
     requires {} { main : Effect {} }
     exposes []
     packages {}
-    imports [ Task.{ Task } ]
+    imports [ pf.Effect ]
     provides [ mainForHost ]
 
-mainForHost : Task {} [] as Fx
+mainForHost : Effect.Effect {} as Fx
 mainForHost = main

@@ -1,5 +1,5 @@
-platform "multi-module"
-    requires {}{ main : Str }
+platform "hello-world-in-rust"
+    requires {} { main : Str }
     exposes []
     packages {}
     imports []
