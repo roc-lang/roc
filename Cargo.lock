@@ -3384,7 +3384,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_types",
- "static_assertions",
+ "static_assertions 1.1.0",
  "ven_graph",
 ]
 
