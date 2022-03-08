@@ -315,9 +315,9 @@ fn starts_with_newline(expr: &Expr) -> bool {
 
     match expr {
         SpaceBefore(_, comment_or_newline) => {
-            if !(**comment_or_newline).is_empty() {
+            if !comment_or_newline.is_empty() {
                 // safe because we check the length before
-                (**comment_or_newline).get(0).unwrap().is_newline()
+                comment_or_newline.get(0).unwrap().is_newline()
             } else {
                 false
             }
@@ -325,7 +325,7 @@ fn starts_with_newline(expr: &Expr) -> bool {
         SpaceAfter(_, comment_or_newline) => {
             if !(**comment_or_newline).is_empty() {
                 // safe because we check the length before
-                (**comment_or_newline).get(0).unwrap().is_newline()
+                comment_or_newline.get(0).unwrap().is_newline()
             } else {
                 false
             }
