@@ -1073,6 +1073,7 @@ fn call_with_bad_record_runtime_error() {
     ))
 }
 
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn generalized_accessor() {
     assert_evals_to!(
