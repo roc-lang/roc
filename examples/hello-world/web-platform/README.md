@@ -23,8 +23,6 @@ http-server
 
 Now open your browser at http://localhost:8080
 
-Some of the above steps can be automated by running `./build.sh`.
-
 ## Design Notes
 
 This demonstrates the basic design of hosts: Roc code gets compiled into a pure
