@@ -69,6 +69,7 @@ pub struct Subs {
     pub record_fields: Vec<RecordField<()>>,
     pub variable_slices: Vec<VariableSubsSlice>,
     pub tag_name_cache: TagNameCache,
+    pub problems: Vec<Problem>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -325,6 +326,14 @@ impl<T> SubsIndex<T> {
             index: start,
             _marker: std::marker::PhantomData,
         }
+    }
+
+    pub fn push_new(vector: &mut Vec<T>, value: T) -> Self {
+        let index = Self::new(vector.len() as _);
+
+        vector.push(value);
+
+        index
     }
 }
 
@@ -778,8 +787,8 @@ impl Variable {
 
     /// # Safety
     ///
-    /// This should only ever be called from tests!
-    pub unsafe fn unsafe_test_debug_variable(v: u32) -> Self {
+    /// It is not guaranteed that the variable is in bounds.
+    pub unsafe fn from_index(v: u32) -> Self {
         debug_assert!(v >= Self::NUM_RESERVED_VARS as u32);
         Variable(v)
     }
@@ -1283,14 +1292,15 @@ impl Subs {
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
-            variables: Default::default(),
+            variables: Vec::new(),
             tag_names,
-            field_names: Default::default(),
-            record_fields: Default::default(),
+            field_names: Vec::new(),
+            record_fields: Vec::new(),
             // store an empty slice at the first position
             // used for "TagOrFunction"
             variable_slices: vec![VariableSubsSlice::default()],
             tag_name_cache: TagNameCache::default(),
+            problems: Vec::new(),
         };
 
         // NOTE the utable does not (currently) have a with_capacity; using this as the next-best thing
@@ -1366,7 +1376,8 @@ impl Subs {
     }
 
     pub fn rigid_var(&mut self, var: Variable, name: Lowercase) {
-        let content = Content::RigidVar(name);
+        let name_index = SubsIndex::push_new(&mut self.field_names, name);
+        let content = Content::RigidVar(name_index);
         let desc = Descriptor::from(content);
 
         self.set(var, desc);
@@ -1723,19 +1734,19 @@ roc_error_macros::assert_sizeof_aarch64!((Variable, Option<Lowercase>), 4 * 8);
 roc_error_macros::assert_sizeof_wasm!((Variable, Option<Lowercase>), 4 * 4);
 roc_error_macros::assert_sizeof_default!((Variable, Option<Lowercase>), 4 * 8);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Content {
     /// A type variable which the user did not name in an annotation,
     ///
     /// When we auto-generate a type var name, e.g. the "a" in (a -> a), we
     /// change the Option in here from None to Some.
-    FlexVar(Option<Lowercase>),
+    FlexVar(Option<SubsIndex<Lowercase>>),
     /// name given in a user-written annotation
-    RigidVar(Lowercase),
+    RigidVar(SubsIndex<Lowercase>),
     /// name given to a recursion variable
     RecursionVar {
         structure: Variable,
-        opt_name: Option<Lowercase>,
+        opt_name: Option<SubsIndex<Lowercase>>,
     },
     Structure(FlatType),
     Alias(Symbol, AliasVariables, Variable, AliasKind),
@@ -1859,7 +1870,7 @@ impl Content {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum FlatType {
     Apply(Symbol, VariableSubsSlice),
     Func(VariableSubsSlice, Variable, Variable),
@@ -1867,7 +1878,7 @@ pub enum FlatType {
     TagUnion(UnionTags, Variable),
     FunctionOrTagUnion(SubsIndex<TagName>, Symbol, Variable),
     RecursiveTagUnion(Variable, UnionTags, Variable),
-    Erroneous(Box<Problem>),
+    Erroneous(SubsIndex<Problem>),
     EmptyRecord,
     EmptyTagUnion,
 }
@@ -2733,18 +2744,23 @@ fn get_var_names(
         match desc.content {
             Error | FlexVar(None) => taken_names,
 
-            FlexVar(Some(name)) => {
-                add_name(subs, 0, name, var, |name| FlexVar(Some(name)), taken_names)
-            }
+            FlexVar(Some(name_index)) => add_name(
+                subs,
+                0,
+                name_index,
+                var,
+                |name| FlexVar(Some(name)),
+                taken_names,
+            ),
 
             RecursionVar {
                 opt_name,
                 structure,
             } => match opt_name {
-                Some(name) => add_name(
+                Some(name_index) => add_name(
                     subs,
                     0,
-                    name,
+                    name_index,
                     var,
                     |name| RecursionVar {
                         opt_name: Some(name),
@@ -2755,7 +2771,7 @@ fn get_var_names(
                 None => taken_names,
             },
 
-            RigidVar(name) => add_name(subs, 0, name, var, RigidVar, taken_names),
+            RigidVar(name_index) => add_name(subs, 0, name_index, var, RigidVar, taken_names),
 
             Alias(_, args, _, _) => args.into_iter().fold(taken_names, |answer, arg_var| {
                 get_var_names(subs, subs[arg_var], answer)
@@ -2845,14 +2861,16 @@ fn get_var_names(
 fn add_name<F>(
     subs: &mut Subs,
     index: usize,
-    given_name: Lowercase,
+    given_name_index: SubsIndex<Lowercase>,
     var: Variable,
     content_from_name: F,
     taken_names: ImMap<Lowercase, Variable>,
 ) -> ImMap<Lowercase, Variable>
 where
-    F: FnOnce(Lowercase) -> Content,
+    F: FnOnce(SubsIndex<Lowercase>) -> Content,
 {
+    let given_name = subs.field_names[given_name_index.index as usize].clone();
+
     let indexed_name = if index == 0 {
         given_name.clone()
     } else {
@@ -2864,7 +2882,9 @@ where
     match taken_names.get(&indexed_name) {
         None => {
             if indexed_name != given_name {
-                subs.set_content(var, content_from_name(indexed_name.clone()));
+                let indexed_name_index =
+                    SubsIndex::push_new(&mut subs.field_names, indexed_name.clone());
+                subs.set_content(var, content_from_name(indexed_name_index));
             }
 
             let mut answer = taken_names.clone();
@@ -2880,7 +2900,7 @@ where
                 add_name(
                     subs,
                     index + 1,
-                    given_name,
+                    given_name_index,
                     var,
                     content_from_name,
                     taken_names,
@@ -2891,25 +2911,12 @@ where
 }
 
 fn var_to_err_type(subs: &mut Subs, state: &mut ErrorTypeState, var: Variable) -> ErrorType {
-    let mut desc = subs.get(var);
+    let desc = subs.get(var);
 
     if desc.mark == Mark::OCCURS {
         ErrorType::Infinite
     } else {
         subs.set_mark(var, Mark::OCCURS);
-
-        if false {
-            // useful for debugging
-            match desc.content {
-                Content::FlexVar(_) => {
-                    desc.content = Content::FlexVar(Some(format!("{:?}", var).into()));
-                }
-                Content::RigidVar(_) => {
-                    desc.content = Content::RigidVar(format!("{:?}", var).into());
-                }
-                _ => {}
-            }
-        }
 
         let err_type = content_to_err_type(subs, state, var, desc.content);
 
@@ -2930,15 +2937,20 @@ fn content_to_err_type(
     match content {
         Structure(flat_type) => flat_type_to_err_type(subs, state, flat_type),
 
-        FlexVar(Some(name)) => ErrorType::FlexVar(name),
+        FlexVar(Some(name_index)) => {
+            let name = subs.field_names[name_index.index as usize].clone();
+            ErrorType::FlexVar(name)
+        }
 
         FlexVar(opt_name) => {
             let name = match opt_name {
-                Some(name) => name,
+                Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
+                    // set the name so when this variable occurs elsewhere in the type it gets the same name
                     let name = get_fresh_var_name(state);
+                    let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
 
-                    subs.set_content(var, FlexVar(Some(name.clone())));
+                    subs.set_content(var, FlexVar(Some(name_index)));
 
                     name
                 }
@@ -2947,15 +2959,19 @@ fn content_to_err_type(
             ErrorType::FlexVar(name)
         }
 
-        RigidVar(name) => ErrorType::RigidVar(name),
+        RigidVar(name_index) => {
+            let name = subs.field_names[name_index.index as usize].clone();
+            ErrorType::RigidVar(name)
+        }
 
         RecursionVar { opt_name, .. } => {
             let name = match opt_name {
-                Some(name) => name,
+                Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
                     let name = get_fresh_var_name(state);
+                    let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
 
-                    subs.set_content(var, FlexVar(Some(name.clone())));
+                    subs.set_content(var, FlexVar(Some(name_index)));
 
                     name
                 }
@@ -3182,8 +3198,9 @@ fn flat_type_to_err_type(
             }
         }
 
-        Erroneous(problem) => {
-            state.problems.push(*problem);
+        Erroneous(problem_index) => {
+            let problem = subs.problems[problem_index.index as usize].clone();
+            state.problems.push(problem);
 
             ErrorType::Error
         }
@@ -3297,6 +3314,7 @@ struct StorageSubsOffsets {
     field_names: u32,
     record_fields: u32,
     variable_slices: u32,
+    problems: u32,
 }
 
 impl StorageSubs {
@@ -3316,6 +3334,7 @@ impl StorageSubs {
             field_names: self.subs.field_names.len() as u32,
             record_fields: self.subs.record_fields.len() as u32,
             variable_slices: self.subs.variable_slices.len() as u32,
+            problems: self.subs.problems.len() as u32,
         };
 
         let offsets = StorageSubsOffsets {
@@ -3325,6 +3344,7 @@ impl StorageSubs {
             field_names: target.field_names.len() as u32,
             record_fields: target.record_fields.len() as u32,
             variable_slices: target.variable_slices.len() as u32,
+            problems: target.problems.len() as u32,
         };
 
         // The first Variable::NUM_RESERVED_VARS are the same in every subs,
@@ -3369,6 +3389,7 @@ impl StorageSubs {
         target.tag_names.extend(self.subs.tag_names);
         target.field_names.extend(self.subs.field_names);
         target.record_fields.extend(self.subs.record_fields);
+        target.problems.extend(self.subs.problems);
 
         debug_assert_eq!(
             target.utable.len(),
@@ -3385,6 +3406,7 @@ impl StorageSubs {
             Self::offset_variable(&offsets, v)
         }
     }
+
     fn offset_flat_type(offsets: &StorageSubsOffsets, flat_type: &FlatType) -> FlatType {
         match flat_type {
             FlatType::Apply(symbol, arguments) => {
@@ -3413,7 +3435,9 @@ impl StorageSubs {
                 Self::offset_union_tags(offsets, *union_tags),
                 Self::offset_variable(offsets, *ext),
             ),
-            FlatType::Erroneous(problem) => FlatType::Erroneous(problem.clone()),
+            FlatType::Erroneous(problem) => {
+                FlatType::Erroneous(Self::offset_problem(offsets, *problem))
+            }
             FlatType::EmptyRecord => FlatType::EmptyRecord,
             FlatType::EmptyTagUnion => FlatType::EmptyTagUnion,
         }
@@ -3423,14 +3447,14 @@ impl StorageSubs {
         use Content::*;
 
         match content {
-            FlexVar(opt_name) => FlexVar(opt_name.clone()),
-            RigidVar(name) => RigidVar(name.clone()),
+            FlexVar(opt_name) => FlexVar(*opt_name),
+            RigidVar(name) => RigidVar(*name),
             RecursionVar {
                 structure,
                 opt_name,
             } => RecursionVar {
                 structure: Self::offset_variable(offsets, *structure),
-                opt_name: opt_name.clone(),
+                opt_name: *opt_name,
             },
             Structure(flat_type) => Structure(Self::offset_flat_type(offsets, flat_type)),
             Alias(symbol, alias_variables, actual, kind) => Alias(
@@ -3499,6 +3523,15 @@ impl StorageSubs {
         slice.start += offsets.variables;
 
         slice
+    }
+
+    fn offset_problem(
+        offsets: &StorageSubsOffsets,
+        mut problem_index: SubsIndex<Problem>,
+    ) -> SubsIndex<Problem> {
+        problem_index.index += offsets.problems;
+
+        problem_index
     }
 }
 

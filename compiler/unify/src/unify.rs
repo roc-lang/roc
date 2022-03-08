@@ -331,7 +331,7 @@ fn unify_alias(
                     }
 
                     if problems.is_empty() {
-                        problems.extend(merge(subs, ctx, other_content.clone()));
+                        problems.extend(merge(subs, ctx, *other_content));
                     }
 
                     // if problems.is_empty() { problems.extend(unify_pool(subs, pool, real_var, *other_real_var)); }
@@ -374,7 +374,7 @@ fn unify_structure(
     match other {
         FlexVar(_) => {
             // If the other is flex, Structure wins!
-            let outcome = merge(subs, ctx, Structure(flat_type.clone()));
+            let outcome = merge(subs, ctx, Structure(*flat_type));
 
             // And if we see a flex variable on the right hand side of a presence
             // constraint, we know we need to open up the structure we're trying to unify with.
@@ -1158,7 +1158,7 @@ fn unify_flat_type(
     use roc_types::subs::FlatType::*;
 
     match (left, right) {
-        (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(left.clone())),
+        (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(*left)),
 
         (Record(fields, ext), EmptyRecord) if fields.has_only_optional_fields(subs) => {
             unify_pool(subs, pool, *ext, ctx.second, ctx.mode)
@@ -1172,7 +1172,7 @@ fn unify_flat_type(
             unify_record(subs, pool, ctx, *fields1, *ext1, *fields2, *ext2)
         }
 
-        (EmptyTagUnion, EmptyTagUnion) => merge(subs, ctx, Structure(left.clone())),
+        (EmptyTagUnion, EmptyTagUnion) => merge(subs, ctx, Structure(*left)),
 
         (TagUnion(tags, ext), EmptyTagUnion) if tags.is_empty() => {
             unify_pool(subs, pool, *ext, ctx.second, ctx.mode)
@@ -1277,7 +1277,7 @@ fn unify_flat_type(
             if tag_name_1_ref == tag_name_2_ref {
                 let problems = unify_pool(subs, pool, *ext1, *ext2, ctx.mode);
                 if problems.is_empty() {
-                    let content = subs.get_content_without_compacting(ctx.second).clone();
+                    let content = *subs.get_content_without_compacting(ctx.second);
                     merge(subs, ctx, content)
                 } else {
                     problems
@@ -1351,11 +1351,16 @@ fn unify_zip_slices(
 }
 
 #[inline(always)]
-fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content) -> Outcome {
+fn unify_rigid(
+    subs: &mut Subs,
+    ctx: &Context,
+    name: &SubsIndex<Lowercase>,
+    other: &Content,
+) -> Outcome {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            merge(subs, ctx, RigidVar(name.clone()))
+            merge(subs, ctx, RigidVar(*name))
         }
         RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _, _) | RangedNumber(..) => {
             if !ctx.mode.contains(Mode::RIGID_AS_FLEX) {
@@ -1364,7 +1369,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
                 mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
             } else {
                 // We are treating rigid vars as flex vars; admit this
-                merge(subs, ctx, other.clone())
+                merge(subs, ctx, *other)
             }
         }
         Error => {
@@ -1378,13 +1383,13 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
 fn unify_flex(
     subs: &mut Subs,
     ctx: &Context,
-    opt_name: &Option<Lowercase>,
+    opt_name: &Option<SubsIndex<Lowercase>>,
     other: &Content,
 ) -> Outcome {
     match other {
         FlexVar(None) => {
             // If both are flex, and only left has a name, keep the name around.
-            merge(subs, ctx, FlexVar(opt_name.clone()))
+            merge(subs, ctx, FlexVar(*opt_name))
         }
 
         FlexVar(Some(_))
@@ -1396,7 +1401,7 @@ fn unify_flex(
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)
-            merge(subs, ctx, other.clone())
+            merge(subs, ctx, *other)
         }
 
         Error => merge(subs, ctx, Error),
@@ -1408,7 +1413,7 @@ fn unify_recursion(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    opt_name: &Option<Lowercase>,
+    opt_name: &Option<SubsIndex<Lowercase>>,
     structure: Variable,
     other: &Content,
 ) -> Outcome {
@@ -1419,7 +1424,7 @@ fn unify_recursion(
         } => {
             // NOTE: structure and other_structure may not be unified yet, but will be
             // we should not do that here, it would create an infinite loop!
-            let name = opt_name.clone().or_else(|| other_opt_name.clone());
+            let name = (*opt_name).or_else(|| *other_opt_name);
             merge(
                 subs,
                 ctx,
@@ -1441,7 +1446,7 @@ fn unify_recursion(
             ctx,
             RecursionVar {
                 structure,
-                opt_name: opt_name.clone(),
+                opt_name: *opt_name,
             },
         ),
 

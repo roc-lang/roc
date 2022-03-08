@@ -1,4 +1,4 @@
-platform "folkertdev/foo"
+platform "benchmarks"
     requires {} { main : Effect {} }
     exposes []
     packages {}

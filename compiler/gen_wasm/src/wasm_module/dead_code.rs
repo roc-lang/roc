@@ -39,16 +39,16 @@ pub struct PreloadsCallGraph<'a> {
 }
 
 impl<'a> PreloadsCallGraph<'a> {
-    pub fn new(arena: &'a Bump, import_fn_count: u32, fn_count: u32) -> Self {
-        let num_preloads = (import_fn_count + fn_count) as usize;
+    pub fn new(arena: &'a Bump, import_fn_count: usize, fn_count: usize) -> Self {
+        let num_preloads = import_fn_count + fn_count;
 
         let mut code_offsets = Vec::with_capacity_in(num_preloads, arena);
         let calls = Vec::with_capacity_in(2 * num_preloads, arena);
         let mut calls_offsets = Vec::with_capacity_in(1 + num_preloads, arena);
 
         // Imported functions have zero code length and no calls
-        code_offsets.extend(std::iter::repeat(0).take(import_fn_count as usize));
-        calls_offsets.extend(std::iter::repeat(0).take(import_fn_count as usize));
+        code_offsets.extend(std::iter::repeat(0).take(import_fn_count));
+        calls_offsets.extend(std::iter::repeat(0).take(import_fn_count));
 
         PreloadsCallGraph {
             num_preloads,
@@ -65,11 +65,24 @@ impl<'a> PreloadsCallGraph<'a> {
 /// use this backend without a linker.
 pub fn parse_preloads_call_graph<'a>(
     arena: &'a Bump,
-    fn_count: u32,
     code_section_body: &[u8],
-    import_fn_count: u32,
+    imported_fn_signatures: &[u32],
+    defined_fn_signatures: &[u32],
+    indirect_callees: &[u32],
 ) -> PreloadsCallGraph<'a> {
-    let mut call_graph = PreloadsCallGraph::new(arena, import_fn_count, fn_count);
+    let mut call_graph = PreloadsCallGraph::new(
+        arena,
+        imported_fn_signatures.len(),
+        defined_fn_signatures.len(),
+    );
+
+    // Function type signatures, used for indirect calls
+    let mut signatures = Vec::with_capacity_in(
+        imported_fn_signatures.len() + defined_fn_signatures.len(),
+        arena,
+    );
+    signatures.extend_from_slice(imported_fn_signatures);
+    signatures.extend_from_slice(defined_fn_signatures);
 
     // Iterate over the bytes of the Code section
     let mut cursor: usize = 0;
@@ -88,13 +101,23 @@ pub fn parse_preloads_call_graph<'a>(
             cursor += 1; // ValueType
         }
 
-        // Parse `call` instructions and skip over all other instructions
+        // Parse `call` and `call_indirect` instructions, skip over everything else
         while cursor < func_end {
             let opcode_byte: u8 = code_section_body[cursor];
             if opcode_byte == OpCode::CALL as u8 {
                 cursor += 1;
                 let call_index = parse_u32_or_panic(code_section_body, &mut cursor);
                 call_graph.calls.push(call_index as u32);
+            } else if opcode_byte == OpCode::CALLINDIRECT as u8 {
+                cursor += 1;
+                // Insert all indirect callees with a matching type signature
+                let sig = parse_u32_or_panic(code_section_body, &mut cursor);
+                call_graph.calls.extend(
+                    indirect_callees
+                        .iter()
+                        .filter(|f| signatures[**f as usize] == sig),
+                );
+                u32::skip_bytes(code_section_body, &mut cursor); // table_idx
             } else {
                 OpCode::skip_bytes(code_section_body, &mut cursor);
             }
@@ -193,11 +216,13 @@ pub fn copy_preloads_shrinking_dead_fns<'a, T: SerialBuffer>(
     live_preload_indices.sort_unstable();
     live_preload_indices.dedup();
 
-    let mut live_iter = live_preload_indices.iter();
+    let mut live_iter = live_preload_indices
+        .into_iter()
+        .skip_while(|f| (*f as usize) < preload_idx_start);
     let mut next_live_idx = live_iter.next();
     for i in preload_idx_start..call_graph.num_preloads {
         match next_live_idx {
-            Some(live) if *live as usize == i => {
+            Some(live) if live as usize == i => {
                 next_live_idx = live_iter.next();
                 let live_body_start = call_graph.code_offsets[i] as usize;
                 let live_body_end = call_graph.code_offsets[i + 1] as usize;

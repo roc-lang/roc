@@ -47,7 +47,7 @@ mod test_load {
 
         let src_lines: Vec<&str> = src.split('\n').collect();
         let lines = LineInfo::new(src);
-        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+        let alloc = RocDocAllocator::new(&src_lines, home, interns);
         let reports = problems
             .into_iter()
             .map(|problem| can_problem(&alloc, &lines, filename.clone(), problem).pretty(&alloc));
@@ -647,7 +647,7 @@ mod test_load {
                 "platform/Package-Config.roc",
                 indoc!(
                     r#"
-                        platform "examples/hello-world"
+                        platform "hello-c"
                             requires {} { main : Str }
                             exposes []
                             packages {}
@@ -691,7 +691,7 @@ mod test_load {
                 "platform/Package-Config.roc",
                 indoc!(
                     r#"
-                    platform "examples/hello-world"
+                    platform "hello-world"
                         requires {} { main : { content: Str, other: Str } }
                         exposes []
                         packages {}

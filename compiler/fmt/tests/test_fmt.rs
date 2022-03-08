@@ -3038,7 +3038,7 @@ mod test_fmt {
         for entry in walkdir::WalkDir::new(&root) {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.extension() == Some(&std::ffi::OsStr::new("roc")) {
+            if path.extension() == Some(std::ffi::OsStr::new("roc")) {
                 count += 1;
                 let src = std::fs::read_to_string(path).unwrap();
                 println!("Now trying to format {}", path.display());

@@ -1,9 +1,11 @@
 #![crate_type = "lib"]
-#![no_std]
+// #![no_std]
 use core::ffi::c_void;
 use core::fmt;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
+use core::str;
+use std::io::Write;
 
 mod rc;
 mod roc_list;
@@ -208,15 +210,26 @@ impl<T, E> Drop for RocResult<T, E> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct RocDec(pub i128);
+pub struct RocDec(i128);
 
 impl RocDec {
     pub const MIN: Self = Self(i128::MIN);
     pub const MAX: Self = Self(i128::MAX);
 
-    pub const DECIMAL_PLACES: u32 = 18;
+    const DECIMAL_PLACES: usize = 18;
+    const ONE_POINT_ZERO: i128 = 10i128.pow(Self::DECIMAL_PLACES as u32);
+    const MAX_DIGITS: usize = 39;
+    const MAX_STR_LENGTH: usize = Self::MAX_DIGITS + 2; // + 2 here to account for the sign & decimal dot
 
-    pub const ONE_POINT_ZERO: i128 = 10i128.pow(Self::DECIMAL_PLACES);
+    pub fn new(bits: i128) -> Self {
+        Self(bits)
+    }
+
+    pub fn as_bits(&self) -> (i64, u64) {
+        let lower_bits = self.0 as u64;
+        let upper_bits = (self.0 >> 64) as i64;
+        (upper_bits, lower_bits)
+    }
 
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Option<Self> {
@@ -231,7 +244,7 @@ impl RocDec {
         };
 
         let opt_after_point = match parts.next() {
-            Some(answer) if answer.len() <= Self::DECIMAL_PLACES as usize => Some(answer),
+            Some(answer) if answer.len() <= Self::DECIMAL_PLACES => Some(answer),
             _ => None,
         };
 
@@ -247,7 +260,7 @@ impl RocDec {
                     Ok(answer) => {
                         // Translate e.g. the 1 from 0.1 into 10000000000000000000
                         // by "restoring" the elided trailing zeroes to the number!
-                        let trailing_zeroes = Self::DECIMAL_PLACES as usize - after_point.len();
+                        let trailing_zeroes = Self::DECIMAL_PLACES - after_point.len();
                         let lo = answer * 10i128.pow(trailing_zeroes as u32);
 
                         if !before_point.starts_with('-') {
@@ -266,7 +279,7 @@ impl RocDec {
 
         // Calculate the high digits - the ones before the decimal point.
         match before_point.parse::<i128>() {
-            Ok(answer) => match answer.checked_mul(10i128.pow(Self::DECIMAL_PLACES)) {
+            Ok(answer) => match answer.checked_mul(Self::ONE_POINT_ZERO) {
                 Some(hi) => hi.checked_add(lo).map(Self),
                 None => None,
             },
@@ -276,5 +289,74 @@ impl RocDec {
 
     pub fn from_str_to_i128_unsafe(val: &str) -> i128 {
         Self::from_str(val).unwrap().0
+    }
+
+    fn to_str_helper(&self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> usize {
+        if self.0 == 0 {
+            write!(&mut bytes[..], "{}", "0").unwrap();
+            return 1;
+        }
+
+        let is_negative = (self.0 < 0) as usize;
+
+        static_assertions::const_assert!(Self::DECIMAL_PLACES + 1 == 19);
+        // The :019 in the following write! is computed as Self::DECIMAL_PLACES + 1. If you change
+        // Self::DECIMAL_PLACES, this assert should remind you to change that format string as
+        // well.
+        //
+        // By using the :019 format, we're guaranteeing that numbers less than 1, say 0.01234
+        // get their leading zeros placed in bytes for us. i.e. bytes = b"0012340000000000000"
+        write!(&mut bytes[..], "{:019}", self.0).unwrap();
+
+        // If self represents 1234.5678, then bytes is b"1234567800000000000000".
+        let mut i = Self::MAX_STR_LENGTH - 1;
+        // Find the last place where we have actual data.
+        while bytes[i] == 0 {
+            i = i - 1;
+        }
+        // At this point i is 21 because bytes[21] is the final '0' in b"1234567800000000000000".
+
+        let decimal_location = i - Self::DECIMAL_PLACES + 1 + is_negative;
+        // decimal_location = 4
+
+        while bytes[i] == ('0' as u8) && i >= decimal_location {
+            bytes[i] = 0;
+            i = i - 1;
+        }
+        // Now i = 7, because bytes[7] = '8', and bytes = b"12345678"
+
+        if i < decimal_location {
+            // This means that we've removed trailing zeros and are left with an integer. Our
+            // convention is to print these without a decimal point or trailing zeros, so we're done.
+            return i + 1;
+        }
+
+        let ret = i + 1;
+        while i >= decimal_location {
+            bytes[i + 1] = bytes[i];
+            i = i - 1;
+        }
+        bytes[i + 1] = bytes[i];
+        // Now i = 4, and bytes = b"123455678"
+
+        bytes[decimal_location] = '.' as u8;
+        // Finally bytes = b"1234.5678"
+
+        ret + 1
+    }
+
+    pub fn to_str(&self) -> RocStr {
+        let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
+        let last_idx = self.to_str_helper(&mut bytes);
+        unsafe { RocStr::from_slice(&bytes[0..last_idx]) }
+    }
+}
+
+impl fmt::Display for RocDec {
+    fn fmt(&self, fmtr: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
+        let last_idx = self.to_str_helper(&mut bytes);
+        let result = unsafe { str::from_utf8_unchecked(&bytes[0..last_idx]) };
+        write!(fmtr, "{}", result)
     }
 }
