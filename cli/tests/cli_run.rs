@@ -234,12 +234,12 @@ mod cli_run {
                     let file_name = example_file(dir_name, example.filename);
 
                     match example.executable_filename {
-                        "hello_web" => {
+                        "helloWeb" => {
                             // this is a web webassembly example, but we don't test with JS at the moment
                             eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
                             return;
                         }
-                        "hello_swift" => {
+                        "helloSwift" => {
                             if cfg!(not(target_os = "macos")) {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
                                 return;
@@ -324,49 +324,49 @@ mod cli_run {
     //     },
     // ]
     examples! {
-        hello_world:"hello-world" => Example {
-            filename: "hello_world.roc",
-            executable_filename: "hello_world",
+        helloWorld:"hello-world" => Example {
+            filename: "helloWorld.roc",
+            executable_filename: "helloWorld",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        hello_c:"hello-world/c-platform" => Example {
-            filename: "hello_c.roc",
-            executable_filename: "hello_c",
+        helloC:"hello-world/c-platform" => Example {
+            filename: "helloC.roc",
+            executable_filename: "helloC",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        hello_zig:"hello-world/zig-platform" => Example {
-            filename: "hello_zig.roc",
-            executable_filename: "hello_zig",
+        helloZig:"hello-world/zig-platform" => Example {
+            filename: "helloZig.roc",
+            executable_filename: "helloZig",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        hello_rust:"hello-world/rust-platform" => Example {
-            filename: "hello_rust.roc",
-            executable_filename: "hello_rust",
+        helloRust:"hello-world/rust-platform" => Example {
+            filename: "helloRust.roc",
+            executable_filename: "helloRust",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        hello_swift:"hello-world/swift-platform" => Example {
-            filename: "hello_swift.roc",
-            executable_filename: "hello_swift",
+        helloSwift:"hello-world/swift-platform" => Example {
+            filename: "helloSwift.roc",
+            executable_filename: "helloSwift",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        hello_web:"hello-world/web-platform" => Example {
-            filename: "hello_web.roc",
-            executable_filename: "hello_web",
+        helloWeb:"hello-world/web-platform" => Example {
+            filename: "helloWeb.roc",
+            executable_filename: "helloWeb",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",

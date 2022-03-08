@@ -1,5 +1,5 @@
 /**
- * Node.js test file for hello_web example
+ * Node.js test file for helloWeb example
  * We are not running this in CI currently, and Node.js is not a Roc dependency.
  * But if you happen to have it, you can run this.
  */
@@ -15,7 +15,7 @@ global.fetch = (filename) =>
 
 const { roc_web_platform_run } = require("./host");
 
-roc_web_platform_run("../hello_web.wasm", (string_from_roc) => {
+roc_web_platform_run("../helloWeb.wasm", (string_from_roc) => {
   const expected = "Hello, World!\n";
   if (string_from_roc !== expected) {
     console.error(`Expected "${expected}", but got "${string_from_roc}"`);

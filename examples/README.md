@@ -13,7 +13,7 @@ Run examples as follows:
 2. Run "Hello, World!" example
 
     ```bash
-    cargo run hello-world/hello_world.roc
+    cargo run hello-world/helloWorld.roc
     ```
 
 Some examples like `examples/benchmarks/NQueens.roc` require input after running.

@@ -3,12 +3,12 @@
 To run this website, first compile either of these identical apps:
 
 ```bash
-# Option A: Compile hello_web.roc
-cargo run -- build --target=wasm32 examples/hello-world/web-platform/hello_web.roc
+# Option A: Compile helloWeb.roc
+cargo run -- build --target=wasm32 examples/hello-world/web-platform/helloWeb.roc
 
-# Option B: Compile hello_world.roc with `pf: "web-platform"` and move the result
-cargo run -- build --target=wasm32 examples/hello-world/hello_world.roc
-(cd examples/hello-world && mv hello_world.wasm web-platform/hello_web.wasm)
+# Option B: Compile helloWorld.roc with `pf: "web-platform"` and move the result
+cargo run -- build --target=wasm32 examples/hello-world/helloWorld.roc
+(cd examples/hello-world && mv helloWorld.wasm web-platform/helloWeb.wasm)
 ```
 
 Then `cd` into the website directory

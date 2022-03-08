@@ -1,4 +1,4 @@
-app "hello_web"
+app "helloRust"
     packages { pf: "." }
     imports []
     provides [ main ] to pf

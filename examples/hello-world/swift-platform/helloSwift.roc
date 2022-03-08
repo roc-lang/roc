@@ -1,4 +1,4 @@
-app "hello_c"
+app "helloSwift"
     packages { pf: "." }
     imports []
     provides [ main ] to pf

@@ -3,13 +3,13 @@
 To run, `cd` into this directory and run:
 
 ```bash
-cargo run hello_world.roc
+cargo run helloWorld.roc
 ```
 
 To run in release mode instead, do:
 
 ```bash
-cargo run --release hello_world.roc
+cargo run --release helloWorld.roc
 ```
 
 ## Design Notes

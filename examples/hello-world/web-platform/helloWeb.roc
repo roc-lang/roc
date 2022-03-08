@@ -1,4 +1,4 @@
-app "hello_zig"
+app "helloWeb"
     packages { pf: "." }
     imports []
     provides [ main ] to pf

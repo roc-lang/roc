@@ -1,4 +1,4 @@
-app "hello_world"
+app "helloWorld"
     packages { pf: "c-platform" }
     # To switch platforms, comment-out the line above and un-comment one below.
     # packages { pf: "rust-platform" }
