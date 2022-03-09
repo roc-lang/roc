@@ -5,7 +5,7 @@ use crate::llvm::build::{
     FAST_CALL_CONV, TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
+use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_tag_as_alloca};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
@@ -1635,7 +1635,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout_1(env, &layout);
+            let basic_type = basic_type_from_layout_tag_as_alloca(env, &layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_union_help(

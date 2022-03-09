@@ -2,7 +2,7 @@ use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::{get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
-use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
+use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_tag_as_alloca};
 use bumpalo::collections::Vec;
 use inkwell::types::BasicType;
 use inkwell::values::{
@@ -780,7 +780,7 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = basic_type_from_layout_1(env, tag_layout);
+            let arg_type = basic_type_from_layout_tag_as_alloca(env, tag_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
