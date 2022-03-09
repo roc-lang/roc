@@ -1202,6 +1202,10 @@ and also `Num.cos 1` and have them all work as expected; the number literal `1` 
 `Num *`, which is compatible with the more constrained types `Int` and `Frac`. For the same reason,
 you can pass number literals to functions expecting even more constrained types, like `I32` or `F64`.
 
+## Opaque types
+
+[ This part of the tutorial has not been written yet. Coming soon! ]
+
 ## Interface modules
 
 [ This part of the tutorial has not been written yet. Coming soon! ]
@@ -1513,11 +1517,83 @@ Some important things to note about backpassing and `await`:
 * Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 * Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
 
+## Builtin Abilities
+
+[ This part of the tutorial has not been written yet. Coming soon! ]
+
 # Appendix: Advanced Concepts
 
 Here are some concepts you likely won't need as a beginner, but may want to know about eventually.
 This is listed as an appendix rather than the main tutorial, to emphasize that it's totally fine
 to stop reading here and go build things!
+
+## Custom Abilities
+
+Abilities were primarily introduced to Roc to facilitate these use cases:
+
+* Custom collections, for example a [hash map](https://en.wikipedia.org/wiki/Hash_table)
+* Custom numeric types, for example to represent [complex numbers](https://en.wikipedia.org/wiki/Complex_number)
+* `Bool.isEq` reporting a type mismatch when given a function, since structural function equality is provably undecidable due to the [halting problem](https://en.wikipedia.org/wiki/Halting_problem).
+
+These use cases led to the builtin abilities like `Equating`, `Hashing`, and `Calculating`.
+
+To understand when Custom Abilities make sense, let's consider two possible designs for a [`Set`](https://en.wikipedia.org/wiki/Set_(abstract_data_type)) type implemented as a hash set. One design uses the `Hashing`
+ability, and the other design does not.
+
+Here are two designs for `Set.single` (which makes a new `Set` consisting only of the given element), with one
+using the `Hashing` ability, and the other using no abilities:
+
+```coffee
+single : elem -> Set elem | elem supports Hashing
+```
+
+```coffee
+single : elem, (elem -> Hash) -> Set elem
+```
+
+The first example only accepts elements that support the `Hashing` ability. The second example supports
+any type of element, but it also requires a function which turns an element into a `Hash` value.
+It would call that function any time it needed to hash an element.
+
+Suppose we decided to use the second design, and not use an ability. Here are two possible designs for
+a `Set.add` function, which adds an element to an existing `Set`, along with `Set.empty`, which provides
+an empty `Set`:
+
+```coffee
+empty : Set *
+
+add : Set elem, elem, (elem -> Hash) -> Set elem
+```
+
+```coffee
+empty : (elem -> Hash) -> Set elem
+
+add : Set elem, elem -> Set elem
+```
+
+The first design has `Set.add` asking for an `elem -> Hash` function. A downside of this design is that it becomes
+possible to pass a different hashing function to different `add` calls. Doing so would almost certainly cause nasty
+bugs, but to be fair, it doesn't sound like a mistake people would make often in practce.
+
+The second design does not have `add` asking for an `elem -> Hash` function, but it does have `empty` asking
+for one. In this design, the `elem -> Hash` function would be stored inside the `Set` itself, and used consistently
+on every call to `add`. This eliminates the potential source of bugs where you pass different calls to `add`
+different hashing functions.
+
+However, there are drawbacks to the second design. One is performance; it would not only need to store the hashing
+function, which both takes up more memory and hinders the powerful performance optimization of function inlining.
+Another downside is that now every `Set` contains a function, which means they can no longer be used with
+`Bool.isEq`. This in turn makes them a lot less useful in tests.
+
+The `Hashing` ability has none of these drawbacks.
+* Each `elem` type can have only one `Hashing` function specified, so the "calling `add` with different hash functions" bug cannot happen.
+* The hash function is not stored in the `Set` itself, meaning there is no performance drawback and `Set`s can still be used with `Bool.isEq`.
+
+This example illustrates two situations when using a Custom Ability could be a good idea:
+* When you would otherwise consider storing a function involving a type variable (such as `elem -> Hash`) inside a data structure
+* When you would otherwise consider passing a function involving a type variable (again, such as `elem -> Hash`) to multiple other functions, and it's critical that they all be passed the same function.
+
+
 
 ## Open Records and Closed Records
 
