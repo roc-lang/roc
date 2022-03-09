@@ -39,7 +39,7 @@ const QUAD_VERTS: [Vertex; 4] = [
     },
 ];
 
-pub const MAX_QUADS: usize = 100_000;
+pub const MAX_QUADS: usize = 1_000;
 
 pub fn create_rect_buffers(
     gpu_device: &wgpu::Device,
