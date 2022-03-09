@@ -1380,11 +1380,6 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
     env.builder
         .build_return(Some(&env.context.bool_type().const_all_ones()));
 
-    let return_false = ctx.append_basic_block(parent, "return_false");
-    env.builder.position_at_end(return_false);
-    env.builder
-        .build_return(Some(&env.context.bool_type().const_zero()));
-
     let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
 
