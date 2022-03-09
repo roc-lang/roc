@@ -1225,7 +1225,11 @@ test "RocStr.joinWith: result is big" {
     var roc_result = RocStr.init(result_ptr, result_len);
 
     var elements: [3]RocStr = .{ roc_elem, roc_elem, roc_elem };
-    const list = RocListStr{ .list_length = 3, .list_elements = @ptrCast([*]RocStr, &elements) };
+    const list = RocListStr{
+        .list_length = 3,
+        .list_capacity = 3,
+        .list_elements = @ptrCast([*]RocStr, &elements),
+    };
 
     defer {
         roc_sep.deinit();
@@ -1406,7 +1410,7 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8(RocList{ .bytes = bytes, .length = length }, .Immutable);
+    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity = length }, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {
