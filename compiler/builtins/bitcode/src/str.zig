@@ -75,7 +75,7 @@ pub const RocStr = extern struct {
         } else {
             var string = RocStr.empty();
 
-            string.asSlice()[@sizeOf(RocStr) - 1] = @intCast(u8, number_of_chars) | 0b1000_0000;
+            string.asU8ptr()[@sizeOf(RocStr) - 1] = @intCast(u8, number_of_chars) | 0b1000_0000;
 
             return string;
         }
@@ -1822,13 +1822,13 @@ test "strTrim: blank" {
 }
 
 test "strTrim: large to large" {
-    const original_bytes = " hello giant world ";
+    const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = "hello giant world";
+    const expected_bytes = "hello even more giant world";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1893,13 +1893,13 @@ test "strTrimLeft: blank" {
 }
 
 test "strTrimLeft: large to large" {
-    const original_bytes = " hello giant world ";
+    const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = "hello giant world ";
+    const expected_bytes = "hello even more giant world ";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1964,13 +1964,13 @@ test "strTrimRight: blank" {
 }
 
 test "strTrimRight: large to large" {
-    const original_bytes = " hello giant world ";
+    const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = " hello giant world";
+    const expected_bytes = " hello even more giant world";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
