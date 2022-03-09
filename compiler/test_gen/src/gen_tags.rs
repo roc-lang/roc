@@ -1,8 +1,8 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to;
+#[cfg(feature = "gen-dev")]
+use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
@@ -29,7 +29,7 @@ fn width_and_alignment_u8_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_nothing_ir() {
     assert_evals_to!(
         indoc!(
@@ -49,7 +49,7 @@ fn applied_tag_nothing_ir() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_nothing() {
     assert_evals_to!(
         indoc!(
@@ -69,7 +69,7 @@ fn applied_tag_nothing() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_just() {
     assert_evals_to!(
         indoc!(
@@ -88,7 +88,7 @@ fn applied_tag_just() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_just_ir() {
     assert_evals_to!(
         indoc!(
@@ -314,7 +314,7 @@ fn gen_if_float() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_nothing() {
     assert_evals_to!(
         indoc!(
@@ -333,7 +333,7 @@ fn when_on_nothing() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_just() {
     assert_evals_to!(
         indoc!(
@@ -352,7 +352,7 @@ fn when_on_just() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_result() {
     assert_evals_to!(
         indoc!(
@@ -371,7 +371,7 @@ fn when_on_result() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_these() {
     assert_evals_to!(
         indoc!(
@@ -393,7 +393,7 @@ fn when_on_these() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn match_on_two_values() {
     // this will produce a Chain internally
     assert_evals_to!(
@@ -410,7 +410,7 @@ fn match_on_two_values() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pair_with_underscore() {
     assert_evals_to!(
         indoc!(
@@ -427,7 +427,7 @@ fn pair_with_underscore() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn result_with_underscore() {
     // This test revealed an issue with hashing Test values
     assert_evals_to!(
@@ -1177,10 +1177,7 @@ fn applied_tag_function() {
             x
             "#
         ),
-        RocList::from_slice(&[
-            RocStr::from_slice("a".as_bytes()),
-            RocStr::from_slice("b".as_bytes())
-        ]),
+        RocList::from_slice(&[RocStr::from("a"), RocStr::from("b")]),
         RocList<RocStr>
     );
 }
@@ -1197,10 +1194,7 @@ fn applied_tag_function_result() {
             List.keepOks x (\y -> y)
             "#
         ),
-        RocList::from_slice(&[
-            (RocStr::from_slice("a".as_bytes())),
-            (RocStr::from_slice("b".as_bytes()))
-        ]),
+        RocList::from_slice(&[(RocStr::from("a")), (RocStr::from("b"))]),
         RocList<RocStr>
     );
 }
@@ -1228,7 +1222,7 @@ fn applied_tag_function_linked_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = "")]
+#[should_panic(expected = "")] // TODO: this only panics because it returns 0 instead of 1!
 fn tag_must_be_its_own_type() {
     assert_evals_to!(
         indoc!(
@@ -1297,7 +1291,7 @@ fn monomorphized_applied_tag() {
                 f a
             "#
         ),
-        RocStr::from_slice(b"abc"),
+        RocStr::from("abc"),
         RocStr
     )
 }

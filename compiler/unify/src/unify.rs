@@ -6,11 +6,11 @@ use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
     RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
-use roc_types::types::{ErrorType, Mismatch, RecordField};
+use roc_types::types::{AliasKind, ErrorType, Mismatch, RecordField};
 
 macro_rules! mismatch {
     () => {{
-        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_some() {
+        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
             println!(
                 "Mismatch in {} Line {} Column {}",
                 file!(),
@@ -205,7 +205,9 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
         }
-        Alias(symbol, args, real_var) => unify_alias(subs, pool, &ctx, *symbol, *args, *real_var),
+        Alias(symbol, args, real_var, kind) => {
+            unify_alias(subs, pool, &ctx, *symbol, *args, *real_var, *kind)
+        }
         &RangedNumber(typ, range_vars) => unify_ranged_number(subs, pool, &ctx, typ, range_vars),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
@@ -294,17 +296,26 @@ fn unify_alias(
     symbol: Symbol,
     args: AliasVariables,
     real_var: Variable,
+    kind: AliasKind,
 ) -> Outcome {
     let other_content = &ctx.second_desc.content;
+
+    let either_is_opaque =
+        kind == AliasKind::Opaque || matches!(other_content, Alias(_, _, _, AliasKind::Opaque));
 
     match other_content {
         FlexVar(_) => {
             // Alias wins
-            merge(subs, ctx, Alias(symbol, args, real_var))
+            merge(subs, ctx, Alias(symbol, args, real_var, kind))
         }
-        RecursionVar { structure, .. } => unify_pool(subs, pool, real_var, *structure, ctx.mode),
+        RecursionVar { structure, .. } if !either_is_opaque => {
+            unify_pool(subs, pool, real_var, *structure, ctx.mode)
+        }
         RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
-        Alias(other_symbol, other_args, other_real_var) => {
+        Alias(other_symbol, other_args, other_real_var, _)
+            // Opaques types are only equal if the opaque symbols are equal!
+            if !either_is_opaque || symbol == *other_symbol =>
+        {
             if symbol == *other_symbol {
                 if args.len() == other_args.len() {
                     let mut problems = Vec::new();
@@ -320,7 +331,7 @@ fn unify_alias(
                     }
 
                     if problems.is_empty() {
-                        problems.extend(merge(subs, ctx, other_content.clone()));
+                        problems.extend(merge(subs, ctx, *other_content));
                     }
 
                     // if problems.is_empty() { problems.extend(unify_pool(subs, pool, real_var, *other_real_var)); }
@@ -334,8 +345,8 @@ fn unify_alias(
                 unify_pool(subs, pool, real_var, *other_real_var, ctx.mode)
             }
         }
-        Structure(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
-        RangedNumber(other_real_var, other_range_vars) => {
+        Structure(_) if !either_is_opaque => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        RangedNumber(other_real_var, other_range_vars) if !either_is_opaque => {
             let outcome = unify_pool(subs, pool, real_var, *other_real_var, ctx.mode);
             if outcome.is_empty() {
                 check_valid_range(subs, pool, real_var, *other_range_vars, ctx.mode)
@@ -344,6 +355,11 @@ fn unify_alias(
             }
         }
         Error => merge(subs, ctx, Error),
+        other => {
+            // The type on the left is an alias, but the one on the right is not!
+            debug_assert!(either_is_opaque);
+            mismatch!("Cannot unify opaque {:?} with {:?}", symbol, other)
+        }
     }
 }
 
@@ -358,7 +374,7 @@ fn unify_structure(
     match other {
         FlexVar(_) => {
             // If the other is flex, Structure wins!
-            let outcome = merge(subs, ctx, Structure(flat_type.clone()));
+            let outcome = merge(subs, ctx, Structure(*flat_type));
 
             // And if we see a flex variable on the right hand side of a presence
             // constraint, we know we need to open up the structure we're trying to unify with.
@@ -409,11 +425,20 @@ fn unify_structure(
             // Unify the two flat types
             unify_flat_type(subs, pool, ctx, flat_type, other_flat_type)
         }
-        Alias(_, _, real_var) => {
-            // NB: not treating this as a presence constraint seems pivotal! I
-            // can't quite figure out why, but it doesn't seem to impact other types.
-            unify_pool(subs, pool, ctx.first, *real_var, ctx.mode.as_eq())
-        }
+        Alias(sym, _, real_var, kind) => match kind {
+            AliasKind::Structural => {
+                // NB: not treating this as a presence constraint seems pivotal! I
+                // can't quite figure out why, but it doesn't seem to impact other types.
+                unify_pool(subs, pool, ctx.first, *real_var, ctx.mode.as_eq())
+            }
+            AliasKind::Opaque => {
+                mismatch!(
+                    "Cannot unify structure {:?} with opaque {:?}",
+                    &flat_type,
+                    sym
+                )
+            }
+        },
         RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
             if outcome.is_empty() {
@@ -1122,17 +1147,6 @@ fn unify_shared_tags_merge_new(
     merge(subs, ctx, Structure(flat_type))
 }
 
-/// Is the given variable a structure. Does not consider Attr itself a structure, and instead looks
-/// into it.
-#[allow(dead_code)]
-fn is_structure(var: Variable, subs: &mut Subs) -> bool {
-    match subs.get_content_without_compacting(var) {
-        Content::Alias(_, _, actual) => is_structure(*actual, subs),
-        Content::Structure(_) => true,
-        _ => false,
-    }
-}
-
 #[inline(always)]
 fn unify_flat_type(
     subs: &mut Subs,
@@ -1144,7 +1158,7 @@ fn unify_flat_type(
     use roc_types::subs::FlatType::*;
 
     match (left, right) {
-        (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(left.clone())),
+        (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(*left)),
 
         (Record(fields, ext), EmptyRecord) if fields.has_only_optional_fields(subs) => {
             unify_pool(subs, pool, *ext, ctx.second, ctx.mode)
@@ -1158,7 +1172,7 @@ fn unify_flat_type(
             unify_record(subs, pool, ctx, *fields1, *ext1, *fields2, *ext2)
         }
 
-        (EmptyTagUnion, EmptyTagUnion) => merge(subs, ctx, Structure(left.clone())),
+        (EmptyTagUnion, EmptyTagUnion) => merge(subs, ctx, Structure(*left)),
 
         (TagUnion(tags, ext), EmptyTagUnion) if tags.is_empty() => {
             unify_pool(subs, pool, *ext, ctx.second, ctx.mode)
@@ -1263,7 +1277,7 @@ fn unify_flat_type(
             if tag_name_1_ref == tag_name_2_ref {
                 let problems = unify_pool(subs, pool, *ext1, *ext2, ctx.mode);
                 if problems.is_empty() {
-                    let content = subs.get_content_without_compacting(ctx.second).clone();
+                    let content = *subs.get_content_without_compacting(ctx.second);
                     merge(subs, ctx, content)
                 } else {
                     problems
@@ -1337,20 +1351,25 @@ fn unify_zip_slices(
 }
 
 #[inline(always)]
-fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content) -> Outcome {
+fn unify_rigid(
+    subs: &mut Subs,
+    ctx: &Context,
+    name: &SubsIndex<Lowercase>,
+    other: &Content,
+) -> Outcome {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
-            merge(subs, ctx, RigidVar(name.clone()))
+            merge(subs, ctx, RigidVar(*name))
         }
-        RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _) | RangedNumber(..) => {
+        RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _, _) | RangedNumber(..) => {
             if !ctx.mode.contains(Mode::RIGID_AS_FLEX) {
                 // Type mismatch! Rigid can only unify with flex, even if the
                 // rigid names are the same.
                 mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
             } else {
                 // We are treating rigid vars as flex vars; admit this
-                merge(subs, ctx, other.clone())
+                merge(subs, ctx, *other)
             }
         }
         Error => {
@@ -1364,25 +1383,25 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
 fn unify_flex(
     subs: &mut Subs,
     ctx: &Context,
-    opt_name: &Option<Lowercase>,
+    opt_name: &Option<SubsIndex<Lowercase>>,
     other: &Content,
 ) -> Outcome {
     match other {
         FlexVar(None) => {
             // If both are flex, and only left has a name, keep the name around.
-            merge(subs, ctx, FlexVar(opt_name.clone()))
+            merge(subs, ctx, FlexVar(*opt_name))
         }
 
         FlexVar(Some(_))
         | RigidVar(_)
         | RecursionVar { .. }
         | Structure(_)
-        | Alias(_, _, _)
+        | Alias(_, _, _, _)
         | RangedNumber(..) => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)
-            merge(subs, ctx, other.clone())
+            merge(subs, ctx, *other)
         }
 
         Error => merge(subs, ctx, Error),
@@ -1394,7 +1413,7 @@ fn unify_recursion(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    opt_name: &Option<Lowercase>,
+    opt_name: &Option<SubsIndex<Lowercase>>,
     structure: Variable,
     other: &Content,
 ) -> Outcome {
@@ -1405,7 +1424,7 @@ fn unify_recursion(
         } => {
             // NOTE: structure and other_structure may not be unified yet, but will be
             // we should not do that here, it would create an infinite loop!
-            let name = opt_name.clone().or_else(|| other_opt_name.clone());
+            let name = (*opt_name).or_else(|| *other_opt_name);
             merge(
                 subs,
                 ctx,
@@ -1427,11 +1446,19 @@ fn unify_recursion(
             ctx,
             RecursionVar {
                 structure,
-                opt_name: opt_name.clone(),
+                opt_name: *opt_name,
             },
         ),
 
-        Alias(_, _, actual) => {
+        Alias(opaque, _, _, AliasKind::Opaque) => {
+            mismatch!(
+                "RecursionVar {:?} cannot be equal to opaque {:?}",
+                ctx.first,
+                opaque
+            )
+        }
+
+        Alias(_, _, actual, _) => {
             // look at the type the alias stands for
 
             unify_pool(subs, pool, ctx.first, *actual, ctx.mode)

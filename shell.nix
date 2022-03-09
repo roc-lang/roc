@@ -66,10 +66,7 @@ let
     # tools for development environment
     less
   ]) ++ (with unstable-pkgs; [
-    rustc
-    cargo
-    clippy
-    rustfmt
+    rustup
   ]);
 
 in pkgs.mkShell {

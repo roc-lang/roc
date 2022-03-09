@@ -3,7 +3,7 @@ use crate::{
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
-use roc_parse::ast::{AliasHeader, AssignedField, Collection, Expr, Tag, TypeAnnotation};
+use roc_parse::ast::{AssignedField, Collection, Expr, Tag, TypeAnnotation, TypeHeader};
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
@@ -35,7 +35,7 @@ pub enum Parens {
 /// we also want to show newlines. By default the formatter
 /// takes care of inserting newlines, but sometimes the user's
 /// newlines are taken into account.
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Newlines {
     No,
     Yes,
@@ -276,7 +276,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 }
             }
 
-            As(lhs, _spaces, AliasHeader { name, vars }) => {
+            As(lhs, _spaces, TypeHeader { name, vars }) => {
                 // TODO use _spaces?
                 lhs.value
                     .format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
@@ -293,6 +293,9 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
             SpaceBefore(ann, spaces) => {
                 buf.newline();
+
+                buf.indent(indent);
+
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 ann.format_with_options(buf, parens, Newlines::No, indent)
             }

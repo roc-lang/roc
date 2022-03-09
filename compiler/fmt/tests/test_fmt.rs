@@ -2582,6 +2582,30 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn apply_lambda() {
+        expr_formats_same(indoc!(
+            r#"
+            List.map
+                xs
+                (\i ->
+                    i + length)
+            "#
+        ));
+    }
+
+    #[test]
+    fn pipline_apply_lambda() {
+        expr_formats_same(indoc!(
+            r#"
+            shout
+                |> List.map
+                    xs
+                    (\i -> i)
+            "#
+        ));
+    }
+
     // MODULES
 
     #[test]
@@ -2985,6 +3009,18 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_higher_order_function() {
+        expr_formats_same(indoc!(
+            r#"
+            foo :
+                (Str -> Bool) -> Bool
+
+            42
+            "#
+        ));
+    }
+
+    #[test]
     /// Test that everything under examples/ is formatted correctly
     /// If this test fails on your diff, it probably means you need to re-format the examples.
     /// Try this:
@@ -3002,7 +3038,7 @@ mod test_fmt {
         for entry in walkdir::WalkDir::new(&root) {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.extension() == Some(&std::ffi::OsStr::new("roc")) {
+            if path.extension() == Some(std::ffi::OsStr::new("roc")) {
                 count += 1;
                 let src = std::fs::read_to_string(path).unwrap();
                 println!("Now trying to format {}", path.display());

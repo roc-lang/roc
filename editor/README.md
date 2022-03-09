@@ -1,4 +1,7 @@
 
+
+## :construction: Work In Progress :construction:
+
 The editor is a work in progress, only a limited subset of Roc expressions are currently supported.
 
 Unlike most editors, we use projectional or structural editing to edit the [Abstract Syntax Tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree) directly. This will allow for cool features like excellent auto-complete, refactoring and never needing to format your code.
@@ -43,7 +46,7 @@ From roc to render:
 - `ed_model` also contains an `EdModule`, which holds the parsed abstract syntax tree (AST).
 - In the `init_model` function:
     + The AST is converted into a tree of `MarkupNode`. The different types of `MarkupNode` are similar to the elements/nodes in HTML. A line of roc code is represented as a nested `MarkupNode` containing mostly text `MarkupNode`s. The line `foo = "bar"` is represented as
-    three text `MarkupNode` representing `foo`, ` = ` and `bar`. Multiple lines of roc code are represented as nested `MarkupNode` that contain other nested `MarkupNode`.
+    three text `MarkupNode`; representing `foo`, ` = ` and `bar`. Multiple lines of roc code are represented as nested `MarkupNode` that contain other nested `MarkupNode`.
     + `CodeLines` holds a `Vec` of `String`, each line of code is a `String`. When saving the file, the content of `CodeLines` is written to disk.
     + `GridNodeMap` maps every position of a char of roc code to a `MarkNodeId`, for easy interaction with the caret.
 - Back in `editor/src/editor/main.rs` we convert the `EdModel` to `RenderedWgpu` by calling `model_to_wgpu`.
@@ -67,6 +70,7 @@ Important folders/files outside the editor folder:
 - ast/src/lang/core/expr
 - ast/src/lang/core/ast.rs
 - ast/src/lang/env.rs
+
 
 ## Contributing
 

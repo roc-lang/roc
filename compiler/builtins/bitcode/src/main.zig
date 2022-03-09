@@ -49,8 +49,8 @@ comptime {
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listSublist, "sublist");
     exportListFn(list.listDropAt, "drop_at");
-    exportListFn(list.listSet, "set");
-    exportListFn(list.listSetInPlace, "set_in_place");
+    exportListFn(list.listReplace, "replace");
+    exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listAny, "any");
     exportListFn(list.listAll, "all");
@@ -96,6 +96,14 @@ comptime {
     inline for (INTEGERS) |T| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
+    }
+
+    inline for (INTEGERS) |FROM| {
+        inline for (INTEGERS) |TO| {
+            // We're exporting more than we need here, but that's okay.
+            num.exportToIntCheckingMax(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max.");
+            num.exportToIntCheckingMaxAndMin(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max_and_min.");
+        }
     }
 
     inline for (FLOATS) |T| {

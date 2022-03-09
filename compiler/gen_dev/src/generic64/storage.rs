@@ -1,6 +1,7 @@
 use crate::{
     generic64::{Assembler, CallConv, RegTrait},
-    single_register_floats, single_register_integers, single_register_layouts, Env,
+    sign_extended_int_builtins, single_register_floats, single_register_int_builtins,
+    single_register_integers, single_register_layouts, Env,
 };
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -9,7 +10,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::{
     ir::{JoinPointId, Param},
-    layout::{Builtin, Layout},
+    layout::{Builtin, Layout, TagIdIntType, UnionLayout},
 };
 use roc_target::TargetInfo;
 use std::cmp::max;
@@ -48,6 +49,9 @@ enum StackStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
         base_offset: i32,
         // Size on the stack in bytes.
         size: u32,
+        // Whether or not the data is need to be sign extended on load.
+        // If not, it must be zero extended.
+        sign_extend: bool,
     },
     /// Complex data (lists, unions, structs, str) stored on the stack.
     /// Note, this is also used for referencing a value within a struct/union.
@@ -72,6 +76,7 @@ enum Storage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     NoData,
 }
 
+#[derive(Clone)]
 pub struct StorageManager<
     'a,
     GeneralReg: RegTrait,
@@ -175,6 +180,10 @@ impl<
         self.free_stack_chunks.clear();
         self.stack_size = 0;
         self.fn_call_stack_size = 0;
+    }
+
+    pub fn target_info(&self) -> TargetInfo {
+        self.target_info
     }
 
     pub fn stack_size(&self) -> u32 {
@@ -323,19 +332,21 @@ impl<
                 );
                 reg
             }
-            Stack(ReferencedPrimitive { base_offset, size })
-                if base_offset % 8 == 0 && size == 8 =>
-            {
-                // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
+            Stack(ReferencedPrimitive {
+                base_offset,
+                size,
+                sign_extend,
+            }) => {
                 let reg = self.get_general_reg(buf);
-                ASM::mov_reg64_base32(buf, reg, base_offset);
+                if sign_extend {
+                    ASM::movsx_reg64_base32(buf, reg, base_offset, size as u8);
+                } else {
+                    ASM::movzx_reg64_base32(buf, reg, base_offset, size as u8);
+                }
                 self.general_used_regs.push((reg, *sym));
                 self.symbol_storage_map.insert(*sym, Reg(General(reg)));
                 self.free_reference(sym);
                 reg
-            }
-            Stack(ReferencedPrimitive { .. }) => {
-                todo!("loading referenced primitives")
             }
             Stack(Complex { .. }) => {
                 internal_error!("Cannot load large values into general registers: {}", sym)
@@ -385,9 +396,9 @@ impl<
                 );
                 reg
             }
-            Stack(ReferencedPrimitive { base_offset, size })
-                if base_offset % 8 == 0 && size == 8 =>
-            {
+            Stack(ReferencedPrimitive {
+                base_offset, size, ..
+            }) if base_offset % 8 == 0 && size == 8 => {
                 // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
                 let reg = self.get_float_reg(buf);
                 ASM::mov_freg64_base32(buf, reg, base_offset);
@@ -444,9 +455,9 @@ impl<
                 debug_assert_eq!(base_offset % 8, 0);
                 ASM::mov_reg64_base32(buf, reg, *base_offset);
             }
-            Stack(ReferencedPrimitive { base_offset, size })
-                if base_offset % 8 == 0 && *size == 8 =>
-            {
+            Stack(ReferencedPrimitive {
+                base_offset, size, ..
+            }) if base_offset % 8 == 0 && *size == 8 => {
                 // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
                 ASM::mov_reg64_base32(buf, reg, *base_offset);
             }
@@ -493,9 +504,9 @@ impl<
                 debug_assert_eq!(base_offset % 8, 0);
                 ASM::mov_freg64_base32(buf, reg, *base_offset);
             }
-            Stack(ReferencedPrimitive { base_offset, size })
-                if base_offset % 8 == 0 && *size == 8 =>
-            {
+            Stack(ReferencedPrimitive {
+                base_offset, size, ..
+            }) if base_offset % 8 == 0 && *size == 8 => {
                 // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
                 ASM::mov_freg64_base32(buf, reg, *base_offset);
             }
@@ -522,11 +533,7 @@ impl<
     ) {
         debug_assert!(index < field_layouts.len() as u64);
         // This must be removed and reinserted for ownership and mutability reasons.
-        let owned_data = if let Some(owned_data) = self.allocation_map.remove(structure) {
-            owned_data
-        } else {
-            internal_error!("Unknown symbol: {}", structure);
-        };
+        let owned_data = self.remove_allocation_for_sym(structure);
         self.allocation_map
             .insert(*structure, Rc::clone(&owned_data));
         match self.get_storage_for_sym(structure) {
@@ -538,15 +545,19 @@ impl<
                     data_offset += field_size as i32;
                 }
                 debug_assert!(data_offset < base_offset + size as i32);
-                self.allocation_map.insert(*sym, owned_data);
                 let layout = field_layouts[index as usize];
                 let size = layout.stack_size(self.target_info);
+                self.allocation_map.insert(*sym, owned_data);
                 self.symbol_storage_map.insert(
                     *sym,
                     Stack(if is_primitive(&layout) {
                         ReferencedPrimitive {
                             base_offset: data_offset,
                             size,
+                            sign_extend: matches!(
+                                layout,
+                                Layout::Builtin(sign_extended_int_builtins!())
+                            ),
                         }
                     } else {
                         Complex {
@@ -565,6 +576,57 @@ impl<
         }
     }
 
+    pub fn load_union_tag_id(
+        &mut self,
+        _buf: &mut Vec<'a, u8>,
+        sym: &Symbol,
+        structure: &Symbol,
+        union_layout: &UnionLayout<'a>,
+    ) {
+        // This must be removed and reinserted for ownership and mutability reasons.
+        let owned_data = self.remove_allocation_for_sym(structure);
+        self.allocation_map
+            .insert(*structure, Rc::clone(&owned_data));
+        match union_layout {
+            UnionLayout::NonRecursive(_) => {
+                let (union_offset, _) = self.stack_offset_and_size(structure);
+
+                let (data_size, data_alignment) =
+                    union_layout.data_size_and_alignment(self.target_info);
+                let id_offset = data_size - data_alignment;
+                let id_builtin = union_layout.tag_id_builtin();
+
+                let size = id_builtin.stack_size(self.target_info);
+                self.allocation_map.insert(*sym, owned_data);
+                self.symbol_storage_map.insert(
+                    *sym,
+                    Stack(ReferencedPrimitive {
+                        base_offset: union_offset + id_offset as i32,
+                        size,
+                        sign_extend: matches!(id_builtin, sign_extended_int_builtins!()),
+                    }),
+                );
+            }
+            x => todo!("getting tag id of union with layout ({:?})", x),
+        }
+    }
+
+    // Loads the dst to be the later 64 bits of a list (its length).
+    pub fn list_len(&mut self, _buf: &mut Vec<'a, u8>, dst: &Symbol, list: &Symbol) {
+        let owned_data = self.remove_allocation_for_sym(list);
+        self.allocation_map.insert(*list, Rc::clone(&owned_data));
+        self.allocation_map.insert(*dst, owned_data);
+        let (list_offset, _) = self.stack_offset_and_size(list);
+        self.symbol_storage_map.insert(
+            *dst,
+            Stack(ReferencedPrimitive {
+                base_offset: list_offset + 8,
+                size: 8,
+                sign_extend: false,
+            }),
+        );
+    }
+
     /// Creates a struct on the stack, moving the data in fields into the struct.
     pub fn create_struct(
         &mut self,
@@ -580,7 +642,7 @@ impl<
         }
         let base_offset = self.claim_stack_area(sym, struct_size);
 
-        if let Layout::Struct(field_layouts) = layout {
+        if let Layout::Struct { field_layouts, .. } = layout {
             let mut current_offset = base_offset;
             for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
                 self.copy_symbol_to_stack_offset(buf, current_offset, field, field_layout);
@@ -594,11 +656,66 @@ impl<
         }
     }
 
+    /// Creates a union on the stack, moving the data in fields into the union and tagging it.
+    pub fn create_union(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        sym: &Symbol,
+        union_layout: &UnionLayout<'a>,
+        fields: &'a [Symbol],
+        tag_id: TagIdIntType,
+    ) {
+        match union_layout {
+            UnionLayout::NonRecursive(field_layouts) => {
+                let (data_size, data_alignment) =
+                    union_layout.data_size_and_alignment(self.target_info);
+                let id_offset = data_size - data_alignment;
+                if data_alignment < 8 || data_alignment % 8 != 0 {
+                    todo!("small/unaligned tagging");
+                }
+                let base_offset = self.claim_stack_area(sym, data_size);
+                let mut current_offset = base_offset;
+                for (field, field_layout) in
+                    fields.iter().zip(field_layouts[tag_id as usize].iter())
+                {
+                    self.copy_symbol_to_stack_offset(buf, current_offset, field, field_layout);
+                    let field_size = field_layout.stack_size(self.target_info);
+                    current_offset += field_size as i32;
+                }
+                self.with_tmp_general_reg(buf, |_symbol_storage, buf, reg| {
+                    ASM::mov_reg64_imm64(buf, reg, tag_id as i64);
+                    debug_assert!((base_offset + id_offset as i32) % 8 == 0);
+                    ASM::mov_base32_reg64(buf, base_offset + id_offset as i32, reg);
+                });
+            }
+            x => todo!("creating unions with layout: {:?}", x),
+        }
+    }
+
+    /// Copies a complex symbol on the stack to the arg pointer.
+    pub fn copy_symbol_to_arg_pointer(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        sym: &Symbol,
+        _layout: &Layout<'a>,
+    ) {
+        let ret_reg = self.load_to_general_reg(buf, &Symbol::RET_POINTER);
+        let (base_offset, size) = self.stack_offset_and_size(sym);
+        debug_assert!(base_offset % 8 == 0);
+        debug_assert!(size % 8 == 0);
+        self.with_tmp_general_reg(buf, |_storage_manager, buf, tmp_reg| {
+            for i in (0..size as i32).step_by(8) {
+                ASM::mov_reg64_base32(buf, tmp_reg, base_offset + i);
+                ASM::mov_mem64_offset32_reg64(buf, ret_reg, i, tmp_reg);
+            }
+        });
+    }
+
     /// Copies a symbol to the specified stack offset. This is used for things like filling structs.
     /// The offset is not guarenteed to be perfectly aligned, it follows Roc's alignment plan.
     /// This means that, for example 2 I32s might be back to back on the stack.
     /// Always interact with the stack using aligned 64bit movement.
-    fn copy_symbol_to_stack_offset(
+    pub fn copy_symbol_to_stack_offset(
         &mut self,
         buf: &mut Vec<'a, u8>,
         to_offset: i32,
@@ -616,32 +733,33 @@ impl<
                 let reg = self.load_to_float_reg(buf, sym);
                 ASM::mov_base32_freg64(buf, to_offset, reg);
             }
-            // Layout::Struct(_) if layout.safe_to_memcpy() => {
-            //     // self.storage_manager.with_tmp_float_reg(&mut self.buf, |buf, storage, )
-            //     // if let Some(SymbolStorage::Base {
-            //     //     offset: from_offset,
-            //     //     size,
-            //     //     ..
-            //     // }) = self.symbol_storage_map.get(sym)
-            //     // {
-            //     //     debug_assert_eq!(
-            //     //         *size,
-            //     //         layout.stack_size(self.target_info),
-            //     //         "expected struct to have same size as data being stored in it"
-            //     //     );
-            //     //     for i in 0..layout.stack_size(self.target_info) as i32 {
-            //     //         ASM::mov_reg64_base32(&mut self.buf, tmp_reg, from_offset + i);
-            //     //         ASM::mov_base32_reg64(&mut self.buf, to_offset + i, tmp_reg);
-            //     //     }
-            //     todo!()
-            //     } else {
-            //         internal_error!("unknown struct: {:?}", sym);
-            //     }
-            // }
+            Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
+                let (from_offset, _) = self.stack_offset_and_size(sym);
+                self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
+                    ASM::mov_reg64_base32(buf, reg, from_offset);
+                    ASM::mov_base32_reg64(buf, to_offset, reg);
+                    ASM::mov_reg64_base32(buf, reg, from_offset + 8);
+                    ASM::mov_base32_reg64(buf, to_offset + 8, reg);
+                });
+            }
+            _ if layout.stack_size(self.target_info) == 0 => {}
+            _ if layout.safe_to_memcpy() && layout.stack_size(self.target_info) > 8 => {
+                let (from_offset, size) = self.stack_offset_and_size(sym);
+                debug_assert!(from_offset % 8 == 0);
+                debug_assert!(size % 8 == 0);
+                debug_assert_eq!(size, layout.stack_size(self.target_info));
+                self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
+                    for i in (0..size as i32).step_by(8) {
+                        ASM::mov_reg64_base32(buf, reg, from_offset + i);
+                        ASM::mov_base32_reg64(buf, to_offset + i, reg);
+                    }
+                });
+            }
             x => todo!("copying data to the stack with layout, {:?}", x),
         }
     }
 
+    #[allow(dead_code)]
     /// Ensures that a register is free. If it is not free, data will be moved to make it free.
     fn ensure_reg_free(
         &mut self,
@@ -687,6 +805,58 @@ impl<
                     }
                 }
             }
+        }
+    }
+
+    pub fn ensure_symbol_on_stack(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) {
+        match self.remove_storage_for_sym(sym) {
+            Reg(reg_storage) => {
+                let base_offset = self.claim_stack_size(8);
+                match reg_storage {
+                    General(reg) => ASM::mov_base32_reg64(buf, base_offset, reg),
+                    Float(reg) => ASM::mov_base32_freg64(buf, base_offset, reg),
+                }
+                self.symbol_storage_map.insert(
+                    *sym,
+                    Stack(Primitive {
+                        base_offset,
+                        reg: Some(reg_storage),
+                    }),
+                );
+            }
+            x => {
+                self.symbol_storage_map.insert(*sym, x);
+            }
+        }
+    }
+
+    /// Frees all symbols to the stack setuping up a clean slate.
+    pub fn free_all_to_stack(&mut self, buf: &mut Vec<'a, u8>) {
+        let mut free_list = bumpalo::vec![in self.env.arena];
+        for (sym, storage) in self.symbol_storage_map.iter() {
+            match storage {
+                Reg(reg_storage)
+                | Stack(Primitive {
+                    reg: Some(reg_storage),
+                    ..
+                }) => {
+                    free_list.push((*sym, *reg_storage));
+                }
+                _ => {}
+            }
+        }
+        for (sym, reg_storage) in free_list {
+            match reg_storage {
+                General(reg) => {
+                    self.general_free_regs.push(reg);
+                    self.general_used_regs.retain(|(r, _)| *r != reg);
+                }
+                Float(reg) => {
+                    self.float_free_regs.push(reg);
+                    self.float_used_regs.retain(|(r, _)| *r != reg);
+                }
+            }
+            self.free_to_stack(buf, &sym, reg_storage);
         }
     }
 
@@ -739,9 +909,12 @@ impl<
     pub fn stack_offset_and_size(&self, sym: &Symbol) -> (i32, u32) {
         match self.get_storage_for_sym(sym) {
             Stack(Primitive { base_offset, .. }) => (*base_offset, 8),
-            Stack(ReferencedPrimitive { base_offset, size } | Complex { base_offset, size }) => {
-                (*base_offset, *size)
-            }
+            Stack(
+                ReferencedPrimitive {
+                    base_offset, size, ..
+                }
+                | Complex { base_offset, size },
+            ) => (*base_offset, *size),
             storage => {
                 internal_error!(
                     "Data not on the stack for sym ({}) with storage ({:?})",
@@ -775,12 +948,33 @@ impl<
                 reg: None,
             }),
         );
+        self.allocation_map.insert(*sym, Rc::new((base_offset, 8)));
+    }
+
+    /// Specifies a complex is loaded at the specific base offset.
+    pub fn complex_stack_arg(&mut self, sym: &Symbol, base_offset: i32, size: u32) {
+        self.symbol_storage_map
+            .insert(*sym, Stack(Complex { base_offset, size }));
+        self.allocation_map
+            .insert(*sym, Rc::new((base_offset, size)));
+    }
+
+    /// Specifies a no data exists.
+    pub fn no_data_arg(&mut self, sym: &Symbol) {
+        self.symbol_storage_map.insert(*sym, NoData);
     }
 
     /// Loads the arg pointer symbol to the specified general reg.
     pub fn ret_pointer_arg(&mut self, reg: GeneralReg) {
         self.symbol_storage_map
             .insert(Symbol::RET_POINTER, Reg(General(reg)));
+        self.general_free_regs.retain(|x| *x != reg);
+        self.general_used_regs.push((reg, Symbol::RET_POINTER));
+    }
+
+    /// updates the stack size to the max of its current value and the tmp size needed.
+    pub fn update_stack_size(&mut self, tmp_size: u32) {
+        self.stack_size = max(self.stack_size, tmp_size);
     }
 
     /// updates the function call stack size to the max of its current value and the size need for this call.
@@ -794,7 +988,7 @@ impl<
     /// Later jumps to the join point can overwrite the stored locations to pass parameters.
     pub fn setup_joinpoint(
         &mut self,
-        buf: &mut Vec<'a, u8>,
+        _buf: &mut Vec<'a, u8>,
         id: &JoinPointId,
         params: &'a [Param<'a>],
     ) {
@@ -812,12 +1006,19 @@ impl<
                 todo!("joinpoints with borrowed parameters");
             }
             // Claim a location for every join point parameter to be loaded at.
+            // Put everything on the stack for simplicity.
             match layout {
-                single_register_integers!() => {
-                    self.claim_general_reg(buf, symbol);
-                }
-                single_register_floats!() => {
-                    self.claim_float_reg(buf, symbol);
+                single_register_layouts!() => {
+                    let base_offset = self.claim_stack_size(8);
+                    self.symbol_storage_map.insert(
+                        *symbol,
+                        Stack(Primitive {
+                            base_offset,
+                            reg: None,
+                        }),
+                    );
+                    self.allocation_map
+                        .insert(*symbol, Rc::new((base_offset, 8)));
                 }
                 _ => {
                     let stack_size = layout.stack_size(self.target_info);
@@ -839,7 +1040,7 @@ impl<
         &mut self,
         buf: &mut Vec<'a, u8>,
         id: &JoinPointId,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
     ) {
         // TODO: remove was use here and for current_storage to deal with borrow checker.
@@ -856,28 +1057,45 @@ impl<
                 continue;
             }
             match wanted_storage {
-                Reg(General(reg)) => {
-                    // Ensure the reg is free, if not free it.
-                    self.ensure_reg_free(buf, General(*reg));
-                    // Copy the value over to the reg.
-                    self.load_to_specified_general_reg(buf, sym, *reg)
+                Reg(_) => {
+                    internal_error!("Register storage is not allowed for jumping to joinpoint")
                 }
-                Reg(Float(reg)) => {
-                    // Ensure the reg is free, if not free it.
-                    self.ensure_reg_free(buf, Float(*reg));
-                    // Copy the value over to the reg.
-                    self.load_to_specified_float_reg(buf, sym, *reg)
-                }
-                Stack(ReferencedPrimitive { base_offset, .. } | Complex { base_offset, .. }) => {
+                Stack(Complex { base_offset, .. }) => {
                     // TODO: This might be better not to call.
                     // Maybe we want a more memcpy like method to directly get called here.
                     // That would also be capable of asserting the size.
                     // Maybe copy stack to stack or something.
                     self.copy_symbol_to_stack_offset(buf, *base_offset, sym, layout);
                 }
+                Stack(Primitive {
+                    base_offset,
+                    reg: None,
+                }) => match layout {
+                    single_register_integers!() => {
+                        let reg = self.load_to_general_reg(buf, sym);
+                        ASM::mov_base32_reg64(buf, *base_offset, reg);
+                    }
+                    single_register_floats!() => {
+                        let reg = self.load_to_float_reg(buf, sym);
+                        ASM::mov_base32_freg64(buf, *base_offset, reg);
+                    }
+                    _ => {
+                        internal_error!(
+                            "cannot load non-primitive layout ({:?}) to primitive stack location",
+                            layout
+                        );
+                    }
+                },
                 NoData => {}
-                Stack(Primitive { .. }) => {
-                    internal_error!("Primitive stack storage is not allowed for jumping")
+                Stack(Primitive { reg: Some(_), .. }) => {
+                    internal_error!(
+                        "primitives with register storage are not allowed for jumping to joinpoint"
+                    )
+                }
+                Stack(ReferencedPrimitive { .. }) => {
+                    internal_error!(
+                        "referenced primitive stack storage is not allowed for jumping to joinpoint"
+                    )
                 }
             }
         }
@@ -973,11 +1191,7 @@ impl<
 
     /// Frees an reference and release an allocation if it is no longer used.
     fn free_reference(&mut self, sym: &Symbol) {
-        let owned_data = if let Some(owned_data) = self.allocation_map.remove(sym) {
-            owned_data
-        } else {
-            internal_error!("Unknown symbol: {:?}", sym);
-        };
+        let owned_data = self.remove_allocation_for_sym(sym);
         if Rc::strong_count(&owned_data) == 1 {
             self.free_stack_chunk(owned_data.0, owned_data.1);
         }
@@ -1060,7 +1274,26 @@ impl<
         }
     }
 
-    /// Gets a value from storage. They index symbol must be defined.
+    #[allow(dead_code)]
+    /// Gets the allocated area for a symbol. The index symbol must be defined.
+    fn get_allocation_for_sym(&self, sym: &Symbol) -> &Rc<(i32, u32)> {
+        if let Some(allocation) = self.allocation_map.get(sym) {
+            allocation
+        } else {
+            internal_error!("Unknown symbol: {:?}", sym);
+        }
+    }
+
+    /// Removes and returns the allocated area for a symbol. They index symbol must be defined.
+    fn remove_allocation_for_sym(&mut self, sym: &Symbol) -> Rc<(i32, u32)> {
+        if let Some(allocation) = self.allocation_map.remove(sym) {
+            allocation
+        } else {
+            internal_error!("Unknown symbol: {:?}", sym);
+        }
+    }
+
+    /// Gets a value from storage. The index symbol must be defined.
     fn get_storage_for_sym(&self, sym: &Symbol) -> &Storage<GeneralReg, FloatReg> {
         if let Some(storage) = self.symbol_storage_map.get(sym) {
             storage

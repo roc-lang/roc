@@ -3,8 +3,6 @@ use crate::helpers::llvm::assert_evals_to;
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_expect_failed;
 #[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::assert_llvm_evals_to;
-#[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_non_opt_evals_to;
 
 #[cfg(feature = "gen-dev")]
@@ -1468,7 +1466,7 @@ fn rbtree_insert() {
                 show (insert 0 {} Empty)
             "#
         ),
-        RocStr::from_slice("Node".as_bytes()),
+        RocStr::from("Node"),
         RocStr
     );
 }
@@ -1535,7 +1533,7 @@ fn rbtree_layout_issue() {
             main = show (balance Red zero zero Empty)
             "#
         ),
-        RocStr::from_slice("Empty".as_bytes()),
+        RocStr::from("Empty"),
         RocStr
     );
 }
@@ -1589,7 +1587,7 @@ fn rbtree_balance_mono_problem() {
             main = show (balance Red 0 0 Empty Empty)
             "#
         ),
-        RocStr::from_slice("Empty".as_bytes()),
+        RocStr::from("Empty"),
         RocStr
     );
 }
@@ -2382,7 +2380,7 @@ fn build_then_apply_closure() {
                 (\_ -> x) {}
             "#
         ),
-        RocStr::from_slice(b"long string that is malloced"),
+        RocStr::from("long string that is malloced"),
         RocStr
     );
 }
@@ -2470,10 +2468,10 @@ fn function_malformed_pattern() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Hit an erroneous type when creating a layout for")]
 fn call_invalid_layout() {
-    assert_llvm_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 f : I64 -> I64
@@ -2556,7 +2554,7 @@ fn module_thunk_is_function() {
                 helper = Str.concat
             "#
         ),
-        RocStr::from_slice(b"foobar"),
+        RocStr::from("foobar"),
         RocStr
     );
 }
@@ -2580,7 +2578,7 @@ fn hit_unresolved_type_variable() {
                     \input -> input
             "#
         ),
-        RocStr::from_slice(b"B"),
+        RocStr::from("B"),
         RocStr
     );
 }
@@ -2648,7 +2646,7 @@ fn mirror_llvm_alignment_padding() {
 
             "#
         ),
-        RocStr::from_slice(b"pass\npass"),
+        RocStr::from("pass\npass"),
         RocStr
     );
 }
@@ -2911,7 +2909,7 @@ fn mix_function_and_closure() {
                     (if 1 == 1 then foo else (bar "nope nope nope")) "hello world"
             "#
         ),
-        RocStr::from_slice(b"hello world"),
+        RocStr::from("hello world"),
         RocStr
     );
 }
@@ -2936,7 +2934,7 @@ fn mix_function_and_closure_level_of_indirection() {
                     f "hello world"
             "#
         ),
-        RocStr::from_slice(b"hello world"),
+        RocStr::from("hello world"),
         RocStr
     );
 }
@@ -3012,7 +3010,7 @@ fn do_pass_bool_byte_closure_layout() {
             main = [test1, test2, test3, test4] |> Str.joinWith ", "
        "#
         ),
-        RocStr::from_slice(b"PASS, PASS, PASS, PASS"),
+        RocStr::from("PASS, PASS, PASS, PASS"),
         RocStr
     );
 }
@@ -3037,7 +3035,7 @@ fn nested_rigid_list() {
                         _ -> "hello world"
             "#
         ),
-        RocStr::from_slice(b"hello world"),
+        RocStr::from("hello world"),
         RocStr
     );
 }
@@ -3064,7 +3062,7 @@ fn nested_rigid_alias() {
                         _ -> "hello world"
             "#
         ),
-        RocStr::from_slice(b"hello world"),
+        RocStr::from("hello world"),
         RocStr
     );
 }
@@ -3089,7 +3087,7 @@ fn nested_rigid_tag_union() {
                         _ -> "hello world"
             "#
         ),
-        RocStr::from_slice(b"hello world"),
+        RocStr::from("hello world"),
         RocStr
     );
 }
@@ -3117,7 +3115,7 @@ fn call_that_needs_closure_parameter() {
             runTest manyAuxTest
             "#
         ),
-        RocStr::from_slice(b"FAIL"),
+        RocStr::from("FAIL"),
         RocStr
     );
 }
@@ -3138,7 +3136,7 @@ fn alias_defined_out_of_order() {
 
             "#
         ),
-        RocStr::from_slice(b"foo"),
+        RocStr::from("foo"),
         RocStr
     );
 }
@@ -3184,7 +3182,7 @@ fn recursively_build_effect() {
                             e2 {}
             "#
         ),
-        RocStr::from_slice(b"Hello, World!"),
+        RocStr::from("Hello, World!"),
         RocStr
     );
 }

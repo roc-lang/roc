@@ -1,9 +1,12 @@
+#[allow(unused_imports)]
 use indoc::indoc;
 
-mod cli;
-
-#[cfg(feature = "cli")]
+#[cfg(not(feature = "wasm"))]
 use crate::cli::{expect_failure, expect_success};
+
+#[cfg(feature = "wasm")]
+#[allow(unused_imports)]
+use crate::wasm::{expect_failure, expect_success};
 
 #[test]
 fn literal_0() {
@@ -50,16 +53,19 @@ fn float_addition() {
     expect_success("1.1 + 2", "3.1 : F64");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_rem() {
     expect_success("299 % 10", "Ok 9 : Result (Int *) [ DivByZero ]*");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_floor_division_success() {
     expect_success("Num.divFloor 4 3", "Ok 1 : Result (Int *) [ DivByZero ]*");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_floor_division_divby_zero() {
     expect_success(
@@ -68,6 +74,7 @@ fn num_floor_division_divby_zero() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_ceil_division_success() {
     expect_success("Num.divCeil 4 3", "Ok 2 : Result (Int *) [ DivByZero ]*")
@@ -230,6 +237,7 @@ fn literal_empty_list() {
     expect_success("[]", "[] : List *");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn literal_empty_list_empty_record() {
     expect_success("[ {} ]", "[ {} ] : List {}");
@@ -322,6 +330,7 @@ fn num_mul_wrap() {
     expect_success("Num.mulWrap Num.maxI64 2", "-2 : I64");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_add_checked() {
     expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [ Overflow ]*");
@@ -331,6 +340,7 @@ fn num_add_checked() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_sub_checked() {
     expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [ Overflow ]*");
@@ -340,6 +350,7 @@ fn num_sub_checked() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn num_mul_checked() {
     expect_success(
@@ -352,6 +363,7 @@ fn num_mul_checked() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn list_concat() {
     expect_success(
@@ -360,6 +372,7 @@ fn list_concat() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn list_contains() {
     expect_success("List.contains [] 0", "False : Bool");
@@ -367,6 +380,7 @@ fn list_contains() {
     expect_success("List.contains [ 1, 2, 3 ] 4", "False : Bool");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn list_sum() {
     expect_success("List.sum []", "0 : Num *");
@@ -374,6 +388,7 @@ fn list_sum() {
     expect_success("List.sum [ 1.1, 2.2, 3.3 ]", "6.6 : F64");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn list_first() {
     expect_success(
@@ -386,6 +401,7 @@ fn list_first() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn list_last() {
     expect_success(
@@ -503,11 +519,11 @@ fn four_element_record() {
     );
 }
 
-// #[test]
-// fn multiline_string() {
-//     // If a string contains newlines, format it as a multiline string in the output
-//     expect_success(r#""\n\nhi!\n\n""#, "\"\"\"\n\nhi!\n\n\"\"\"");
-// }
+#[test]
+fn multiline_string() {
+    // If a string contains newlines, format it as a multiline string in the output
+    expect_success(r#""\n\nhi!\n\n""#, "\"\n\nhi!\n\n\" : Str");
+}
 
 #[test]
 fn list_of_3_field_records() {
@@ -522,16 +538,19 @@ fn identity_lambda() {
     expect_success("\\x -> x", "<function> : a -> a");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn sum_lambda() {
     expect_success("\\x, y -> x + y", "<function> : Num a, Num a -> Num a");
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn stdlib_function() {
     expect_success("Num.abs", "<function> : Num a -> Num a");
 }
 
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
 fn too_few_args() {
     expect_failure(
@@ -552,6 +571,7 @@ fn too_few_args() {
     );
 }
 
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
 fn type_problem() {
     expect_failure(
@@ -770,6 +790,7 @@ fn large_nullable_wrapped_tag_union() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn issue_2300() {
     expect_success(
@@ -778,6 +799,7 @@ fn issue_2300() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn function_in_list() {
     expect_success(
@@ -786,14 +808,16 @@ fn function_in_list() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn function_in_record() {
     expect_success(
         r#"{ n: 1, adder: \x -> x + 1 }"#,
-        r#"{ adder: <function>, n: <function> } : { adder : Num a -> Num a, n : Num * }"#,
+        r#"{ adder: <function>, n: 1 } : { adder : Num a -> Num a, n : Num * }"#,
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn function_in_unwrapped_record() {
     expect_success(
@@ -802,6 +826,7 @@ fn function_in_unwrapped_record() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn function_in_tag() {
     expect_success(
@@ -832,6 +857,7 @@ fn print_u8s() {
     )
 }
 
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
 fn parse_problem() {
     expect_failure(
@@ -855,6 +881,7 @@ fn parse_problem() {
     );
 }
 
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
 fn mono_problem() {
     expect_failure(
@@ -887,6 +914,7 @@ fn mono_problem() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn issue_2343_complete_mono_with_shadowed_vars() {
     expect_failure(
@@ -919,4 +947,107 @@ fn issue_2343_complete_mono_with_shadowed_vars() {
                 "#
         ),
     );
+}
+
+#[test]
+fn record_with_type_behind_alias() {
+    expect_success(
+        indoc!(
+            r#"
+            T : { a: Str }
+            v : T
+            v = { a: "value" }
+            v
+            "#
+        ),
+        r#"{ a: "value" } : T"#,
+    );
+}
+
+#[test]
+fn tag_with_type_behind_alias() {
+    expect_success(
+        indoc!(
+            r#"
+            T : [ A Str ]
+            v : T
+            v = A "value"
+            v
+            "#
+        ),
+        r#"A "value" : T"#,
+    );
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn issue_2588_record_with_function_and_nonfunction() {
+    expect_success(
+        indoc!(
+            r#"
+            x = 1
+            f = \n -> n * 2
+            { y: f x, f }
+            "#
+        ),
+        r#"{ f: <function>, y: 2 } : { f : Num a -> Num a, y : Num * }"#,
+    )
+}
+
+#[test]
+fn opaque_apply() {
+    expect_success(
+        indoc!(
+            r#"
+            Age := U32
+
+            $Age 23
+            "#
+        ),
+        "23 : Age",
+    )
+}
+
+#[test]
+fn opaque_apply_polymorphic() {
+    expect_success(
+        indoc!(
+            r#"
+            F t u := [ Package t u ]
+
+            $F (Package "" { a: "" })
+            "#
+        ),
+        r#"Package "" { a: "" } : F Str { a : Str }"#,
+    )
+}
+
+#[test]
+fn opaque_pattern_and_call() {
+    expect_success(
+        indoc!(
+            r#"
+            F t u := [ Package t u ]
+
+            f = \$F (Package A {}) -> $F (Package {} A)
+
+            f ($F (Package A {}))
+            "#
+        ),
+        r#"Package {} A : F {} [ A ]*"#,
+    )
+}
+
+#[test]
+fn dec_in_repl() {
+    expect_success(
+        indoc!(
+            r#"
+            x: Dec
+            x=1.23
+            x
+            "#
+        ),
+        r#"1.23 : Dec"#,
+    )
 }

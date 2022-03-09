@@ -1,6 +1,6 @@
 use crate::ast::{
-    AliasHeader, AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Pattern,
-    Spaceable, TypeAnnotation,
+    AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Pattern, Spaceable,
+    TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{space0_after_e, space0_around_ee, space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
@@ -195,6 +195,7 @@ fn parse_loc_term_or_underscore<'a>(
     one_of!(
         loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
+        loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
         loc!(underscore_expression()),
@@ -217,6 +218,7 @@ fn parse_loc_term<'a>(
     one_of!(
         loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
+        loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
         loc!(record_literal_help(min_indent)),
@@ -417,16 +419,27 @@ impl<'a> ExprState<'a> {
         }
     }
 
-    fn validate_has_type(
+    fn validate_is_type_def(
         mut self,
         arena: &'a Bump,
         loc_op: Loc<BinOp>,
+        kind: TypeKind,
     ) -> Result<(Loc<Expr<'a>>, Vec<'a, &'a Loc<Expr<'a>>>), EExpr<'a>> {
-        debug_assert_eq!(loc_op.value, BinOp::HasType);
+        debug_assert_eq!(
+            loc_op.value,
+            match kind {
+                TypeKind::Alias => BinOp::IsAliasType,
+                TypeKind::Opaque => BinOp::IsOpaqueType,
+            }
+        );
 
         if !self.operators.is_empty() {
-            // this `:` likely occurred inline; treat it as an invalid operator
-            let fail = EExpr::BadOperator(":", loc_op.region.start());
+            // this `:`/`:=` likely occurred inline; treat it as an invalid operator
+            let op = match kind {
+                TypeKind::Alias => ":",
+                TypeKind::Opaque => ":=",
+            };
+            let fail = EExpr::BadOperator(op, loc_op.region.start());
 
             Err(fail)
         } else {
@@ -671,6 +684,7 @@ fn append_annotation_definition<'a>(
     spaces: &'a [CommentOrNewline<'a>],
     loc_pattern: Loc<Pattern<'a>>,
     loc_ann: Loc<TypeAnnotation<'a>>,
+    kind: TypeKind,
 ) {
     let region = Region::span_across(&loc_pattern.region, &loc_ann.region);
 
@@ -682,7 +696,7 @@ fn append_annotation_definition<'a>(
                 ..
             },
             alias_arguments,
-        ) => append_alias_definition(
+        ) => append_type_definition(
             arena,
             defs,
             region,
@@ -690,8 +704,9 @@ fn append_annotation_definition<'a>(
             Loc::at(loc_pattern.region, name),
             alias_arguments,
             loc_ann,
+            kind,
         ),
-        Pattern::GlobalTag(name) => append_alias_definition(
+        Pattern::GlobalTag(name) => append_type_definition(
             arena,
             defs,
             region,
@@ -699,6 +714,7 @@ fn append_annotation_definition<'a>(
             Loc::at(loc_pattern.region, name),
             &[],
             loc_ann,
+            kind,
         ),
         _ => {
             let mut loc_def = Loc::at(region, Def::Annotation(loc_pattern, loc_ann));
@@ -736,7 +752,8 @@ fn append_expect_definition<'a>(
     defs.push(arena.alloc(loc_def));
 }
 
-fn append_alias_definition<'a>(
+#[allow(clippy::too_many_arguments)]
+fn append_type_definition<'a>(
     arena: &'a Bump,
     defs: &mut Vec<'a, &'a Loc<Def<'a>>>,
     region: Region,
@@ -744,13 +761,21 @@ fn append_alias_definition<'a>(
     name: Loc<&'a str>,
     pattern_arguments: &'a [Loc<Pattern<'a>>],
     loc_ann: Loc<TypeAnnotation<'a>>,
+    kind: TypeKind,
 ) {
-    let def = Def::Alias {
-        header: AliasHeader {
-            name,
-            vars: pattern_arguments,
+    let header = TypeHeader {
+        name,
+        vars: pattern_arguments,
+    };
+    let def = match kind {
+        TypeKind::Alias => Def::Alias {
+            header,
+            ann: loc_ann,
         },
-        ann: loc_ann,
+        TypeKind::Opaque => Def::Opaque {
+            header,
+            typ: loc_ann,
+        },
     };
     let mut loc_def = Loc::at(region, def);
 
@@ -853,7 +878,7 @@ fn parse_defs_end<'a>(
 
                 parse_defs_end(options, column, def_state, arena, state)
             }
-            Ok((_, BinOp::HasType, state)) => {
+            Ok((_, op @ (BinOp::IsAliasType | BinOp::IsOpaqueType), state)) => {
                 let (_, ann_type, state) = specialize(
                     EExpr::Type,
                     space0_before_e(
@@ -870,6 +895,11 @@ fn parse_defs_end<'a>(
                     def_state.spaces_after,
                     loc_pattern,
                     ann_type,
+                    match op {
+                        BinOp::IsAliasType => TypeKind::Alias,
+                        BinOp::IsOpaqueType => TypeKind::Opaque,
+                        _ => unreachable!(),
+                    },
                 );
 
                 parse_defs_end(options, column, def_state, arena, state)
@@ -917,6 +947,128 @@ fn parse_defs_expr<'a>(
             }
         }
     }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum TypeKind {
+    Alias,
+    Opaque,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_parsing_alias_or_opaque<'a>(
+    min_indent: u32,
+    options: ExprParseOptions,
+    start_column: u32,
+    expr_state: ExprState<'a>,
+    loc_op: Loc<BinOp>,
+    arena: &'a Bump,
+    state: State<'a>,
+    spaces_after_operator: &'a [CommentOrNewline<'a>],
+    kind: TypeKind,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let expr_region = expr_state.expr.region;
+    let indented_more = start_column + 1;
+
+    let (expr, arguments) = expr_state
+        .validate_is_type_def(arena, loc_op, kind)
+        .map_err(|fail| (MadeProgress, fail, state.clone()))?;
+
+    let (loc_def, state) = match &expr.value {
+        Expr::GlobalTag(name) => {
+            let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
+
+            for argument in arguments {
+                match expr_to_pattern_help(arena, &argument.value) {
+                    Ok(good) => {
+                        type_arguments.push(Loc::at(argument.region, good));
+                    }
+                    Err(_) => panic!(),
+                }
+            }
+
+            let (_, ann_type, state) = specialize(
+                EExpr::Type,
+                space0_before_e(
+                    type_annotation::located_help(indented_more, true),
+                    min_indent,
+                    EType::TIndentStart,
+                ),
+            )
+            .parse(arena, state)?;
+
+            let def_region = Region::span_across(&expr.region, &ann_type.region);
+
+            let header = TypeHeader {
+                name: Loc::at(expr.region, name),
+                vars: type_arguments.into_bump_slice(),
+            };
+            let type_def = match kind {
+                TypeKind::Alias => Def::Alias {
+                    header,
+                    ann: ann_type,
+                },
+                TypeKind::Opaque => Def::Opaque {
+                    header,
+                    typ: ann_type,
+                },
+            };
+
+            (&*arena.alloc(Loc::at(def_region, type_def)), state)
+        }
+
+        _ => {
+            let call = to_call(arena, arguments, expr);
+
+            match expr_to_pattern_help(arena, &call.value) {
+                Ok(good) => {
+                    let parser = specialize(
+                        EExpr::Type,
+                        space0_before_e(
+                            type_annotation::located_help(indented_more, false),
+                            min_indent,
+                            EType::TIndentStart,
+                        ),
+                    );
+
+                    match parser.parse(arena, state) {
+                        Err((_, fail, state)) => return Err((MadeProgress, fail, state)),
+                        Ok((_, mut ann_type, state)) => {
+                            // put the spaces from after the operator in front of the call
+                            if !spaces_after_operator.is_empty() {
+                                ann_type = arena
+                                    .alloc(ann_type.value)
+                                    .with_spaces_before(spaces_after_operator, ann_type.region);
+                            }
+
+                            let def_region = Region::span_across(&call.region, &ann_type.region);
+
+                            let alias = Def::Annotation(Loc::at(expr_region, good), ann_type);
+
+                            (&*arena.alloc(Loc::at(def_region, alias)), state)
+                        }
+                    }
+                }
+                Err(_) => {
+                    // this `:`/`:=` likely occurred inline; treat it as an invalid operator
+                    let op = match kind {
+                        TypeKind::Alias => ":",
+                        TypeKind::Opaque => ":=",
+                    };
+                    let fail = EExpr::BadOperator(op, loc_op.region.start());
+
+                    return Err((MadeProgress, fail, state));
+                }
+            }
+        }
+    };
+
+    let def_state = DefState {
+        defs: bumpalo::vec![in arena; loc_def],
+        spaces_after: &[],
+    };
+
+    parse_defs_expr(options, start_column, def_state, arena, state)
 }
 
 fn parse_expr_operator<'a>(
@@ -1059,102 +1211,21 @@ fn parse_expr_operator<'a>(
 
             Ok((MadeProgress, ret, state))
         }
-        BinOp::HasType => {
-            let expr_region = expr_state.expr.region;
-            let indented_more = start_column + 1;
-
-            let (expr, arguments) = expr_state
-                .validate_has_type(arena, loc_op)
-                .map_err(|fail| (MadeProgress, fail, state.clone()))?;
-
-            let (loc_def, state) = match &expr.value {
-                Expr::GlobalTag(name) => {
-                    let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
-
-                    for argument in arguments {
-                        match expr_to_pattern_help(arena, &argument.value) {
-                            Ok(good) => {
-                                type_arguments.push(Loc::at(argument.region, good));
-                            }
-                            Err(_) => panic!(),
-                        }
-                    }
-
-                    let (_, ann_type, state) = specialize(
-                        EExpr::Type,
-                        space0_before_e(
-                            type_annotation::located_help(indented_more, true),
-                            min_indent,
-                            EType::TIndentStart,
-                        ),
-                    )
-                    .parse(arena, state)?;
-
-                    let alias_region = Region::span_across(&expr.region, &ann_type.region);
-
-                    let alias = Def::Alias {
-                        header: AliasHeader {
-                            name: Loc::at(expr.region, name),
-                            vars: type_arguments.into_bump_slice(),
-                        },
-                        ann: ann_type,
-                    };
-
-                    (&*arena.alloc(Loc::at(alias_region, alias)), state)
-                }
-
-                _ => {
-                    let call = to_call(arena, arguments, expr);
-
-                    match expr_to_pattern_help(arena, &call.value) {
-                        Ok(good) => {
-                            let parser = specialize(
-                                EExpr::Type,
-                                space0_before_e(
-                                    type_annotation::located_help(indented_more, false),
-                                    min_indent,
-                                    EType::TIndentStart,
-                                ),
-                            );
-
-                            match parser.parse(arena, state) {
-                                Err((_, fail, state)) => return Err((MadeProgress, fail, state)),
-                                Ok((_, mut ann_type, state)) => {
-                                    // put the spaces from after the operator in front of the call
-                                    if !spaces_after_operator.is_empty() {
-                                        ann_type = arena.alloc(ann_type.value).with_spaces_before(
-                                            spaces_after_operator,
-                                            ann_type.region,
-                                        );
-                                    }
-
-                                    let alias_region =
-                                        Region::span_across(&call.region, &ann_type.region);
-
-                                    let alias =
-                                        Def::Annotation(Loc::at(expr_region, good), ann_type);
-
-                                    (&*arena.alloc(Loc::at(alias_region, alias)), state)
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            // this `:` likely occurred inline; treat it as an invalid operator
-                            let fail = EExpr::BadOperator(":", loc_op.region.start());
-
-                            return Err((MadeProgress, fail, state));
-                        }
-                    }
-                }
-            };
-
-            let def_state = DefState {
-                defs: bumpalo::vec![in arena; loc_def],
-                spaces_after: &[],
-            };
-
-            parse_defs_expr(options, start_column, def_state, arena, state)
-        }
+        BinOp::IsAliasType | BinOp::IsOpaqueType => finish_parsing_alias_or_opaque(
+            min_indent,
+            options,
+            start_column,
+            expr_state,
+            loc_op,
+            arena,
+            state,
+            spaces_after_operator,
+            match op {
+                BinOp::IsAliasType => TypeKind::Alias,
+                BinOp::IsOpaqueType => TypeKind::Opaque,
+                _ => unreachable!(),
+            },
+        ),
         _ => match loc_possibly_negative_or_negated_term(min_indent, options).parse(arena, state) {
             Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
             Ok((_, mut new_expr, state)) => {
@@ -1396,6 +1467,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         Expr::Underscore(opt_name) => Ok(Pattern::Underscore(opt_name)),
         Expr::GlobalTag(value) => Ok(Pattern::GlobalTag(value)),
         Expr::PrivateTag(value) => Ok(Pattern::PrivateTag(value)),
+        Expr::OpaqueRef(value) => Ok(Pattern::OpaqueRef(value)),
         Expr::Apply(loc_val, loc_args, _) => {
             let region = loc_val.region;
             let value = expr_to_pattern_help(arena, &loc_val.value)?;
@@ -1464,6 +1536,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::UnaryOp(_, _) => Err(()),
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(*string)),
+        Expr::SingleQuote(string) => Ok(Pattern::SingleQuote(*string)),
         Expr::MalformedIdent(string, _problem) => Ok(Pattern::Malformed(string)),
     }
 }
@@ -2067,6 +2140,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
         Ident::GlobalTag(string) => Expr::GlobalTag(string),
         Ident::PrivateTag(string) => Expr::PrivateTag(string),
+        Ident::OpaqueRef(string) => Expr::OpaqueRef(string),
         Ident::Access { module_name, parts } => {
             let mut iter = parts.iter();
 
@@ -2281,6 +2355,13 @@ fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
     map!(crate::string_literal::parse(), Expr::Str)
 }
 
+fn single_quote_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
+    map!(
+        crate::string_literal::parse_single_quote(),
+        Expr::SingleQuote
+    )
+}
+
 fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
     map!(
         crate::number_literal::positive_number_literal(),
@@ -2372,7 +2453,8 @@ where
             Err((NoProgress, to_error(".", state.pos()), state))
         }
         "=" => good!(BinOp::Assignment, 1),
-        ":" => good!(BinOp::HasType, 1),
+        ":=" => good!(BinOp::IsOpaqueType, 2),
+        ":" => good!(BinOp::IsAliasType, 1),
         "|>" => good!(BinOp::Pizza, 2),
         "==" => good!(BinOp::Equals, 2),
         "!=" => good!(BinOp::NotEquals, 2),

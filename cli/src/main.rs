@@ -63,10 +63,16 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_REPL, _)) => {
-            roc_repl_cli::main()?;
+            #[cfg(feature = "llvm")]
+            {
+                roc_repl_cli::main()?;
 
-            // Exit 0 if the repl exited normally
-            Ok(0)
+                // Exit 0 if the repl exited normally
+                Ok(0)
+            }
+
+            #[cfg(not(feature = "llvm"))]
+            todo!("enable roc repl without llvm");
         }
         Some((CMD_EDIT, matches)) => {
             match matches

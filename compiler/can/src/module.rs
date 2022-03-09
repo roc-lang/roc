@@ -16,7 +16,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, Type};
+use roc_types::types::{Alias, AliasKind, Type};
 
 #[derive(Debug)]
 pub struct Module {
@@ -86,7 +86,13 @@ pub fn canonicalize_module_defs<'a>(
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
-        scope.add_alias(name, alias.region, alias.type_variables, alias.typ);
+        scope.add_alias(
+            name,
+            alias.region,
+            alias.type_variables,
+            alias.typ,
+            alias.kind,
+        );
     }
 
     struct Hosted {
@@ -131,6 +137,7 @@ pub fn canonicalize_module_defs<'a>(
                 Region::zero(),
                 vec![Loc::at_zero(("a".into(), a_var))],
                 actual,
+                AliasKind::Structural,
             );
         }
 
@@ -541,6 +548,10 @@ fn fix_values_captured_in_closure_pattern(
                 fix_values_captured_in_closure_pattern(&mut loc_arg.value, no_capture_symbols);
             }
         }
+        UnwrappedOpaque { argument, .. } => {
+            let (_, loc_arg) = &mut **argument;
+            fix_values_captured_in_closure_pattern(&mut loc_arg.value, no_capture_symbols);
+        }
         RecordDestructure { destructs, .. } => {
             for loc_destruct in destructs.iter_mut() {
                 use crate::pattern::DestructType::*;
@@ -561,10 +572,12 @@ fn fix_values_captured_in_closure_pattern(
         | IntLiteral(..)
         | FloatLiteral(..)
         | StrLiteral(_)
+        | SingleQuote(_)
         | Underscore
         | Shadowed(..)
         | MalformedPattern(_, _)
-        | UnsupportedPattern(_) => (),
+        | UnsupportedPattern(_)
+        | OpaqueNotInScope(..) => (),
     }
 }
 
@@ -617,6 +630,7 @@ fn fix_values_captured_in_closure_expr(
         | Int(..)
         | Float(..)
         | Str(_)
+        | SingleQuote(_)
         | Var(_)
         | EmptyRecord
         | RuntimeError(_)
@@ -690,6 +704,10 @@ fn fix_values_captured_in_closure_expr(
             for (_, loc_arg) in arguments.iter_mut() {
                 fix_values_captured_in_closure_expr(&mut loc_arg.value, no_capture_symbols);
             }
+        }
+        OpaqueRef { argument, .. } => {
+            let (_, loc_arg) = &mut **argument;
+            fix_values_captured_in_closure_expr(&mut loc_arg.value, no_capture_symbols);
         }
     }
 }

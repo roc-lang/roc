@@ -50,10 +50,10 @@ fn build_hash_layout<'a, 'ctx, 'env>(
             hash_builtin(env, layout_ids, seed, val, layout, builtin, when_recursive)
         }
 
-        Layout::Struct(fields) => build_hash_struct(
+        Layout::Struct { field_layouts, .. } => build_hash_struct(
             env,
             layout_ids,
-            fields,
+            field_layouts,
             when_recursive,
             seed,
             val.into_struct_value(),
@@ -166,7 +166,7 @@ fn build_hash_struct<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let struct_layout = Layout::Struct(field_layouts);
+    let struct_layout = Layout::struct_no_name_order(field_layouts);
 
     let symbol = Symbol::GENERIC_HASH;
     let fn_name = layout_ids
@@ -248,7 +248,7 @@ fn hash_struct<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     let ptr_bytes = env.target_info;
 
-    let layout = Layout::Struct(field_layouts);
+    let layout = Layout::struct_no_name_order(field_layouts);
 
     // Optimization: if the bit representation of equal values is the same
     // just hash the bits. Caveat here is tags: e.g. `Nothing` in `Just a`
@@ -818,7 +818,7 @@ fn hash_ptr_to_struct<'a, 'ctx, 'env>(
         .build_struct_gep(wrapper_ptr, TAG_DATA_INDEX, "get_tag_data")
         .unwrap();
 
-    let struct_layout = Layout::Struct(field_layouts);
+    let struct_layout = Layout::struct_no_name_order(field_layouts);
     let struct_type = basic_type_from_layout(env, &struct_layout);
     let struct_ptr = env
         .builder

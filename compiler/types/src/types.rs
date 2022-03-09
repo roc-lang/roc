@@ -2,7 +2,7 @@ use crate::pretty_print::Parens;
 use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
-use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
+use roc_collections::all::{HumanIndex, ImMap, ImSet, MutSet, SendMap};
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
@@ -185,6 +185,7 @@ pub enum Type {
         type_arguments: Vec<(Lowercase, Type)>,
         lambda_set_variables: Vec<LambdaSet>,
         actual: Box<Type>,
+        kind: AliasKind,
     },
     HostExposedAlias {
         name: Symbol,
@@ -721,10 +722,11 @@ impl Type {
 
     /// a shallow dealias, continue until the first constructor is not an alias.
     pub fn shallow_dealias(&self) -> &Self {
-        match self {
-            Type::Alias { actual, .. } => actual.shallow_dealias(),
-            _ => self,
+        let mut result = self;
+        while let Type::Alias { actual, .. } = result {
+            result = actual;
         }
+        result
     }
 
     pub fn instantiate_aliases(
@@ -853,6 +855,7 @@ impl Type {
                         type_arguments: named_args,
                         lambda_set_variables,
                         actual: Box::new(actual),
+                        kind: alias.kind,
                     };
                 } else {
                     // one of the special-cased Apply types.
@@ -920,6 +923,13 @@ impl Type {
             Type::Alias { .. } => internal_error!("should be dealiased"),
             // Non-composite types are trivially narrow
             _ => true,
+        }
+    }
+
+    pub fn expect_variable(&self, reason: &'static str) -> Variable {
+        match self {
+            Type::Variable(v) => *v,
+            _ => internal_error!(reason),
         }
     }
 }
@@ -1194,14 +1204,14 @@ pub struct TagUnionStructure<'a> {
 pub enum PReason {
     TypedArg {
         opt_name: Option<Symbol>,
-        index: Index,
+        index: HumanIndex,
     },
     WhenMatch {
-        index: Index,
+        index: HumanIndex,
     },
     TagArg {
         tag_name: TagName,
-        index: Index,
+        index: HumanIndex,
     },
     PatternGuard,
     OptionalField,
@@ -1210,12 +1220,12 @@ pub enum PReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationSource {
     TypedIfBranch {
-        index: Index,
+        index: HumanIndex,
         num_branches: usize,
         region: Region,
     },
     TypedWhenBranch {
-        index: Index,
+        index: HumanIndex,
         region: Region,
     },
     TypedBody {
@@ -1237,7 +1247,7 @@ impl AnnotationSource {
 pub enum Reason {
     FnArg {
         name: Option<Symbol>,
-        arg_index: Index,
+        arg_index: HumanIndex,
     },
     FnCall {
         name: Option<Symbol>,
@@ -1245,28 +1255,28 @@ pub enum Reason {
     },
     LowLevelOpArg {
         op: LowLevel,
-        arg_index: Index,
+        arg_index: HumanIndex,
     },
     ForeignCallArg {
         foreign_symbol: ForeignSymbol,
-        arg_index: Index,
+        arg_index: HumanIndex,
     },
     FloatLiteral,
     IntLiteral,
     NumLiteral,
     StrInterpolation,
     WhenBranch {
-        index: Index,
+        index: HumanIndex,
     },
     WhenGuard,
     ExpectCondition,
     IfCondition,
     IfBranch {
-        index: Index,
+        index: HumanIndex,
         total_branches: usize,
     },
     ElemInList {
-        index: Index,
+        index: HumanIndex,
     },
     RecordUpdateValue(Lowercase),
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Region>),
@@ -1284,6 +1294,8 @@ pub enum Category {
         tag_name: TagName,
         args_count: usize,
     },
+    OpaqueWrap(Symbol),
+    OpaqueArg,
     Lambda,
     Uniqueness,
     ClosureSize,
@@ -1302,6 +1314,7 @@ pub enum Category {
     Num,
     List,
     Str,
+    Character,
 
     // records
     Record,
@@ -1319,10 +1332,25 @@ pub enum PatternCategory {
     Set,
     Map,
     Ctor(TagName),
+    Opaque(Symbol),
     Str,
     Num,
     Int,
     Float,
+    Character,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum AliasKind {
+    /// A structural alias is something like
+    ///   List a : [ Nil, Cons a (List a) ]
+    /// It is typed structurally, so that a `List U8` is always equal to a `[ Nil ]_`, for example.
+    Structural,
+    /// An opaque alias corresponds to an opaque type from the language syntax, like
+    ///   Age := U32
+    /// It is type nominally, so that `Age` is never equal to `U8` - the only way to unwrap the
+    /// structural type inside `Age` is to unwrap the opaque, so `Age` = `@Age U8`.
+    Opaque,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1337,6 +1365,8 @@ pub struct Alias {
     pub recursion_variables: MutSet<Variable>,
 
     pub typ: Type,
+
+    pub kind: AliasKind,
 }
 
 impl Alias {
@@ -1386,7 +1416,7 @@ pub enum ErrorType {
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
-    Alias(Symbol, Vec<ErrorType>, Box<ErrorType>),
+    Alias(Symbol, Vec<ErrorType>, Box<ErrorType>, AliasKind),
     Range(Box<ErrorType>, Vec<ErrorType>),
     Error,
 }
@@ -1399,9 +1429,9 @@ impl std::fmt::Debug for ErrorType {
 }
 
 impl ErrorType {
-    pub fn unwrap_alias(self) -> ErrorType {
+    pub fn unwrap_structural_alias(self) -> ErrorType {
         match self {
-            ErrorType::Alias(_, _, real) => real.unwrap_alias(),
+            ErrorType::Alias(_, _, real, AliasKind::Structural) => real.unwrap_structural_alias(),
             real => real,
         }
     }
@@ -1440,7 +1470,7 @@ impl ErrorType {
                 capt.add_names(taken);
                 ret.add_names(taken);
             }
-            Alias(_, ts, t) => {
+            Alias(_, ts, t, _) => {
                 ts.iter().for_each(|t| {
                     t.add_names(taken);
                 });
@@ -1496,7 +1526,7 @@ fn write_error_type_help(
                 buf.push(')');
             }
         }
-        Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
+        Alias(Symbol::NUM_NUM, mut arguments, _actual, _) => {
             debug_assert!(arguments.len() == 1);
 
             let argument = arguments.remove(0);
@@ -1614,7 +1644,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push(')');
             }
         }
-        Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
+        Alias(Symbol::NUM_NUM, mut arguments, _actual, _) => {
             debug_assert!(arguments.len() == 1);
 
             let argument = arguments.remove(0);
@@ -1641,7 +1671,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 }
             }
         }
-        Alias(symbol, arguments, _actual) => {
+        Alias(symbol, arguments, _actual, _) => {
             let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
 
             if write_parens {
@@ -1862,7 +1892,7 @@ pub fn gather_fields_unsorted_iter(
                 var = *sub_ext;
             }
 
-            Alias(_, _, actual_var) => {
+            Alias(_, _, actual_var, _) => {
                 // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
                 var = *actual_var;
             }
@@ -1947,7 +1977,7 @@ pub fn gather_tags_unsorted_iter(
                 //                var = *sub_ext;
             }
 
-            Alias(_, _, actual_var) => {
+            Alias(_, _, actual_var, _) => {
                 // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
                 var = *actual_var;
             }

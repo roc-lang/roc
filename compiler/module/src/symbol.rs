@@ -580,6 +580,7 @@ impl IdentIds {
     }
 
     // necessary when the name of a value is changed in the editor
+    // TODO fix when same ident_name is present multiple times, see issue #2548
     pub fn update_key(
         &mut self,
         old_ident_name: &str,
@@ -883,6 +884,10 @@ define_builtins! {
 
         // used in dev backend
         26 DEV_TMP: "#dev_tmp"
+        27 DEV_TMP2: "#dev_tmp2"
+        28 DEV_TMP3: "#dev_tmp3"
+        29 DEV_TMP4: "#dev_tmp4"
+        30 DEV_TMP5: "#dev_tmp5"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -1010,6 +1015,26 @@ define_builtins! {
         122 NUM_MAX_U64: "maxU64"
         123 NUM_MIN_I128: "minI128"
         124 NUM_MAX_I128: "maxI128"
+        125 NUM_TO_I8: "toI8"
+        126 NUM_TO_I8_CHECKED: "toI8Checked"
+        127 NUM_TO_I16: "toI16"
+        128 NUM_TO_I16_CHECKED: "toI16Checked"
+        129 NUM_TO_I32: "toI32"
+        130 NUM_TO_I32_CHECKED: "toI32Checked"
+        131 NUM_TO_I64: "toI64"
+        132 NUM_TO_I64_CHECKED: "toI64Checked"
+        133 NUM_TO_I128: "toI128"
+        134 NUM_TO_I128_CHECKED: "toI128Checked"
+        135 NUM_TO_U8: "toU8"
+        136 NUM_TO_U8_CHECKED: "toU8Checked"
+        137 NUM_TO_U16: "toU16"
+        138 NUM_TO_U16_CHECKED: "toU16Checked"
+        139 NUM_TO_U32: "toU32"
+        140 NUM_TO_U32_CHECKED: "toU32Checked"
+        141 NUM_TO_U64: "toU64"
+        142 NUM_TO_U64_CHECKED: "toU64Checked"
+        143 NUM_TO_U128: "toU128"
+        144 NUM_TO_U128_CHECKED: "toU128Checked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -1121,6 +1146,7 @@ define_builtins! {
         55 LIST_SORT_ASC: "sortAsc"
         56 LIST_SORT_DESC: "sortDesc"
         57 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
+        58 LIST_REPLACE: "replace"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

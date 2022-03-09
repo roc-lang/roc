@@ -2,7 +2,8 @@
 window.js_create_app = js_create_app;
 window.js_run_app = js_run_app;
 window.js_get_result_and_memory = js_get_result_and_memory;
-import * as roc_repl_wasm from "./roc_repl_wasm.js";
+import * as roc_repl_wasm from "/roc_repl_wasm.js";
+import { getMockWasiImports } from "/wasi.js";
 
 // ----------------------------------------------------------------------------
 // REPL state
@@ -14,6 +15,8 @@ const repl = {
 
   inputQueue: [],
   inputHistory: [],
+  inputHistoryIndex: 0,
+  inputStash: "", // stash the user input while we're toggling through history with up/down arrows
 
   textDecoder: new TextDecoder(),
   textEncoder: new TextEncoder(),
@@ -27,6 +30,7 @@ const repl = {
 
 // Initialise
 repl.elemSourceInput.addEventListener("change", onInputChange);
+repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
 roc_repl_wasm.default().then((instance) => {
   repl.compiler = instance;
 });
@@ -37,6 +41,8 @@ roc_repl_wasm.default().then((instance) => {
 
 function onInputChange(event) {
   const inputText = event.target.value;
+  if (!inputText) return;
+
   event.target.value = "";
 
   repl.inputQueue.push(inputText);
@@ -45,13 +51,62 @@ function onInputChange(event) {
   }
 }
 
+function onInputKeyup(event) {
+  const UP = 38;
+  const DOWN = 40;
+  const ENTER = 13;
+
+  const { keyCode } = event;
+
+  const el = repl.elemSourceInput;
+
+  switch (keyCode) {
+    case UP:
+      if (repl.inputHistoryIndex == repl.inputHistory.length - 1) {
+        repl.inputStash = el.value;
+      }
+      setInput(repl.inputHistory[repl.inputHistoryIndex]);
+
+      if (repl.inputHistoryIndex > 0) {
+        repl.inputHistoryIndex--;
+      }
+      break;
+
+    case DOWN:
+      if (repl.inputHistoryIndex === repl.inputHistory.length - 1) {
+        setInput(repl.inputStash);
+      } else {
+        repl.inputHistoryIndex++;
+        setInput(repl.inputHistory[repl.inputHistoryIndex]);
+      }
+      break;
+
+    case ENTER:
+      if (!event.shiftKey) {
+        onInputChange({ target: repl.elemSourceInput });
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+function setInput(value) {
+  const el = repl.elemSourceInput;
+  el.value = value;
+  el.selectionStart = value.length;
+  el.selectionEnd = value.length;
+}
+
 // Use a queue just in case we somehow get inputs very fast
 // We want the REPL to only process one at a time, since we're using some global state.
 // In normal usage we shouldn't see this edge case anyway. Maybe with copy/paste?
 async function processInputQueue() {
   while (repl.inputQueue.length) {
     const inputText = repl.inputQueue[0];
-    const historyIndex = createHistoryEntry(inputText);
+    repl.inputHistoryIndex = createHistoryEntry(inputText);
+    repl.inputStash = "";
 
     let outputText;
     let ok = true;
@@ -62,7 +117,7 @@ async function processInputQueue() {
       ok = false;
     }
 
-    updateHistoryEntry(historyIndex, ok, outputText);
+    updateHistoryEntry(repl.inputHistoryIndex, ok, outputText);
     repl.inputQueue.shift();
   }
 }
@@ -74,15 +129,21 @@ async function processInputQueue() {
 // Create an executable Wasm instance from an array of bytes
 // (Browser validates the module and does the final compilation to the host's machine code.)
 async function js_create_app(wasm_module_bytes) {
-  const { instance } = await WebAssembly.instantiate(wasm_module_bytes);
+  const wasiLinkObject = {}; // gives the WASI functions a reference to the app so they can write to its memory
+  const importObj = getMockWasiImports(wasiLinkObject);
+  const { instance } = await WebAssembly.instantiate(
+    wasm_module_bytes,
+    importObj
+  );
+  wasiLinkObject.instance = instance;
   repl.app = instance;
 }
 
 // Call the main function of the app, via the test wrapper
 // Cache the result and return the size of the app's memory
 function js_run_app() {
-  const { run, memory } = repl.app.exports;
-  const addr = run();
+  const { wrapper, memory } = repl.app.exports;
+  const addr = wrapper();
   const { buffer } = memory;
   repl.result = { addr, buffer };
 
@@ -109,12 +170,13 @@ function createHistoryEntry(inputText) {
   const historyIndex = repl.inputHistory.length;
   repl.inputHistory.push(inputText);
 
-  const inputElem = document.createElement("div");
-  inputElem.textContent = "> " + inputText;
+  const inputElem = document.createElement("pre");
+  inputElem.textContent = inputText;
   inputElem.classList.add("input");
 
   const historyItem = document.createElement("div");
   historyItem.appendChild(inputElem);
+  historyItem.classList.add("history-item");
 
   repl.elemHistory.appendChild(historyItem);
   repl.elemHistory.scrollTop = repl.elemHistory.scrollHeight;
@@ -123,7 +185,7 @@ function createHistoryEntry(inputText) {
 }
 
 function updateHistoryEntry(index, ok, outputText) {
-  const outputElem = document.createElement("div");
+  const outputElem = document.createElement("pre");
   outputElem.textContent = outputText;
   outputElem.classList.add("output");
   outputElem.classList.add(ok ? "output-ok" : "output-error");

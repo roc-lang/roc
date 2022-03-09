@@ -100,6 +100,26 @@ interface Num
             subWrap,
             sqrt,
             tan,
+            toI8,
+            toI8Checked,
+            toI16,
+            toI16Checked,
+            toI32,
+            toI32Checked,
+            toI64,
+            toI64Checked,
+            toI128,
+            toI128Checked,
+            toU8,
+            toU8Checked,
+            toU16,
+            toU16Checked,
+            toU32,
+            toU32Checked,
+            toU64,
+            toU64Checked,
+            toU128,
+            toU128Checked,
             toFloat,
             toStr
         ]
@@ -591,6 +611,35 @@ mul : Num a, Num a -> Num a
 mulCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
 
 ## Convert
+
+## Convert any [Int] to a specifically-sized [Int], without checking validity.
+## These are unchecked bitwise operations,
+## so if the source number is outside the target range, then these will
+## effectively modulo-wrap around the target range to reach a valid value.
+toI8 : Int * -> I8
+toI16 : Int * -> I16
+toI32 : Int * -> I32
+toI64 : Int * -> I64
+toI128 : Int * -> I128
+toU8 : Int * -> U8
+toU16 : Int * -> U16
+toU32 : Int * -> U32
+toU64 : Int * -> U64
+toU128 : Int * -> U128
+## Convert any [Int] to a specifically-sized [Int], after checking validity.
+## These are checked bitwise operations,
+## so if the source number is outside the target range, then these will
+## return `Err OutOfBounds`.
+toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
+toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
+toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
+toI64Checked : Int * -> Result I64 [ OutOfBounds ]*
+toI128Checked : Int * -> Result I128 [ OutOfBounds ]*
+toU8Checked : Int * -> Result U8 [ OutOfBounds ]*
+toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
+toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
+toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
+toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
 
 ## Convert a number to a [Str].
 ##

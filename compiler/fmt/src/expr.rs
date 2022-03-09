@@ -30,6 +30,7 @@ impl<'a> Formattable for Expr<'a> {
             Float(..)
             | Num(..)
             | NonBase10Int { .. }
+            | SingleQuote(_)
             | Access(_, _)
             | AccessorFunction(_)
             | Var { .. }
@@ -37,7 +38,8 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedIdent(_, _)
             | MalformedClosure
             | GlobalTag(_)
-            | PrivateTag(_) => false,
+            | PrivateTag(_)
+            | OpaqueRef(_) => false,
 
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
@@ -141,11 +143,17 @@ impl<'a> Formattable for Expr<'a> {
                 } else {
                     buf.indent(indent);
                     buf.push('(');
+                    let next_indent = if starts_with_newline(sub_expr) {
+                        indent + INDENT
+                    } else {
+                        indent
+                    };
+
                     sub_expr.format_with_options(
                         buf,
                         Parens::NotNeeded,
                         Newlines::Yes,
-                        indent + INDENT,
+                        next_indent,
                     );
                     buf.indent(indent);
                     buf.push(')');
@@ -204,9 +212,14 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 buf.push_str(string);
             }
-            GlobalTag(string) | PrivateTag(string) => {
+            GlobalTag(string) | PrivateTag(string) | OpaqueRef(string) => {
                 buf.indent(indent);
                 buf.push_str(string)
+            }
+            SingleQuote(string) => {
+                buf.push('\'');
+                buf.push_str(string);
+                buf.push('\'');
             }
             &NonBase10Int {
                 base,
@@ -297,6 +310,30 @@ impl<'a> Formattable for Expr<'a> {
     }
 }
 
+fn starts_with_newline(expr: &Expr) -> bool {
+    use roc_parse::ast::Expr::*;
+
+    match expr {
+        SpaceBefore(_, comment_or_newline) => {
+            if !comment_or_newline.is_empty() {
+                // safe because we check the length before
+                comment_or_newline.get(0).unwrap().is_newline()
+            } else {
+                false
+            }
+        }
+        SpaceAfter(_, comment_or_newline) => {
+            if !(**comment_or_newline).is_empty() {
+                // safe because we check the length before
+                comment_or_newline.get(0).unwrap().is_newline()
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
 fn format_str_segment<'a, 'buf>(seg: &StrSegment<'a>, buf: &mut Buf<'buf>, indent: u16) {
     use StrSegment::*;
 
@@ -347,7 +384,8 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::Or => buf.push_str("||"),
         called_via::BinOp::Pizza => buf.push_str("|>"),
         called_via::BinOp::Assignment => unreachable!(),
-        called_via::BinOp::HasType => unreachable!(),
+        called_via::BinOp::IsAliasType => unreachable!(),
+        called_via::BinOp::IsOpaqueType => unreachable!(),
         called_via::BinOp::Backpassing => unreachable!(),
     }
 }
@@ -432,7 +470,13 @@ fn fmt_bin_ops<'a, 'buf>(
         buf.spaces(1);
     }
 
-    loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
+    let next_indent = if is_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, next_indent);
 }
 
 fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
@@ -1067,7 +1111,11 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::GreaterThanOrEq
                     | BinOp::And
                     | BinOp::Or => true,
-                    BinOp::Pizza | BinOp::Assignment | BinOp::HasType | BinOp::Backpassing => false,
+                    BinOp::Pizza
+                    | BinOp::Assignment
+                    | BinOp::IsAliasType
+                    | BinOp::IsOpaqueType
+                    | BinOp::Backpassing => false,
                 })
         }
         Expr::If(_, _) => true,

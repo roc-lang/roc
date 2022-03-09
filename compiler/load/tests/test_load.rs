@@ -23,13 +23,44 @@ mod test_load {
     use roc_load::file::LoadedModule;
     use roc_module::ident::ModuleName;
     use roc_module::symbol::{Interns, ModuleId};
+    use roc_problem::can::Problem;
+    use roc_region::all::LineInfo;
+    use roc_reporting::report::can_problem;
+    use roc_reporting::report::RocDocAllocator;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
 
     // HELPERS
+
+    fn format_can_problems(
+        problems: Vec<Problem>,
+        home: ModuleId,
+        interns: &Interns,
+        filename: PathBuf,
+        src: &str,
+    ) -> String {
+        use ven_pretty::DocAllocator;
+
+        let src_lines: Vec<&str> = src.split('\n').collect();
+        let lines = LineInfo::new(src);
+        let alloc = RocDocAllocator::new(&src_lines, home, interns);
+        let reports = problems
+            .into_iter()
+            .map(|problem| can_problem(&alloc, &lines, filename.clone(), problem).pretty(&alloc));
+
+        let mut buf = String::new();
+        alloc
+            .stack(reports)
+            .append(alloc.line())
+            .1
+            .render_raw(70, &mut roc_reporting::report::CiWrite::new(&mut buf))
+            .unwrap();
+        buf
+    }
 
     fn multiple_modules(files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
         use roc_load::file::LoadingProblem;
@@ -43,11 +74,19 @@ mod test_load {
             Ok(Err(loading_problem)) => Err(format!("{:?}", loading_problem)),
             Ok(Ok(mut loaded_module)) => {
                 let home = loaded_module.module_id;
+                let (filepath, src) = loaded_module.sources.get(&home).unwrap();
 
-                assert_eq!(
-                    loaded_module.can_problems.remove(&home).unwrap_or_default(),
-                    Vec::new()
-                );
+                let can_problems = loaded_module.can_problems.remove(&home).unwrap_or_default();
+                if !can_problems.is_empty() {
+                    return Err(format_can_problems(
+                        can_problems,
+                        home,
+                        &loaded_module.interns,
+                        filepath.clone(),
+                        src,
+                    ));
+                }
+
                 assert_eq!(
                     loaded_module
                         .type_problems
@@ -67,7 +106,6 @@ mod test_load {
     ) -> Result<Result<LoadedModule, roc_load::file::LoadingProblem<'a>>, std::io::Error> {
         use std::fs::{self, File};
         use std::io::Write;
-        use std::path::PathBuf;
         use tempfile::tempdir;
 
         let stdlib = roc_builtins::std::standard_stdlib();
@@ -609,7 +647,7 @@ mod test_load {
                 "platform/Package-Config.roc",
                 indoc!(
                     r#"
-                        platform "examples/hello-world"
+                        platform "hello-c"
                             requires {} { main : Str }
                             exposes []
                             packages {}
@@ -653,7 +691,7 @@ mod test_load {
                 "platform/Package-Config.roc",
                 indoc!(
                     r#"
-                    platform "examples/hello-world"
+                    platform "hello-world"
                         requires {} { main : { content: Str, other: Str } }
                         exposes []
                         packages {}
@@ -681,5 +719,82 @@ mod test_load {
         ];
 
         assert!(multiple_modules(modules).is_ok());
+    }
+
+    #[test]
+    fn opaque_wrapped_unwrapped_outside_defining_module() {
+        let modules = vec![
+            (
+                "Age",
+                indoc!(
+                    r#"
+                    interface Age exposes [ Age ] imports []
+
+                    Age := U32
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                    interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
+
+                    twenty = $Age 20
+
+                    readAge = \$Age n -> n
+                    "#
+                ),
+            ),
+        ];
+
+        let err = multiple_modules(modules).unwrap_err();
+        let err = strip_ansi_escapes::strip(err).unwrap();
+        let err = String::from_utf8(err).unwrap();
+        assert_eq!(
+            err,
+            indoc!(
+                r#"
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ──────────────────────────────────────────
+
+                The unwrapped opaque type Age referenced here:
+
+                3│  twenty = $Age 20
+                             ^^^^
+
+                is imported from another module:
+
+                1│  interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
+                                                                         ^^^^^^^^^^^
+
+                Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
+
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ──────────────────────────────────────────
+
+                The unwrapped opaque type Age referenced here:
+
+                5│  readAge = \$Age n -> n
+                               ^^^^
+
+                is imported from another module:
+
+                1│  interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
+                                                                         ^^^^^^^^^^^
+
+                Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
+
+                ── UNUSED IMPORT ───────────────────────────────────────────────────────────────
+
+                Nothing from Age is used in this module.
+
+                1│  interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
+                                                                         ^^^^^^^^^^^
+
+                Since Age isn't used, you don't need to import it.
+                "#
+            ),
+            "\n{}",
+            err
+        );
     }
 }

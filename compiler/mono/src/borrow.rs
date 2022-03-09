@@ -934,7 +934,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     // - other refcounted arguments are Borrowed
     match op {
         ListLen | StrIsEmpty | StrCountGraphemes => arena.alloc_slice_copy(&[borrowed]),
-        ListSet => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        ListReplaceUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListConcat => arena.alloc_slice_copy(&[owned, owned]),
         StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
@@ -984,7 +984,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         NumToStr | NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumLogUnchecked
         | NumRound | NumCeiling | NumFloor | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos
-        | NumAsin | NumIntCast => arena.alloc_slice_copy(&[irrelevant]),
+        | NumAsin | NumIntCast | NumToIntChecked => arena.alloc_slice_copy(&[irrelevant]),
         NumBytesToU16 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[owned, borrowed]),
