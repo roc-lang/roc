@@ -55,3 +55,10 @@ where
 {
     run_test()
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefCount {
+    Live(u32),
+    Deallocated,
+    Constant,
+}

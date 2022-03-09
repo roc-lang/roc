@@ -647,7 +647,7 @@ mod test_load {
                 "platform/Package-Config.roc",
                 indoc!(
                     r#"
-                        platform "examples/hello-world"
+                        platform "hello-c"
                             requires {} { main : Str }
                             exposes []
                             packages {}
@@ -691,7 +691,7 @@ mod test_load {
                 "platform/Package-Config.roc",
                 indoc!(
                     r#"
-                    platform "examples/hello-world"
+                    platform "hello-world"
                         requires {} { main : { content: Str, other: Str } }
                         exposes []
                         packages {}

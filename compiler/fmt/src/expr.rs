@@ -143,11 +143,17 @@ impl<'a> Formattable for Expr<'a> {
                 } else {
                     buf.indent(indent);
                     buf.push('(');
+                    let next_indent = if starts_with_newline(sub_expr) {
+                        indent + INDENT
+                    } else {
+                        indent
+                    };
+
                     sub_expr.format_with_options(
                         buf,
                         Parens::NotNeeded,
                         Newlines::Yes,
-                        indent + INDENT,
+                        next_indent,
                     );
                     buf.indent(indent);
                     buf.push(')');
@@ -304,6 +310,30 @@ impl<'a> Formattable for Expr<'a> {
     }
 }
 
+fn starts_with_newline(expr: &Expr) -> bool {
+    use roc_parse::ast::Expr::*;
+
+    match expr {
+        SpaceBefore(_, comment_or_newline) => {
+            if !comment_or_newline.is_empty() {
+                // safe because we check the length before
+                comment_or_newline.get(0).unwrap().is_newline()
+            } else {
+                false
+            }
+        }
+        SpaceAfter(_, comment_or_newline) => {
+            if !(**comment_or_newline).is_empty() {
+                // safe because we check the length before
+                comment_or_newline.get(0).unwrap().is_newline()
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
 fn format_str_segment<'a, 'buf>(seg: &StrSegment<'a>, buf: &mut Buf<'buf>, indent: u16) {
     use StrSegment::*;
 
@@ -440,7 +470,13 @@ fn fmt_bin_ops<'a, 'buf>(
         buf.spaces(1);
     }
 
-    loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
+    let next_indent = if is_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, next_indent);
 }
 
 fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
