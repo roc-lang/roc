@@ -36,7 +36,8 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
         LambdaSet(lambda_set) => basic_type_from_layout(env, &lambda_set.runtime_representation()),
         Union(union_layout) => basic_type_from_union_layout(env, union_layout),
         RecursivePointer => env
-            .ptr_int()
+            .context
+            .i64_type()
             .ptr_type(AddressSpace::Generic)
             .as_basic_type_enum(),
 
