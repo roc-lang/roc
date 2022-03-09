@@ -216,9 +216,9 @@ fn add_indents(
                     consumer.token(Token::SameIndent, *curr_byte_ctr, 0);
                 }
                 Ordering::Greater => {
-                    // safe unwrap because we check first
                     while state.indents.last().is_some()
                         && curr_line_indent < *state.indents.last().unwrap()
+                    // safe unwrap because we check first
                     {
                         state.indents.pop();
                         consumer.token(Token::CloseIndent, *curr_byte_ctr, 0);
@@ -237,9 +237,22 @@ fn add_indents(
 
 impl TokenTable {
     pub fn extract_str<'a>(&self, index: usize, content: &'a str) -> &'a str {
-        // TODO remove unwrap
-        let len = *self.lengths.get(index).unwrap();
-        let offset = *self.offsets.get(index).unwrap();
+        // Not returning a result here because weaving it through highlight_parser makes it more difficult to expand and understand.
+        // The only way I think this can panic is by calling position! in highlight_parser after the last element, which does not make sense to begin with.
+        let len = *self.lengths.get(index).unwrap_or_else(|| {
+            panic!(
+                "Index {:?} was out of bounds for TokenTable.lengths with len {:?}",
+                index,
+                self.lengths.len()
+            )
+        });
+        let offset = *self.offsets.get(index).unwrap_or_else(|| {
+            panic!(
+                "Index {:?} was out of bounds for TokenTable.offsets with len {:?}",
+                index,
+                self.lengths.len()
+            )
+        });
 
         &content[offset..(offset + len)]
     }

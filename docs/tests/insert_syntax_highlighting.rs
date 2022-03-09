@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate pretty_assertions;
+// Keep this around until the commented out tests can be enabled again.
 /*#[macro_use]
 extern crate indoc;*/
 
@@ -43,6 +44,8 @@ mod insert_doc_syntax_highlighting {
         expect_html_expr("2", r#"<span class="syntax-number">2</span>"#);
     }
 
+    // These tests have been commented out due to introduction of a new syntax highlighting approach.
+    // You can make these tests work by following the instructions at the top of this file here: roc/highlight/src/highlight_parser.rs
     /*#[test]
     fn string_expr() {
         expect_html_expr(r#""abc""#, r#"<span class="syntax-string">"abc"</span>"#);

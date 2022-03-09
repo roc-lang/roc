@@ -241,38 +241,4 @@ pub mod highlight_tests {
 
         assert_eq!(&str_buffer, "a = 0\n\n");
     }
-
-    /*#[test]
-      fn test_highlight_defs() {
-        let mut mark_node_pool = SlowPool::default();
-
-        let res =
-          highlight_defs(
-            r#"0
-    1"#,
-            &mut mark_node_pool
-          );
-
-        assert!(
-          all_highlight_style(res, HighlightStyle::Number, 2, &mark_node_pool)
-        );
-      }
-
-      fn all_highlight_style(parse_res: Result<Vec<MarkNodeId>, ParseError<usize>>, highlight_style: HighlightStyle, expected_len: usize, mark_node_pool: &SlowPool) -> bool {
-        let node_vec = parse_res
-          .unwrap();
-
-        assert_eq!(node_vec.len(), expected_len);
-
-        node_vec
-        .iter()
-        .all(|m_node| has_highlight_style(mark_node_pool.get(*m_node), highlight_style))
-      }
-
-      fn has_highlight_style(mark_node: &MarkupNode, highlight_style: HighlightStyle) -> bool {
-        match *mark_node {
-          MarkupNode::Text { syn_high_style, .. } => syn_high_style == highlight_style,
-          _ => false,
-        }
-      }*/
 }

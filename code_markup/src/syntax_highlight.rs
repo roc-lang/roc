@@ -20,9 +20,9 @@ pub enum HighlightStyle {
     Blank,
     Comment,
     DocsComment,
-    UppercaseIdent, // TODO remove other HighlightStyle subtypes of UppercaseIdent?
-    LowercaseIdent, // TODO remove other HighlightStyle subtypes of LowercaseIdent?
-    Keyword,        // if, else, when
+    UppercaseIdent,
+    LowercaseIdent, // TODO we probably don't want all lowercase identifiers to have the same color?
+    Keyword,        // if, else, when...
 }
 
 pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {

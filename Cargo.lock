@@ -3734,7 +3734,6 @@ dependencies = [
  "criterion 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "encode_unicode",
  "indoc",
- "peg",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",

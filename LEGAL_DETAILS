@@ -203,7 +203,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 * Zig - https://ziglang.org
 
-This source code can be found in compiler/builtins/bitcode/src/hash.zig and compiler/parse/tests/peg_grammar.rs and is licensed under the following terms:
+This source code can be found in compiler/builtins/bitcode/src/hash.zig, highlight/tests/peg_grammar.rs and highlight/src/highlight_parser.rs and is licensed under the following terms:
 
 
 The MIT License (Expat)
