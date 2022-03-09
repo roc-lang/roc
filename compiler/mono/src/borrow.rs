@@ -734,7 +734,7 @@ impl<'a> BorrowInfState<'a> {
             }
 
             ExprUnbox { symbol: x } => {
-                // if the structure (record/tag/array) is owned, the extracted value is
+                // if the boxed value is owned, the box is
                 self.if_is_owned_then_own(*x, z);
 
                 // if the extracted value is owned, the structure must be too
