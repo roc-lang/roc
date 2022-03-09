@@ -736,14 +736,14 @@ test1 =
 
     #[test]
     fn test_hello() {
-        let tokens = tokenize(&example_path("hello-world/Hello.roc"));
+        let tokens = tokenize(&example_path("hello-world/helloWorld.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
 
     #[test]
     fn test_fibo() {
-        let tokens = tokenize(&example_path("fib/Fib.roc"));
+        let tokens = tokenize(&example_path("algorithms/fibonacci.roc"));
         dbg!(&tokens);
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -812,13 +812,6 @@ test1 =
     }
 
     #[test]
-    fn test_cons_list() {
-        let tokens = tokenize(&example_path("effect/ConsList.roc"));
-        dbg!(&tokens);
-        assert_eq!(tokenparser::module(&tokens), Ok(()));
-    }
-
-    #[test]
     fn test_when_in_defs() {
         let tokens = tokenize(
             r#"fromBytes = \bytes ->
@@ -883,7 +876,7 @@ test1 =
 
     #[test]
     fn test_cli_echo() {
-        let tokens = tokenize(&example_path("cli/echo.roc"));
+        let tokens = tokenize(&example_path("interactive/echo.roc"));
         dbg!(&tokens);
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
