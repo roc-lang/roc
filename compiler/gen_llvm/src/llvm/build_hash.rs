@@ -4,7 +4,7 @@ use crate::llvm::build::tag_pointer_clear_tag_id;
 use crate::llvm::build::Env;
 use crate::llvm::build::{get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
 use crate::llvm::build_str;
-use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_tag_as_alloca};
+use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::values::{
     BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
@@ -13,7 +13,7 @@ use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
-use super::convert::stack_basic_type_from_union_layout;
+use super::convert::argument_type_from_union_layout;
 
 #[derive(Clone, Debug)]
 enum WhenRecursive<'a> {
@@ -318,7 +318,7 @@ fn build_hash_tag<'a, 'ctx, 'env>(
         None => {
             let seed_type = env.context.i64_type();
 
-            let arg_type = stack_basic_type_from_union_layout(env, union_layout);
+            let arg_type = argument_type_from_union_layout(env, union_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -797,7 +797,7 @@ fn hash_ptr_to_struct<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     use inkwell::types::BasicType;
 
-    let wrapper_type = basic_type_from_layout_tag_as_alloca(env, &Layout::Union(*union_layout));
+    let wrapper_type = argument_type_from_union_layout(env, union_layout);
 
     // cast the opaque pointer to a pointer of the correct shape
     let wrapper_ptr = env
