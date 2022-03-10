@@ -2581,6 +2581,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         let align_bytes = layout.alignment_bytes(env.target_info);
 
                         if align_bytes > 0 {
+                            debug_assert!(value.is_pointer_value(), "{:?}\n{:?}", value, layout);
                             let value_ptr = value.into_pointer_value();
 
                             // We can only do this if the function itself writes data into this
