@@ -1301,7 +1301,7 @@ fn build_box_eq<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = basic_type_from_layout_1(env, box_layout);
+            let arg_type = basic_type_from_layout(env, box_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,

@@ -35,7 +35,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
         } => basic_type_from_record(env, sorted_fields),
         LambdaSet(lambda_set) => basic_type_from_layout(env, &lambda_set.runtime_representation()),
         Boxed(inner_layout) => {
-            let inner_type = basic_type_from_layout_1(env, inner_layout);
+            let inner_type = basic_type_from_layout(env, inner_layout);
 
             inner_type.ptr_type(AddressSpace::Generic).into()
         }
