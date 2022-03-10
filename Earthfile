@@ -13,10 +13,15 @@ install-other-libs:
 
 install-zig-llvm-valgrind-clippy-rustfmt:
     FROM +install-other-libs
+    # editor
+    RUN apt -y install libxkbcommon-dev
     # zig
     RUN wget -c https://ziglang.org/download/0.8.0/zig-linux-x86_64-0.8.0.tar.xz --no-check-certificate
     RUN tar -xf zig-linux-x86_64-0.8.0.tar.xz
     RUN ln -s /earthbuild/zig-linux-x86_64-0.8.0/zig /usr/bin/zig
+    # zig builtins wasm tests
+    RUN apt -y install build-essential
+    RUN cargo install wasmer-cli --features "singlepass"
     # llvm
     RUN apt -y install lsb-release software-properties-common gnupg
     RUN wget https://apt.llvm.org/llvm.sh
@@ -39,8 +44,6 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack
     # criterion
     RUN cargo install cargo-criterion
-    # editor
-    RUN apt -y install libxkbcommon-dev
     # sccache
     RUN cargo install sccache
     RUN sccache -V
@@ -55,7 +58,7 @@ copy-dirs:
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     COPY --dir compiler/builtins/bitcode ./
-    RUN cd bitcode && ./run-tests.sh
+    RUN cd bitcode && ./run-tests.sh && ./run-wasm-tests.sh
 
 check-clippy:
     FROM +copy-dirs
