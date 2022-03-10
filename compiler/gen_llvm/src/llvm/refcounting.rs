@@ -5,7 +5,7 @@ use crate::llvm::build::{
     FAST_CALL_CONV, TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
+use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
@@ -19,6 +19,8 @@ use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_target::TargetInfo;
+
+use super::convert::argument_type_from_union_layout;
 
 /// "Infinite" reference count, for static values
 /// Ref counts are encoded as negative numbers where isize::MIN represents 1
@@ -1618,7 +1620,8 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     when_recursive: &WhenRecursive<'a>,
     fields: &'a [&'a [Layout<'a>]],
 ) -> FunctionValue<'ctx> {
-    let layout = Layout::Union(UnionLayout::NonRecursive(fields));
+    let union_layout = UnionLayout::NonRecursive(fields);
+    let layout = Layout::Union(union_layout);
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
@@ -1635,7 +1638,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout_1(env, &layout);
+            let basic_type = argument_type_from_union_layout(env, &union_layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_union_help(

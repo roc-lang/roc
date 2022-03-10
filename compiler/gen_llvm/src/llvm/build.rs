@@ -24,7 +24,7 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    self, basic_type_from_builtin, basic_type_from_layout, basic_type_from_layout_1,
+    self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
     block_of_memory_slices,
 };
 use crate::llvm::refcounting::{
@@ -4225,7 +4225,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
     for (layout, _) in args.iter() {
-        let arg_type = basic_type_from_layout_1(env, layout);
+        let arg_type = argument_type_from_layout(env, layout);
 
         arg_basic_types.push(arg_type);
     }

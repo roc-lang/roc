@@ -2,7 +2,7 @@ use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::{get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
-use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
+use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::types::BasicType;
 use inkwell::values::{
@@ -15,6 +15,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
 use super::build::load_roc_value;
+use super::convert::argument_type_from_union_layout;
 
 #[derive(Clone, Debug)]
 enum WhenRecursive<'a> {
@@ -176,7 +177,6 @@ fn build_eq<'a, 'ctx, 'env>(
             env,
             layout_ids,
             when_recursive,
-            lhs_layout,
             union_layout,
             lhs_val,
             rhs_val,
@@ -207,7 +207,6 @@ fn build_eq<'a, 'ctx, 'env>(
                     env,
                     layout_ids,
                     WhenRecursive::Loop(union_layout),
-                    &layout,
                     &union_layout,
                     field1_cast.into(),
                     field2_cast.into(),
@@ -350,7 +349,6 @@ fn build_neq<'a, 'ctx, 'env>(
                 env,
                 layout_ids,
                 when_recursive,
-                lhs_layout,
                 union_layout,
                 lhs_val,
                 rhs_val,
@@ -764,7 +762,6 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     when_recursive: WhenRecursive<'a>,
-    tag_layout: &Layout<'a>,
     union_layout: &UnionLayout<'a>,
     tag1: BasicValueEnum<'ctx>,
     tag2: BasicValueEnum<'ctx>,
@@ -772,15 +769,16 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
+    let tag_layout = Layout::Union(*union_layout);
     let symbol = Symbol::GENERIC_EQ;
     let fn_name = layout_ids
-        .get(symbol, tag_layout)
+        .get(symbol, &tag_layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = basic_type_from_layout_1(env, tag_layout);
+            let arg_type = argument_type_from_union_layout(env, union_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
