@@ -64,49 +64,6 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
 
             env.context.struct_type(&[data, tag_id_type], false).into()
         }
-<<<<<<< HEAD
-        Boxed(inner_layout) => {
-            let inner_type = basic_type_from_layout_1(env, inner_layout);
-
-            inner_type.ptr_type(AddressSpace::Generic).into()
-        }
-        Union(union_layout) => {
-            use UnionLayout::*;
-
-            let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
-
-            match union_layout {
-                NonRecursive(tags) => {
-                    let data = block_of_memory_slices(env.context, tags, env.target_info);
-                    let struct_type = env.context.struct_type(&[data, tag_id_type], false);
-
-                    struct_type.ptr_type(AddressSpace::Generic).into()
-                }
-                Recursive(tags)
-                | NullableWrapped {
-                    other_tags: tags, ..
-                } => {
-                    let data = block_of_memory_slices(env.context, tags, env.target_info);
-
-                    if union_layout.stores_tag_id_as_data(env.target_info) {
-                        env.context
-                            .struct_type(&[data, tag_id_type], false)
-                            .ptr_type(AddressSpace::Generic)
-                            .into()
-                    } else {
-                        data.ptr_type(AddressSpace::Generic).into()
-                    }
-                }
-                NullableUnwrapped { other_fields, .. } => {
-                    let block =
-                        block_of_memory_slices(env.context, &[other_fields], env.target_info);
-                    block.ptr_type(AddressSpace::Generic).into()
-                }
-                NonNullableUnwrapped(fields) => {
-                    let block = block_of_memory_slices(env.context, &[fields], env.target_info);
-                    block.ptr_type(AddressSpace::Generic).into()
-                }
-=======
         Recursive(tags)
         | NullableWrapped {
             other_tags: tags, ..
@@ -120,7 +77,6 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
                     .into()
             } else {
                 data.ptr_type(AddressSpace::Generic).into()
->>>>>>> origin/trunk
             }
         }
         NullableUnwrapped { other_fields, .. } => {
