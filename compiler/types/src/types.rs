@@ -713,11 +713,8 @@ impl Type {
         }
     }
 
-    pub fn symbols(&self) -> ImSet<Symbol> {
-        let mut found_symbols = ImSet::default();
-        symbols_help(self, &mut found_symbols);
-
-        found_symbols
+    pub fn symbols(&self) -> Vec<Symbol> {
+        symbols_help(self)
     }
 
     /// a shallow dealias, continue until the first constructor is not an alias.
@@ -934,62 +931,61 @@ impl Type {
     }
 }
 
-fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
+fn symbols_help(initial: &Type) -> Vec<Symbol> {
     use Type::*;
 
-    match tipe {
-        Function(args, closure, ret) => {
-            symbols_help(ret, accum);
-            symbols_help(closure, accum);
-            args.iter().for_each(|arg| symbols_help(arg, accum));
-        }
-        FunctionOrTagUnion(_, _, ext) => {
-            symbols_help(ext, accum);
-        }
-        RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
-            symbols_help(ext, accum);
-            tags.iter()
-                .map(|v| v.1.iter())
-                .flatten()
-                .for_each(|arg| symbols_help(arg, accum));
-        }
+    let mut output = vec![];
+    let mut stack = vec![initial];
 
-        Record(fields, ext) => {
-            symbols_help(ext, accum);
-            fields.values().for_each(|field| {
-                use RecordField::*;
+    while let Some(tipe) = stack.pop() {
+        match tipe {
+            Function(args, closure, ret) => {
+                stack.push(ret);
+                stack.push(closure);
+                stack.extend(args);
+            }
+            FunctionOrTagUnion(_, _, ext) => {
+                stack.push(ext);
+            }
+            RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+                stack.push(ext);
+                stack.extend(tags.iter().map(|v| v.1.iter()).flatten());
+            }
 
-                match field {
-                    Optional(arg) => symbols_help(arg, accum),
-                    Required(arg) => symbols_help(arg, accum),
-                    Demanded(arg) => symbols_help(arg, accum),
-                }
-            });
+            Record(fields, ext) => {
+                stack.push(ext);
+                stack.extend(fields.values().map(|field| field.as_inner()));
+            }
+            Alias {
+                symbol: alias_symbol,
+                actual: actual_type,
+                ..
+            } => {
+                output.push(*alias_symbol);
+                stack.push(actual_type);
+            }
+            HostExposedAlias { name, actual, .. } => {
+                output.push(*name);
+                stack.push(actual);
+            }
+            Apply(symbol, args, _) => {
+                output.push(*symbol);
+                stack.extend(args);
+            }
+            Erroneous(Problem::CyclicAlias(alias, _, _)) => {
+                output.push(*alias);
+            }
+            RangedNumber(typ, _) => {
+                stack.push(typ);
+            }
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
-        Alias {
-            symbol: alias_symbol,
-            actual: actual_type,
-            ..
-        } => {
-            accum.insert(*alias_symbol);
-            symbols_help(actual_type, accum);
-        }
-        HostExposedAlias { name, actual, .. } => {
-            accum.insert(*name);
-            symbols_help(actual, accum);
-        }
-        Apply(symbol, args, _) => {
-            accum.insert(*symbol);
-            args.iter().for_each(|arg| symbols_help(arg, accum));
-        }
-        Erroneous(Problem::CyclicAlias(alias, _, _)) => {
-            accum.insert(*alias);
-        }
-        RangedNumber(typ, _) => {
-            symbols_help(typ, accum);
-        }
-        EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
     }
+
+    output.sort();
+    output.dedup();
+
+    output
 }
 
 fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
