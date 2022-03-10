@@ -188,11 +188,17 @@ impl<'a> LowLevelCall<'a> {
             // Str
             StrConcat => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT),
             StrJoinWith => self.load_args_and_call_zig(backend, bitcode::STR_JOIN_WITH),
-            StrIsEmpty => {
-                self.load_args(backend);
-                backend.code_builder.i64_const(i64::MIN);
-                backend.code_builder.i64_eq();
-            }
+            StrIsEmpty => match backend.storage.get(&self.arguments[0]) {
+                StoredValue::StackMemory { location, .. } => {
+                    let (local_id, offset) =
+                        location.local_and_offset(backend.storage.stack_frame_pointer);
+                    backend.code_builder.get_local(local_id);
+                    backend.code_builder.i32_load8_u(Align::Bytes1, offset + 11);
+                    backend.code_builder.i32_const(0x80);
+                    backend.code_builder.i32_eq();
+                }
+                _ => internal_error!("invalid storage for Str"),
+            },
             StrStartsWith => self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH),
             StrStartsWithCodePt => {
                 self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_CODE_PT)
@@ -224,7 +230,7 @@ impl<'a> LowLevelCall<'a> {
                         &bitcode::STR_TO_FLOAT[float_width]
                     }
                     Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
-                    rest => internal_error!("Unexpected builtin {:?} for StrToNum", rest),
+                    rest => internal_error!("Unexpected layout {:?} for StrToNum", rest),
                 };
 
                 self.load_args_and_call_zig(backend, intrinsic);
