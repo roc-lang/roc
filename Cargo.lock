@@ -1770,13 +1770,13 @@ dependencies = [
 name = "inkwell"
 version = "0.1.0"
 dependencies = [
- "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1)",
+ "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?branch=master)",
 ]
 
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1#e15d665227b2acad4ca949820d80048e09f3f4e5"
+source = "git+https://github.com/rtfeldman/inkwell?branch=master#b3fb82c653ffe754e078ac778d7fd9a619a26c0c"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1789,7 +1789,7 @@ dependencies = [
 [[package]]
 name = "inkwell_internals"
 version = "0.5.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1#e15d665227b2acad4ca949820d80048e09f3f4e5"
+source = "git+https://github.com/rtfeldman/inkwell?branch=master#b3fb82c653ffe754e078ac778d7fd9a619a26c0c"
 dependencies = [
  "proc-macro2",
  "quote",

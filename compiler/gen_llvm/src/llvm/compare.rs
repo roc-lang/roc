@@ -1101,8 +1101,10 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             let i8_type = env.context.i8_type();
 
             let sum = env.builder.build_int_add(
-                env.builder.build_int_cast(is_null_1, i8_type, "to_u8"),
-                env.builder.build_int_cast(is_null_2, i8_type, "to_u8"),
+                env.builder
+                    .build_int_cast_sign_flag(is_null_1, i8_type, false, "to_u8"),
+                env.builder
+                    .build_int_cast_sign_flag(is_null_2, i8_type, false, "to_u8"),
                 "sum_is_null",
             );
 

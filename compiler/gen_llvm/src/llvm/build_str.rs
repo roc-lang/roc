@@ -179,7 +179,7 @@ pub fn str_number_of_bytes<'a, 'ctx, 'env>(
 
     // cast to the appropriate usize of the current build
     env.builder
-        .build_int_cast(length, env.ptr_int(), "len_as_usize")
+        .build_int_cast_sign_flag(length, env.ptr_int(), false, "len_as_usize")
 }
 
 /// Str.startsWith : Str, Str -> Bool
