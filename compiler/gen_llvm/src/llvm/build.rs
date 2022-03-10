@@ -24,7 +24,7 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    self, basic_type_from_builtin, basic_type_from_layout, basic_type_from_layout_1,
+    self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
     block_of_memory_slices,
 };
 use crate::llvm::refcounting::{
@@ -2605,6 +2605,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         let align_bytes = layout.alignment_bytes(env.target_info);
 
                         if align_bytes > 0 {
+                            debug_assert!(value.is_pointer_value(), "{:?}\n{:?}", value, layout);
                             let value_ptr = value.into_pointer_value();
 
                             // We can only do this if the function itself writes data into this
@@ -4249,7 +4250,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
     for (layout, _) in args.iter() {
-        let arg_type = basic_type_from_layout_1(env, layout);
+        let arg_type = argument_type_from_layout(env, layout);
 
         arg_basic_types.push(arg_type);
     }
