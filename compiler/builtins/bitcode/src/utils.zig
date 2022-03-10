@@ -38,14 +38,14 @@ fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*c_void {
 }
 
 fn testing_roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, _: u32) callconv(.C) ?*c_void {
-    const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
+    const ptr = @ptrCast([*]u8, @alignCast(2 * @alignOf(usize), c_ptr));
     const slice = ptr[0..old_size];
 
     return @ptrCast(?*c_void, std.testing.allocator.realloc(slice, new_size) catch unreachable);
 }
 
 fn testing_roc_dealloc(c_ptr: *c_void, _: u32) callconv(.C) void {
-    const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
+    const ptr = @ptrCast([*]u8, @alignCast(2 * @alignOf(usize), c_ptr));
 
     std.testing.allocator.destroy(ptr);
 }

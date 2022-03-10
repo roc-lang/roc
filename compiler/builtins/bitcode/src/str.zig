@@ -1840,13 +1840,13 @@ test "strTrim: large to large" {
 }
 
 test "strTrim: large to small" {
-    const original_bytes = "             hello world         ";
+    const original_bytes = "             hello         ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = "hello world";
+    const expected_bytes = "hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1859,13 +1859,13 @@ test "strTrim: large to small" {
 }
 
 test "strTrim: small to small" {
-    const original_bytes = " hello world ";
+    const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(original.isSmallStr());
 
-    const expected_bytes = "hello world";
+    const expected_bytes = "hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1911,13 +1911,13 @@ test "strTrimLeft: large to large" {
 }
 
 test "strTrimLeft: large to small" {
-    const original_bytes = "                    hello world ";
+    const original_bytes = "                    hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = "hello world ";
+    const expected_bytes = "hello ";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1930,13 +1930,13 @@ test "strTrimLeft: large to small" {
 }
 
 test "strTrimLeft: small to small" {
-    const original_bytes = " hello world ";
+    const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(original.isSmallStr());
 
-    const expected_bytes = "hello world ";
+    const expected_bytes = "hello ";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1982,13 +1982,13 @@ test "strTrimRight: large to large" {
 }
 
 test "strTrimRight: large to small" {
-    const original_bytes = " hello world                    ";
+    const original_bytes = " hello                    ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = " hello world";
+    const expected_bytes = " hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -2001,13 +2001,13 @@ test "strTrimRight: large to small" {
 }
 
 test "strTrimRight: small to small" {
-    const original_bytes = " hello world ";
+    const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(original.isSmallStr());
 
-    const expected_bytes = " hello world";
+    const expected_bytes = " hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
