@@ -1628,13 +1628,9 @@ fn correct_mutual_recursive_type_alias<'a>(
     original_aliases: &SendMap<Symbol, Alias>,
     var_store: &mut VarStore,
 ) -> SendMap<Symbol, Alias> {
-    let mut symbols_introduced = ImSet::default();
+    let symbols_introduced: Vec<Symbol> = original_aliases.keys().copied().collect();
 
-    for (key, _) in original_aliases.iter() {
-        symbols_introduced.insert(*key);
-    }
-
-    let all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
+    let all_successors_with_self = |symbol: &Symbol| -> Vec<Symbol> {
         match original_aliases.get(symbol) {
             Some(alias) => {
                 let mut loc_succ = alias.typ.symbols();
@@ -1643,7 +1639,7 @@ fn correct_mutual_recursive_type_alias<'a>(
 
                 loc_succ
             }
-            None => ImSet::default(),
+            None => vec![],
         }
     };
 
