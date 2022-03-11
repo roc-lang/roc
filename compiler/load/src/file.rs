@@ -12,6 +12,7 @@ use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
     constrain_imports, constrain_module, ExposedByModule, ExposedForModule, ExposedModuleTypes,
 };
+use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, PackageQualified,
@@ -3078,6 +3079,8 @@ fn run_solve<'a>(
     let constrain_start = SystemTime::now();
 
     // see if there are imported modules from which nothing is actually used
+    // this is an odd time to check this, it should be part of canonicalization.
+    // one thing we miss is if only types are imported, but all are unused
     let mut unused_imports = imported_modules;
 
     let (mut rigid_vars, mut def_types) =
@@ -3101,14 +3104,18 @@ fn run_solve<'a>(
     for symbol in exposed_for_module.imported_symbols {
         unused_imports.remove(&symbol.module_id());
 
-        match exposed_for_module
-            .exposed_by_module
-            .get_mut(&symbol.module_id())
-        {
+        let module_id = symbol.module_id();
+        match exposed_for_module.exposed_by_module.get_mut(&module_id) {
             Some(t) => match t {
                 ExposedModuleTypes::Invalid => {
-                    // idk, just skip?
-                    continue;
+                    // make the type a flex var, so it unifies with anything
+                    // this way the error is only reported in the module it originates in
+                    let variable = subs.fresh_unnamed_flex_var();
+
+                    def_types.push((
+                        symbol,
+                        Loc::at_zero(roc_types::types::Type::Variable(variable)),
+                    ));
                 }
                 ExposedModuleTypes::Valid {
                     stored_vars_by_symbol,
@@ -3137,7 +3144,9 @@ fn run_solve<'a>(
                     ));
                 }
             },
-            None => todo!(),
+            None => {
+                internal_error!("Imported module {:?} is not available", module_id)
+            }
         }
     }
 
