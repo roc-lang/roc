@@ -682,6 +682,10 @@ impl<'a> LowLevelCall<'a> {
             Hash => todo!("{:?}", self.lowlevel),
 
             Eq | NotEq => self.eq_or_neq(backend),
+
+            BoxExpr | UnboxExpr => {
+                unreachable!("The {:?} operation is turned into mono Expr", self.lowlevel)
+            }
         }
     }
 
@@ -741,6 +745,8 @@ impl<'a> LowLevelCall<'a> {
                     backend.code_builder.i32_eqz();
                 }
             }
+
+            Layout::Boxed(_) => todo!(),
 
             Layout::RecursivePointer => {
                 internal_error!(

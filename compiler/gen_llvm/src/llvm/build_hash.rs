@@ -72,6 +72,11 @@ fn build_hash_layout<'a, 'ctx, 'env>(
 
         Layout::Union(union_layout) => build_hash_tag(env, layout_ids, union_layout, seed, val),
 
+        Layout::Boxed(_inner_layout) => {
+            // build_hash_box(env, layout_ids, layout, inner_layout, seed, val)
+            todo!()
+        }
+
         Layout::RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be hashed directly")
