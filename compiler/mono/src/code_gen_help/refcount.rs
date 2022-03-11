@@ -346,12 +346,13 @@ fn refcount_str<'a>(
 ) -> Stmt<'a> {
     let string = Symbol::ARG_1;
     let layout_isize = root.layout_isize;
+    let field_layouts = root.arena.alloc([LAYOUT_PTR, layout_isize, layout_isize]);
 
     // Get the last word as a signed int
     let last_word = root.create_symbol(ident_ids, "last_word");
     let last_word_expr = Expr::StructAtIndex {
         index: 2,
-        field_layouts: root.arena.alloc([LAYOUT_PTR, layout_isize]),
+        field_layouts,
         structure: string,
     };
     let last_word_stmt = |next| Stmt::Let(last_word, last_word_expr, layout_isize, next);
@@ -377,7 +378,7 @@ fn refcount_str<'a>(
     let elements = root.create_symbol(ident_ids, "elements");
     let elements_expr = Expr::StructAtIndex {
         index: 0,
-        field_layouts: root.arena.alloc([LAYOUT_PTR, layout_isize]),
+        field_layouts,
         structure: string,
     };
     let elements_stmt = |next| Stmt::Let(elements, elements_expr, layout_isize, next);
@@ -478,7 +479,7 @@ fn refcount_list<'a>(
     let elements = root.create_symbol(ident_ids, "elements");
     let elements_expr = Expr::StructAtIndex {
         index: 0,
-        field_layouts: arena.alloc([box_layout, layout_isize]),
+        field_layouts: arena.alloc([box_layout, layout_isize, layout_isize]),
         structure,
     };
     let elements_stmt = |next| Stmt::Let(elements, elements_expr, box_layout, next);
