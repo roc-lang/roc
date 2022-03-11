@@ -309,7 +309,7 @@ impl Constraints {
         let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_contraint);
 
-        Constraint::Let(let_index)
+        Constraint::Let(let_index, Slice::default())
     }
 
     #[inline(always)]
@@ -335,7 +335,7 @@ impl Constraints {
         let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_contraint);
 
-        Constraint::Let(let_index)
+        Constraint::Let(let_index, Slice::default())
     }
 
     #[inline(always)]
@@ -368,7 +368,40 @@ impl Constraints {
         let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_contraint);
 
-        Constraint::Let(let_index)
+        Constraint::Let(let_index, Slice::default())
+    }
+
+    #[inline(always)]
+    pub fn let_import_constraint<I1, I2>(
+        &mut self,
+        rigid_vars: I1,
+        def_types: I2,
+        ret_constraint: Constraint,
+        pool_variables: &[Variable],
+    ) -> Constraint
+    where
+        I1: IntoIterator<Item = Variable>,
+        I2: IntoIterator<Item = (Symbol, Loc<Type>)>,
+        I2::IntoIter: ExactSizeIterator,
+    {
+        let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
+
+        self.constraints.push(Constraint::True);
+        self.constraints.push(ret_constraint);
+
+        let let_contraint = LetConstraint {
+            rigid_vars: self.variable_slice(rigid_vars),
+            flex_vars: Slice::default(),
+            def_types: self.def_types_slice(def_types),
+            defs_and_ret_constraint,
+        };
+
+        let let_index = Index::new(self.let_constraints.len() as _);
+        self.let_constraints.push(let_contraint);
+
+        let pool_slice = self.variable_slice(pool_variables.iter().copied());
+
+        Constraint::Let(let_index, pool_slice)
     }
 
     #[inline(always)]
@@ -416,7 +449,7 @@ impl Constraints {
             Constraint::Pattern(..) => false,
             Constraint::True => false,
             Constraint::SaveTheEnvironment => true,
-            Constraint::Let(index) => {
+            Constraint::Let(index, _) => {
                 let let_constraint = &self.let_constraints[index.index()];
 
                 let offset = let_constraint.defs_and_ret_constraint.index();
@@ -455,7 +488,7 @@ impl Constraints {
 
 static_assertions::assert_eq_size!([u8; 3 * 8], Constraint);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Constraint {
     Eq(Index<Type>, Index<Expected<Type>>, Index<Category>, Region),
     Store(Index<Type>, Variable, Index<&'static str>, u32),
@@ -468,7 +501,7 @@ pub enum Constraint {
     ),
     True, // Used for things that always unify, e.g. blanks and runtime errors
     SaveTheEnvironment,
-    Let(Index<LetConstraint>),
+    Let(Index<LetConstraint>, Slice<Variable>),
     And(Slice<Constraint>),
     /// Presence constraints
     IsOpenType(Index<Type>), // Theory; always applied to a variable? if yes the use that
@@ -502,4 +535,43 @@ pub struct IncludesTag {
     pub types: Slice<Type>,
     pub pattern_category: Index<PatternCategory>,
     pub region: Region,
+}
+
+impl std::fmt::Debug for Constraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Eq(arg0, arg1, arg2, arg3) => {
+                write!(f, "Eq({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+            }
+            Self::Store(arg0, arg1, arg2, arg3) => {
+                write!(f, "Store({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+            }
+            Self::Lookup(arg0, arg1, arg2) => f
+                .debug_tuple("Lookup")
+                .field(arg0)
+                .field(arg1)
+                .field(arg2)
+                .finish(),
+            Self::Pattern(arg0, arg1, arg2, arg3) => f
+                .debug_tuple("Pattern")
+                .field(arg0)
+                .field(arg1)
+                .field(arg2)
+                .field(arg3)
+                .finish(),
+            Self::True => write!(f, "True"),
+            Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),
+            Self::Let(arg0, arg1) => f.debug_tuple("Let").field(arg0).field(arg1).finish(),
+            Self::And(arg0) => f.debug_tuple("And").field(arg0).finish(),
+            Self::IsOpenType(arg0) => f.debug_tuple("IsOpenType").field(arg0).finish(),
+            Self::IncludesTag(arg0) => f.debug_tuple("IncludesTag").field(arg0).finish(),
+            Self::PatternPresence(arg0, arg1, arg2, arg3) => f
+                .debug_tuple("PatternPresence")
+                .field(arg0)
+                .field(arg1)
+                .field(arg2)
+                .field(arg3)
+                .finish(),
+        }
+    }
 }

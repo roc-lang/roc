@@ -38,7 +38,6 @@ pub struct Import {
 pub fn constrain_imported_values(
     constraints: &mut Constraints,
     imports: Vec<Import>,
-    stored_imports: Vec<HackyImport>,
     body_con: Constraint,
     var_store: &mut VarStore,
 ) -> (Vec<Variable>, Constraint) {
@@ -96,17 +95,11 @@ pub fn constrain_imported_values(
 pub fn constrain_imports(
     constraints: &mut Constraints,
     imported_symbols: Vec<Import>,
-    stored_imports: Vec<HackyImport>,
     constraint: Constraint,
     var_store: &mut VarStore,
 ) -> Constraint {
-    let (_introduced_rigids, constraint) = constrain_imported_values(
-        constraints,
-        imported_symbols,
-        stored_imports,
-        constraint,
-        var_store,
-    );
+    let (_introduced_rigids, constraint) =
+        constrain_imported_values(constraints, imported_symbols, constraint, var_store);
 
     // TODO determine what to do with those rigids
     //    for var in introduced_rigids {
@@ -116,6 +109,57 @@ pub fn constrain_imports(
     constraint
 }
 
+pub fn constrain_imports2(
+    imports: Vec<Import>,
+    var_store: &mut VarStore,
+) -> (Vec<Variable>, Vec<(Symbol, Loc<roc_types::types::Type>)>) {
+    let mut def_types = Vec::new();
+    let mut rigid_vars = Vec::new();
+
+    for import in imports {
+        let mut free_vars = FreeVars::default();
+        let loc_symbol = import.loc_symbol;
+
+        // an imported symbol can be either an alias or a value
+        match import.solved_type {
+            SolvedType::Alias(symbol, _, _, _, _) if symbol == loc_symbol.value => {
+                // do nothing, in the future the alias definitions should not be in the list of imported values
+            }
+            _ => {
+                let typ = roc_types::solved_types::to_type(
+                    &import.solved_type,
+                    &mut free_vars,
+                    var_store,
+                );
+
+                def_types.push((
+                    loc_symbol.value,
+                    Loc {
+                        region: loc_symbol.region,
+                        value: typ,
+                    },
+                ));
+
+                for (_, var) in free_vars.named_vars {
+                    rigid_vars.push(var);
+                }
+
+                for var in free_vars.wildcards {
+                    rigid_vars.push(var);
+                }
+
+                // Variables can lose their name during type inference. But the unnamed
+                // variables are still part of a signature, and thus must be treated as rigids here!
+                for (_, var) in free_vars.unnamed_vars {
+                    rigid_vars.push(var);
+                }
+            }
+        }
+    }
+
+    (rigid_vars, def_types)
+}
+
 pub struct ConstrainableImports {
     pub imported_symbols: Vec<Import>,
     pub hacky_symbols: Vec<HackyImport>,
@@ -123,11 +167,11 @@ pub struct ConstrainableImports {
     pub unused_imports: MutMap<ModuleId, Region>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HackyImport {
-    storage_subs: StorageSubs,
-    loc_symbol: Loc<Symbol>,
-    variable: Variable,
+    pub storage_subs: StorageSubs,
+    pub loc_symbol: Loc<Symbol>,
+    pub variable: Variable,
 }
 
 /// Run this before constraining imports.

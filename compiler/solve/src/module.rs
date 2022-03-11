@@ -69,7 +69,7 @@ pub fn exposed_types_storage_subs(
     let mut stored_vars_by_symbol = Vec::with_capacity(exposed_vars_by_symbol.len());
 
     for (symbol, var) in exposed_vars_by_symbol.iter() {
-        let new_var = storage_subs.extend_with_variable(subs, *var);
+        let new_var = storage_subs.import_variable_from(subs, *var).variable;
         stored_vars_by_symbol.push((*symbol, new_var));
     }
 

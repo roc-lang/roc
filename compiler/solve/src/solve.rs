@@ -189,6 +189,7 @@ pub fn run_in_place(
     constraint: &Constraint,
 ) -> Env {
     let mut pools = Pools::default();
+
     let state = State {
         env: env.clone(),
         mark: Mark::NONE.next(),
@@ -234,6 +235,9 @@ enum Work<'a> {
         env: &'a Env,
         rank: Rank,
         let_con: &'a LetConstraint,
+
+        /// Used for imports
+        pool_variables: &'a [Variable],
     },
 }
 
@@ -294,6 +298,10 @@ fn solve(
 
                 let mut new_env = env.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
+                    println!(
+                        "introducing {:?} at rank {:?} with no variables",
+                        symbol, rank,
+                    );
                     new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                 }
 
@@ -306,7 +314,12 @@ fn solve(
 
                 continue;
             }
-            Work::LetConIntroducesVariables { env, rank, let_con } => {
+            Work::LetConIntroducesVariables {
+                env,
+                rank,
+                let_con,
+                pool_variables,
+            } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
                 let ret_constraint = &constraints.constraints[offset + 1];
@@ -320,6 +333,7 @@ fn solve(
                 let visit_mark = young_mark.next();
                 let final_mark = visit_mark.next();
 
+                dbg!(&pools);
                 // Add a variable for each def to local_def_vars.
                 let local_def_vars = LocalDefVarsVec::from_def_types(
                     constraints,
@@ -329,6 +343,24 @@ fn solve(
                     subs,
                     let_con.def_types,
                 );
+
+                pools.get_mut(next_rank).extend(pool_variables);
+                dbg!(&pools);
+
+                for (symbol, loc_var) in local_def_vars.iter() {
+                    let rigid = &constraints.variables[let_con.rigid_vars.indices()];
+                    let flex = &constraints.variables[let_con.flex_vars.indices()];
+
+                    println!(
+                        "introducing {:?} at rank {:?} with variables {:?} {:?}",
+                        symbol, next_rank, rigid, flex
+                    );
+
+                    //                    if rigid.len() > 6 && format!("{:?}", symbol).contains("after") {
+                    //                        dbg!(&subs, symbol, loc_var);
+                    //                        panic!();
+                    //                    }
+                }
 
                 debug_assert_eq!(
                     {
@@ -510,6 +542,9 @@ fn solve(
                         // then we copy from that module's Subs into our own. If the value
                         // is being looked up in this module, then we use our Subs as both
                         // the source and destination.
+
+                        // dbg!(&subs, symbol, var, rank);
+
                         let actual = deep_copy_var_in(subs, rank, pools, var, arena);
                         let expectation = &constraints.expectations[expectation_index.index()];
 
@@ -619,7 +654,7 @@ fn solve(
                     }
                 }
             }
-            Let(index) => {
+            Let(index, pool_slice) => {
                 let let_con = &constraints.let_constraints[index.index()];
 
                 let offset = let_con.defs_and_ret_constraint.index();
@@ -629,7 +664,11 @@ fn solve(
                 let flex_vars = &constraints.variables[let_con.flex_vars.indices()];
                 let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
 
+                let pool_variables = &constraints.variables[pool_slice.indices()];
+
                 if matches!(&ret_constraint, True) && let_con.rigid_vars.is_empty() {
+                    debug_assert!(pool_variables.is_empty());
+
                     introduce(subs, rank, pools, flex_vars);
 
                     // If the return expression is guaranteed to solve,
@@ -642,6 +681,8 @@ fn solve(
 
                     state
                 } else if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() {
+                    debug_assert!(pool_variables.is_empty());
+
                     // items are popped from the stack in reverse order. That means that we'll
                     // first solve then defs_constraint, and then (eventually) the ret_constraint.
                     //
@@ -689,7 +730,12 @@ fn solve(
                     //
                     // Note that the LetConSimple gets the current env and rank,
                     // and not the env/rank from after solving the defs_constraint
-                    stack.push(Work::LetConIntroducesVariables { env, rank, let_con });
+                    stack.push(Work::LetConIntroducesVariables {
+                        env,
+                        rank,
+                        let_con,
+                        pool_variables,
+                    });
                     stack.push(Work::Constraint {
                         env,
                         rank: next_rank,

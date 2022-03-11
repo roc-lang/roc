@@ -10,8 +10,8 @@ use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
-    constrain_imports, constrain_module, pre_constrain_imports, ConstrainableImports,
-    ExposedModuleTypes, HackyImport, Import, SubsByModule,
+    constrain_imports, constrain_imports2, constrain_module, pre_constrain_imports,
+    ConstrainableImports, ExposedModuleTypes, HackyImport, Import, SubsByModule,
 };
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -3098,15 +3098,20 @@ fn run_solve<'a>(
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
 
-    // Finish constraining the module by wrapping the existing Constraint
-    // in the ones we just computed. We can do this off the main thread.
-    let constraint = constrain_imports(
-        &mut constraints,
-        imported_symbols,
-        imported_storage_subs,
-        constraint,
-        &mut var_store,
-    );
+    // only retain symbols that are not provided with a storage subs
+    let mut imported_symbols = imported_symbols;
+
+    const NEW_TYPES: bool = true;
+
+    if NEW_TYPES {
+        imported_symbols.retain(|k| {
+            !imported_storage_subs
+                .iter()
+                .any(|i| k.loc_symbol.value == i.loc_symbol.value)
+        });
+    }
+
+    let (mut rigid_vars, mut def_types) = constrain_imports2(imported_symbols, &mut var_store);
 
     let constrain_end = SystemTime::now();
 
@@ -3123,8 +3128,43 @@ fn run_solve<'a>(
     // if false { debug_assert!(constraint.validate(), "{:?}", &constraint); }
 
     let mut subs = Subs::new_from_varstore(var_store);
+
+    println!("new variables starting at {:?}", subs.len());
+
+    let mut import_variables = Vec::new();
+
+    if NEW_TYPES {
+        for mut import in imported_storage_subs {
+            //            if format!("{:?}", import.loc_symbol.value).contains("after") {
+            //                dbg!(&import.storage_subs, import.variable, import.loc_symbol);
+            //            }
+            let copied_import = import
+                .storage_subs
+                .export_variable_to(&mut subs, import.variable);
+
+            rigid_vars.extend(copied_import.rigid);
+            // not a typo; rigids are turned into flex during type inference, but when imported we must
+            // consider them rigid variables
+            rigid_vars.extend(copied_import.flex);
+
+            import_variables.extend(copied_import.registered);
+
+            def_types.push((
+                import.loc_symbol.value,
+                Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+            ));
+        }
+    }
+
+    let actual_constraint =
+        constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
+
+    dbg!(&subs);
+
+    dbg!(&import_variables);
+
     let (solved_subs, solved_env, problems) =
-        roc_solve::module::run_solve(&constraints, constraint, rigid_variables, subs);
+        roc_solve::module::run_solve(&constraints, actual_constraint, rigid_variables, subs);
 
     let exposed_vars_by_symbol: Vec<_> = solved_env
         .vars_by_symbol()
