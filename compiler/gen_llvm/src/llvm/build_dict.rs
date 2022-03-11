@@ -67,7 +67,12 @@ pub fn dict_len<'a, 'ctx, 'env>(
             );
 
             env.builder
-                .build_int_cast(length_i64.into_int_value(), env.ptr_int(), "to_usize")
+                .build_int_cast_sign_flag(
+                    length_i64.into_int_value(),
+                    env.ptr_int(),
+                    false,
+                    "to_usize",
+                )
                 .into()
         }
         _ => unreachable!("Invalid layout given to Dict.len : {:?}", dict_layout),

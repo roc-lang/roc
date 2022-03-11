@@ -23,11 +23,11 @@ echo = \shout ->
     shout
         |> Str.toUtf8
         |> List.mapWithIndex
-        (\_, i ->
-            length = (List.len (Str.toUtf8 shout) - i)
-            phrase = (List.split (Str.toUtf8 shout) length).before
+            (\_, i ->
+                length = (List.len (Str.toUtf8 shout) - i)
+                phrase = (List.split (Str.toUtf8 shout) length).before
 
-            List.concat (silence (if i == 0 then 2 * length else length)) phrase)
+                List.concat (silence (if i == 0 then 2 * length else length)) phrase)
         |> List.join
         |> Str.fromUtf8
         |> Result.withDefault ""

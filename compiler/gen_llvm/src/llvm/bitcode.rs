@@ -260,8 +260,12 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
                     tag_value.into(),
                 );
 
-                env.builder
-                    .build_int_cast(tag_id_i64, env.context.i16_type(), "to_i16")
+                env.builder.build_int_cast_sign_flag(
+                    tag_id_i64,
+                    env.context.i16_type(),
+                    true,
+                    "to_i16",
+                )
             };
 
             let answer = env.builder.build_int_compare(

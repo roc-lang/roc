@@ -5,7 +5,7 @@ use crate::llvm::build::{
     FAST_CALL_CONV, TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
+use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
@@ -19,6 +19,8 @@ use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_target::TargetInfo;
+
+use super::convert::argument_type_from_union_layout;
 
 /// "Infinite" reference count, for static values
 /// Ref counts are encoded as negative numbers where isize::MIN represents 1
@@ -589,6 +591,12 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             modify_refcount_builtin(env, layout_ids, mode, when_recursive, layout, builtin)
         }
 
+        Boxed(inner) => {
+            let function = modify_refcount_boxed(env, layout_ids, mode, inner);
+
+            Some(function)
+        }
+
         Union(variant) => {
             use UnionLayout::*;
 
@@ -886,6 +894,76 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     builder.build_unconditional_branch(cont_block);
 
     builder.position_at_end(cont_block);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
+fn modify_refcount_boxed<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
+    inner_layout: &'a Layout<'a>,
+) -> FunctionValue<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let boxed_layout = env.arena.alloc(Layout::Boxed(inner_layout));
+
+    let (_, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_boxed",
+        "decrement_boxed",
+        boxed_layout,
+        mode,
+    );
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let basic_type = basic_type_from_layout(env, boxed_layout);
+            let function_value = build_header(env, basic_type, mode, &fn_name);
+
+            modify_refcount_box_help(env, mode, inner_layout, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+
+    function
+}
+
+fn modify_refcount_box_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    mode: Mode,
+    inner_layout: &Layout<'a>,
+    fn_val: FunctionValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Add a basic block for the entry point
+    let entry = ctx.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, fn_val);
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
+
+    let boxed = arg_val.into_pointer_value();
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, boxed);
+    let call_mode = mode_to_call_mode(fn_val, mode);
+    let boxed_layout = Layout::Boxed(inner_layout);
+    refcount_ptr.modify(call_mode, &boxed_layout, env);
 
     // this function returns void
     builder.build_return(None);
@@ -1619,7 +1697,8 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     when_recursive: &WhenRecursive<'a>,
     fields: &'a [&'a [Layout<'a>]],
 ) -> FunctionValue<'ctx> {
-    let layout = Layout::Union(UnionLayout::NonRecursive(fields));
+    let union_layout = UnionLayout::NonRecursive(fields);
+    let layout = Layout::Union(union_layout);
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
@@ -1636,7 +1715,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout_1(env, &layout);
+            let basic_type = argument_type_from_union_layout(env, &union_layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_union_help(
@@ -1700,9 +1779,9 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         .build_load(tag_id_ptr, "load_tag_id")
         .into_int_value();
 
-    let tag_id_u8 = env
-        .builder
-        .build_int_cast(tag_id, env.context.i8_type(), "tag_id_u8");
+    let tag_id_u8 =
+        env.builder
+            .build_int_cast_sign_flag(tag_id, env.context.i8_type(), false, "tag_id_u8");
 
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
