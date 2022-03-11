@@ -8576,17 +8576,19 @@ I need all branches in an `if` to have the same type!
                 insertHelper : UnknownType, Type -> Type
                 insertHelper = \h, m ->
                     when m is
-                        Constructor h2 -> Constructor h 
+                        Constructor _ -> Constructor h 
+
+                insertHelper
                 "#
             ),
             indoc!(
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
 
-                I cannot find a `UnkownType` value
+                I cannot find a `UnknownType` value
 
-                1│  Type : [ Constructor UnkownType ]
-                                         ^^^^^^^^^^
+                1│  Type : [ Constructor UnknownType ]
+                                         ^^^^^^^^^^^
 
                 Did you mean one of these?
 
@@ -8594,14 +8596,13 @@ I need all branches in an `if` to have the same type!
                     Unsigned8
                     Unsigned32
                     Unsigned16
-
 
                 ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
 
-                I cannot find a `UnkownType` value
+                I cannot find a `UnknownType` value
 
-                3│  insertHelper : UnkownType, Type -> Type
-                                                       ^^^^
+                3│  insertHelper : UnknownType, Type -> Type
+                                                        ^^^^
 
                 Did you mean one of these?
 
@@ -8609,8 +8610,7 @@ I need all branches in an `if` to have the same type!
                     Unsigned8
                     Unsigned32
                     Unsigned16
-
-                ────────────────────────────────────────────────────────────────────────────────"#
+                "#
             ),
         )
     }
