@@ -239,6 +239,12 @@ fn insert_reset<'a>(
                 stack.push((symbol, expr, expr_layout));
                 stmt = rest;
             }
+
+            ExprBox { .. } | ExprUnbox { .. } => {
+                // TODO
+                break;
+            }
+
             Literal(_)
             | Call(_)
             | Tag { .. }
@@ -620,6 +626,8 @@ fn has_live_var_expr<'a>(expr: &'a Expr<'a>, needle: Symbol) -> bool {
             symbol, arguments, ..
         } => needle == *symbol || arguments.iter().any(|s| *s == needle),
         Expr::Reset { symbol, .. } => needle == *symbol,
+        Expr::ExprBox { symbol, .. } => needle == *symbol,
+        Expr::ExprUnbox { symbol, .. } => needle == *symbol,
         Expr::RuntimeErrorFunction(_) => false,
     }
 }

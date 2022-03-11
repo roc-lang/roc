@@ -2781,3 +2781,35 @@ fn to_float_f64() {
         f64
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// https://github.com/rtfeldman/roc/issues/2696
+fn upcast_of_int_is_zext() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Num.toU16 0b1000_0000u8
+            "#
+        ),
+        128,
+        u16
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+// https://github.com/rtfeldman/roc/issues/2696
+fn upcast_of_int_checked_is_zext() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Num.toU16Checked 0b1000_0000u8 is
+                Ok 128u16 -> 1u8
+                _ -> 0u8
+            "#
+        ),
+        1,
+        u16
+    )
+}

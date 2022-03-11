@@ -39,7 +39,7 @@ const QUAD_VERTS: [Vertex; 4] = [
     },
 ];
 
-pub const MAX_QUADS: usize = 100_000;
+pub const MAX_QUADS: usize = 1_000;
 
 pub fn create_rect_buffers(
     gpu_device: &wgpu::Device,
@@ -59,7 +59,7 @@ pub fn create_rect_buffers(
     });
 
     let quad_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("iced_wgpu::quad instance buffer"),
+        label: None,
         size: mem::size_of::<Quad>() as u64 * MAX_QUADS as u64,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,

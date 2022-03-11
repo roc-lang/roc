@@ -594,6 +594,10 @@ impl<'a> WasmBackend<'a> {
                 index,
             } => self.expr_union_at_index(*structure, *tag_id, union_layout, *index, sym),
 
+            Expr::ExprBox { .. } | Expr::ExprUnbox { .. } => {
+                todo!("Expression `{}`", expr.to_pretty(100))
+            }
+
             Expr::Reuse { .. } | Expr::Reset { .. } | Expr::RuntimeErrorFunction(_) => {
                 todo!("Expression `{}`", expr.to_pretty(100))
             }
