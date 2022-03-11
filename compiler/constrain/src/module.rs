@@ -5,7 +5,7 @@ use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::{FreeVars, SolvedType};
-use roc_types::subs::{VarStore, Variable};
+use roc_types::subs::{StorageSubs, VarStore, Variable};
 use roc_types::types::{Alias, Problem};
 
 pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
@@ -111,8 +111,16 @@ pub fn constrain_imports(
 
 pub struct ConstrainableImports {
     pub imported_symbols: Vec<Import>,
+    pub hacky_symbols: Vec<HackyImport>,
     pub imported_aliases: MutMap<Symbol, Alias>,
     pub unused_imports: MutMap<ModuleId, Region>,
+}
+
+#[derive(Debug)]
+pub struct HackyImport {
+    storage_subs: StorageSubs,
+    loc_symbol: Loc<Symbol>,
+    variable: Variable,
 }
 
 /// Run this before constraining imports.
@@ -128,6 +136,7 @@ pub fn pre_constrain_imports(
     stdlib: &StdLib,
 ) -> ConstrainableImports {
     let mut imported_symbols = Vec::with_capacity(references.len());
+    let mut hacky_symbols = Vec::with_capacity(references.len());
     let mut imported_aliases = MutMap::default();
     let mut unused_imports = imported_modules; // We'll remove these as we encounter them.
 
@@ -198,6 +207,19 @@ pub fn pre_constrain_imports(
                             loc_symbol,
                             solved_type: solved_type.clone(),
                         });
+
+                        let variable = stored_vars_by_symbol
+                            .iter()
+                            .find(|(s, _)| *s == loc_symbol.value)
+                            .unwrap()
+                            .1;
+
+                        hacky_symbols.push(HackyImport {
+                            loc_symbol,
+                            variable,
+                            // TODO very bad, so much cloning!
+                            storage_subs: storage_subs.clone(),
+                        });
                     }
                 }
                 Some(ExposedModuleTypes::Invalid) => {
@@ -207,6 +229,8 @@ pub fn pre_constrain_imports(
                         loc_symbol,
                         solved_type: SolvedType::Erroneous(Problem::InvalidModule),
                     });
+
+                    // TODO what about storage subs here?
                 }
                 None => {
                     panic!(
@@ -220,6 +244,7 @@ pub fn pre_constrain_imports(
 
     ConstrainableImports {
         imported_symbols,
+        hacky_symbols,
         imported_aliases,
         unused_imports,
     }

@@ -11,7 +11,7 @@ use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
     constrain_imports, constrain_module, pre_constrain_imports, ConstrainableImports,
-    ExposedModuleTypes, Import, SubsByModule,
+    ExposedModuleTypes, HackyImport, Import, SubsByModule,
 };
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -730,6 +730,7 @@ enum BuildTask<'a> {
         module: Module,
         ident_ids: IdentIds,
         imported_symbols: Vec<Import>,
+        imported_storage_subs: Vec<HackyImport>,
         module_timing: ModuleTiming,
         constraints: Constraints,
         constraint: ConstraintSoa,
@@ -3052,8 +3053,9 @@ impl<'a> BuildTask<'a> {
         // (which would be more expensive for the main thread).
         let ConstrainableImports {
             imported_symbols,
-            imported_aliases: _,
+            imported_aliases: _, // TODO well then... do we even need those?
             unused_imports,
+            hacky_symbols,
         } = pre_constrain_imports(
             home,
             &module.references,
@@ -3067,6 +3069,7 @@ impl<'a> BuildTask<'a> {
             module,
             ident_ids,
             imported_symbols,
+            imported_storage_subs: hacky_symbols,
             constraints,
             constraint,
             var_store,
@@ -3084,6 +3087,7 @@ fn run_solve<'a>(
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
     imported_symbols: Vec<Import>,
+    imported_storage_subs: Vec<HackyImport>,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     mut var_store: VarStore,
@@ -3770,6 +3774,7 @@ fn run_task<'a>(
             module,
             module_timing,
             imported_symbols,
+            imported_storage_subs,
             constraints,
             constraint,
             var_store,
@@ -3782,6 +3787,7 @@ fn run_task<'a>(
             ident_ids,
             module_timing,
             imported_symbols,
+            imported_storage_subs,
             constraints,
             constraint,
             var_store,
