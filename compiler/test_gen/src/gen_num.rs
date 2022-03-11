@@ -2798,7 +2798,7 @@ fn upcast_of_int_is_zext() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 // https://github.com/rtfeldman/roc/issues/2696
 fn upcast_of_int_checked_is_zext() {
     assert_evals_to!(
