@@ -241,22 +241,7 @@ pub fn pre_constrain_imports(
                     storage_subs,
                     stored_vars_by_symbol,
                 }) => {
-                    // If the exposed value was invalid (e.g. it didn't have
-                    // a corresponding definition), it won't have an entry
-                    // in solved_types
-                    if let Some(solved_type) = solved_types.get(&symbol) {
-                        // TODO should this be a union?
-                        for (k, v) in new_aliases.clone() {
-                            imported_aliases.insert(k, v);
-                        }
-
-                        continue;
-
-                        imported_symbols.push(Import {
-                            loc_symbol,
-                            solved_type: solved_type.clone(),
-                        });
-                    }
+                    // do nothing, basically
                 }
                 Some(ExposedModuleTypes::Invalid) => {
                     // If that module was invalid, use True constraints
