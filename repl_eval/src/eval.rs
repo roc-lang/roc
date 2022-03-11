@@ -438,6 +438,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             unreachable!("RecursivePointers can only be inside structures")
         }
         Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
+        Layout::Boxed(_inner) => todo!(),
     };
     result.map(|e| apply_newtypes(env, newtype_containers, e))
 }

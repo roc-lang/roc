@@ -43,7 +43,7 @@ fn pass_element_as_opaque<'a, 'ctx, 'env>(
     env.builder.build_bitcast(
         element_ptr,
         env.context.i8_type().ptr_type(AddressSpace::Generic),
-        "to_opaque",
+        "pass_element_as_opaque",
     )
 }
 
@@ -75,7 +75,7 @@ pub fn pass_as_opaque<'a, 'ctx, 'env>(
     env.builder.build_bitcast(
         ptr,
         env.context.i8_type().ptr_type(AddressSpace::Generic),
-        "to_opaque",
+        "pass_as_opaque",
     )
 }
 
@@ -407,10 +407,19 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
         ListWalk::WalkBackwardsUntil => todo!(),
     };
 
-    let default_ptr = builder.build_alloca(default.get_type(), "default_ptr");
-    env.builder.build_store(default_ptr, default);
+    let default_ptr = if default_layout.is_passed_by_reference() {
+        debug_assert!(default.is_pointer_value());
+        default.into_pointer_value()
+    } else {
+        let default_ptr = builder.build_alloca(default.get_type(), "default_ptr");
+        env.builder.build_store(default_ptr, default);
+        default_ptr
+    };
 
-    let result_ptr = env.builder.build_alloca(default.get_type(), "result");
+    let result_ptr = {
+        let basic_type = basic_type_from_layout(env, default_layout);
+        env.builder.build_alloca(basic_type, "result")
+    };
 
     match variant {
         ListWalk::Walk | ListWalk::WalkBackwards => {
@@ -467,7 +476,11 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
         }
     }
 
-    env.builder.build_load(result_ptr, "load_result")
+    if default_layout.is_passed_by_reference() {
+        result_ptr.into()
+    } else {
+        env.builder.build_load(result_ptr, "load_result")
+    }
 }
 
 /// List.range : Int a, Int a -> List (Int a)

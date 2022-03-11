@@ -271,6 +271,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         RESULT_WITH_DEFAULT => result_with_default,
         RESULT_IS_OK => result_is_ok,
         RESULT_IS_ERR => result_is_err,
+        BOX_BOX_FUNCTION => box_box,
+        BOX_UNBOX => box_unbox,
     }
 }
 
@@ -5324,6 +5326,16 @@ fn num_bytes_to(symbol: Symbol, var_store: &mut VarStore, offset: i64, low_level
         body,
         ret_var,
     )
+}
+
+/// Box.box : a -> Box a
+fn box_box(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::BoxExpr, var_store)
+}
+
+/// Box.unbox : Box a -> a
+fn box_unbox(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::UnboxExpr, var_store)
 }
 
 #[inline(always)]
