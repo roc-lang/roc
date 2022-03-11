@@ -31,12 +31,12 @@ impl Wasm32Sized for () {
 }
 
 impl Wasm32Sized for RocStr {
-    const SIZE_OF_WASM: usize = 8;
+    const SIZE_OF_WASM: usize = 12;
     const ALIGN_OF_WASM: usize = 4;
 }
 
 impl<T: Wasm32Sized + ReferenceCount> Wasm32Sized for RocList<T> {
-    const SIZE_OF_WASM: usize = 8;
+    const SIZE_OF_WASM: usize = 12;
     const ALIGN_OF_WASM: usize = 4;
 }
 
