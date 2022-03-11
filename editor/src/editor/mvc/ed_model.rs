@@ -339,7 +339,7 @@ pub mod test_ed_model {
         )?;
 
         // adjust caret for header and main function
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
+        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 2;
         let caret_w_select = convert_dsl_to_selection(&code_lines)?;
         let adjusted_caret_pos = TextPos {
             line: caret_w_select.caret_pos.line + nr_hello_world_lines,

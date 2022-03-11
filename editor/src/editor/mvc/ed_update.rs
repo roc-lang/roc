@@ -1242,7 +1242,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             for caret_pos in ed_model.get_carets() {
 
                                                 if caret_pos.line > 0 {
+                                                    // TODO print AST before
                                                     insert_new_blank(ed_model, caret_pos.line)?;
+                                                    // TODO print AST after
                                                     ed_model.post_process_ast_update()?;
                                                 }
                                             }
@@ -1409,7 +1411,7 @@ pub mod test_ed_update {
             } else if input_char == '🡱' {
                 ed_model.simple_move_carets_up(1);
             } else {
-                //dbg!(input_char);
+                dbg!(input_char);
                 ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
             }
         }
@@ -1423,7 +1425,7 @@ pub mod test_ed_update {
     }
 
     fn strip_header(lines: &mut Vec<String>) {
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
+        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 2;
         lines.drain(0..nr_hello_world_lines);
     }
 
@@ -1484,7 +1486,7 @@ pub mod test_ed_update {
     fn add_nls(lines: Vec<String>) -> Vec<String> {
         let mut new_lines = lines;
         //Two lines between TLD's, extra newline so the user can go to third line add new def there
-        new_lines.append(&mut vec!["".to_owned(), "".to_owned(), "".to_owned()]);
+        new_lines.append(&mut vec!["".to_owned(), "".to_owned()]);
 
         new_lines
     }
@@ -2576,7 +2578,7 @@ pub mod test_ed_update {
     fn test_enter() -> Result<(), String> {
         assert_insert_seq(
             ovec!["┃"],
-            ovec!["ab = 5", "", "", "cd = \"good┃\"", "", "", ""],
+            ovec!["ab = 5", "", "cd = \"good┃\"", "", ""],
             "ab🡲🡲🡲5\rcd🡲🡲🡲\"good",
         )?;
 
