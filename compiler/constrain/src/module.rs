@@ -13,7 +13,12 @@ pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
 #[derive(Clone, Debug)]
 pub enum ExposedModuleTypes {
     Invalid,
-    Valid(MutMap<Symbol, SolvedType>, MutMap<Symbol, Alias>),
+    Valid {
+        solved_types: MutMap<Symbol, SolvedType>,
+        aliases: MutMap<Symbol, Alias>,
+        stored_vars_by_symbol: Vec<(Symbol, Variable)>,
+        storage_subs: roc_types::subs::StorageSubs,
+    },
 }
 
 pub fn constrain_module(
@@ -174,7 +179,12 @@ pub fn pre_constrain_imports(
             };
 
             match exposed_types.get(&module_id) {
-                Some(ExposedModuleTypes::Valid(solved_types, new_aliases)) => {
+                Some(ExposedModuleTypes::Valid {
+                    solved_types,
+                    aliases: new_aliases,
+                    storage_subs,
+                    stored_vars_by_symbol,
+                }) => {
                     // If the exposed value was invalid (e.g. it didn't have
                     // a corresponding definition), it won't have an entry
                     // in solved_types

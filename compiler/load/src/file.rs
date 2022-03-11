@@ -1832,7 +1832,12 @@ fn update<'a>(
             } else {
                 state.exposed_types.insert(
                     module_id,
-                    ExposedModuleTypes::Valid(solved_module.solved_types, solved_module.aliases),
+                    ExposedModuleTypes::Valid {
+                        solved_types: solved_module.solved_types,
+                        aliases: solved_module.aliases,
+                        stored_vars_by_symbol: solved_module.stored_vars_by_symbol,
+                        storage_subs: solved_module.storage_subs,
+                    },
                 );
 
                 if state.goal_phase > Phase::SolveTypes {
