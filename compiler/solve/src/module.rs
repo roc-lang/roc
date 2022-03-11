@@ -9,7 +9,6 @@ use roc_types::types::Alias;
 
 #[derive(Debug)]
 pub struct SolvedModule {
-    pub solved_types: MutMap<Symbol, SolvedType>,
     pub aliases: MutMap<Symbol, Alias>,
     pub exposed_symbols: Vec<Symbol>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
