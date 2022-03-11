@@ -331,7 +331,7 @@ pub fn canonicalize_defs<'a>(
 
     // Now that we know the alias dependency graph, we can try to insert recursion variables
     // where aliases are recursive tag unions, or detect illegal recursions.
-    let mut aliases = correct_mutual_recursive_type_alias(env, &aliases, var_store);
+    let mut aliases = correct_mutual_recursive_type_alias(env, aliases, var_store);
     for (symbol, alias) in aliases.iter() {
         scope.add_alias(
             *symbol,
@@ -383,7 +383,8 @@ pub fn canonicalize_defs<'a>(
         CanDefs {
             refs_by_symbol,
             can_defs_by_symbol,
-            aliases,
+            // The result needs a thread-safe `SendMap`
+            aliases: aliases.into_iter().collect(),
         },
         scope,
         output,
@@ -901,7 +902,7 @@ fn canonicalize_pending_def<'a>(
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     var_store: &mut VarStore,
     refs_by_symbol: &mut MutMap<Symbol, (Region, References)>,
-    aliases: &mut SendMap<Symbol, Alias>,
+    aliases: &mut ImMap<Symbol, Alias>,
 ) -> Output {
     use PendingDef::*;
 
@@ -1625,9 +1626,9 @@ fn pending_typed_body<'a>(
 /// Make aliases recursive
 fn correct_mutual_recursive_type_alias<'a>(
     env: &mut Env<'a>,
-    original_aliases: &SendMap<Symbol, Alias>,
+    mut original_aliases: SendMap<Symbol, Alias>,
     var_store: &mut VarStore,
-) -> SendMap<Symbol, Alias> {
+) -> ImMap<Symbol, Alias> {
     let symbols_introduced: Vec<Symbol> = original_aliases.keys().copied().collect();
 
     let all_successors_with_self = |symbol: &Symbol| -> Vec<Symbol> {
@@ -1647,44 +1648,39 @@ fn correct_mutual_recursive_type_alias<'a>(
     let defined_symbols: Vec<Symbol> = original_aliases.keys().copied().collect();
 
     let cycles = strongly_connected_components(&defined_symbols, all_successors_with_self);
-    let mut solved_aliases = SendMap::default();
+    let mut solved_aliases = ImMap::default();
 
     for cycle in cycles {
         debug_assert!(!cycle.is_empty());
 
-        let mut pending_aliases: SendMap<_, _> = cycle
+        let mut pending_aliases: ImMap<_, _> = cycle
             .iter()
-            .map(|&sym| (sym, original_aliases.get(&sym).unwrap().clone()))
+            .map(|&sym| (sym, original_aliases.remove(&sym).unwrap()))
             .collect();
 
         // Make sure we report only one error for the cycle, not an error for every
         // alias in the cycle.
         let mut can_still_report_error = true;
 
-        for &rec in cycle.iter() {
-            // First, we need to instantiate the alias with any symbols in the currrent module it
-            // depends on.
-            // We only need to worry about symbols in this SCC or any prior one, since the SCCs
-            // were sorted topologically, and we've already instantiated aliases coming from other
-            // modules.
-            let mut to_instantiate: ImMap<_, _> = solved_aliases.clone().into_iter().collect();
-            let mut others_in_scc = Vec::with_capacity(cycle.len() - 1);
-            for &other in cycle.iter() {
-                if rec != other {
-                    others_in_scc.push(other);
-                    if let Some(alias) = original_aliases.get(&other) {
-                        to_instantiate.insert(other, alias.clone());
-                    }
-                }
-            }
+        // We need to instantiate the alias with any symbols in the currrent module it
+        // depends on.
+        // We only need to worry about symbols in this SCC or any prior one, since the SCCs
+        // were sorted topologically, and we've already instantiated aliases coming from other
+        // modules.
+        // NB: ImMap::clone is O(1): https://docs.rs/im/latest/src/im/hash/map.rs.html#1527-1544
+        let mut to_instantiate = solved_aliases.clone().union(pending_aliases.clone());
 
+        for &rec in cycle.iter() {
             let alias = pending_aliases.get_mut(&rec).unwrap();
+            // Don't try to instantiate the alias itself in its definition.
+            let original_alias_def = to_instantiate.remove(&rec).unwrap();
             alias.typ.instantiate_aliases(
                 alias.region,
                 &to_instantiate,
                 var_store,
                 &mut ImSet::default(),
             );
+            to_instantiate.insert(rec, original_alias_def);
 
             // Now mark the alias recursive, if it needs to be.
             let is_self_recursive = alias.typ.contains_symbol(rec);
