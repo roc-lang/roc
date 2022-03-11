@@ -11,7 +11,7 @@ use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
     constrain_imports, constrain_module, pre_constrain_imports, ConstrainableImports,
-    ExposedModuleTypes, HackyImport, Import, SubsByModule,
+    ExposedByModule, ExposedModuleTypes, HackyImport, Import,
 };
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -567,7 +567,7 @@ struct State<'a> {
     pub platform_data: Option<PlatformData>,
     pub goal_phase: Phase,
     pub stdlib: &'a StdLib,
-    pub exposed_types: SubsByModule,
+    pub exposed_types: ExposedByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
     pub target_info: TargetInfo,
@@ -607,7 +607,7 @@ impl<'a> State<'a> {
         target_info: TargetInfo,
         goal_phase: Phase,
         stdlib: &'a StdLib,
-        exposed_types: SubsByModule,
+        exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     ) -> Self {
@@ -813,7 +813,7 @@ pub fn load_and_typecheck<'a>(
     filename: PathBuf,
     stdlib: &'a StdLib,
     src_dir: &Path,
-    exposed_types: SubsByModule,
+    exposed_types: ExposedByModule,
     target_info: TargetInfo,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
@@ -840,7 +840,7 @@ pub fn load_and_monomorphize<'a>(
     filename: PathBuf,
     stdlib: &'a StdLib,
     src_dir: &Path,
-    exposed_types: SubsByModule,
+    exposed_types: ExposedByModule,
     target_info: TargetInfo,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
@@ -868,7 +868,7 @@ pub fn load_and_monomorphize_from_str<'a>(
     src: &'a str,
     stdlib: &'a StdLib,
     src_dir: &Path,
-    exposed_types: SubsByModule,
+    exposed_types: ExposedByModule,
     target_info: TargetInfo,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
@@ -1034,7 +1034,7 @@ fn load<'a>(
     load_start: LoadStart<'a>,
     stdlib: &'a StdLib,
     src_dir: &Path,
-    exposed_types: SubsByModule,
+    exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
@@ -1070,7 +1070,7 @@ fn load_single_threaded<'a>(
     load_start: LoadStart<'a>,
     stdlib: &'a StdLib,
     src_dir: &Path,
-    exposed_types: SubsByModule,
+    exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
@@ -1246,7 +1246,7 @@ fn load_multi_threaded<'a>(
     load_start: LoadStart<'a>,
     stdlib: &'a StdLib,
     src_dir: &Path,
-    exposed_types: SubsByModule,
+    exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
@@ -3041,7 +3041,7 @@ impl<'a> BuildTask<'a> {
         constraint: ConstraintSoa,
         var_store: VarStore,
         imported_modules: MutMap<ModuleId, Region>,
-        exposed_types: &mut SubsByModule,
+        exposed_types: &mut ExposedByModule,
         stdlib: &StdLib,
         dep_idents: MutMap<ModuleId, IdentIds>,
         declarations: Vec<Declaration>,

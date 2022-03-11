@@ -19,7 +19,7 @@ mod test_load {
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
     use roc_collections::all::MutMap;
-    use roc_constrain::module::SubsByModule;
+    use roc_constrain::module::ExposedByModule;
     use roc_load::file::LoadedModule;
     use roc_module::ident::ModuleName;
     use roc_module::symbol::{Interns, ModuleId};
@@ -159,7 +159,7 @@ mod test_load {
     fn load_fixture(
         dir_name: &str,
         module_name: &str,
-        subs_by_module: SubsByModule,
+        subs_by_module: ExposedByModule,
     ) -> LoadedModule {
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));

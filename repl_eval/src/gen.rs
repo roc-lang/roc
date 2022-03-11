@@ -1,7 +1,6 @@
 use bumpalo::Bump;
 use std::path::{Path, PathBuf};
 
-use roc_collections::all::MutMap;
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
 use roc_load::file::{LoadingProblem, MonomorphizedModule};
@@ -55,7 +54,7 @@ pub fn compile_to_mono<'a>(
 
     let module_src = arena.alloc(promote_expr_to_module(src));
 
-    let exposed_types = MutMap::default();
+    let exposed_types = Default::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,

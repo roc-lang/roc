@@ -8,7 +8,20 @@ use roc_types::solved_types::{FreeVars, SolvedType};
 use roc_types::subs::{StorageSubs, VarStore, Variable};
 use roc_types::types::{Alias, Problem};
 
-pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
+#[derive(Clone, Debug, Default)]
+pub struct ExposedByModule {
+    exposed: MutMap<ModuleId, ExposedModuleTypes>,
+}
+
+impl ExposedByModule {
+    pub fn insert(&mut self, module_id: ModuleId, exposed: ExposedModuleTypes) {
+        self.exposed.insert(module_id, exposed);
+    }
+
+    pub fn get(&self, module_id: &ModuleId) -> Option<&ExposedModuleTypes> {
+        self.exposed.get(module_id)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum ExposedModuleTypes {
@@ -119,7 +132,7 @@ pub fn pre_constrain_imports(
     home: ModuleId,
     references: &MutSet<Symbol>,
     imported_modules: MutMap<ModuleId, Region>,
-    exposed_types: &mut SubsByModule,
+    exposed_types: &mut ExposedByModule,
     stdlib: &StdLib,
 ) -> ConstrainableImports {
     let mut imported_symbols = Vec::with_capacity(references.len());
