@@ -73,6 +73,12 @@ macro_rules! log {
     ($($arg:tt)*) => (if SHOW_MESSAGE_LOG { println!($($arg)*); } else {})
 }
 
+static mut STDLIB: Option<StdLib> = None;
+
+fn borrow_stdlib() -> &'static StdLib {
+    unsafe { &mut STDLIB }.get_or_insert_with(standard_stdlib)
+}
+
 /// Struct storing various intermediate stages by their ModuleId
 #[derive(Debug, Default)]
 struct ModuleCache<'a> {
@@ -246,7 +252,6 @@ fn start_phase<'a>(
                     var_store,
                     imported_modules,
                     &mut state.exposed_types,
-                    state.stdlib,
                     dep_idents,
                     declarations,
                 )
@@ -565,7 +570,6 @@ struct State<'a> {
     pub root_id: ModuleId,
     pub platform_data: Option<PlatformData>,
     pub goal_phase: Phase,
-    pub stdlib: &'a StdLib,
     pub exposed_types: ExposedByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
@@ -605,7 +609,6 @@ impl<'a> State<'a> {
         root_id: ModuleId,
         target_info: TargetInfo,
         goal_phase: Phase,
-        stdlib: &'a StdLib,
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
@@ -617,7 +620,6 @@ impl<'a> State<'a> {
             target_info,
             platform_data: None,
             goal_phase,
-            stdlib,
             output_path: None,
             platform_path: PlatformPath::NotSpecified,
             module_cache: ModuleCache::default(),
@@ -1032,7 +1034,7 @@ enum LoadResult<'a> {
 fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    stdlib: &'a StdLib,
+    _stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
@@ -1044,7 +1046,6 @@ fn load<'a>(
         load_single_threaded(
             arena,
             load_start,
-            stdlib,
             src_dir,
             exposed_types,
             goal_phase,
@@ -1054,7 +1055,6 @@ fn load<'a>(
         load_multi_threaded(
             arena,
             load_start,
-            stdlib,
             src_dir,
             exposed_types,
             goal_phase,
@@ -1068,7 +1068,6 @@ fn load<'a>(
 fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
@@ -1091,7 +1090,6 @@ fn load_single_threaded<'a>(
         root_id,
         target_info,
         goal_phase,
-        stdlib,
         exposed_types,
         arc_modules,
         ident_ids_by_module,
@@ -1244,7 +1242,6 @@ fn state_thread_step<'a>(
 fn load_multi_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
@@ -1261,7 +1258,6 @@ fn load_multi_threaded<'a>(
         root_id,
         target_info,
         goal_phase,
-        stdlib,
         exposed_types,
         arc_modules,
         ident_ids_by_module,
@@ -3040,7 +3036,6 @@ impl<'a> BuildTask<'a> {
         var_store: VarStore,
         imported_modules: MutMap<ModuleId, Region>,
         exposed_types: &mut ExposedByModule,
-        stdlib: &StdLib,
         dep_idents: MutMap<ModuleId, IdentIds>,
         declarations: Vec<Declaration>,
     ) -> Self {
@@ -3091,10 +3086,8 @@ fn run_solve<'a>(
     // see if there are imported modules from which nothing is actually used
     let mut unused_imports = imported_modules;
 
-    let stdlib = standard_stdlib();
-
     let (mut rigid_vars, mut def_types) =
-        constrain_imports(&stdlib, imported_builtins, &mut var_store);
+        constrain_imports(borrow_stdlib(), imported_builtins, &mut var_store);
 
     let constrain_end = SystemTime::now();
 
