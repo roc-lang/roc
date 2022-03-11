@@ -4,14 +4,13 @@ use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
-use roc_builtins::std::StdLib;
+use roc_builtins::std::{standard_stdlib, StdLib};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
-    constrain_imports, constrain_module, pre_constrain_imports, ConstrainableImports,
-    ExposedByModule, ExposedForModule, ExposedModuleTypes, Import,
+    constrain_imports, constrain_module, ExposedByModule, ExposedForModule, ExposedModuleTypes,
 };
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -729,7 +728,7 @@ enum BuildTask<'a> {
     Solve {
         module: Module,
         ident_ids: IdentIds,
-        imported_builtins: Vec<Import>,
+        imported_builtins: Vec<Symbol>,
         exposed_for_module: ExposedForModule,
         module_timing: ModuleTiming,
         constraints: Constraints,
@@ -737,7 +736,8 @@ enum BuildTask<'a> {
         var_store: VarStore,
         declarations: Vec<Declaration>,
         dep_idents: MutMap<ModuleId, IdentIds>,
-        unused_imports: MutMap<ModuleId, Region>,
+        /// Modules that this module imports, and where they are imported
+        imported_modules: MutMap<ModuleId, Region>,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -3044,25 +3044,15 @@ impl<'a> BuildTask<'a> {
         dep_idents: MutMap<ModuleId, IdentIds>,
         declarations: Vec<Declaration>,
     ) -> Self {
-        let home = module.module_id;
+        let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
+        let exposed_for_module = ExposedForModule::new(module.references.iter(), exposed_by_module);
 
-        let our_imports = exposed_types.retain_modules(imported_modules.keys());
-
-        let exposed_for_module = ExposedForModule::new(module.references.iter(), our_imports);
-
-        // Get the constraints for this module's imports. We do this on the main thread
-        // to avoid having to lock the map of exposed types, or to clone it
-        // (which would be more expensive for the main thread).
-        let ConstrainableImports {
-            imported_builtins,
-            unused_imports,
-        } = pre_constrain_imports(
-            home,
-            &module.references,
-            imported_modules,
-            exposed_types,
-            stdlib,
-        );
+        let imported_builtins = module
+            .references
+            .iter()
+            .filter(|s| s.is_builtin())
+            .copied()
+            .collect();
 
         // Next, solve this module in the background.
         Self::Solve {
@@ -3076,7 +3066,7 @@ impl<'a> BuildTask<'a> {
             declarations,
             dep_idents,
             module_timing,
-            unused_imports,
+            imported_modules,
         }
     }
 }
@@ -3086,19 +3076,25 @@ fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
-    imported_builtins: Vec<Import>,
+    imported_builtins: Vec<Symbol>,
     mut exposed_for_module: ExposedForModule,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     mut var_store: VarStore,
     decls: Vec<Declaration>,
     dep_idents: MutMap<ModuleId, IdentIds>,
-    unused_imports: MutMap<ModuleId, Region>,
+    imported_modules: MutMap<ModuleId, Region>,
 ) -> Msg<'a> {
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
 
-    let (mut rigid_vars, mut def_types) = constrain_imports(imported_builtins, &mut var_store);
+    // see if there are imported modules from which nothing is actually used
+    let mut unused_imports = imported_modules;
+
+    let stdlib = standard_stdlib();
+
+    let (mut rigid_vars, mut def_types) =
+        constrain_imports(&stdlib, imported_builtins, &mut var_store);
 
     let constrain_end = SystemTime::now();
 
@@ -3116,6 +3112,8 @@ fn run_solve<'a>(
     let mut import_variables = Vec::new();
 
     for symbol in exposed_for_module.imported_symbols {
+        unused_imports.remove(&symbol.module_id());
+
         match exposed_for_module
             .exposed_by_module
             .get_mut(&symbol.module_id())
@@ -3816,7 +3814,7 @@ fn run_task<'a>(
             ident_ids,
             declarations,
             dep_idents,
-            unused_imports,
+            imported_modules: unused_imports,
         } => Ok(run_solve(
             module,
             ident_ids,

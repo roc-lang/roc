@@ -108,19 +108,50 @@ pub fn introduce_builtin_imports(
     body_con: Constraint,
     var_store: &mut VarStore,
 ) -> Constraint {
-    let (rigid_vars, def_types) = constrain_imports(imports, var_store);
-    constraints.let_import_constraint(rigid_vars, def_types, body_con, &[])
+    // let (rigid_vars, def_types) = constrain_imports(imports, var_store);
+    // constraints.let_import_constraint(rigid_vars, def_types, body_con, &[])
+    todo!()
 }
 
 pub fn constrain_imports(
-    imports: Vec<Import>,
+    stdlib: &StdLib,
+    imports: Vec<Symbol>,
     var_store: &mut VarStore,
 ) -> (Vec<Variable>, Vec<(Symbol, Loc<roc_types::types::Type>)>) {
     let mut def_types = Vec::new();
     let mut rigid_vars = Vec::new();
 
-    for import in imports {
+    for symbol in imports {
         let mut free_vars = FreeVars::default();
+
+        let import = match stdlib.types.get(&symbol) {
+            Some((solved_type, region)) => {
+                let loc_symbol = Loc {
+                    value: symbol,
+                    region: *region,
+                };
+
+                Import {
+                    loc_symbol,
+                    solved_type: solved_type.clone(),
+                }
+            }
+            None => {
+                let is_valid_alias = stdlib.applies.contains(&symbol)
+                        // This wasn't a builtin value or Apply; maybe it was a builtin alias.
+                        || roc_types::builtin_aliases::aliases().contains_key(&symbol);
+
+                if !is_valid_alias {
+                    panic!(
+                        "Could not find {:?} in builtin types {:?} or builtin aliases",
+                        symbol, stdlib.types,
+                    );
+                }
+
+                continue;
+            }
+        };
+
         let loc_symbol = import.loc_symbol;
 
         // an imported symbol can be either an alias or a value
@@ -173,7 +204,7 @@ pub struct ConstrainableImports {
 /// Constraining imports is split into two different functions, because this
 /// part of the work needs to be done on the main thread, whereas the rest of it
 /// can be done on a different thread.
-pub fn pre_constrain_imports(
+fn pre_constrain_imports(
     home: ModuleId,
     references: &MutSet<Symbol>,
     imported_modules: MutMap<ModuleId, Region>,
