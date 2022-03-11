@@ -1035,6 +1035,8 @@ define_builtins! {
         142 NUM_TO_U64_CHECKED: "toU64Checked"
         143 NUM_TO_U128: "toU128"
         144 NUM_TO_U128_CHECKED: "toU128Checked"
+        145 NUM_TO_NAT: "toNat"
+        146 NUM_TO_NAT_CHECKED: "toNatChecked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
