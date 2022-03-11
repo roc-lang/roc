@@ -511,7 +511,7 @@ mod test_load {
                 "w" => "Dep1.Identity {}",
                 "succeed" => "a -> Dep1.Identity a",
                 "yay" => "Res.Res {} err",
-                "withDefault" => "Res.Res a *, a -> a",
+                "withDefault" => "Res.Res a err, a -> a",
             },
         );
     }
@@ -533,7 +533,7 @@ mod test_load {
                 "w" => "Dep1.Identity {}",
                 "succeed" => "a -> Dep1.Identity a",
                 "yay" => "Res.Res {} err",
-                "withDefault" => "Res.Res a *, a -> a",
+                "withDefault" => "Res.Res a err, a -> a",
             },
         );
     }
