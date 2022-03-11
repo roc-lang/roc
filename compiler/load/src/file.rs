@@ -11,7 +11,7 @@ use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
     constrain_imports, constrain_module, pre_constrain_imports, ConstrainableImports,
-    ExposedByModule, ExposedModuleTypes, HackyImport, Import,
+    ExposedByModule, ExposedForModule, ExposedModuleTypes, Import,
 };
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -730,7 +730,7 @@ enum BuildTask<'a> {
         module: Module,
         ident_ids: IdentIds,
         imported_symbols: Vec<Import>,
-        imported_storage_subs: Vec<HackyImport>,
+        exposed_for_module: ExposedForModule,
         module_timing: ModuleTiming,
         constraints: Constraints,
         constraint: ConstraintSoa,
@@ -3048,6 +3048,10 @@ impl<'a> BuildTask<'a> {
     ) -> Self {
         let home = module.module_id;
 
+        let our_imports = exposed_types.retain_modules(imported_modules.keys());
+
+        let exposed_for_module = ExposedForModule::new(module.references.iter(), our_imports);
+
         // Get the constraints for this module's imports. We do this on the main thread
         // to avoid having to lock the map of exposed types, or to clone it
         // (which would be more expensive for the main thread).
@@ -3055,7 +3059,6 @@ impl<'a> BuildTask<'a> {
             imported_symbols,
             imported_aliases: _, // TODO well then... do we even need those?
             unused_imports,
-            hacky_symbols,
         } = pre_constrain_imports(
             home,
             &module.references,
@@ -3069,7 +3072,7 @@ impl<'a> BuildTask<'a> {
             module,
             ident_ids,
             imported_symbols,
-            imported_storage_subs: hacky_symbols,
+            exposed_for_module,
             constraints,
             constraint,
             var_store,
@@ -3087,7 +3090,7 @@ fn run_solve<'a>(
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
     imported_symbols: Vec<Import>,
-    imported_storage_subs: Vec<HackyImport>,
+    mut exposed_for_module: ExposedForModule,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     mut var_store: VarStore,
@@ -3105,9 +3108,10 @@ fn run_solve<'a>(
 
     if NEW_TYPES {
         imported_symbols.retain(|k| {
-            !imported_storage_subs
+            !exposed_for_module
+                .imported_symbols
                 .iter()
-                .any(|i| k.loc_symbol.value == i.loc_symbol.value)
+                .any(|i| k.loc_symbol.value == *i)
         });
     }
 
@@ -3124,30 +3128,53 @@ fn run_solve<'a>(
         ..
     } = module;
 
-    // TODO
-    // if false { debug_assert!(constraint.validate(), "{:?}", &constraint); }
-
     let mut subs = Subs::new_from_varstore(var_store);
 
     let mut import_variables = Vec::new();
 
     if NEW_TYPES {
-        for mut import in imported_storage_subs {
-            let copied_import = import
-                .storage_subs
-                .export_variable_to(&mut subs, import.variable);
+        for symbol in exposed_for_module.imported_symbols {
+            match exposed_for_module
+                .exposed_by_module
+                .get_mut(&symbol.module_id())
+            {
+                Some(t) => match t {
+                    ExposedModuleTypes::Invalid => {
+                        // idk, just skip?
+                        continue;
+                    }
+                    ExposedModuleTypes::Valid {
+                        solved_types: _,
+                        aliases: _,
+                        stored_vars_by_symbol,
+                        storage_subs,
+                    } => {
+                        let variable =
+                            match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
+                                None => {
+                                    // TODO happens for imported types
+                                    continue;
+                                }
+                                Some((_, x)) => *x,
+                            };
 
-            // not a typo; rigids are turned into flex during type inference, but when imported we must
-            // consider them rigid variables
-            rigid_vars.extend(copied_import.rigid);
-            rigid_vars.extend(copied_import.flex);
+                        let copied_import = storage_subs.export_variable_to(&mut subs, variable);
 
-            import_variables.extend(copied_import.registered);
+                        // not a typo; rigids are turned into flex during type inference, but when imported we must
+                        // consider them rigid variables
+                        rigid_vars.extend(copied_import.rigid);
+                        rigid_vars.extend(copied_import.flex);
 
-            def_types.push((
-                import.loc_symbol.value,
-                Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
-            ));
+                        import_variables.extend(copied_import.registered);
+
+                        def_types.push((
+                            symbol,
+                            Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+                        ));
+                    }
+                },
+                None => todo!(),
+            }
         }
     }
 
@@ -3807,7 +3834,7 @@ fn run_task<'a>(
             module,
             module_timing,
             imported_symbols,
-            imported_storage_subs,
+            exposed_for_module,
             constraints,
             constraint,
             var_store,
@@ -3820,7 +3847,7 @@ fn run_task<'a>(
             ident_ids,
             module_timing,
             imported_symbols,
-            imported_storage_subs,
+            exposed_for_module,
             constraints,
             constraint,
             var_store,

@@ -2,10 +2,11 @@ use roc_builtins::std::StdLib;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::{FreeVars, SolvedType};
-use roc_types::subs::{StorageSubs, VarStore, Variable};
+use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, Problem};
 
 #[derive(Clone, Debug, Default)]
@@ -20,6 +21,61 @@ impl ExposedByModule {
 
     pub fn get(&self, module_id: &ModuleId) -> Option<&ExposedModuleTypes> {
         self.exposed.get(module_id)
+    }
+
+    pub fn get_mut(&mut self, module_id: &ModuleId) -> Option<&mut ExposedModuleTypes> {
+        self.exposed.get_mut(module_id)
+    }
+
+    pub fn retain_modules<'a>(&self, it: impl Iterator<Item = &'a ModuleId>) -> Self {
+        let mut output = Self::default();
+
+        for module_id in it {
+            match self.exposed.get(module_id) {
+                None => {
+                    internal_error!("Module {:?} did not register its exposed values", module_id)
+                }
+                Some(exposed_types) => {
+                    output.exposed.insert(*module_id, exposed_types.clone());
+                }
+            }
+        }
+
+        output
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ExposedForModule {
+    pub exposed_by_module: ExposedByModule,
+    pub imported_symbols: Vec<Symbol>,
+}
+
+impl ExposedForModule {
+    pub fn new<'a>(
+        it: impl Iterator<Item = &'a Symbol>,
+        exposed_by_module: ExposedByModule,
+    ) -> Self {
+        let mut imported_symbols = Vec::new();
+
+        for symbol in it {
+            if symbol.is_builtin() {
+                continue;
+            }
+
+            if let Some(ExposedModuleTypes::Valid { .. }) =
+                exposed_by_module.exposed.get(&symbol.module_id())
+            {
+                imported_symbols.push(*symbol);
+            } else {
+                continue;
+            }
+        }
+
+        Self {
+            imported_symbols,
+            exposed_by_module,
+        }
     }
 }
 
@@ -111,16 +167,8 @@ pub fn constrain_imports(
 
 pub struct ConstrainableImports {
     pub imported_symbols: Vec<Import>,
-    pub hacky_symbols: Vec<HackyImport>,
     pub imported_aliases: MutMap<Symbol, Alias>,
     pub unused_imports: MutMap<ModuleId, Region>,
-}
-
-#[derive(Debug, Clone)]
-pub struct HackyImport {
-    pub storage_subs: StorageSubs,
-    pub loc_symbol: Loc<Symbol>,
-    pub variable: Variable,
 }
 
 /// Run this before constraining imports.
@@ -136,7 +184,6 @@ pub fn pre_constrain_imports(
     stdlib: &StdLib,
 ) -> ConstrainableImports {
     let mut imported_symbols = Vec::with_capacity(references.len());
-    let mut hacky_symbols = Vec::with_capacity(references.len());
     let mut imported_aliases = MutMap::default();
     let mut unused_imports = imported_modules; // We'll remove these as we encounter them.
 
@@ -203,22 +250,11 @@ pub fn pre_constrain_imports(
                             imported_aliases.insert(k, v);
                         }
 
+                        continue;
+
                         imported_symbols.push(Import {
                             loc_symbol,
                             solved_type: solved_type.clone(),
-                        });
-
-                        let variable = stored_vars_by_symbol
-                            .iter()
-                            .find(|(s, _)| *s == loc_symbol.value)
-                            .unwrap()
-                            .1;
-
-                        hacky_symbols.push(HackyImport {
-                            loc_symbol,
-                            variable,
-                            // TODO very bad, so much cloning!
-                            storage_subs: storage_subs.clone(),
                         });
                     }
                 }
@@ -244,7 +280,6 @@ pub fn pre_constrain_imports(
 
     ConstrainableImports {
         imported_symbols,
-        hacky_symbols,
         imported_aliases,
         unused_imports,
     }
