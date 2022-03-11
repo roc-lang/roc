@@ -164,8 +164,7 @@ pub fn constrain_imports(
 }
 
 pub struct ConstrainableImports {
-    pub imported_symbols: Vec<Import>,
-    pub imported_aliases: MutMap<Symbol, Alias>,
+    pub imported_builtins: Vec<Import>,
     pub unused_imports: MutMap<ModuleId, Region>,
 }
 
@@ -182,7 +181,6 @@ pub fn pre_constrain_imports(
     stdlib: &StdLib,
 ) -> ConstrainableImports {
     let mut imported_symbols = Vec::with_capacity(references.len());
-    let mut imported_aliases = MutMap::default();
     let mut unused_imports = imported_modules; // We'll remove these as we encounter them.
 
     // Translate referenced symbols into constraints. We do this on the main
@@ -260,8 +258,7 @@ pub fn pre_constrain_imports(
     }
 
     ConstrainableImports {
-        imported_symbols,
-        imported_aliases,
+        imported_builtins: imported_symbols,
         unused_imports,
     }
 }

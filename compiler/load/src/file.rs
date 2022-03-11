@@ -729,7 +729,7 @@ enum BuildTask<'a> {
     Solve {
         module: Module,
         ident_ids: IdentIds,
-        imported_symbols: Vec<Import>,
+        imported_builtins: Vec<Import>,
         exposed_for_module: ExposedForModule,
         module_timing: ModuleTiming,
         constraints: Constraints,
@@ -3054,8 +3054,7 @@ impl<'a> BuildTask<'a> {
         // to avoid having to lock the map of exposed types, or to clone it
         // (which would be more expensive for the main thread).
         let ConstrainableImports {
-            imported_symbols,
-            imported_aliases: _, // TODO well then... do we even need those?
+            imported_builtins,
             unused_imports,
         } = pre_constrain_imports(
             home,
@@ -3069,7 +3068,7 @@ impl<'a> BuildTask<'a> {
         Self::Solve {
             module,
             ident_ids,
-            imported_symbols,
+            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
@@ -3087,7 +3086,7 @@ fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
-    imported_symbols: Vec<Import>,
+    imported_builtins: Vec<Import>,
     mut exposed_for_module: ExposedForModule,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
@@ -3099,21 +3098,7 @@ fn run_solve<'a>(
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
 
-    // only retain symbols that are not provided with a storage subs
-    let mut imported_symbols = imported_symbols;
-
-    const NEW_TYPES: bool = true;
-
-    if NEW_TYPES {
-        imported_symbols.retain(|k| {
-            !exposed_for_module
-                .imported_symbols
-                .iter()
-                .any(|i| k.loc_symbol.value == *i)
-        });
-    }
-
-    let (mut rigid_vars, mut def_types) = constrain_imports(imported_symbols, &mut var_store);
+    let (mut rigid_vars, mut def_types) = constrain_imports(imported_builtins, &mut var_store);
 
     let constrain_end = SystemTime::now();
 
@@ -3130,47 +3115,44 @@ fn run_solve<'a>(
 
     let mut import_variables = Vec::new();
 
-    if NEW_TYPES {
-        for symbol in exposed_for_module.imported_symbols {
-            match exposed_for_module
-                .exposed_by_module
-                .get_mut(&symbol.module_id())
-            {
-                Some(t) => match t {
-                    ExposedModuleTypes::Invalid => {
-                        // idk, just skip?
-                        continue;
-                    }
-                    ExposedModuleTypes::Valid {
-                        stored_vars_by_symbol,
-                        storage_subs,
-                    } => {
-                        let variable =
-                            match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
-                                None => {
-                                    // TODO happens for imported types
-                                    continue;
-                                }
-                                Some((_, x)) => *x,
-                            };
+    for symbol in exposed_for_module.imported_symbols {
+        match exposed_for_module
+            .exposed_by_module
+            .get_mut(&symbol.module_id())
+        {
+            Some(t) => match t {
+                ExposedModuleTypes::Invalid => {
+                    // idk, just skip?
+                    continue;
+                }
+                ExposedModuleTypes::Valid {
+                    stored_vars_by_symbol,
+                    storage_subs,
+                } => {
+                    let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
+                        None => {
+                            // TODO happens for imported types
+                            continue;
+                        }
+                        Some((_, x)) => *x,
+                    };
 
-                        let copied_import = storage_subs.export_variable_to(&mut subs, variable);
+                    let copied_import = storage_subs.export_variable_to(&mut subs, variable);
 
-                        // not a typo; rigids are turned into flex during type inference, but when imported we must
-                        // consider them rigid variables
-                        rigid_vars.extend(copied_import.rigid);
-                        rigid_vars.extend(copied_import.flex);
+                    // not a typo; rigids are turned into flex during type inference, but when imported we must
+                    // consider them rigid variables
+                    rigid_vars.extend(copied_import.rigid);
+                    rigid_vars.extend(copied_import.flex);
 
-                        import_variables.extend(copied_import.registered);
+                    import_variables.extend(copied_import.registered);
 
-                        def_types.push((
-                            symbol,
-                            Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
-                        ));
-                    }
-                },
-                None => todo!(),
-            }
+                    def_types.push((
+                        symbol,
+                        Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+                    ));
+                }
+            },
+            None => todo!(),
         }
     }
 
@@ -3826,7 +3808,7 @@ fn run_task<'a>(
         Solve {
             module,
             module_timing,
-            imported_symbols,
+            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
@@ -3839,7 +3821,7 @@ fn run_task<'a>(
             module,
             ident_ids,
             module_timing,
-            imported_symbols,
+            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
