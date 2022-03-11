@@ -4222,8 +4222,11 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         }
 
         Error => {
-            // elm says in `variableToCanType` that this basically should not happen
-            unreachable!("This should not happen (based on my reading of elm compiler source")
+            // Open question: should this return Error, or a Flex var?
+
+            env.target.set(copy, make_descriptor(Error));
+
+            copy
         }
 
         RigidVar(name_index) => {
