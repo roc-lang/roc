@@ -3303,7 +3303,7 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
 
 #[derive(Clone, Debug)]
 pub struct StorageSubs {
-    pub subs: Subs,
+    subs: Subs,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -3821,7 +3821,17 @@ fn deep_copy_var_to_help<'a>(
             copy
         }
 
-        FlexVar(_) | Error => copy,
+        FlexVar(Some(name_index)) => {
+            let name = source.field_names[name_index.index as usize].clone();
+            let new_name_index = SubsIndex::push_new(&mut target.field_names, name);
+
+            let content = FlexVar(Some(new_name_index));
+            target.set_content(copy, content);
+
+            copy
+        }
+
+        FlexVar(None) | Error => copy,
 
         RecursionVar {
             opt_name,
@@ -3902,7 +3912,6 @@ pub struct CopiedImport {
 }
 
 struct CopyImportEnv<'a> {
-    arena: &'a bumpalo::Bump,
     visited: bumpalo::collections::Vec<'a, Variable>,
     source: &'a mut Subs,
     target: &'a mut Subs,
@@ -3926,7 +3935,6 @@ pub fn copy_import_to(
         let visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
 
         let mut env = CopyImportEnv {
-            arena: &arena,
             visited,
             source,
             target,
@@ -3943,7 +3951,6 @@ pub fn copy_import_to(
             flex,
             rigid,
             registered,
-            arena: _,
             target: _,
         } = env;
 
@@ -4200,28 +4207,32 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             copy
         }
 
-        FlexVar(_) => {
-            // copy the name?
+        FlexVar(_opt_name_index) => {
+            // if let Some(name_index) = opt_name_index {
+            //     let name = env.source.field_names[name_index.index as usize].clone();
+            //     let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+            //
+            //     let content = FlexVar(Some(new_name_index));
+            //     env.target.set_content(copy, content);
+            // }
+
             env.flex.push(copy);
 
             copy
         }
 
         Error => {
-            todo!()
-
-            // copy
+            // elm says in `variableToCanType` that this basically should not happen
+            unreachable!("This should not happen (based on my reading of elm compiler source")
         }
 
         RigidVar(name_index) => {
             let name = env.source.field_names[name_index.index as usize].clone();
             let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
 
-            let mut desc = make_descriptor(RigidVar(new_name_index));
-            desc.rank = max_rank;
-            env.target.set(copy, desc);
+            env.target
+                .set(copy, make_descriptor(RigidVar(new_name_index)));
 
-            println!("look a rigid -------------------------> in copy_import");
             env.rigid.push(copy);
 
             copy

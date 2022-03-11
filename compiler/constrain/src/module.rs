@@ -1,7 +1,7 @@
 use roc_builtins::std::StdLib;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
-use roc_collections::all::{MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::{FreeVars, SolvedType};

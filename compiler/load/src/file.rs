@@ -3133,16 +3133,13 @@ fn run_solve<'a>(
 
     if NEW_TYPES {
         for mut import in imported_storage_subs {
-            //            if format!("{:?}", import.loc_symbol.value).contains("after") {
-            //                dbg!(&import.storage_subs, import.variable, import.loc_symbol);
-            //            }
             let copied_import = import
                 .storage_subs
                 .export_variable_to(&mut subs, import.variable);
 
-            rigid_vars.extend(copied_import.rigid);
             // not a typo; rigids are turned into flex during type inference, but when imported we must
             // consider them rigid variables
+            rigid_vars.extend(copied_import.rigid);
             rigid_vars.extend(copied_import.flex);
 
             import_variables.extend(copied_import.registered);
@@ -3159,8 +3156,6 @@ fn run_solve<'a>(
 
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(&constraints, actual_constraint, rigid_variables, subs);
-
-    dbg!(&solved_subs, &solved_env);
 
     let exposed_vars_by_symbol: Vec<_> = solved_env
         .vars_by_symbol()
