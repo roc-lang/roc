@@ -345,29 +345,29 @@ fn refcount_str<'a>(
     let string = Symbol::ARG_1;
     let layout_isize = root.layout_isize;
 
-    // Get the string length as a signed int
-    let len = root.create_symbol(ident_ids, "len");
-    let len_expr = Expr::StructAtIndex {
-        index: 1,
+    // Get the last word as a signed int
+    let last_word = root.create_symbol(ident_ids, "last_word");
+    let last_word_expr = Expr::StructAtIndex {
+        index: 2,
         field_layouts: root.arena.alloc([LAYOUT_PTR, layout_isize]),
         structure: string,
     };
-    let len_stmt = |next| Stmt::Let(len, len_expr, layout_isize, next);
+    let last_word_stmt = |next| Stmt::Let(last_word, last_word_expr, layout_isize, next);
 
     // Zero
     let zero = root.create_symbol(ident_ids, "zero");
     let zero_expr = Expr::Literal(Literal::Int(0));
     let zero_stmt = |next| Stmt::Let(zero, zero_expr, layout_isize, next);
 
-    // is_big_str = (len >= 0);
-    // Treat len as isize so that the small string flag is the same as the sign bit
+    // is_big_str = (last_word >= 0);
+    // Treat last word as isize so that the small string flag is the same as the sign bit
     let is_big_str = root.create_symbol(ident_ids, "is_big_str");
     let is_big_str_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
             op: LowLevel::NumGte,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
-        arguments: root.arena.alloc([len, zero]),
+        arguments: root.arena.alloc([last_word, zero]),
     });
     let is_big_str_stmt = |next| Stmt::Let(is_big_str, is_big_str_expr, LAYOUT_BOOL, next);
 
@@ -422,7 +422,7 @@ fn refcount_str<'a>(
     };
 
     // Combine the statements in sequence
-    len_stmt(root.arena.alloc(
+    last_word_stmt(root.arena.alloc(
         //
         zero_stmt(root.arena.alloc(
             //
