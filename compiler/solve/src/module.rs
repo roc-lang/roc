@@ -4,7 +4,7 @@ use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_types::solved_types::{Solved, SolvedType};
-use roc_types::subs::{Subs, VarStore, Variable};
+use roc_types::subs::{StorageSubs, Subs, VarStore, Variable};
 use roc_types::types::Alias;
 
 #[derive(Debug)]
@@ -14,6 +14,8 @@ pub struct SolvedModule {
     pub exposed_symbols: Vec<Symbol>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub problems: Vec<solve::TypeError>,
+    pub stored_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub storage_subs: StorageSubs,
 }
 
 pub fn run_solve(
@@ -58,4 +60,20 @@ pub fn make_solved_types(
     }
 
     solved_types
+}
+
+pub fn exposed_types_storage_subs(
+    solved_subs: &mut Solved<Subs>,
+    exposed_vars_by_symbol: &[(Symbol, Variable)],
+) -> (StorageSubs, Vec<(Symbol, Variable)>) {
+    let subs = solved_subs.inner_mut();
+    let mut storage_subs = StorageSubs::new(Subs::new());
+    let mut stored_vars_by_symbol = Vec::with_capacity(exposed_vars_by_symbol.len());
+
+    for (symbol, var) in exposed_vars_by_symbol.iter() {
+        let new_var = storage_subs.extend_with_variable(subs, *var);
+        stored_vars_by_symbol.push((*symbol, new_var));
+    }
+
+    (storage_subs, stored_vars_by_symbol)
 }

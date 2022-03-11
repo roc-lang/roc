@@ -3122,12 +3122,18 @@ fn run_solve<'a>(
 
     let solved_types = roc_solve::module::make_solved_types(&solved_subs, &exposed_vars_by_symbol);
 
+    let mut solved_subs = solved_subs;
+    let (storage_subs, stored_vars_by_symbol) =
+        roc_solve::module::exposed_types_storage_subs(&mut solved_subs, &exposed_vars_by_symbol);
+
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
         exposed_symbols: exposed_symbols.into_iter().collect::<Vec<_>>(),
         solved_types,
         problems,
         aliases,
+        stored_vars_by_symbol,
+        storage_subs,
     };
 
     // Record the final timings
