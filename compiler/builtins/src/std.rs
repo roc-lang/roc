@@ -13,6 +13,16 @@ use roc_types::subs::VarId;
 use roc_types::types::RecordField;
 use std::collections::HashMap;
 
+thread_local! {
+    static STDLIB: StdLib = standard_stdlib();
+}
+
+pub fn borrow_stdlib() -> &'static StdLib {
+    let ptr = STDLIB.with(|x| x as *const StdLib);
+
+    unsafe { &*ptr }
+}
+
 /// Example:
 ///
 ///     let_tvars! { a, b, c }
