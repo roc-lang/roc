@@ -13,45 +13,13 @@ use roc_types::subs::VarId;
 use roc_types::types::RecordField;
 use std::collections::HashMap;
 
-use std::sync::atomic::{AtomicU8, Ordering};
+lazy_static::lazy_static! {
+    static ref STDLIB: StdLib = standard_stdlib();
+}
 
 /// A global static that stores our initialized standard library definitions
-static mut STDLIB: Option<StdLib> = None;
-static mut STDLIB_STATE: AtomicU8 = AtomicU8::new(STDLIB_STATE_EMPTY);
-
-const STDLIB_STATE_EMPTY: u8 = 0;
-const STDLIB_STATE_LOCKED: u8 = 1;
-const STDLIB_STATE_READY: u8 = 2;
-
 pub fn borrow_stdlib() -> &'static StdLib {
-    let state = unsafe { &STDLIB_STATE };
-
-    let ce = state.compare_exchange(
-        STDLIB_STATE_EMPTY,
-        STDLIB_STATE_LOCKED,
-        Ordering::Acquire,
-        Ordering::Relaxed,
-    );
-
-    match ce {
-        Ok(_) => {
-            // the STDLIB static is empty, and we have the write lock
-            let stdlib = unsafe { &mut STDLIB };
-            *stdlib = Some(standard_stdlib());
-
-            state.store(STDLIB_STATE_READY, Ordering::SeqCst);
-
-            stdlib.as_ref().unwrap()
-        }
-        Err(_) => {
-            // someone else has the write lock. They will soon move into the ready state
-            while state.load(Ordering::SeqCst) != STDLIB_STATE_READY {
-                // do nothng
-            }
-
-            unsafe { &STDLIB }.as_ref().unwrap()
-        }
-    }
+    &STDLIB
 }
 
 /// Example:
