@@ -18,7 +18,6 @@ mod test_load {
     use bumpalo::Bump;
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
-    use roc_collections::all::MutMap;
     use roc_constrain::module::ExposedByModule;
     use roc_load::file::LoadedModule;
     use roc_module::ident::ModuleName;
@@ -111,7 +110,6 @@ mod test_load {
         let stdlib = roc_builtins::std::standard_stdlib();
 
         let mut file_handles: Vec<_> = Vec::new();
-        let exposed_types = MutMap::default();
 
         // create a temporary directory
         let dir = tempdir()?;
@@ -146,7 +144,7 @@ mod test_load {
                 full_file_path,
                 arena.alloc(stdlib),
                 dir.path(),
-                exposed_types,
+                Default::default(),
                 TARGET_INFO,
             )
         };
@@ -325,7 +323,7 @@ mod test_load {
 
     #[test]
     fn interface_with_deps() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let src_dir = fixtures_dir().join("interface_with_deps");
         let filename = src_dir.join("Primary.roc");
         let arena = Bump::new();
@@ -373,7 +371,7 @@ mod test_load {
 
     #[test]
     fn load_unit() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("no_deps", "Unit", subs_by_module);
 
         expect_types(
@@ -386,7 +384,7 @@ mod test_load {
 
     #[test]
     fn import_alias() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("interface_with_deps", "ImportAlias", subs_by_module);
 
         expect_types(
@@ -399,7 +397,7 @@ mod test_load {
 
     #[test]
     fn load_and_typecheck() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("interface_with_deps", "WithBuiltins", subs_by_module);
 
         expect_types(
@@ -419,7 +417,7 @@ mod test_load {
 
     #[test]
     fn iface_quicksort() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("interface_with_deps", "Quicksort", subs_by_module);
 
         expect_types(
@@ -435,7 +433,7 @@ mod test_load {
 
     #[test]
     fn quicksort_one_def() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("app_with_deps", "QuicksortOneDef", subs_by_module);
 
         expect_types(
@@ -448,7 +446,7 @@ mod test_load {
 
     #[test]
     fn app_quicksort() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("app_with_deps", "Quicksort", subs_by_module);
 
         expect_types(
@@ -464,7 +462,7 @@ mod test_load {
 
     #[test]
     fn load_astar() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("interface_with_deps", "AStar", subs_by_module);
 
         expect_types(
@@ -482,7 +480,7 @@ mod test_load {
 
     #[test]
     fn load_principal_types() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("no_deps", "Principal", subs_by_module);
 
         expect_types(
@@ -496,7 +494,7 @@ mod test_load {
 
     #[test]
     fn iface_dep_types() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("interface_with_deps", "Primary", subs_by_module);
 
         expect_types(
@@ -518,7 +516,7 @@ mod test_load {
 
     #[test]
     fn app_dep_types() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("app_with_deps", "Primary", subs_by_module);
 
         expect_types(
@@ -540,7 +538,7 @@ mod test_load {
 
     #[test]
     fn imported_dep_regression() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("interface_with_deps", "OneDep", subs_by_module);
 
         expect_types(
@@ -590,7 +588,7 @@ mod test_load {
     #[test]
     #[should_panic(expected = "FILE NOT FOUND")]
     fn file_not_found() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("interface_with_deps", "invalid$name", subs_by_module);
 
         expect_types(
@@ -604,7 +602,7 @@ mod test_load {
     #[test]
     #[should_panic(expected = "FILE NOT FOUND")]
     fn imported_file_not_found() {
-        let subs_by_module = MutMap::default();
+        let subs_by_module = Default::default();
         let loaded_module = load_fixture("no_deps", "MissingDep", subs_by_module);
 
         expect_types(
