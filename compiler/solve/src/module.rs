@@ -22,11 +22,9 @@ pub fn run_solve(
     constraints: &Constraints,
     constraint: ConstraintSoa,
     rigid_variables: MutMap<Variable, Lowercase>,
-    var_store: VarStore,
+    mut subs: Subs,
 ) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
     let env = solve::Env::default();
-
-    let mut subs = Subs::new_from_varstore(var_store);
 
     for (var, name) in rigid_variables {
         subs.rigid_var(var, name);

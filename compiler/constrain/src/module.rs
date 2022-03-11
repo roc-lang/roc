@@ -38,6 +38,7 @@ pub struct Import {
 pub fn constrain_imported_values(
     constraints: &mut Constraints,
     imports: Vec<Import>,
+    stored_imports: Vec<HackyImport>,
     body_con: Constraint,
     var_store: &mut VarStore,
 ) -> (Vec<Variable>, Constraint) {
@@ -95,11 +96,17 @@ pub fn constrain_imported_values(
 pub fn constrain_imports(
     constraints: &mut Constraints,
     imported_symbols: Vec<Import>,
+    stored_imports: Vec<HackyImport>,
     constraint: Constraint,
     var_store: &mut VarStore,
 ) -> Constraint {
-    let (_introduced_rigids, constraint) =
-        constrain_imported_values(constraints, imported_symbols, constraint, var_store);
+    let (_introduced_rigids, constraint) = constrain_imported_values(
+        constraints,
+        imported_symbols,
+        stored_imports,
+        constraint,
+        var_store,
+    );
 
     // TODO determine what to do with those rigids
     //    for var in introduced_rigids {

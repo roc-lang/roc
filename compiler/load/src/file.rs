@@ -3103,6 +3103,7 @@ fn run_solve<'a>(
     let constraint = constrain_imports(
         &mut constraints,
         imported_symbols,
+        imported_storage_subs,
         constraint,
         &mut var_store,
     );
@@ -3121,8 +3122,9 @@ fn run_solve<'a>(
     // TODO
     // if false { debug_assert!(constraint.validate(), "{:?}", &constraint); }
 
+    let mut subs = Subs::new_from_varstore(var_store);
     let (solved_subs, solved_env, problems) =
-        roc_solve::module::run_solve(&constraints, constraint, rigid_variables, var_store);
+        roc_solve::module::run_solve(&constraints, constraint, rigid_variables, subs);
 
     let exposed_vars_by_symbol: Vec<_> = solved_env
         .vars_by_symbol()
