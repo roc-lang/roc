@@ -59,7 +59,7 @@ mod test_peg_grammar {
               [T::LambdaStart] args() [T::Arrow] closure_body()
 
             rule closure_body() =
-              [T::OpenIndent] full_expr() ([T::CloseIndent] / end_of_file())
+              [T::OpenIndent] full_expr() ([T::CloseIndent] / end_of_file() / &[T::CloseParen])
               / [T::SameIndent]? full_expr()
 
             rule args() =
@@ -125,7 +125,7 @@ mod test_peg_grammar {
               ident() [T::Colon] type_annotation()
 
 
-            rule parens_around() = [T::OpenParen] full_expr() [T::CloseParen]
+            pub rule parens_around() = [T::OpenParen] full_expr() [T::CloseParen]
 
             rule if_expr() = [T::KeywordIf] full_expr() [T::KeywordThen] full_expr()
                                 [T::KeywordElse] full_expr()
@@ -1158,6 +1158,15 @@ test1 =
         );
 
         assert_eq!(tokenparser::apply_args(&tokens), Ok(()));
+    }
+
+    #[test]
+    fn test_parens_closure_indent() {
+        let tokens = tokenize(
+            r#"(\i ->
+    i)"#,
+        );
+        assert_eq!(tokenparser::parens_around(&tokens), Ok(()));
     }
 
     #[test]
