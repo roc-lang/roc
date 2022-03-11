@@ -1850,7 +1850,7 @@ pub fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
     let masked = env.builder.build_and(as_int, mask_intval, "mask");
 
     env.builder
-        .build_int_cast(masked, env.context.i8_type(), "to_u8")
+        .build_int_cast_sign_flag(masked, env.context.i8_type(), false, "to_u8")
 }
 
 pub fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
@@ -5943,8 +5943,11 @@ fn run_low_level<'a, 'ctx, 'env>(
             let arg = load_symbol(scope, &args[0]).into_int_value();
 
             let to = basic_type_from_layout(env, layout).into_int_type();
+            let to_signed = intwidth_from_layout(*layout).is_signed();
 
-            env.builder.build_int_cast(arg, to, "inc_cast").into()
+            env.builder
+                .build_int_cast_sign_flag(arg, to, to_signed, "inc_cast")
+                .into()
         }
         Eq => {
             debug_assert_eq!(args.len(), 2);
@@ -7052,7 +7055,12 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 let target_int_type = convert::int_type_from_int_width(env, target_int_width);
                 let target_int_val: BasicValueEnum<'ctx> = env
                     .builder
-                    .build_int_cast(arg, target_int_type, "int_cast")
+                    .build_int_cast_sign_flag(
+                        arg,
+                        target_int_type,
+                        target_int_width.is_signed(),
+                        "int_cast",
+                    )
                     .into();
 
                 let return_type =

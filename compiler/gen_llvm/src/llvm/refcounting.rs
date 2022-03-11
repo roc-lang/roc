@@ -1778,9 +1778,9 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         .build_load(tag_id_ptr, "load_tag_id")
         .into_int_value();
 
-    let tag_id_u8 = env
-        .builder
-        .build_int_cast(tag_id, env.context.i8_type(), "tag_id_u8");
+    let tag_id_u8 =
+        env.builder
+            .build_int_cast_sign_flag(tag_id, env.context.i8_type(), false, "tag_id_u8");
 
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
