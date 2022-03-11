@@ -1,13 +1,12 @@
 use roc_builtins::std::StdLib;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::{Loc, Region};
+use roc_region::all::Loc;
 use roc_types::solved_types::{FreeVars, SolvedType};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, Problem};
 
 #[derive(Clone, Debug, Default)]
 pub struct ExposedByModule {
@@ -104,13 +103,13 @@ pub struct Import {
 
 pub fn introduce_builtin_imports(
     constraints: &mut Constraints,
-    imports: Vec<Import>,
+    imports: Vec<Symbol>,
     body_con: Constraint,
     var_store: &mut VarStore,
 ) -> Constraint {
-    // let (rigid_vars, def_types) = constrain_imports(imports, var_store);
-    // constraints.let_import_constraint(rigid_vars, def_types, body_con, &[])
-    todo!()
+    let stdlib = roc_builtins::std::borrow_stdlib();
+    let (rigid_vars, def_types) = constrain_imports(stdlib, imports, var_store);
+    constraints.let_import_constraint(rigid_vars, def_types, body_con, &[])
 }
 
 pub fn constrain_imports(
@@ -192,104 +191,4 @@ pub fn constrain_imports(
     }
 
     (rigid_vars, def_types)
-}
-
-pub struct ConstrainableImports {
-    pub imported_builtins: Vec<Import>,
-    pub unused_imports: MutMap<ModuleId, Region>,
-}
-
-/// Run this before constraining imports.
-///
-/// Constraining imports is split into two different functions, because this
-/// part of the work needs to be done on the main thread, whereas the rest of it
-/// can be done on a different thread.
-fn pre_constrain_imports(
-    home: ModuleId,
-    references: &MutSet<Symbol>,
-    imported_modules: MutMap<ModuleId, Region>,
-    exposed_types: &mut ExposedByModule,
-    stdlib: &StdLib,
-) -> ConstrainableImports {
-    let mut imported_symbols = Vec::with_capacity(references.len());
-    let mut unused_imports = imported_modules; // We'll remove these as we encounter them.
-
-    // Translate referenced symbols into constraints. We do this on the main
-    // thread because we need exclusive access to the exposed_types map, in order
-    // to get the necessary constraint info for any aliases we imported. We also
-    // resolve builtin types now, so we can use a reference to stdlib instead of
-    // having to either clone it or recreate it from scratch on the other thread.
-    for &symbol in references.iter() {
-        let module_id = symbol.module_id();
-
-        // We used this module, so clearly it is not unused!
-        unused_imports.remove(&module_id);
-
-        if module_id.is_builtin() {
-            // For builtin modules, we create imports from the
-            // hardcoded builtin map.
-            match stdlib.types.get(&symbol) {
-                Some((solved_type, region)) => {
-                    let loc_symbol = Loc {
-                        value: symbol,
-                        region: *region,
-                    };
-
-                    imported_symbols.push(Import {
-                        loc_symbol,
-                        solved_type: solved_type.clone(),
-                    });
-                }
-                None => {
-                    let is_valid_alias = stdlib.applies.contains(&symbol)
-                        // This wasn't a builtin value or Apply; maybe it was a builtin alias.
-                        || roc_types::builtin_aliases::aliases().contains_key(&symbol);
-
-                    if !is_valid_alias {
-                        panic!(
-                            "Could not find {:?} in builtin types {:?} or builtin aliases",
-                            symbol, stdlib.types,
-                        );
-                    }
-                }
-            }
-        } else if module_id != home {
-            // We already have constraints for our own symbols.
-            let region = Region::zero(); // TODO this should be the region where this symbol was declared in its home module. Look that up!
-            let loc_symbol = Loc {
-                value: symbol,
-                region,
-            };
-
-            match exposed_types.get(&module_id) {
-                Some(ExposedModuleTypes::Valid {
-                    storage_subs,
-                    stored_vars_by_symbol,
-                }) => {
-                    // do nothing, basically
-                }
-                Some(ExposedModuleTypes::Invalid) => {
-                    // If that module was invalid, use True constraints
-                    // for everything imported from it.
-                    imported_symbols.push(Import {
-                        loc_symbol,
-                        solved_type: SolvedType::Erroneous(Problem::InvalidModule),
-                    });
-
-                    // TODO what about storage subs here?
-                }
-                None => {
-                    panic!(
-                        "Could not find module {:?} in exposed_types {:?}",
-                        module_id, exposed_types
-                    );
-                }
-            }
-        }
-    }
-
-    ConstrainableImports {
-        imported_builtins: imported_symbols,
-        unused_imports,
-    }
 }

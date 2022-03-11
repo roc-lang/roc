@@ -4,7 +4,7 @@ use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
-use roc_builtins::std::{standard_stdlib, StdLib};
+use roc_builtins::std::{borrow_stdlib, StdLib};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
@@ -71,12 +71,6 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 macro_rules! log {
     () => (if SHOW_MESSAGE_LOG { println!()} else {});
     ($($arg:tt)*) => (if SHOW_MESSAGE_LOG { println!($($arg)*); } else {})
-}
-
-static mut STDLIB: Option<StdLib> = None;
-
-fn borrow_stdlib() -> &'static StdLib {
-    unsafe { &mut STDLIB }.get_or_insert_with(standard_stdlib)
 }
 
 /// Struct storing various intermediate stages by their ModuleId

@@ -163,14 +163,10 @@ pub fn can_expr_with<'a>(
         expected,
     );
 
-    let types = roc_builtins::std::types();
-
-    let imports: Vec<_> = types
-        .into_iter()
-        .map(|(symbol, (solved_type, region))| Import {
-            loc_symbol: Loc::at(region, symbol),
-            solved_type,
-        })
+    let imports = roc_builtins::std::borrow_stdlib()
+        .types
+        .keys()
+        .copied()
         .collect();
 
     let constraint =
