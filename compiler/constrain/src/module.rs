@@ -83,8 +83,6 @@ impl ExposedForModule {
 pub enum ExposedModuleTypes {
     Invalid,
     Valid {
-        solved_types: MutMap<Symbol, SolvedType>,
-        aliases: MutMap<Symbol, Alias>,
         stored_vars_by_symbol: Vec<(Symbol, Variable)>,
         storage_subs: roc_types::subs::StorageSubs,
     },
@@ -236,8 +234,6 @@ pub fn pre_constrain_imports(
 
             match exposed_types.get(&module_id) {
                 Some(ExposedModuleTypes::Valid {
-                    solved_types,
-                    aliases: new_aliases,
                     storage_subs,
                     stored_vars_by_symbol,
                 }) => {

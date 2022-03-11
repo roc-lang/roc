@@ -1834,8 +1834,6 @@ fn update<'a>(
                 state.exposed_types.insert(
                     module_id,
                     ExposedModuleTypes::Valid {
-                        solved_types: solved_module.solved_types,
-                        aliases: solved_module.aliases,
                         stored_vars_by_symbol: solved_module.stored_vars_by_symbol,
                         storage_subs: solved_module.storage_subs,
                     },
@@ -3144,8 +3142,6 @@ fn run_solve<'a>(
                         continue;
                     }
                     ExposedModuleTypes::Valid {
-                        solved_types: _,
-                        aliases: _,
                         stored_vars_by_symbol,
                         storage_subs,
                     } => {
