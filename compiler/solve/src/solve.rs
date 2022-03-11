@@ -226,6 +226,9 @@ enum Work<'a> {
         env: &'a Env,
         rank: Rank,
         let_con: &'a LetConstraint,
+
+        /// Used for imports
+        pool_variables: &'a [Variable],
     },
     /// The ret_con part of a let constraint that introduces rigid and/or flex variables
     ///
@@ -281,7 +284,12 @@ fn solve(
 
                 continue;
             }
-            Work::LetConNoVariables { env, rank, let_con } => {
+            Work::LetConNoVariables {
+                env,
+                rank,
+                let_con,
+                pool_variables,
+            } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
                 let ret_constraint = &constraints.constraints[offset + 1];
@@ -296,12 +304,10 @@ fn solve(
                     let_con.def_types,
                 );
 
+                pools.get_mut(rank).extend(pool_variables);
+
                 let mut new_env = env.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
-                    println!(
-                        "introducing {:?} at rank {:?} with no variables",
-                        symbol, rank,
-                    );
                     new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                 }
 
@@ -333,7 +339,6 @@ fn solve(
                 let visit_mark = young_mark.next();
                 let final_mark = visit_mark.next();
 
-                dbg!(&pools);
                 // Add a variable for each def to local_def_vars.
                 let local_def_vars = LocalDefVarsVec::from_def_types(
                     constraints,
@@ -345,22 +350,6 @@ fn solve(
                 );
 
                 pools.get_mut(next_rank).extend(pool_variables);
-                dbg!(&pools);
-
-                for (symbol, loc_var) in local_def_vars.iter() {
-                    let rigid = &constraints.variables[let_con.rigid_vars.indices()];
-                    let flex = &constraints.variables[let_con.flex_vars.indices()];
-
-                    println!(
-                        "introducing {:?} at rank {:?} with variables {:?} {:?}",
-                        symbol, next_rank, rigid, flex
-                    );
-
-                    //                    if rigid.len() > 6 && format!("{:?}", symbol).contains("after") {
-                    //                        dbg!(&subs, symbol, loc_var);
-                    //                        panic!();
-                    //                    }
-                }
 
                 debug_assert_eq!(
                     {
@@ -681,14 +670,17 @@ fn solve(
 
                     state
                 } else if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() {
-                    debug_assert!(pool_variables.is_empty());
-
                     // items are popped from the stack in reverse order. That means that we'll
                     // first solve then defs_constraint, and then (eventually) the ret_constraint.
                     //
                     // Note that the LetConSimple gets the current env and rank,
                     // and not the env/rank from after solving the defs_constraint
-                    stack.push(Work::LetConNoVariables { env, rank, let_con });
+                    stack.push(Work::LetConNoVariables {
+                        env,
+                        rank,
+                        let_con,
+                        pool_variables,
+                    });
                     stack.push(Work::Constraint {
                         env,
                         rank,

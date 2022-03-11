@@ -35,81 +35,17 @@ pub struct Import {
     pub solved_type: SolvedType,
 }
 
-pub fn constrain_imported_values(
+pub fn introduce_builtin_imports(
     constraints: &mut Constraints,
     imports: Vec<Import>,
     body_con: Constraint,
     var_store: &mut VarStore,
-) -> (Vec<Variable>, Constraint) {
-    let mut def_types = SendMap::default();
-    let mut rigid_vars = Vec::new();
-
-    for import in imports {
-        let mut free_vars = FreeVars::default();
-        let loc_symbol = import.loc_symbol;
-
-        // an imported symbol can be either an alias or a value
-        match import.solved_type {
-            SolvedType::Alias(symbol, _, _, _, _) if symbol == loc_symbol.value => {
-                // do nothing, in the future the alias definitions should not be in the list of imported values
-            }
-            _ => {
-                let typ = roc_types::solved_types::to_type(
-                    &import.solved_type,
-                    &mut free_vars,
-                    var_store,
-                );
-
-                def_types.insert(
-                    loc_symbol.value,
-                    Loc {
-                        region: loc_symbol.region,
-                        value: typ,
-                    },
-                );
-
-                for (_, var) in free_vars.named_vars {
-                    rigid_vars.push(var);
-                }
-
-                for var in free_vars.wildcards {
-                    rigid_vars.push(var);
-                }
-
-                // Variables can lose their name during type inference. But the unnamed
-                // variables are still part of a signature, and thus must be treated as rigids here!
-                for (_, var) in free_vars.unnamed_vars {
-                    rigid_vars.push(var);
-                }
-            }
-        }
-    }
-
-    (
-        rigid_vars.clone(),
-        constraints.let_constraint(rigid_vars, [], def_types, Constraint::True, body_con),
-    )
-}
-
-/// Run pre_constrain_imports to get imported_symbols and imported_aliases.
-pub fn constrain_imports(
-    constraints: &mut Constraints,
-    imported_symbols: Vec<Import>,
-    constraint: Constraint,
-    var_store: &mut VarStore,
 ) -> Constraint {
-    let (_introduced_rigids, constraint) =
-        constrain_imported_values(constraints, imported_symbols, constraint, var_store);
-
-    // TODO determine what to do with those rigids
-    //    for var in introduced_rigids {
-    //        output.ftv.insert(var, format!("internal_{:?}", var).into());
-    //    }
-
-    constraint
+    let (rigid_vars, def_types) = constrain_imports(imports, var_store);
+    constraints.let_import_constraint(rigid_vars, def_types, body_con, &[])
 }
 
-pub fn constrain_imports2(
+pub fn constrain_imports(
     imports: Vec<Import>,
     var_store: &mut VarStore,
 ) -> (Vec<Variable>, Vec<(Symbol, Loc<roc_types::types::Type>)>) {

@@ -10,8 +10,8 @@ use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
-    constrain_imports, constrain_imports2, constrain_module, pre_constrain_imports,
-    ConstrainableImports, ExposedModuleTypes, HackyImport, Import, SubsByModule,
+    constrain_imports, constrain_module, pre_constrain_imports, ConstrainableImports,
+    ExposedModuleTypes, HackyImport, Import, SubsByModule,
 };
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -3111,7 +3111,7 @@ fn run_solve<'a>(
         });
     }
 
-    let (mut rigid_vars, mut def_types) = constrain_imports2(imported_symbols, &mut var_store);
+    let (mut rigid_vars, mut def_types) = constrain_imports(imported_symbols, &mut var_store);
 
     let constrain_end = SystemTime::now();
 
@@ -3128,8 +3128,6 @@ fn run_solve<'a>(
     // if false { debug_assert!(constraint.validate(), "{:?}", &constraint); }
 
     let mut subs = Subs::new_from_varstore(var_store);
-
-    println!("new variables starting at {:?}", subs.len());
 
     let mut import_variables = Vec::new();
 
@@ -3159,12 +3157,10 @@ fn run_solve<'a>(
     let actual_constraint =
         constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
 
-    dbg!(&subs);
-
-    dbg!(&import_variables);
-
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(&constraints, actual_constraint, rigid_variables, subs);
+
+    dbg!(&solved_subs, &solved_env);
 
     let exposed_vars_by_symbol: Vec<_> = solved_env
         .vars_by_symbol()

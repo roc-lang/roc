@@ -3303,7 +3303,7 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
 
 #[derive(Clone, Debug)]
 pub struct StorageSubs {
-    subs: Subs,
+    pub subs: Subs,
 }
 
 #[derive(Copy, Clone, Debug)]

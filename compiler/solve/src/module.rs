@@ -4,7 +4,7 @@ use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_types::solved_types::{Solved, SolvedType};
-use roc_types::subs::{StorageSubs, Subs, VarStore, Variable};
+use roc_types::subs::{StorageSubs, Subs, Variable};
 use roc_types::types::Alias;
 
 #[derive(Debug)]

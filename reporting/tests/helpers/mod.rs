@@ -9,7 +9,7 @@ use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
-use roc_constrain::module::{constrain_imported_values, Import};
+use roc_constrain::module::{introduce_builtin_imports, Import};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::parser::{SourceError, SyntaxError};
 use roc_problem::can::Problem;
@@ -173,9 +173,8 @@ pub fn can_expr_with<'a>(
         })
         .collect();
 
-    //load builtin values
-    let (_introduced_rigids, constraint) =
-        constrain_imported_values(&mut constraints, imports, constraint, &mut var_store);
+    let constraint =
+        introduce_builtin_imports(&mut constraints, imports, constraint, &mut var_store);
 
     let mut all_ident_ids = MutMap::default();
 
