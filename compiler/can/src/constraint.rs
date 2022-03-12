@@ -371,6 +371,19 @@ impl Constraints {
         Constraint::Let(let_index, Slice::default())
     }
 
+    /// A variant of `Let` used specifically for imports. When importing types from another module,
+    /// we use a StorageSubs to store the data, and copy over the relevant
+    /// variables/content/flattype/tagname etc.
+    ///
+    /// The aim of that process is to simulate what `type_to_var` (solve.rs) does to a `Type`.
+    /// While the copying puts all the data the right place, it misses that `type_to_var` puts
+    /// the variables that it creates (to store the nodes of a Type in Subs) in the pool of the
+    /// current rank.
+    ///
+    /// So, during copying of an import (`copy_import_to`, subs.rs) we track the variables that
+    /// we need to put into the pool (simulating what `type_to_var` would do). Those variables
+    /// then need to find their way to the pool, and a convenient approach turned out to be to
+    /// tag them onto the `Let` that we used to add the imported values.
     #[inline(always)]
     pub fn let_import_constraint<I1, I2>(
         &mut self,
