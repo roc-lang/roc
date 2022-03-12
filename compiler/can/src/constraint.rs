@@ -550,6 +550,7 @@ pub struct IncludesTag {
     pub region: Region,
 }
 
+/// Custom impl to limit vertical space used by the debug output
 impl std::fmt::Debug for Constraint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -559,32 +560,25 @@ impl std::fmt::Debug for Constraint {
             Self::Store(arg0, arg1, arg2, arg3) => {
                 write!(f, "Store({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
             }
-            Self::Lookup(arg0, arg1, arg2) => f
-                .debug_tuple("Lookup")
-                .field(arg0)
-                .field(arg1)
-                .field(arg2)
-                .finish(),
-            Self::Pattern(arg0, arg1, arg2, arg3) => f
-                .debug_tuple("Pattern")
-                .field(arg0)
-                .field(arg1)
-                .field(arg2)
-                .field(arg3)
-                .finish(),
+            Self::Lookup(arg0, arg1, arg2) => {
+                write!(f, "Lookup({:?}, {:?}, {:?})", arg0, arg1, arg2)
+            }
+            Self::Pattern(arg0, arg1, arg2, arg3) => {
+                write!(f, "Pattern({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+            }
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),
             Self::Let(arg0, arg1) => f.debug_tuple("Let").field(arg0).field(arg1).finish(),
             Self::And(arg0) => f.debug_tuple("And").field(arg0).finish(),
             Self::IsOpenType(arg0) => f.debug_tuple("IsOpenType").field(arg0).finish(),
             Self::IncludesTag(arg0) => f.debug_tuple("IncludesTag").field(arg0).finish(),
-            Self::PatternPresence(arg0, arg1, arg2, arg3) => f
-                .debug_tuple("PatternPresence")
-                .field(arg0)
-                .field(arg1)
-                .field(arg2)
-                .field(arg3)
-                .finish(),
+            Self::PatternPresence(arg0, arg1, arg2, arg3) => {
+                write!(
+                    f,
+                    "PatternPresence({:?}, {:?}, {:?}, {:?})",
+                    arg0, arg1, arg2, arg3
+                )
+            }
         }
     }
 }
