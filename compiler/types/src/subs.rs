@@ -3982,6 +3982,9 @@ pub fn copy_import_to(
 }
 
 /// is this content registered (in the current pool) by type_to_variable?
+/// TypeToVar skips registering for flex and rigid variables, and
+/// also for the empty records and tag unions (they used the Variable::EMPTY_RECORD/...)
+/// standard variables
 fn is_registered(content: &Content) -> bool {
     match content {
         Content::FlexVar(_) | Content::RigidVar(_) => false,
@@ -4207,14 +4210,14 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             copy
         }
 
-        FlexVar(_opt_name_index) => {
-            // if let Some(name_index) = opt_name_index {
-            //     let name = env.source.field_names[name_index.index as usize].clone();
-            //     let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
-            //
-            //     let content = FlexVar(Some(new_name_index));
-            //     env.target.set_content(copy, content);
-            // }
+        FlexVar(opt_name_index) => {
+            if let Some(name_index) = opt_name_index {
+                let name = env.source.field_names[name_index.index as usize].clone();
+                let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+
+                let content = FlexVar(Some(new_name_index));
+                env.target.set_content(copy, content);
+            }
 
             env.flex.push(copy);
 
