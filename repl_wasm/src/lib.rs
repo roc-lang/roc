@@ -1,3 +1,4 @@
+extern crate console_error_panic_hook;
 mod repl;
 
 //
