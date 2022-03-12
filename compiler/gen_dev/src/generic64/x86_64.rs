@@ -200,7 +200,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
 
     #[inline(always)]
     fn load_args<'a>(
-        buf: &mut Vec<'a, u8>,
+        _buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
             X86_64GeneralReg,
@@ -237,19 +237,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                     } else {
                         storage_manager.primitive_stack_arg(sym, arg_offset);
                         arg_offset += 8;
-                    }
-                }
-                Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
-                    if general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
-                        // Load the value from the param reg into a useable base offset.
-                        let src1 = Self::GENERAL_PARAM_REGS[general_i];
-                        let src2 = Self::GENERAL_PARAM_REGS[general_i + 1];
-                        let base_offset = storage_manager.claim_stack_area(sym, 16);
-                        X86_64Assembler::mov_base32_reg64(buf, base_offset, src1);
-                        X86_64Assembler::mov_base32_reg64(buf, base_offset + 8, src2);
-                        general_i += 2;
-                    } else {
-                        todo!("loading lists and strings args on the stack");
                     }
                 }
                 _ if stack_size == 0 => {
@@ -347,37 +334,25 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                         tmp_stack_offset += 8;
                     }
                 }
-                Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
-                    if general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
-                        let (base_offset, _size) = storage_manager.stack_offset_and_size(sym);
-                        debug_assert_eq!(base_offset % 8, 0);
-                        X86_64Assembler::mov_reg64_base32(
-                            buf,
-                            Self::GENERAL_PARAM_REGS[general_i],
-                            base_offset,
-                        );
-                        X86_64Assembler::mov_reg64_base32(
-                            buf,
-                            Self::GENERAL_PARAM_REGS[general_i + 1],
-                            base_offset + 8,
-                        );
-                        general_i += 2;
-                    } else {
-                        todo!("calling functions with strings on the stack");
-                    }
-                }
                 x if x.stack_size(TARGET_INFO) == 0 => {}
                 x if x.stack_size(TARGET_INFO) > 16 => {
                     // TODO: Double check this.
                     // Just copy onto the stack.
+                    // Use return reg as buffer because it will be empty right now.
                     let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
                     debug_assert_eq!(base_offset % 8, 0);
-                    storage_manager.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
-                        for i in (0..size as i32).step_by(8) {
-                            X86_64Assembler::mov_reg64_base32(buf, reg, base_offset + i);
-                            X86_64Assembler::mov_stack32_reg64(buf, tmp_stack_offset + i, reg);
-                        }
-                    });
+                    for i in (0..size as i32).step_by(8) {
+                        X86_64Assembler::mov_reg64_base32(
+                            buf,
+                            Self::GENERAL_RETURN_REGS[0],
+                            base_offset + i,
+                        );
+                        X86_64Assembler::mov_stack32_reg64(
+                            buf,
+                            tmp_stack_offset + i,
+                            Self::GENERAL_RETURN_REGS[0],
+                        );
+                    }
                     tmp_stack_offset += size as i32;
                 }
                 x => {
@@ -403,16 +378,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         match layout {
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
-            }
-            Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
-                let (base_offset, _size) = storage_manager.stack_offset_and_size(sym);
-                debug_assert_eq!(base_offset % 8, 0);
-                X86_64Assembler::mov_reg64_base32(buf, Self::GENERAL_RETURN_REGS[0], base_offset);
-                X86_64Assembler::mov_reg64_base32(
-                    buf,
-                    Self::GENERAL_RETURN_REGS[1],
-                    base_offset + 8,
-                );
             }
             x if x.stack_size(TARGET_INFO) == 0 => {}
             x if !Self::returns_via_arg_pointer(x) => {
@@ -469,11 +434,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         match layout {
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
-            }
-            Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
-                let offset = storage_manager.claim_stack_area(sym, 16);
-                X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
-                X86_64Assembler::mov_base32_reg64(buf, offset + 8, Self::GENERAL_RETURN_REGS[1]);
             }
             x if x.stack_size(TARGET_INFO) == 0 => {}
             x if !Self::returns_via_arg_pointer(x) => {
@@ -670,10 +630,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[i]);
                         i += 1;
                     }
-                    Layout::Builtin(Builtin::Str) => {
-                        // I think this just needs to be passed on the stack, so not a huge deal.
-                        todo!("Passing str args with Windows fast call");
-                    }
                     x if x.stack_size(TARGET_INFO) == 0 => {}
                     x => {
                         todo!("Loading args with layout {:?}", x);
@@ -759,10 +715,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         );
                         tmp_stack_offset += 8;
                     }
-                }
-                Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
-                    // I think this just needs to be passed on the stack, so not a huge deal.
-                    todo!("Passing str args with Windows fast call");
                 }
                 x if x.stack_size(TARGET_INFO) == 0 => {}
                 x => {
