@@ -3810,7 +3810,7 @@ fn run_task<'a>(
             ident_ids,
             declarations,
             dep_idents,
-            imported_modules: unused_imports,
+            imported_modules,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -3822,7 +3822,7 @@ fn run_task<'a>(
             var_store,
             declarations,
             dep_idents,
-            unused_imports,
+            imported_modules,
         )),
         BuildPendingSpecializations {
             module_id,
