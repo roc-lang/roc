@@ -665,7 +665,8 @@ impl<'a> WasmBackend<'a> {
                             bytes[11] = 0x80 | (len as u8);
 
                             // Transform into two integers, to minimise number of instructions
-                            let bytes_split: &([u8; 8], [u8; 4]) = unsafe { std::mem::transmute(&bytes) };
+                            let bytes_split: &([u8; 8], [u8; 4]) =
+                                unsafe { std::mem::transmute(&bytes) };
                             let int64 = i64::from_le_bytes(bytes_split.0);
                             let int32 = i32::from_le_bytes(bytes_split.1);
 

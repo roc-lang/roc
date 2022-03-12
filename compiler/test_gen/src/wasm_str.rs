@@ -311,7 +311,20 @@ fn small_str_zeroed_literal() {
                     functionWithReusedSpace True
                  "#
         ),
-        [0x4a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0b1000_0001],
+        [
+            0x4a,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0b1000_0001
+        ],
         [u8; 12]
     );
 }
