@@ -55,17 +55,16 @@ struct RocCallResult {
   struct RocStr content;
 };
 
-extern void roc__mainForHost_1_exposed(struct RocStr url,
-                                       struct RocCallResult* re);
+extern struct RocStr roc__mainForHost_1_exposed(struct RocStr url);
 
 void handle_request(struct http_request_s* request) {
   struct http_string_s raw_url = http_request_target(request);
   struct RocStr roc_url = {raw_url.buf, raw_url.len};
 
-  struct RocCallResult call_result;
-  roc__mainForHost_1_exposed(roc_url, &call_result);
+  //struct RocCallResult call_result;
+  struct RocStr str = roc__mainForHost_1_exposed(roc_url);
 
-  struct RocStr str = call_result.content;
+  //struct RocStr str = call_result.content;
   size_t str_len = roc_str_len(str);
   char* str_bytes = (is_small_str(str)) ? (char*)&str : str.bytes;
 
