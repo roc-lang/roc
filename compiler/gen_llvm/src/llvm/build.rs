@@ -1,4 +1,4 @@
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::path::Path;
 
 use crate::llvm::bitcode::{
@@ -815,36 +815,11 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             let str_type = super::convert::zig_str_type(env);
 
             if str_literal.len() < env.small_str_bytes() as usize {
-                let mut array = Vec::from_iter_in(
-                    std::iter::repeat(0u8).take(env.small_str_bytes() as usize),
-                    env.arena,
-                );
-
-                // while loop because for uses Iterator and is not available in const contexts
-                let mut i = 0;
-                while i < str_literal.len() {
-                    array[i] = str_literal.as_bytes()[i];
-                    i += 1;
+                match env.small_str_bytes() {
+                    24 => small_str_ptr_width_8(env, str_literal).into(),
+                    12 => small_str_ptr_width_4(env, str_literal).into(),
+                    _ => unreachable!("incorrect small_str_bytes"),
                 }
-
-                array[env.small_str_bytes() as usize - 1] =
-                    str_literal.len() as u8 | roc_std::RocStr::MASK;
-
-                let byte_int_values = Vec::from_iter_in(
-                    array
-                        .iter()
-                        .map(|x| env.context.i8_type().const_int(*x as _, false)),
-                    env.arena,
-                );
-
-                let llvm_array = env.context.i8_type().const_array(&byte_int_values);
-
-                complex_bitcast(
-                    env.builder,
-                    llvm_array.into(),
-                    zig_str_type(env).into(),
-                    "transmute_to_roc_str",
-                )
             } else {
                 let ptr = define_global_str_literal_ptr(env, *str_literal);
                 let number_of_elements = env.ptr_int().const_int(number_of_chars, false);
@@ -887,6 +862,60 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             }
         }
     }
+}
+
+fn small_str_ptr_width_8<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    str_literal: &str,
+) -> StructValue<'ctx> {
+    debug_assert_eq!(env.target_info.ptr_width() as u8, 8);
+
+    let mut array = [0u8; 24];
+
+    array[..str_literal.len()].copy_from_slice(str_literal.as_bytes());
+
+    array[env.small_str_bytes() as usize - 1] = str_literal.len() as u8 | roc_std::RocStr::MASK;
+
+    let word1 = u64::from_ne_bytes(array[0..8].try_into().unwrap());
+    let word2 = u64::from_ne_bytes(array[8..16].try_into().unwrap());
+    let word3 = u64::from_ne_bytes(array[16..24].try_into().unwrap());
+
+    let ptr = env.ptr_int().const_int(word1, false);
+    let len = env.ptr_int().const_int(word2, false).into();
+    let cap = env.ptr_int().const_int(word3, false).into();
+
+    let address_space = AddressSpace::Generic;
+    let ptr_type = env.context.i8_type().ptr_type(address_space);
+    let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
+
+    zig_str_type(env).const_named_struct(&[ptr.into(), len, cap])
+}
+
+fn small_str_ptr_width_4<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    str_literal: &str,
+) -> StructValue<'ctx> {
+    debug_assert_eq!(env.target_info.ptr_width() as u8, 4);
+
+    let mut array = [0u8; 12];
+
+    array[..str_literal.len()].copy_from_slice(str_literal.as_bytes());
+
+    array[env.small_str_bytes() as usize - 1] = str_literal.len() as u8 | roc_std::RocStr::MASK;
+
+    let word1 = u32::from_ne_bytes(array[0..4].try_into().unwrap());
+    let word2 = u32::from_ne_bytes(array[4..8].try_into().unwrap());
+    let word3 = u32::from_ne_bytes(array[8..12].try_into().unwrap());
+
+    let ptr = env.ptr_int().const_int(word1 as u64, false);
+    let len = env.ptr_int().const_int(word2 as u64, false).into();
+    let cap = env.ptr_int().const_int(word3 as u64, false).into();
+
+    let address_space = AddressSpace::Generic;
+    let ptr_type = env.context.i8_type().ptr_type(address_space);
+    let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
+
+    zig_str_type(env).const_named_struct(&[ptr.into(), len, cap])
 }
 
 pub fn build_exp_call<'a, 'ctx, 'env>(
