@@ -247,20 +247,6 @@ pub fn str_trim<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
 
-    /*
-    let parent = env
-        .builder
-        .get_insert_block()
-        .and_then(|b| b.get_parent())
-        .unwrap();
-
-    let str_type = super::convert::zig_str_type(env);
-    let string_alloca = create_entry_block_alloca(env, parent, str_type.into(), "str_alloca");
-
-    let string = load_symbol(scope, &str_symbol);
-    env.builder.build_store(string_alloca, string);
-    */
-
     call_str_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM)
 }
 
