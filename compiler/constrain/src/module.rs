@@ -8,6 +8,7 @@ use roc_region::all::Loc;
 use roc_types::solved_types::{FreeVars, SolvedType};
 use roc_types::subs::{VarStore, Variable};
 
+/// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
 pub struct ExposedByModule {
     exposed: MutMap<ModuleId, ExposedModuleTypes>,
@@ -22,10 +23,15 @@ impl ExposedByModule {
         self.exposed.get(module_id)
     }
 
+    /// Convenient when you need mutable access to the StorageSubs in the ExposedModuleTypes
     pub fn get_mut(&mut self, module_id: &ModuleId) -> Option<&mut ExposedModuleTypes> {
         self.exposed.get_mut(module_id)
     }
 
+    /// Create a clone of `self` that has just a subset of the modules
+    ///
+    /// Useful when we know what modules a particular module imports, and want just
+    /// the exposed types for those exposed modules.
     pub fn retain_modules<'a>(&self, it: impl Iterator<Item = &'a ModuleId>) -> Self {
         let mut output = Self::default();
 
@@ -78,6 +84,7 @@ impl ExposedForModule {
     }
 }
 
+/// The types of all exposed values/functions of a module
 #[derive(Clone, Debug)]
 pub enum ExposedModuleTypes {
     Invalid,
