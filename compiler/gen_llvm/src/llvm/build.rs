@@ -3390,11 +3390,16 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     let c_function_type = match roc_function.get_type().get_return_type() {
         None => {
             // this function already returns by-pointer
-            roc_function.get_type()
+            let output_type = roc_function.get_type().get_param_types().pop().unwrap();
+            argument_types.insert(0, output_type);
+
+            env.context
+                .void_type()
+                .fn_type(&function_arguments(env, &argument_types), false)
         }
         Some(return_type) => {
             let output_type = return_type.ptr_type(AddressSpace::Generic);
-            argument_types.push(output_type.into());
+            argument_types.insert(0, output_type.into());
 
             env.context
                 .void_type()
@@ -3426,9 +3431,9 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     // drop the final argument, which is the pointer we write the result into
     let args_vector = c_function.get_params();
     let mut args = args_vector.as_slice();
-    let args_length = args.len();
 
-    args = &args[..args.len() - 1];
+    // drop the output parameter
+    args = &args[1..];
 
     let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
 
@@ -3439,8 +3444,26 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
             // the C and Fast calling conventions agree
             arguments_for_call.push(*arg);
         } else {
-            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
-            arguments_for_call.push(cast);
+            // not pretty, but seems to cover all our current cases
+            if arg_type.is_pointer_type() && !fastcc_type.is_pointer_type() {
+                // bitcast the ptr
+                let fastcc_ptr = env
+                    .builder
+                    .build_bitcast(
+                        *arg,
+                        fastcc_type.ptr_type(AddressSpace::Generic),
+                        "bitcast_arg",
+                    )
+                    .into_pointer_value();
+
+                let loaded = env.builder.build_load(fastcc_ptr, "load_arg");
+                arguments_for_call.push(loaded);
+            } else {
+                todo!("C <-> Fastcc interaction that we haven't seen before")
+            }
+
+            // let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
+            // arguments_for_call.push(cast);
         }
     }
 
@@ -3465,7 +3488,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
         }
     };
 
-    let output_arg_index = args_length - 1;
+    let output_arg_index = 0;
 
     let output_arg = c_function
         .get_nth_param(output_arg_index as u32)
