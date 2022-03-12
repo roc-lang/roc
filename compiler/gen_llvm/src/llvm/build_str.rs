@@ -359,7 +359,7 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
             complex_bitcast(
                 env.builder,
                 count_and_start.into(),
-                env.str_list_c_abi().into(),
+                env.twice_ptr_int().into(),
                 "to_i128",
             ),
             result_ptr.into(),

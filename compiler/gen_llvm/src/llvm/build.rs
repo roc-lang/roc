@@ -204,12 +204,17 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         }
     }
 
-    /// The integer type representing a RocList or RocStr when following the C ABI
+    /// The integer type representing twice the width of a pointer
     ///
     /// on 64-bit systems, this is i128
     /// on 32-bit systems, this is i64
-    pub fn str_list_c_abi(&self) -> IntType<'ctx> {
-        crate::llvm::convert::str_list_int(self.context, self.target_info)
+    pub fn twice_ptr_int(&self) -> IntType<'ctx> {
+        let ctx = self.context;
+
+        match self.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => ctx.i64_type(),
+            roc_target::PtrWidth::Bytes8 => ctx.i128_type(),
+        }
     }
 
     pub fn small_str_bytes(&self) -> u32 {
