@@ -887,11 +887,20 @@ pub fn listSublist(
         }
 
         const keep_len = std.math.min(len, size - start);
-        const drop_len = std.math.max(start, 0);
+        const drop_start_len = start;
+        const drop_end_len = size - (start + keep_len);
 
+        // Decrement the reference counts of elements before `start`.
         var i: usize = 0;
-        while (i < drop_len) : (i += 1) {
+        while (i < drop_start_len) : (i += 1) {
             const element = source_ptr + i * element_width;
+            dec(element);
+        }
+
+        // Decrement the reference counts of elements after `start + keep_len`.
+        i = 0;
+        while (i < drop_end_len) : (i += 1) {
+            const element = source_ptr + (start + keep_len + i) * element_width;
             dec(element);
         }
 

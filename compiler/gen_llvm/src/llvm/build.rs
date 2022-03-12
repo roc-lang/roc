@@ -1128,6 +1128,30 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             ..
         } => build_tag(env, scope, union_layout, *tag_id, arguments, None, parent),
 
+        ExprBox { symbol } => {
+            let (value, layout) = load_symbol_and_layout(scope, symbol);
+            let basic_type = basic_type_from_layout(env, layout);
+            let allocation = reserve_with_refcount_help(
+                env,
+                basic_type,
+                layout.stack_size(env.target_info),
+                layout.alignment_bytes(env.target_info),
+            );
+
+            env.builder.build_store(allocation, value);
+
+            allocation.into()
+        }
+
+        ExprUnbox { symbol } => {
+            let value = load_symbol(scope, symbol);
+
+            debug_assert!(value.is_pointer_value());
+
+            env.builder
+                .build_load(value.into_pointer_value(), "load_boxed_value")
+        }
+
         Reset { symbol, .. } => {
             let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
             let tag_ptr = tag_ptr.into_pointer_value();
@@ -1826,7 +1850,7 @@ pub fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
     let masked = env.builder.build_and(as_int, mask_intval, "mask");
 
     env.builder
-        .build_int_cast(masked, env.context.i8_type(), "to_u8")
+        .build_int_cast_sign_flag(masked, env.context.i8_type(), false, "to_u8")
 }
 
 pub fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
@@ -5919,8 +5943,11 @@ fn run_low_level<'a, 'ctx, 'env>(
             let arg = load_symbol(scope, &args[0]).into_int_value();
 
             let to = basic_type_from_layout(env, layout).into_int_type();
+            let to_signed = intwidth_from_layout(*layout).is_signed();
 
-            env.builder.build_int_cast(arg, to, "inc_cast").into()
+            env.builder
+                .build_int_cast_sign_flag(arg, to, to_signed, "inc_cast")
+                .into()
         }
         Eq => {
             debug_assert_eq!(args.len(), 2);
@@ -6144,6 +6171,10 @@ fn run_low_level<'a, 'ctx, 'env>(
         | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
         | ListAny | ListAll | ListFindUnsafe | DictWalk => {
             unreachable!("these are higher order, and are handled elsewhere")
+        }
+
+        BoxExpr | UnboxExpr => {
+            unreachable!("The {:?} operation is turned into mono Expr", op)
         }
 
         PtrCast | RefCountInc | RefCountDec => {
@@ -7024,7 +7055,12 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 let target_int_type = convert::int_type_from_int_width(env, target_int_width);
                 let target_int_val: BasicValueEnum<'ctx> = env
                     .builder
-                    .build_int_cast(arg, target_int_type, "int_cast")
+                    .build_int_cast_sign_flag(
+                        arg,
+                        target_int_type,
+                        target_int_width.is_signed(),
+                        "int_cast",
+                    )
                     .into();
 
                 let return_type =

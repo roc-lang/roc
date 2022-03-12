@@ -182,6 +182,16 @@ fn build_eq<'a, 'ctx, 'env>(
             rhs_val,
         ),
 
+        Layout::Boxed(inner_layout) => build_box_eq(
+            env,
+            layout_ids,
+            when_recursive,
+            lhs_layout,
+            inner_layout,
+            lhs_val,
+            rhs_val,
+        ),
+
         Layout::RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be compared directly")
@@ -344,12 +354,30 @@ fn build_neq<'a, 'ctx, 'env>(
 
             result.into()
         }
+
         Layout::Union(union_layout) => {
             let is_equal = build_tag_eq(
                 env,
                 layout_ids,
                 when_recursive,
                 union_layout,
+                lhs_val,
+                rhs_val,
+            )
+            .into_int_value();
+
+            let result: IntValue = env.builder.build_not(is_equal, "negate");
+
+            result.into()
+        }
+
+        Layout::Boxed(inner_layout) => {
+            let is_equal = build_box_eq(
+                env,
+                layout_ids,
+                when_recursive,
+                lhs_layout,
+                inner_layout,
                 lhs_val,
                 rhs_val,
             )
@@ -1099,8 +1127,10 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             let i8_type = env.context.i8_type();
 
             let sum = env.builder.build_int_add(
-                env.builder.build_int_cast(is_null_1, i8_type, "to_u8"),
-                env.builder.build_int_cast(is_null_2, i8_type, "to_u8"),
+                env.builder
+                    .build_int_cast_sign_flag(is_null_1, i8_type, false, "to_u8"),
+                env.builder
+                    .build_int_cast_sign_flag(is_null_2, i8_type, false, "to_u8"),
                 "sum_is_null",
             );
 
@@ -1249,4 +1279,142 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
         struct2,
     )
     .into_int_value()
+}
+
+/// ----
+
+fn build_box_eq<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    when_recursive: WhenRecursive<'a>,
+    box_layout: &Layout<'a>,
+    inner_layout: &Layout<'a>,
+    tag1: BasicValueEnum<'ctx>,
+    tag2: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let symbol = Symbol::GENERIC_EQ;
+    let fn_name = layout_ids
+        .get(symbol, box_layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let arg_type = basic_type_from_layout(env, box_layout);
+
+            let function_value = crate::llvm::refcounting::build_header_help(
+                env,
+                &fn_name,
+                env.context.bool_type().into(),
+                &[arg_type, arg_type],
+            );
+
+            build_box_eq_help(
+                env,
+                layout_ids,
+                when_recursive,
+                function_value,
+                inner_layout,
+            );
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+    let call = env
+        .builder
+        .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
+
+    call.set_call_convention(FAST_CALL_CONV);
+
+    call.try_as_basic_value().left().unwrap()
+}
+
+fn build_box_eq_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    when_recursive: WhenRecursive<'a>,
+    parent: FunctionValue<'ctx>,
+    inner_layout: &Layout<'a>,
+) {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    {
+        use inkwell::debug_info::AsDIScope;
+
+        let func_scope = parent.get_subprogram().unwrap();
+        let lexical_block = env.dibuilder.create_lexical_block(
+            /* scope */ func_scope.as_debug_info_scope(),
+            /* file */ env.compile_unit.get_file(),
+            /* line_no */ 0,
+            /* column_no */ 0,
+        );
+
+        let loc = env.dibuilder.create_debug_location(
+            ctx,
+            /* line */ 0,
+            /* column */ 0,
+            /* current_scope */ lexical_block.as_debug_info_scope(),
+            /* inlined_at */ None,
+        );
+        builder.set_current_debug_location(ctx, loc);
+    }
+
+    // Add args to scope
+    let mut it = parent.get_param_iter();
+    let box1 = it.next().unwrap();
+    let box2 = it.next().unwrap();
+
+    box1.set_name(Symbol::ARG_1.as_str(&env.interns));
+    box2.set_name(Symbol::ARG_2.as_str(&env.interns));
+
+    let return_true = ctx.append_basic_block(parent, "return_true");
+    env.builder.position_at_end(return_true);
+    env.builder
+        .build_return(Some(&env.context.bool_type().const_all_ones()));
+
+    let entry = ctx.append_basic_block(parent, "entry");
+    env.builder.position_at_end(entry);
+
+    let ptr_equal = env.builder.build_int_compare(
+        IntPredicate::EQ,
+        env.builder
+            .build_ptr_to_int(box1.into_pointer_value(), env.ptr_int(), "pti"),
+        env.builder
+            .build_ptr_to_int(box2.into_pointer_value(), env.ptr_int(), "pti"),
+        "compare_pointers",
+    );
+
+    let compare_inner_value = ctx.append_basic_block(parent, "compare_inner_value");
+
+    env.builder
+        .build_conditional_branch(ptr_equal, return_true, compare_inner_value);
+
+    env.builder.position_at_end(compare_inner_value);
+
+    // clear the tag_id so we get a pointer to the actual data
+    let box1 = box1.into_pointer_value();
+    let box2 = box2.into_pointer_value();
+
+    let value1 = env.builder.build_load(box1, "load_box1");
+    let value2 = env.builder.build_load(box2, "load_box2");
+
+    let is_equal = build_eq(
+        env,
+        layout_ids,
+        value1,
+        value2,
+        inner_layout,
+        inner_layout,
+        when_recursive,
+    );
+
+    env.builder.build_return(Some(&is_equal));
 }

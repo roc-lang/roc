@@ -264,6 +264,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_TO_U64_CHECKED => num_to_u64_checked,
         NUM_TO_U128 => num_to_u128,
         NUM_TO_U128_CHECKED => num_to_u128_checked,
+        NUM_TO_NAT => num_to_nat,
+        NUM_TO_NAT_CHECKED => num_to_nat_checked,
         NUM_TO_STR => num_to_str,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
@@ -271,6 +273,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         RESULT_WITH_DEFAULT => result_with_default,
         RESULT_IS_OK => result_is_ok,
         RESULT_IS_ERR => result_is_err,
+        BOX_BOX_FUNCTION => box_box,
+        BOX_UNBOX => box_unbox,
     }
 }
 
@@ -472,6 +476,12 @@ fn num_to_u128(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
 }
 
+// Num.toNat : Int * -> Nat
+fn num_to_nat(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
 fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) -> Def {
     let bool_var = var_store.fresh();
     let num_var_1 = var_store.fresh();
@@ -578,6 +588,7 @@ num_to_checked! {
     num_to_u32_checked
     num_to_u64_checked
     num_to_u128_checked
+    num_to_nat_checked
 }
 
 // Num.toStr : Num a -> Str
@@ -5324,6 +5335,16 @@ fn num_bytes_to(symbol: Symbol, var_store: &mut VarStore, offset: i64, low_level
         body,
         ret_var,
     )
+}
+
+/// Box.box : a -> Box a
+fn box_box(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::BoxExpr, var_store)
+}
+
+/// Box.unbox : Box a -> a
+fn box_unbox(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::UnboxExpr, var_store)
 }
 
 #[inline(always)]

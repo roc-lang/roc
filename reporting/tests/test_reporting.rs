@@ -426,8 +426,8 @@ mod test_reporting {
 
                 `Booly` is not used anywhere in your code.
 
-                3│  Booly : [ Yes, No, Maybe ]
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                1│  Booly : [ Yes, No ]
+                    ^^^^^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `Booly` then remove it so future readers
                 of your code don't wonder why it is there.
@@ -436,8 +436,8 @@ mod test_reporting {
 
                 `Booly` is not used anywhere in your code.
 
-                1│  Booly : [ Yes, No ]
-                    ^^^^^^^^^^^^^^^^^^^
+                3│  Booly : [ Yes, No, Maybe ]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `Booly` then remove it so future readers
                 of your code don't wonder why it is there.
@@ -1544,10 +1544,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
+                    Box
                     Bool
                     U8
                     F64
-                    Nat
                 "#
             ),
         )
@@ -2003,8 +2003,8 @@ mod test_reporting {
 
                     Ok
                     U8
+                    Box
                     f
-                    I8
                "#
             ),
         )
@@ -3727,10 +3727,10 @@ mod test_reporting {
                 Is there an import missing? Perhaps there is a typo. Did you mean one
                 of these?
 
+                    Box
                     Bool
                     Num
                     Set
-                    Str
                 "#
             ),
         )
@@ -7983,21 +7983,21 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
-
-                The `Bar` alias is recursive in an invalid way:
-
-                2│  Bar a : [ Stuff (Foo a) ]
-                    ^^^^^
-
-                The `Bar` alias depends on itself through the following chain of
+                
+                The `Foo` alias is recursive in an invalid way:
+                
+                1│  Foo a : [ Thing (Bar a) ]
+                    ^^^
+                
+                The `Foo` alias depends on itself through the following chain of
                 definitions:
-
+                
                     ┌─────┐
-                    │     Bar
-                    │     ↓
                     │     Foo
+                    │     ↓
+                    │     Bar
                     └─────┘
-
+                
                 Recursion in aliases is only allowed if recursion happens behind a
                 tagged union, at least one variant of which is not recursive.
                 "#
@@ -8185,7 +8185,7 @@ I need all branches in an `if` to have the same type!
                     Test
                     List
                     Num
-                    Set
+                    Box
                 "#
             ),
         )
@@ -8561,6 +8561,55 @@ I need all branches in an `if` to have the same type!
 
                 Note: A tag union extension variable can only contain a type variable
                 or another tag union.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unknown_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Type : [ Constructor UnknownType ]
+                
+                insertHelper : UnknownType, Type -> Type
+                insertHelper = \h, m ->
+                    when m is
+                        Constructor _ -> Constructor h 
+
+                insertHelper
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                I cannot find a `UnknownType` value
+
+                1│  Type : [ Constructor UnknownType ]
+                                         ^^^^^^^^^^^
+
+                Did you mean one of these?
+
+                    Type
+                    Unsigned8
+                    Unsigned32
+                    Unsigned16
+
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                I cannot find a `UnknownType` value
+
+                3│  insertHelper : UnknownType, Type -> Type
+                                                        ^^^^
+
+                Did you mean one of these?
+
+                    Type
+                    Unsigned8
+                    Unsigned32
+                    Unsigned16
                 "#
             ),
         )
