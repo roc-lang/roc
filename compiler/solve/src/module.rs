@@ -10,9 +10,19 @@ use roc_types::types::Alias;
 #[derive(Debug)]
 pub struct SolvedModule {
     pub aliases: MutMap<Symbol, Alias>,
-    pub exposed_symbols: Vec<Symbol>,
-    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub problems: Vec<solve::TypeError>,
+
+    /// All exposed symbols. Annoyingly, this does not differentiate beteen
+    /// types and values
+    pub exposed_symbols: Vec<Symbol>,
+
+    /// Used when the goal phase is TypeChecking, and
+    /// to create the types for HostExposed. This
+    /// has some overlap with the StorageSubs fields,
+    /// so maybe we can get rid of this at some point
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+
+    /// Used when importing this module into another module
     pub stored_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub storage_subs: StorageSubs,
 }
