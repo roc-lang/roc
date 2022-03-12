@@ -30,9 +30,10 @@ void* roc_memset(void* str, int c, size_t n) { return memset(str, c, n); }
 struct RocStr {
   char* bytes;
   size_t len;
+  size_t capacity;
 };
 
-bool is_small_str(struct RocStr str) { return ((ssize_t)str.len) < 0; }
+bool is_small_str(struct RocStr str) { return ((ssize_t)str.capacity) < 0; }
 
 // Determine the length of the string, taking into
 // account the small string optimization

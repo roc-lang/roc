@@ -23,14 +23,15 @@ func rocRealloc(ptr: UInt, _oldSize: Int, newSize: Int, _alignment: UInt) -> UIn
 
 extension RocStr {
     var isSmallString: Bool {
-        len < 0
+        capacity < 0
     }
 
     var length: Int {
         if isSmallString {
-            var len = len
-            let count = MemoryLayout.size(ofValue: len)
-            let bytes = Data(bytes: &len, count: count)
+            // Small String length is last in the byte of capacity.
+            var cap = capacity
+            let count = MemoryLayout.size(ofValue: cap)
+            let bytes = Data(bytes: &cap, count: count)
             let lastByte = bytes[count - 1]
             return Int(lastByte ^ 0b1000_0000)
         } else {
