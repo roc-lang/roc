@@ -54,10 +54,12 @@ size_t roc_str_len(struct RocStr str) {
   }
 }
 
-extern struct RocStr roc__mainForHost_1_exposed();
+extern void roc__mainForHost_1_exposed_generic(*RocStr);
 
 int main() {
-  struct RocStr str = roc__mainForHost_1_exposed();
+
+  struct RocStr str;
+  roc__mainForHost_1_exposed_generic(&str);
 
   // Determine str_len and the str_bytes pointer,
   // taking into account the small string optimization.
