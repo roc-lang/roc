@@ -1242,9 +1242,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             for caret_pos in ed_model.get_carets() {
 
                                                 if caret_pos.line > 0 {
-                                                    // TODO print AST before
                                                     insert_new_blank(ed_model, caret_pos.line)?;
-                                                    // TODO print AST after
                                                     ed_model.post_process_ast_update()?;
                                                 }
                                             }
@@ -1277,6 +1275,8 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
 #[cfg(test)]
 pub mod test_ed_update {
+    use std::iter;
+
     use crate::editor::ed_error::print_err;
     use crate::editor::mvc::ed_model::test_ed_model::ed_model_from_dsl;
     use crate::editor::mvc::ed_model::test_ed_model::ed_model_to_dsl;
@@ -1284,13 +1284,14 @@ pub mod test_ed_update {
     use crate::editor::mvc::ed_update::handle_new_char;
     use crate::editor::mvc::ed_update::EdModel;
     use crate::editor::mvc::ed_update::EdResult;
-    use crate::editor::resources::strings::HELLO_WORLD;
+    use crate::editor::resources::strings::nr_hello_world_lines;
     use crate::ui::text::lines::SelectableLines;
     use crate::ui::ui_error::UIResult;
     use crate::window::keyboard_input::no_mods;
     use crate::window::keyboard_input::test_modifiers::ctrl_cmd_shift;
     use crate::window::keyboard_input::Modifiers;
     use bumpalo::Bump;
+    use roc_code_markup::markup::common_nodes::NEW_LINES_AFTER_DEF;
     use roc_module::symbol::ModuleIds;
     use threadpool::ThreadPool;
     use winit::event::VirtualKeyCode::*;
@@ -1411,7 +1412,7 @@ pub mod test_ed_update {
             } else if input_char == '🡱' {
                 ed_model.simple_move_carets_up(1);
             } else {
-                dbg!(input_char);
+                //dbg!(input_char);
                 ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
             }
         }
@@ -1425,8 +1426,7 @@ pub mod test_ed_update {
     }
 
     fn strip_header(lines: &mut Vec<String>) {
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 2;
-        lines.drain(0..nr_hello_world_lines);
+        lines.drain(0..nr_hello_world_lines());
     }
 
     pub fn assert_insert_seq_nls(
@@ -1485,8 +1485,11 @@ pub mod test_ed_update {
     // add newlines like the editor's formatting would add them
     fn add_nls(lines: Vec<String>) -> Vec<String> {
         let mut new_lines = lines;
-        //Two lines between TLD's, extra newline so the user can go to third line add new def there
-        new_lines.append(&mut vec!["".to_owned(), "".to_owned()]);
+        //line(s) between TLD's, extra newline so the user can go to last line add new def there
+        let mut extra_empty_lines = iter::repeat("".to_owned())
+            .take(NEW_LINES_AFTER_DEF)
+            .collect();
+        new_lines.append(&mut extra_empty_lines);
 
         new_lines
     }
@@ -2578,7 +2581,7 @@ pub mod test_ed_update {
     fn test_enter() -> Result<(), String> {
         assert_insert_seq(
             ovec!["┃"],
-            ovec!["ab = 5", "", "cd = \"good┃\"", "", ""],
+            add_nls(ovec!["ab = 5", "", "cd = \"good┃\""]),
             "ab🡲🡲🡲5\rcd🡲🡲🡲\"good",
         )?;
 

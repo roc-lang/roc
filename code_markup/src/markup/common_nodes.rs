@@ -99,12 +99,17 @@ fn common_text_node(
     }
 }
 
+pub const NEW_LINES_AFTER_DEF: usize = 2;
+
 pub fn new_assign_mn(
     val_name_mn_id: MarkNodeId,
     equals_mn_id: MarkNodeId,
     expr_mark_node_id: MarkNodeId,
 ) -> MarkupNode {
-    make_nested_mn(vec![val_name_mn_id, equals_mn_id, expr_mark_node_id], 2)
+    make_nested_mn(
+        vec![val_name_mn_id, equals_mn_id, expr_mark_node_id],
+        NEW_LINES_AFTER_DEF,
+    )
 }
 
 pub fn new_module_name_mn_id(mn_ids: Vec<MarkNodeId>, mark_node_pool: &mut SlowPool) -> MarkNodeId {

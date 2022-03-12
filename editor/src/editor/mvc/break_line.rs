@@ -1,4 +1,5 @@
 use roc_ast::lang::core::def::def2::Def2;
+use roc_code_markup::markup::common_nodes::NEW_LINES_AFTER_DEF;
 
 use crate::editor::ed_error::EdResult;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -21,23 +22,22 @@ pub fn break_line(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
                 column: caret_pos.column - 1,
             })
         {
-            let new_blank_line_nr = caret_line_nr + 2;
+            let new_blank_line_nr = caret_line_nr + NEW_LINES_AFTER_DEF;
             // if there already is a blank line at new_blank_line_nr just move the caret there, don't add extra lines
             // safe unwrap, we already checked the nr_of_lines
             if !(ed_model.code_lines.nr_of_lines() >= new_blank_line_nr
                 && ed_model.code_lines.line_len(new_blank_line_nr).unwrap() == 0)
             {
-                // one blank lines between top level definitions
-                EdModel::insert_empty_line(caret_line_nr + 1, &mut ed_model.grid_node_map)?;
-                // second "empty" line will be filled by the blank
-                EdModel::insert_empty_line(caret_line_nr + 2, &mut ed_model.grid_node_map)?;
+                for i in 1..=NEW_LINES_AFTER_DEF {
+                    EdModel::insert_empty_line(caret_line_nr + i, &mut ed_model.grid_node_map)?;
+                }
 
-                insert_new_blank(ed_model, caret_pos.line + 3)?;
+                insert_new_blank(ed_model, caret_pos.line + NEW_LINES_AFTER_DEF + 1)?;
             }
         }
     }
 
-    ed_model.simple_move_carets_down(2); // one blank lines between top level definitions
+    ed_model.simple_move_carets_down(NEW_LINES_AFTER_DEF); // one blank lines between top level definitions
 
     Ok(InputOutcome::Accepted)
 }

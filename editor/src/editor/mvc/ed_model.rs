@@ -220,7 +220,7 @@ impl<'a> EdModule<'a> {
 pub mod test_ed_model {
     use crate::editor::ed_error::EdResult;
     use crate::editor::mvc::ed_model;
-    use crate::editor::resources::strings::{HELLO_WORLD, PLATFORM_STR};
+    use crate::editor::resources::strings::{nr_hello_world_lines, HELLO_WORLD, PLATFORM_STR};
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::caret_w_select::CaretPos;
@@ -339,10 +339,9 @@ pub mod test_ed_model {
         )?;
 
         // adjust caret for header and main function
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 2;
         let caret_w_select = convert_dsl_to_selection(&code_lines)?;
         let adjusted_caret_pos = TextPos {
-            line: caret_w_select.caret_pos.line + nr_hello_world_lines,
+            line: caret_w_select.caret_pos.line + nr_hello_world_lines(),
             column: caret_w_select.caret_pos.column,
         };
 
