@@ -506,7 +506,6 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
-        exposed_values: Vec<Symbol>,
         dep_idents: MutMap<ModuleId, IdentIds>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
@@ -1148,7 +1147,6 @@ fn state_thread_step<'a>(
                     solved_subs,
                     exposed_vars_by_symbol,
                     exposed_aliases_by_symbol,
-                    exposed_values,
                     dep_idents,
                     documentation,
                 } => {
@@ -1158,7 +1156,6 @@ fn state_thread_step<'a>(
                     let typechecked = finish(
                         state,
                         solved_subs,
-                        exposed_values,
                         exposed_aliases_by_symbol,
                         exposed_vars_by_symbol,
                         dep_idents,
@@ -1807,7 +1804,6 @@ fn update<'a>(
                     .send(Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                        exposed_values: solved_module.exposed_symbols,
                         exposed_aliases_by_symbol: solved_module.aliases,
                         dep_idents,
                         documentation,
@@ -2128,7 +2124,6 @@ fn finish_specialization(
 fn finish(
     state: State,
     solved: Solved<Subs>,
-    exposed_values: Vec<Symbol>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     dep_idents: MutMap<ModuleId, IdentIds>,
@@ -2150,6 +2145,8 @@ fn finish(
         .into_iter()
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
+
+    let exposed_values = exposed_vars_by_symbol.iter().map(|x| x.0).collect();
 
     LoadedModule {
         module_id: state.root_id,
@@ -3167,7 +3164,6 @@ fn run_solve<'a>(
 
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
-        exposed_symbols: exposed_symbols.into_iter().collect::<Vec<_>>(),
         problems,
         aliases,
         stored_vars_by_symbol,

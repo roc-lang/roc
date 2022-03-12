@@ -9,12 +9,11 @@ use roc_types::types::Alias;
 
 #[derive(Debug)]
 pub struct SolvedModule {
-    pub aliases: MutMap<Symbol, Alias>,
     pub problems: Vec<solve::TypeError>,
 
-    /// All exposed symbols. Annoyingly, this does not differentiate beteen
-    /// types and values
-    pub exposed_symbols: Vec<Symbol>,
+    /// all aliases and their definitions. this has to include non-exposed aliases
+    /// because exposed aliases can depend on non-exposed ones)
+    pub aliases: MutMap<Symbol, Alias>,
 
     /// Used when the goal phase is TypeChecking, and
     /// to create the types for HostExposed. This
