@@ -102,20 +102,18 @@ pub fn type_problem<'b>(
 
                     report(title, doc, filename)
                 }
-                CyclicAlias(..) => {
-                    // We'll also report cyclic aliases as a canonicalization problem, no need to
-                    // re-report them.
-                    None
-                }
-
-                SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/rtfeldman/roc/pull/1711
-
                 Shadowed(original_region, shadow) => {
                     let doc = report_shadowing(alloc, lines, original_region, shadow);
                     let title = DUPLICATE_NAME.to_string();
 
                     report(title, doc, filename)
                 }
+
+                SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/rtfeldman/roc/pull/1711
+
+                // We'll also report these as a canonicalization problem, no need to re-report them.
+                CyclicAlias(..) => None,
+                UnrecognizedIdent(..) => None,
 
                 other => panic!("unhandled bad type: {:?}", other),
             }

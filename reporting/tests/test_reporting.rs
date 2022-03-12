@@ -8565,4 +8565,53 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn unknown_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Type : [ Constructor UnknownType ]
+                
+                insertHelper : UnknownType, Type -> Type
+                insertHelper = \h, m ->
+                    when m is
+                        Constructor _ -> Constructor h 
+
+                insertHelper
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                I cannot find a `UnknownType` value
+
+                1│  Type : [ Constructor UnknownType ]
+                                         ^^^^^^^^^^^
+
+                Did you mean one of these?
+
+                    Type
+                    Unsigned8
+                    Unsigned32
+                    Unsigned16
+
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                I cannot find a `UnknownType` value
+
+                3│  insertHelper : UnknownType, Type -> Type
+                                                        ^^^^
+
+                Did you mean one of these?
+
+                    Type
+                    Unsigned8
+                    Unsigned32
+                    Unsigned16
+                "#
+            ),
+        )
+    }
 }
