@@ -11,7 +11,7 @@ roc_builtins = {path = "../compiler/builtins"}
 
 [dependencies]
 bumpalo = {version = "3.8.0", features = ["collections"]}
-console_error_panic_hook = "0.1.7"
+console_error_panic_hook = {version = "0.1.7", optional = true}
 futures = {version = "0.3.17", optional = true}
 js-sys = "0.3.56"
 wasm-bindgen = "0.2.79"
@@ -26,6 +26,7 @@ roc_target = {path = "../compiler/roc_target"}
 roc_types = {path = "../compiler/types"}
 
 [features]
+default = ["console_error_panic_hook"]
 wasmer = ["futures"]
 
 [package.metadata.wasm-pack.profile.profiling]

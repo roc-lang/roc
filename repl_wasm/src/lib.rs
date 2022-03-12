@@ -1,9 +1,10 @@
-extern crate console_error_panic_hook;
 mod repl;
 
 //
 // Interface with external JS in the browser
 //
+#[cfg(not(feature = "wasmer"))]
+extern crate console_error_panic_hook;
 #[cfg(not(feature = "wasmer"))]
 mod externs_js;
 #[cfg(not(feature = "wasmer"))]
