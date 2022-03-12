@@ -146,7 +146,7 @@ fn roc_fx_getLine_help() !RocStr {
     return str.RocStr.init(@ptrCast([*]const u8, line), line.len);
 }
 
-pub export fn roc_fx_putLine(rocPath: str.RocStr) i64 {
+pub export fn roc_fx_putLine(rocPath: *str.RocStr) i64 {
     const stdout = std.io.getStdOut().writer();
 
     for (rocPath.asSlice()) |char| {

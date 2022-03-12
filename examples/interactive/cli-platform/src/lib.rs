@@ -119,7 +119,7 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) {
+pub extern "C" fn roc_fx_putLine(line: &RocStr) {
     let string = line.as_str();
     println!("{}", string);
 }
