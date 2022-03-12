@@ -6229,7 +6229,18 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
         Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
             basic_type_from_builtin(env, builtin)
         }
-        Builtin::Str | Builtin::List(_) => env.str_list_c_abi().into(),
+        Builtin::Str | Builtin::List(_) => {
+            let address_space = AddressSpace::Generic;
+            let field_types: [BasicTypeEnum; 3] = [
+                env.context.i8_type().ptr_type(address_space).into(),
+                env.ptr_int().into(),
+                env.ptr_int().into(),
+            ];
+
+            let struct_type = env.context.struct_type(&field_types, false);
+
+            struct_type.ptr_type(address_space).into()
+        }
         Builtin::Dict(_, _) | Builtin::Set(_) => {
             // TODO verify this is what actually happens
             basic_type_from_builtin(env, builtin)
@@ -6430,9 +6441,25 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                     if param.get_type() == *cc_type {
                         cc_arguments.push(param.into());
                     } else {
-                        let as_cc_type =
-                            complex_bitcast(env.builder, param, *cc_type, "to_cc_type");
-                        cc_arguments.push(as_cc_type.into());
+                        // not pretty, but seems to cover all our current case
+                        if cc_type.is_pointer_type() && !param.get_type().is_pointer_type() {
+                            // we need to pass this value by-reference; put it into an alloca
+                            // and bitcast the reference
+
+                            let param_alloca =
+                                env.builder.build_alloca(param.get_type(), "param_alloca");
+                            env.builder.build_store(param_alloca, param);
+
+                            let as_cc_type = env.builder.build_bitcast(
+                                param_alloca,
+                                cc_type.into_pointer_type(),
+                                "to_cc_type_ptr",
+                            );
+
+                            cc_arguments.push(as_cc_type.into());
+                        } else {
+                            todo!("C <-> Fastcc interaction that we haven't seen before")
+                        }
                     }
                 }
 
