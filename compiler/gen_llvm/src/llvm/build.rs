@@ -4317,6 +4317,24 @@ fn build_proc_header<'a, 'ctx, 'env>(
         );
     }
 
+    if false {
+        use inkwell::attributes::{Attribute, AttributeLoc};
+
+        let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+        debug_assert!(kind_id > 0);
+        let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+        fn_val.add_attribute(AttributeLoc::Function, enum_attr);
+    }
+
+    if false {
+        use inkwell::attributes::{Attribute, AttributeLoc};
+
+        let kind_id = Attribute::get_named_enum_kind_id("noinline");
+        debug_assert!(kind_id > 0);
+        let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+        fn_val.add_attribute(AttributeLoc::Function, enum_attr);
+    }
+
     fn_val
 }
 

@@ -75,7 +75,7 @@ pub fn call_str_bitcode_fn<'a, 'ctx, 'env>(
         .unwrap();
 
     let str_type = super::convert::zig_str_type(env);
-    let result = create_entry_block_alloca(env, parent, str_type.into(), "str_alloca");
+    let result = create_entry_block_alloca(env, parent, str_type.into(), "return_str_alloca");
     let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len() + 1, env.arena);
 
     arguments.push(result.into());
