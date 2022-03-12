@@ -1,11 +1,14 @@
+use crate::llvm::build::Env;
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
-use inkwell::types::{BasicType, BasicTypeEnum, IntType, StructType};
+use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::AddressSpace;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_target::TargetInfo;
 
 fn basic_type_from_record<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+    env: &Env<'a, 'ctx, 'env>,
     fields: &[Layout<'_>],
 ) -> BasicTypeEnum<'ctx> {
     let mut field_types = Vec::with_capacity_in(fields.len(), env.arena);
@@ -20,100 +23,171 @@ fn basic_type_from_record<'a, 'ctx, 'env>(
 }
 
 pub fn basic_type_from_layout<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+    env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'_>,
 ) -> BasicTypeEnum<'ctx> {
     use Layout::*;
 
     match layout {
-        Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
-        Union(union_layout) => {
-            use UnionLayout::*;
+        Struct {
+            field_layouts: sorted_fields,
+            ..
+        } => basic_type_from_record(env, sorted_fields),
+        LambdaSet(lambda_set) => basic_type_from_layout(env, &lambda_set.runtime_representation()),
+        Boxed(inner_layout) => {
+            let inner_type = basic_type_from_layout(env, inner_layout);
 
-            let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
-
-            match union_layout {
-                NonRecursive(tags) => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
-
-                    env.context.struct_type(&[data, tag_id_type], false).into()
-                }
-                Recursive(tags)
-                | NullableWrapped {
-                    other_tags: tags, ..
-                } => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
-
-                    if union_layout.stores_tag_id_as_data(env.ptr_bytes) {
-                        env.context
-                            .struct_type(&[data, tag_id_type], false)
-                            .ptr_type(AddressSpace::Generic)
-                            .into()
-                    } else {
-                        data.ptr_type(AddressSpace::Generic).into()
-                    }
-                }
-                NullableUnwrapped { other_fields, .. } => {
-                    let block = block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
-                    block.ptr_type(AddressSpace::Generic).into()
-                }
-                NonNullableUnwrapped(fields) => {
-                    let block = block_of_memory_slices(env.context, &[fields], env.ptr_bytes);
-                    block.ptr_type(AddressSpace::Generic).into()
-                }
-            }
+            inner_type.ptr_type(AddressSpace::Generic).into()
         }
-        RecursivePointer => {
-            // TODO make this dynamic
-            env.context
-                .i64_type()
-                .ptr_type(AddressSpace::Generic)
-                .as_basic_type_enum()
-        }
+        Union(union_layout) => basic_type_from_union_layout(env, union_layout),
+        RecursivePointer => env
+            .context
+            .i64_type()
+            .ptr_type(AddressSpace::Generic)
+            .as_basic_type_enum(),
 
         Builtin(builtin) => basic_type_from_builtin(env, builtin),
     }
 }
 
+pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    union_layout: &UnionLayout<'_>,
+) -> BasicTypeEnum<'ctx> {
+    use UnionLayout::*;
+
+    let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
+
+    match union_layout {
+        NonRecursive(tags) => {
+            let data = block_of_memory_slices(env.context, tags, env.target_info);
+
+            env.context.struct_type(&[data, tag_id_type], false).into()
+        }
+        Recursive(tags)
+        | NullableWrapped {
+            other_tags: tags, ..
+        } => {
+            let data = block_of_memory_slices(env.context, tags, env.target_info);
+
+            if union_layout.stores_tag_id_as_data(env.target_info) {
+                env.context
+                    .struct_type(&[data, tag_id_type], false)
+                    .ptr_type(AddressSpace::Generic)
+                    .into()
+            } else {
+                data.ptr_type(AddressSpace::Generic).into()
+            }
+        }
+        NullableUnwrapped { other_fields, .. } => {
+            let block = block_of_memory_slices(env.context, &[other_fields], env.target_info);
+            block.ptr_type(AddressSpace::Generic).into()
+        }
+        NonNullableUnwrapped(fields) => {
+            let block = block_of_memory_slices(env.context, &[fields], env.target_info);
+            block.ptr_type(AddressSpace::Generic).into()
+        }
+    }
+}
+
 pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+    env: &Env<'a, 'ctx, 'env>,
     builtin: &Builtin<'_>,
 ) -> BasicTypeEnum<'ctx> {
     use Builtin::*;
 
     let context = env.context;
-    let ptr_bytes = env.ptr_bytes;
 
     match builtin {
-        Int128 => context.i128_type().as_basic_type_enum(),
-        Int64 => context.i64_type().as_basic_type_enum(),
-        Int32 => context.i32_type().as_basic_type_enum(),
-        Int16 => context.i16_type().as_basic_type_enum(),
-        Int8 => context.i8_type().as_basic_type_enum(),
-        Int1 => context.bool_type().as_basic_type_enum(),
-        Usize => ptr_int(context, ptr_bytes).as_basic_type_enum(),
+        Int(int_width) => int_type_from_int_width(env, *int_width).as_basic_type_enum(),
+        Float(float_width) => float_type_from_float_width(env, *float_width).as_basic_type_enum(),
+        Bool => context.bool_type().as_basic_type_enum(),
         Decimal => context.i128_type().as_basic_type_enum(),
-        Float128 => context.f128_type().as_basic_type_enum(),
-        Float64 => context.f64_type().as_basic_type_enum(),
-        Float32 => context.f32_type().as_basic_type_enum(),
-        Float16 => context.f16_type().as_basic_type_enum(),
-        Dict(_, _) | EmptyDict => zig_dict_type(env).into(),
-        Set(_) | EmptySet => zig_dict_type(env).into(),
-        List(_) | EmptyList => zig_list_type(env).into(),
-        Str | EmptyStr => zig_str_type(env).into(),
+        Dict(_, _) => zig_dict_type(env).into(),
+        Set(_) => zig_dict_type(env).into(),
+        List(_) => zig_list_type(env).into(),
+        Str => zig_str_type(env).into(),
+    }
+}
+
+/// Turn a layout into a BasicType that we use in LLVM function arguments.
+///
+/// This makes it possible to pass values as something different from how they are typically stored.
+/// Current differences
+///
+/// - tag unions are passed by-reference. That means that
+///     * `f : [ Some I64, None ] -> I64` is typed `{ { i64, i8 }, i64 }* -> i64`
+///     * `f : { x : [ Some I64, None ] } -> I64 is typed `{ { { i64, i8 }, i64 } } -> i64`
+///
+/// Ideas exist to have (bigger than 2 register) records also be passed by-reference, but this
+/// is not currently implemented
+pub fn argument_type_from_layout<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'_>,
+) -> BasicTypeEnum<'ctx> {
+    use Layout::*;
+
+    match layout {
+        LambdaSet(lambda_set) => {
+            argument_type_from_layout(env, &lambda_set.runtime_representation())
+        }
+        Union(union_layout) => argument_type_from_union_layout(env, union_layout),
+        other => basic_type_from_layout(env, other),
+    }
+}
+
+/// Non-recursive tag unions are stored on the stack, but passed by-reference
+pub fn argument_type_from_union_layout<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    union_layout: &UnionLayout<'_>,
+) -> BasicTypeEnum<'ctx> {
+    let heap_type = basic_type_from_union_layout(env, union_layout);
+
+    if let UnionLayout::NonRecursive(_) = union_layout {
+        heap_type.ptr_type(AddressSpace::Generic).into()
+    } else {
+        heap_type
+    }
+}
+
+pub fn int_type_from_int_width<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    int_width: IntWidth,
+) -> IntType<'ctx> {
+    use IntWidth::*;
+
+    match int_width {
+        U128 | I128 => env.context.i128_type(),
+        U64 | I64 => env.context.i64_type(),
+        U32 | I32 => env.context.i32_type(),
+        U16 | I16 => env.context.i16_type(),
+        U8 | I8 => env.context.i8_type(),
+    }
+}
+
+pub fn float_type_from_float_width<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    float_width: FloatWidth,
+) -> FloatType<'ctx> {
+    use FloatWidth::*;
+
+    match float_width {
+        F128 => todo!("F128 is not implemented"),
+        F64 => env.context.f64_type(),
+        F32 => env.context.f32_type(),
     }
 }
 
 pub fn block_of_memory_slices<'ctx>(
     context: &'ctx Context,
     layouts: &[&[Layout<'_>]],
-    ptr_bytes: u32,
+    target_info: TargetInfo,
 ) -> BasicTypeEnum<'ctx> {
     let mut union_size = 0;
     for tag in layouts {
         let mut total = 0;
         for layout in tag.iter() {
-            total += layout.stack_size(ptr_bytes as u32);
+            total += layout.stack_size(target_info);
         }
 
         union_size = union_size.max(total);
@@ -122,32 +196,16 @@ pub fn block_of_memory_slices<'ctx>(
     block_of_memory_help(context, union_size)
 }
 
-pub fn union_data_is_struct<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-    layouts: &[Layout<'_>],
-) -> StructType<'ctx> {
-    let data_type = basic_type_from_record(env, layouts);
-    union_data_is_struct_type(env.context, data_type.into_struct_type())
-}
-
-pub fn union_data_is_struct_type<'ctx>(
-    context: &'ctx Context,
-    struct_type: StructType<'ctx>,
-) -> StructType<'ctx> {
-    let tag_id_type = context.i64_type();
-    context.struct_type(&[struct_type.into(), tag_id_type.into()], false)
-}
-
 pub fn block_of_memory<'ctx>(
     context: &'ctx Context,
     layout: &Layout<'_>,
-    ptr_bytes: u32,
+    target_info: TargetInfo,
 ) -> BasicTypeEnum<'ctx> {
     // TODO make this dynamic
-    let mut union_size = layout.stack_size(ptr_bytes as u32);
+    let mut union_size = layout.stack_size(target_info);
 
     if let Layout::Union(UnionLayout::NonRecursive { .. }) = layout {
-        union_size -= ptr_bytes;
+        union_size -= target_info.ptr_width() as u32;
     }
 
     block_of_memory_help(context, union_size)
@@ -165,14 +223,18 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
     let num_i64 = union_size / 8;
     let num_i8 = union_size % 8;
 
+    let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
     let i64_array_type = context.i64_type().array_type(num_i64).as_basic_type_enum();
 
-    if num_i8 == 0 {
-        // the object fits perfectly in some number of i64's
+    if num_i64 == 0 {
+        // The object fits perfectly in some number of i8s
+        context.struct_type(&[i8_array_type], false).into()
+    } else if num_i8 == 0 {
+        // The object fits perfectly in some number of i64s
         // (i.e. the size is a multiple of 8 bytes)
         context.struct_type(&[i64_array_type], false).into()
     } else {
-        // there are some trailing bytes at the end
+        // There are some trailing bytes at the end
         let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
 
         context
@@ -181,60 +243,31 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
     }
 }
 
-pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
-    match ptr_bytes {
-        1 => ctx.i8_type(),
-        2 => ctx.i16_type(),
-        4 => ctx.i32_type(),
-        8 => ctx.i64_type(),
-        _ => panic!(
-            "Invalid target: Roc does't support compiling to {}-bit systems.",
-            ptr_bytes * 8
-        ),
-    }
-}
-
 /// The int type that the C ABI turns our RocList/RocStr into
-pub fn str_list_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
-    match ptr_bytes {
-        1 => ctx.i16_type(),
-        2 => ctx.i32_type(),
-        4 => ctx.i64_type(),
-        8 => ctx.i128_type(),
-        _ => panic!(
-            "Invalid target: Roc does't support compiling to {}-bit systems.",
-            ptr_bytes * 8
-        ),
+pub fn str_list_int(ctx: &Context, target_info: TargetInfo) -> IntType<'_> {
+    match target_info.ptr_width() {
+        roc_target::PtrWidth::Bytes4 => ctx.i64_type(),
+        roc_target::PtrWidth::Bytes8 => ctx.i128_type(),
     }
 }
 
-pub fn zig_dict_type<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-) -> StructType<'ctx> {
+pub fn zig_dict_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
     env.module.get_struct_type("dict.RocDict").unwrap()
 }
 
-pub fn zig_list_type<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-) -> StructType<'ctx> {
+pub fn zig_list_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
     env.module.get_struct_type("list.RocList").unwrap()
 }
 
-pub fn zig_str_type<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-) -> StructType<'ctx> {
+pub fn zig_str_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
     env.module.get_struct_type("str.RocStr").unwrap()
 }
 
-pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-) -> StructType<'ctx> {
+pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
     env.module.get_struct_type("list.HasTagId").unwrap()
 }
 
-pub fn zig_with_overflow_roc_dec<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-) -> StructType<'ctx> {
+pub fn zig_with_overflow_roc_dec<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
     env.module
         .get_struct_type("utils.WithOverflow(dec.RocDec)")
         .unwrap()

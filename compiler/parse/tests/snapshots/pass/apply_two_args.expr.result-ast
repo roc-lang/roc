@@ -1,0 +1,15 @@
+Apply(
+    @0-4 Var {
+        module_name: "",
+        ident: "whee",
+    },
+    [
+        @6-8 Num(
+            "12",
+        ),
+        @10-12 Num(
+            "34",
+        ),
+    ],
+    Space,
+)

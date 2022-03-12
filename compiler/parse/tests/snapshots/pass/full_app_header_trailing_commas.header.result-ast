@@ -1,0 +1,75 @@
+App {
+    header: AppHeader {
+        name: @4-15 PlainLine(
+            "quicksort",
+        ),
+        packages: [
+            @31-47 PackageEntry {
+                shorthand: "pf",
+                spaces_after_shorthand: [],
+                package_name: @35-47 PackageName(
+                    "./platform",
+                ),
+            },
+        ],
+        imports: [
+            @65-141 Package(
+                "foo",
+                ModuleName(
+                    "Bar",
+                ),
+                Collection {
+                    items: [
+                        @83-86 SpaceBefore(
+                            ExposedName(
+                                "Baz",
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                        @96-104 SpaceBefore(
+                            ExposedName(
+                                "FortyTwo",
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ],
+                    final_comments: [
+                        Newline,
+                        LineComment(
+                            " I'm a happy comment",
+                        ),
+                    ],
+                },
+            ),
+        ],
+        provides: [
+            @159-168 ExposedName(
+                "quicksort",
+            ),
+        ],
+        provides_types: None,
+        to: @175-177 ExistingPackage(
+            "pf",
+        ),
+        before_header: [],
+        after_app_keyword: [],
+        before_packages: [
+            Newline,
+        ],
+        after_packages: [],
+        before_imports: [
+            Newline,
+        ],
+        after_imports: [],
+        before_provides: [
+            Newline,
+        ],
+        after_provides: [],
+        before_to: [],
+        after_to: [],
+    },
+}

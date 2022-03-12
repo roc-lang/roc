@@ -1,0 +1,59 @@
+App {
+    header: AppHeader {
+        name: @4-10 PlainLine(
+            "test",
+        ),
+        packages: [
+            @26-42 PackageEntry {
+                shorthand: "pf",
+                spaces_after_shorthand: [],
+                package_name: @30-42 PackageName(
+                    "./platform",
+                ),
+            },
+        ],
+        imports: [
+            @59-70 Package(
+                "foo",
+                ModuleName(
+                    "Bar.Baz",
+                ),
+                [],
+            ),
+        ],
+        provides: [
+            @88-97 ExposedName(
+                "quicksort",
+            ),
+        ],
+        provides_types: Some(
+            [
+                @102-107 UppercaseIdent(
+                    "Flags",
+                ),
+                @109-114 UppercaseIdent(
+                    "Model",
+                ),
+            ],
+        ),
+        to: @121-123 ExistingPackage(
+            "pf",
+        ),
+        before_header: [],
+        after_app_keyword: [],
+        before_packages: [
+            Newline,
+        ],
+        after_packages: [],
+        before_imports: [
+            Newline,
+        ],
+        after_imports: [],
+        before_provides: [
+            Newline,
+        ],
+        after_provides: [],
+        before_to: [],
+        after_to: [],
+    },
+}

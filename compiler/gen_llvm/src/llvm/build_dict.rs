@@ -3,7 +3,8 @@ use crate::llvm::bitcode::{
     build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
-    complex_bitcast, load_symbol, load_symbol_and_layout, Env, RocFunctionCall, Scope,
+    complex_bitcast, load_roc_value, load_symbol, load_symbol_and_layout, Env, RocFunctionCall,
+    Scope,
 };
 use crate::llvm::build_list::{layout_width, pass_as_opaque};
 use crate::llvm::convert::{basic_type_from_layout, zig_dict_type, zig_list_type};
@@ -16,17 +17,20 @@ use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
+use roc_target::TargetInfo;
 
 #[repr(transparent)]
 struct Alignment(u8);
 
 impl Alignment {
-    fn from_key_value_layout(key: &Layout, value: &Layout, ptr_bytes: u32) -> Alignment {
-        let key_align = key.alignment_bytes(ptr_bytes);
-        let value_align = value.alignment_bytes(ptr_bytes);
+    fn from_key_value_layout(key: &Layout, value: &Layout, target_info: TargetInfo) -> Alignment {
+        let key_align = key.alignment_bytes(target_info);
+        let value_align = value.alignment_bytes(target_info);
 
         let mut bits = key_align.max(value_align) as u8;
-        debug_assert!(bits == 4 || bits == 8 || bits == 16);
+
+        // alignment must be a power of 2
+        debug_assert!(bits.is_power_of_two());
 
         let value_before_key_flag = 0b1000_0000;
 
@@ -47,8 +51,6 @@ pub fn dict_len<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     dict_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
-
     let (_, dict_layout) = load_symbol_and_layout(scope, &dict_symbol);
 
     match dict_layout {
@@ -56,13 +58,21 @@ pub fn dict_len<'a, 'ctx, 'env>(
             // let dict_as_int = dict_symbol_to_i128(env, scope, dict_symbol);
             let dict_as_zig_dict = dict_symbol_to_zig_dict(env, scope, dict_symbol);
 
-            call_bitcode_fn(
+            let length_i64 = call_bitcode_fn(
                 env,
                 &[pass_dict_c_abi(env, dict_as_zig_dict.into())],
                 bitcode::DICT_LEN,
-            )
+            );
+
+            env.builder
+                .build_int_cast_sign_flag(
+                    length_i64.into_int_value(),
+                    env.ptr_int(),
+                    false,
+                    "to_usize",
+                )
+                .into()
         }
-        Layout::Builtin(Builtin::EmptyDict) => ctx.i64_type().const_zero().into(),
         _ => unreachable!("Invalid layout given to Dict.len : {:?}", dict_layout),
     }
 }
@@ -101,15 +111,15 @@ pub fn dict_insert<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
     let result_ptr = builder.build_alloca(zig_dict_type(env), "result_ptr");
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -158,15 +168,15 @@ pub fn dict_remove<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
     let result_ptr = builder.build_alloca(zig_dict_type(env), "result_ptr");
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -214,13 +224,13 @@ pub fn dict_contains<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -260,13 +270,13 @@ pub fn dict_get<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -362,13 +372,13 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
 ) {
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let (key_fn, value_fn) = match rc_operation {
@@ -408,13 +418,13 @@ pub fn dict_keys<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let inc_key_fn = build_inc_wrapper(env, layout_ids, key_layout);
@@ -450,19 +460,18 @@ fn pass_dict_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     dict: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    match env.ptr_bytes {
-        4 => {
+    match env.target_info.ptr_width() {
+        roc_target::PtrWidth::Bytes4 => {
             let target_type = env.context.custom_width_int_type(96).into();
 
             complex_bitcast(env.builder, dict, target_type, "to_i96")
         }
-        8 => {
+        roc_target::PtrWidth::Bytes8 => {
             let dict_ptr = env.builder.build_alloca(zig_dict_type(env), "dict_ptr");
             env.builder.build_store(dict_ptr, dict);
 
             dict_ptr.into()
         }
-        _ => unreachable!(),
     }
 }
 
@@ -479,13 +488,13 @@ pub fn dict_union<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -572,13 +581,13 @@ fn dict_intersect_or_difference<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -627,7 +636,7 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     let accum_ptr = builder.build_alloca(accum_bt, "accum_ptr");
     env.builder.build_store(accum_ptr, accum);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let output_ptr = builder.build_alloca(accum_bt, "output_ptr");
@@ -667,13 +676,13 @@ pub fn dict_values<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env
         .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
-    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
@@ -725,14 +734,13 @@ pub fn set_from_list<'a, 'ctx, 'env>(
 
     let key_width = env
         .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
+        .const_int(key_layout.stack_size(env.target_info) as u64, false);
 
     let value_width = env.ptr_int().const_zero();
 
     let result_alloca = builder.build_alloca(zig_dict_type(env), "result_alloca");
 
-    let alignment =
-        Alignment::from_key_value_layout(key_layout, &Layout::Struct(&[]), env.ptr_bytes);
+    let alignment = Alignment::from_key_value_layout(key_layout, &Layout::UNIT, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
@@ -809,7 +817,7 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
                 .build_bitcast(value_ptr, value_type, "load_opaque")
                 .into_pointer_value();
 
-            let val_arg = env.builder.build_load(value_cast, "load_opaque");
+            let val_arg = load_roc_value(env, *layout, value_cast, "load_opaque");
 
             let result =
                 crate::llvm::build_hash::generic_hash(env, layout_ids, seed_arg, val_arg, layout);
@@ -841,4 +849,18 @@ fn dict_symbol_to_zig_dict<'a, 'ctx, 'env>(
         "dict_to_zig_dict",
     )
     .into_struct_value()
+}
+
+pub fn decref<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    wrapper_struct: StructValue<'ctx>,
+    alignment: u32,
+) {
+    let pointer = env
+        .builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
+        .unwrap()
+        .into_pointer_value();
+
+    crate::llvm::refcounting::decref_pointer_check_null(env, pointer, alignment);
 }

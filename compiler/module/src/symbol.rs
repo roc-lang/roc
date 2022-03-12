@@ -1,7 +1,9 @@
 use crate::ident::{Ident, ModuleName};
+use crate::module_err::{IdentIdNotFound, ModuleIdNotFound, ModuleResult};
 use roc_collections::all::{default_hasher, MutMap, SendMap};
 use roc_ident::IdentStr;
 use roc_region::all::Region;
+use snafu::OptionExt;
 use std::collections::HashMap;
 use std::{fmt, u32};
 
@@ -253,6 +255,30 @@ impl Interns {
     }
 }
 
+pub fn get_module_ident_ids<'a>(
+    all_ident_ids: &'a MutMap<ModuleId, IdentIds>,
+    module_id: &ModuleId,
+) -> ModuleResult<&'a IdentIds> {
+    all_ident_ids
+        .get(module_id)
+        .with_context(|| ModuleIdNotFound {
+            module_id: format!("{:?}", module_id),
+            all_ident_ids: format!("{:?}", all_ident_ids),
+        })
+}
+
+pub fn get_module_ident_ids_mut<'a>(
+    all_ident_ids: &'a mut MutMap<ModuleId, IdentIds>,
+    module_id: &ModuleId,
+) -> ModuleResult<&'a mut IdentIds> {
+    all_ident_ids
+        .get_mut(module_id)
+        .with_context(|| ModuleIdNotFound {
+            module_id: format!("{:?}", module_id),
+            all_ident_ids: "I could not return all_ident_ids here because of borrowing issues.",
+        })
+}
+
 #[cfg(debug_assertions)]
 lazy_static! {
     /// This is used in Debug builds only, to let us have a Debug instance
@@ -333,7 +359,7 @@ impl fmt::Debug for ModuleId {
     }
 }
 
-/// base.Task
+/// pf.Task
 /// 1. build mapping from short name to package
 /// 2. when adding new modules from package we need to register them in some other map (this module id goes with short name) (shortname, module-name) -> moduleId
 /// 3. pass this around to other modules getting headers parsed. when parsing interfaces we need to use this map to reference shortnames
@@ -536,22 +562,71 @@ impl IdentIds {
     }
 
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
-        match self.by_ident.get(name) {
-            Some(id) => *id,
-            None => {
+        use std::collections::hash_map::Entry;
+
+        match self.by_ident.entry(name.clone()) {
+            Entry::Occupied(occupied) => *occupied.get(),
+            Entry::Vacant(vacant) => {
                 let by_id = &mut self.by_id;
                 let ident_id = IdentId(by_id.len() as u32);
 
                 by_id.push(name.clone());
 
-                self.by_ident.insert(name.clone(), ident_id);
+                vacant.insert(ident_id);
 
                 ident_id
             }
         }
     }
 
-    /// Generates a unique, new name that's just a stringified integer
+    // necessary when the name of a value is changed in the editor
+    // TODO fix when same ident_name is present multiple times, see issue #2548
+    pub fn update_key(
+        &mut self,
+        old_ident_name: &str,
+        new_ident_name: &str,
+    ) -> Result<IdentId, String> {
+        let old_ident: Ident = old_ident_name.into();
+
+        let ident_id_ref_opt = self.by_ident.get(&old_ident);
+
+        match ident_id_ref_opt {
+            Some(ident_id_ref) => {
+                let ident_id = *ident_id_ref;
+
+                self.by_ident.remove(&old_ident);
+                self.by_ident.insert(new_ident_name.into(), ident_id);
+
+                let by_id = &mut self.by_id;
+                let key_index_opt = by_id.iter().position(|x| *x == old_ident);
+
+                if let Some(key_index) = key_index_opt {
+                    if let Some(vec_elt) = by_id.get_mut(key_index) {
+                        *vec_elt = new_ident_name.into();
+                    } else {
+                        // we get the index from by_id
+                        unreachable!()
+                    }
+
+                    Ok(ident_id)
+                } else {
+                    Err(
+                        format!(
+                            "Tried to find position of key {:?} in IdentIds.by_id but I could not find the key. IdentIds.by_id: {:?}",
+                            old_ident_name,
+                            self.by_id
+                        )
+                    )
+                }
+            }
+            None => Err(format!(
+                "Tried to update key in IdentIds ({:?}) but I could not find the key ({}).",
+                self.by_ident, old_ident_name
+            )),
+        }
+    }
+
+    /// Generates a unique, new name that's just a strigified integer
     /// (e.g. "1" or "5"), using an internal counter. Since valid Roc variable
     /// names cannot begin with a number, this has no chance of colliding
     /// with actual user-defined variables.
@@ -574,6 +649,17 @@ impl IdentIds {
 
     pub fn get_name(&self, id: IdentId) -> Option<&Ident> {
         self.by_id.get(id.0 as usize)
+    }
+
+    pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
+        Ok(self
+            .get_name(ident_id)
+            .with_context(|| IdentIdNotFound {
+                ident_id,
+                ident_ids_str: format!("{:?}", self),
+            })?
+            .as_inline_str()
+            .as_str())
     }
 }
 
@@ -789,6 +875,19 @@ define_builtins! {
 
         // used by the dev backend to store the pointer to where to store large return types
         23 RET_POINTER: "#ret_pointer"
+
+        // used in wasm dev backend to mark temporary values in the VM stack
+        24 WASM_TMP: "#wasm_tmp"
+
+        // the _ used in mono when a specialized symbol is deleted
+        25 REMOVED_SPECIALIZATION: "#removed_specialization"
+
+        // used in dev backend
+        26 DEV_TMP: "#dev_tmp"
+        27 DEV_TMP2: "#dev_tmp2"
+        28 DEV_TMP3: "#dev_tmp3"
+        29 DEV_TMP4: "#dev_tmp4"
+        30 DEV_TMP5: "#dev_tmp5"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -809,78 +908,78 @@ define_builtins! {
         15 NUM_F32: "F32" imported // the Num.F32 type alias
         16 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
         17 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
-        18 NUM_MAX_INT: "maxInt"
-        19 NUM_MIN_INT: "minInt"
-        20 NUM_MAX_FLOAT: "maxFloat"
-        21 NUM_MIN_FLOAT: "minFloat"
-        22 NUM_ABS: "abs"
-        23 NUM_NEG: "neg"
-        24 NUM_ADD: "add"
-        25 NUM_SUB: "sub"
-        26 NUM_MUL: "mul"
-        27 NUM_LT: "isLt"
-        28 NUM_LTE: "isLte"
-        29 NUM_GT: "isGt"
-        30 NUM_GTE: "isGte"
-        31 NUM_TO_FLOAT: "toFloat"
-        32 NUM_SIN: "sin"
-        33 NUM_COS: "cos"
-        34 NUM_TAN: "tan"
-        35 NUM_IS_ZERO: "isZero"
-        36 NUM_IS_EVEN: "isEven"
-        37 NUM_IS_ODD: "isOdd"
-        38 NUM_IS_POSITIVE: "isPositive"
-        39 NUM_IS_NEGATIVE: "isNegative"
-        40 NUM_REM: "rem"
-        41 NUM_DIV_FLOAT: "div"
-        42 NUM_DIV_INT: "divFloor"
-        43 NUM_MOD_INT: "modInt"
-        44 NUM_MOD_FLOAT: "modFloat"
-        45 NUM_SQRT: "sqrt"
-        46 NUM_LOG: "log"
-        47 NUM_ROUND: "round"
-        48 NUM_COMPARE: "compare"
-        49 NUM_POW: "pow"
-        50 NUM_CEILING: "ceiling"
-        51 NUM_POW_INT: "powInt"
-        52 NUM_FLOOR: "floor"
-        53 NUM_ADD_WRAP: "addWrap"
-        54 NUM_ADD_CHECKED: "addChecked"
-        55 NUM_ATAN: "atan"
-        56 NUM_ACOS: "acos"
-        57 NUM_ASIN: "asin"
-        58 NUM_AT_SIGNED128: "@Signed128"
-        59 NUM_SIGNED128: "Signed128" imported
-        60 NUM_AT_SIGNED64: "@Signed64"
-        61 NUM_SIGNED64: "Signed64" imported
-        62 NUM_AT_SIGNED32: "@Signed32"
-        63 NUM_SIGNED32: "Signed32" imported
-        64 NUM_AT_SIGNED16: "@Signed16"
-        65 NUM_SIGNED16: "Signed16" imported
-        66 NUM_AT_SIGNED8: "@Signed8"
-        67 NUM_SIGNED8: "Signed8" imported
-        68 NUM_AT_UNSIGNED128: "@Unsigned128"
-        69 NUM_UNSIGNED128: "Unsigned128" imported
-        70 NUM_AT_UNSIGNED64: "@Unsigned64"
-        71 NUM_UNSIGNED64: "Unsigned64" imported
-        72 NUM_AT_UNSIGNED32: "@Unsigned32"
-        73 NUM_UNSIGNED32: "Unsigned32" imported
-        74 NUM_AT_UNSIGNED16: "@Unsigned16"
-        75 NUM_UNSIGNED16: "Unsigned16" imported
-        76 NUM_AT_UNSIGNED8: "@Unsigned8"
-        77 NUM_UNSIGNED8: "Unsigned8" imported
-        78 NUM_AT_BINARY64: "@Binary64"
-        79 NUM_BINARY64: "Binary64" imported
-        80 NUM_AT_BINARY32: "@Binary32"
-        81 NUM_BINARY32: "Binary32" imported
-        82 NUM_BITWISE_AND: "bitwiseAnd"
-        83 NUM_BITWISE_XOR: "bitwiseXor"
-        84 NUM_BITWISE_OR: "bitwiseOr"
-        85 NUM_SHIFT_LEFT: "shiftLeftBy"
-        86 NUM_SHIFT_RIGHT: "shiftRightBy"
-        87 NUM_SHIFT_RIGHT_ZERO_FILL: "shiftRightZfBy"
-        88 NUM_SUB_WRAP: "subWrap"
-        89 NUM_SUB_CHECKED: "subChecked"
+        18 NUM_MAX_FLOAT: "maxFloat"
+        19 NUM_MIN_FLOAT: "minFloat"
+        20 NUM_ABS: "abs"
+        21 NUM_NEG: "neg"
+        22 NUM_ADD: "add"
+        23 NUM_SUB: "sub"
+        24 NUM_MUL: "mul"
+        25 NUM_LT: "isLt"
+        26 NUM_LTE: "isLte"
+        27 NUM_GT: "isGt"
+        28 NUM_GTE: "isGte"
+        29 NUM_TO_FLOAT: "toFloat"
+        30 NUM_SIN: "sin"
+        31 NUM_COS: "cos"
+        32 NUM_TAN: "tan"
+        33 NUM_IS_ZERO: "isZero"
+        34 NUM_IS_EVEN: "isEven"
+        35 NUM_IS_ODD: "isOdd"
+        36 NUM_IS_POSITIVE: "isPositive"
+        37 NUM_IS_NEGATIVE: "isNegative"
+        38 NUM_REM: "rem"
+        39 NUM_DIV_FLOAT: "div"
+        40 NUM_DIV_INT: "divFloor"
+        41 NUM_MOD_INT: "modInt"
+        42 NUM_MOD_FLOAT: "modFloat"
+        43 NUM_SQRT: "sqrt"
+        44 NUM_LOG: "log"
+        45 NUM_ROUND: "round"
+        46 NUM_COMPARE: "compare"
+        47 NUM_POW: "pow"
+        48 NUM_CEILING: "ceiling"
+        49 NUM_POW_INT: "powInt"
+        50 NUM_FLOOR: "floor"
+        51 NUM_ADD_WRAP: "addWrap"
+        52 NUM_ADD_CHECKED: "addChecked"
+        53 NUM_ADD_SATURATED: "addSaturated"
+        54 NUM_ATAN: "atan"
+        55 NUM_ACOS: "acos"
+        56 NUM_ASIN: "asin"
+        57 NUM_AT_SIGNED128: "@Signed128"
+        58 NUM_SIGNED128: "Signed128" imported
+        59 NUM_AT_SIGNED64: "@Signed64"
+        60 NUM_SIGNED64: "Signed64" imported
+        61 NUM_AT_SIGNED32: "@Signed32"
+        62 NUM_SIGNED32: "Signed32" imported
+        63 NUM_AT_SIGNED16: "@Signed16"
+        64 NUM_SIGNED16: "Signed16" imported
+        65 NUM_AT_SIGNED8: "@Signed8"
+        66 NUM_SIGNED8: "Signed8" imported
+        67 NUM_AT_UNSIGNED128: "@Unsigned128"
+        68 NUM_UNSIGNED128: "Unsigned128" imported
+        69 NUM_AT_UNSIGNED64: "@Unsigned64"
+        70 NUM_UNSIGNED64: "Unsigned64" imported
+        71 NUM_AT_UNSIGNED32: "@Unsigned32"
+        72 NUM_UNSIGNED32: "Unsigned32" imported
+        73 NUM_AT_UNSIGNED16: "@Unsigned16"
+        74 NUM_UNSIGNED16: "Unsigned16" imported
+        75 NUM_AT_UNSIGNED8: "@Unsigned8"
+        76 NUM_UNSIGNED8: "Unsigned8" imported
+        77 NUM_AT_BINARY64: "@Binary64"
+        78 NUM_BINARY64: "Binary64" imported
+        79 NUM_AT_BINARY32: "@Binary32"
+        80 NUM_BINARY32: "Binary32" imported
+        81 NUM_BITWISE_AND: "bitwiseAnd"
+        82 NUM_BITWISE_XOR: "bitwiseXor"
+        83 NUM_BITWISE_OR: "bitwiseOr"
+        84 NUM_SHIFT_LEFT: "shiftLeftBy"
+        85 NUM_SHIFT_RIGHT: "shiftRightBy"
+        86 NUM_SHIFT_RIGHT_ZERO_FILL: "shiftRightZfBy"
+        87 NUM_SUB_WRAP: "subWrap"
+        88 NUM_SUB_CHECKED: "subChecked"
+        89 NUM_SUB_SATURATED: "subSaturated"
         90 NUM_MUL_WRAP: "mulWrap"
         91 NUM_MUL_CHECKED: "mulChecked"
         92 NUM_INT: "Int" imported
@@ -889,23 +988,68 @@ define_builtins! {
         95 NUM_NATURAL: "Natural" imported
         96 NUM_NAT: "Nat" imported
         97 NUM_INT_CAST: "intCast"
-        98 NUM_MAX_I128: "maxI128"
-        99 NUM_IS_MULTIPLE_OF: "isMultipleOf"
-        100 NUM_AT_DECIMAL: "@Decimal"
-        101 NUM_DECIMAL: "Decimal" imported
-        102 NUM_DEC: "Dec" imported // the Num.Dectype alias
-        103 NUM_BYTES_TO_U16: "bytesToU16"
-        104 NUM_BYTES_TO_U32: "bytesToU32"
-        105 NUM_CAST_TO_NAT: "#castToNat"
+        98 NUM_IS_MULTIPLE_OF: "isMultipleOf"
+        99 NUM_AT_DECIMAL: "@Decimal"
+        100 NUM_DECIMAL: "Decimal" imported
+        101 NUM_DEC: "Dec" imported // the Num.Dectype alias
+        102 NUM_BYTES_TO_U16: "bytesToU16"
+        103 NUM_BYTES_TO_U32: "bytesToU32"
+        104 NUM_CAST_TO_NAT: "#castToNat"
+        105 NUM_DIV_CEIL: "divCeil"
+        106 NUM_TO_STR: "toStr"
+        107 NUM_MIN_I8: "minI8"
+        108 NUM_MAX_I8: "maxI8"
+        109 NUM_MIN_U8: "minU8"
+        110 NUM_MAX_U8: "maxU8"
+        111 NUM_MIN_I16: "minI16"
+        112 NUM_MAX_I16: "maxI16"
+        113 NUM_MIN_U16: "minU16"
+        114 NUM_MAX_U16: "maxU16"
+        115 NUM_MIN_I32: "minI32"
+        116 NUM_MAX_I32: "maxI32"
+        117 NUM_MIN_U32: "minU32"
+        118 NUM_MAX_U32: "maxU32"
+        119 NUM_MIN_I64: "minI64"
+        120 NUM_MAX_I64: "maxI64"
+        121 NUM_MIN_U64: "minU64"
+        122 NUM_MAX_U64: "maxU64"
+        123 NUM_MIN_I128: "minI128"
+        124 NUM_MAX_I128: "maxI128"
+        125 NUM_TO_I8: "toI8"
+        126 NUM_TO_I8_CHECKED: "toI8Checked"
+        127 NUM_TO_I16: "toI16"
+        128 NUM_TO_I16_CHECKED: "toI16Checked"
+        129 NUM_TO_I32: "toI32"
+        130 NUM_TO_I32_CHECKED: "toI32Checked"
+        131 NUM_TO_I64: "toI64"
+        132 NUM_TO_I64_CHECKED: "toI64Checked"
+        133 NUM_TO_I128: "toI128"
+        134 NUM_TO_I128_CHECKED: "toI128Checked"
+        135 NUM_TO_U8: "toU8"
+        136 NUM_TO_U8_CHECKED: "toU8Checked"
+        137 NUM_TO_U16: "toU16"
+        138 NUM_TO_U16_CHECKED: "toU16Checked"
+        139 NUM_TO_U32: "toU32"
+        140 NUM_TO_U32_CHECKED: "toU32Checked"
+        141 NUM_TO_U64: "toU64"
+        142 NUM_TO_U64_CHECKED: "toU64Checked"
+        143 NUM_TO_U128: "toU128"
+        144 NUM_TO_U128_CHECKED: "toU128Checked"
+        145 NUM_TO_NAT: "toNat"
+        146 NUM_TO_NAT_CHECKED: "toNatChecked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
-        1 BOOL_AND: "and"
-        2 BOOL_OR: "or"
-        3 BOOL_NOT: "not"
-        4 BOOL_XOR: "xor"
-        5 BOOL_EQ: "isEq"
-        6 BOOL_NEQ: "isNotEq"
+        1 BOOL_FALSE: "False" imported // Bool.Bool = [ False, True ]
+                                       // NB: not strictly needed; used for finding global tag names in error suggestions
+        2 BOOL_TRUE: "True" imported // Bool.Bool = [ False, True ]
+                                     // NB: not strictly needed; used for finding global tag names in error suggestions
+        3 BOOL_AND: "and"
+        4 BOOL_OR: "or"
+        5 BOOL_NOT: "not"
+        6 BOOL_XOR: "xor"
+        7 BOOL_EQ: "isEq"
+        8 BOOL_NEQ: "isNotEq"
     }
     3 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
@@ -918,15 +1062,32 @@ define_builtins! {
         7 STR_COUNT_GRAPHEMES: "countGraphemes"
         8 STR_STARTS_WITH: "startsWith"
         9 STR_ENDS_WITH: "endsWith"
-        10 STR_FROM_INT: "fromInt"
-        11 STR_FROM_FLOAT: "fromFloat"
-        12 STR_FROM_UTF8: "fromUtf8"
-        13 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
-        14 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
-        15 STR_TO_UTF8: "toUtf8"
-        16 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
-        17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
-        18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
+        10 STR_FROM_UTF8: "fromUtf8"
+        11 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
+        12 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
+        13 STR_TO_UTF8: "toUtf8"
+        14 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
+        15 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
+        16 STR_FROM_UTF8_RANGE: "fromUtf8Range"
+        17 STR_REPEAT: "repeat"
+        18 STR_TRIM: "trim"
+        19 STR_TRIM_LEFT: "trimLeft"
+        20 STR_TRIM_RIGHT: "trimRight"
+        21 STR_TO_DEC: "toDec"
+        22 STR_TO_F64: "toF64"
+        23 STR_TO_F32: "toF32"
+        24 STR_TO_NAT: "toNat"
+        25 STR_TO_U128: "toU128"
+        26 STR_TO_I128: "toI128"
+        27 STR_TO_U64: "toU64"
+        28 STR_TO_I64: "toI64"
+        29 STR_TO_U32: "toU32"
+        30 STR_TO_I32: "toI32"
+        31 STR_TO_U16: "toU16"
+        32 STR_TO_I16: "toI16"
+        33 STR_TO_U8: "toU8"
+        34 STR_TO_I8: "toI8"
+
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -956,20 +1117,51 @@ define_builtins! {
         24 LIST_MAP2: "map2"
         25 LIST_MAP3: "map3"
         26 LIST_PRODUCT: "product"
-        27 LIST_SUM_ADD: "#sumadd"
-        28 LIST_PRODUCT_MUL: "#productmul"
-        29 LIST_WALK_UNTIL: "walkUntil"
-        30 LIST_RANGE: "range"
-        31 LIST_SORT_WITH: "sortWith"
-        32 LIST_DROP: "drop"
-        33 LIST_SWAP: "swap"
+        27 LIST_WALK_UNTIL: "walkUntil"
+        28 LIST_RANGE: "range"
+        29 LIST_SORT_WITH: "sortWith"
+        30 LIST_DROP: "drop"
+        31 LIST_SWAP: "swap"
+        32 LIST_DROP_AT: "dropAt"
+        33 LIST_DROP_LAST: "dropLast"
+        34 LIST_MIN: "min"
+        35 LIST_MIN_LT: "#minlt"
+        36 LIST_MAX: "max"
+        37 LIST_MAX_GT: "#maxGt"
+        38 LIST_MAP4: "map4"
+        39 LIST_DROP_FIRST: "dropFirst"
+        40 LIST_JOIN_MAP: "joinMap"
+        41 LIST_JOIN_MAP_CONCAT: "#joinMapConcat"
+        42 LIST_ANY: "any"
+        43 LIST_TAKE_FIRST: "takeFirst"
+        44 LIST_TAKE_LAST: "takeLast"
+        45 LIST_FIND: "find"
+        46 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
+        47 LIST_SUBLIST: "sublist"
+        48 LIST_INTERSPERSE: "intersperse"
+        49 LIST_INTERSPERSE_CLOS: "#intersperseClos"
+        50 LIST_SPLIT: "split"
+        51 LIST_SPLIT_CLOS: "#splitClos"
+        52 LIST_ALL: "all"
+        53 LIST_DROP_IF: "dropIf"
+        54 LIST_DROP_IF_PREDICATE: "#dropIfPred"
+        55 LIST_SORT_ASC: "sortAsc"
+        56 LIST_SORT_DESC: "sortDesc"
+        57 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
+        58 LIST_REPLACE: "replace"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
-        1 RESULT_MAP: "map"
-        2 RESULT_MAP_ERR: "mapErr"
-        3 RESULT_WITH_DEFAULT: "withDefault"
-        4 RESULT_AFTER: "after"
+        1 RESULT_OK: "Ok" imported // Result.Result a e = [ Ok a, Err e ]
+                                   // NB: not strictly needed; used for finding global tag names in error suggestions
+        2 RESULT_ERR: "Err" imported // Result.Result a e = [ Ok a, Err e ]
+                                     // NB: not strictly needed; used for finding global tag names in error suggestions
+        3 RESULT_MAP: "map"
+        4 RESULT_MAP_ERR: "mapErr"
+        5 RESULT_WITH_DEFAULT: "withDefault"
+        6 RESULT_AFTER: "after"
+        7 RESULT_IS_OK: "isOk"
+        8 RESULT_IS_ERR: "isErr"
     }
     6 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
@@ -982,18 +1174,14 @@ define_builtins! {
         7 DICT_INSERT: "insert"
         8 DICT_LEN: "len"
 
-        // This should not be exposed to users, its for testing the
-        // hash function ONLY
-        9 DICT_TEST_HASH: "hashTestOnly"
+        9 DICT_REMOVE: "remove"
+        10 DICT_CONTAINS: "contains"
+        11 DICT_KEYS: "keys"
+        12 DICT_VALUES: "values"
 
-        10 DICT_REMOVE: "remove"
-        11 DICT_CONTAINS: "contains"
-        12 DICT_KEYS: "keys"
-        13 DICT_VALUES: "values"
-
-        14 DICT_UNION: "union"
-        15 DICT_INTERSECTION: "intersection"
-        16 DICT_DIFFERENCE: "difference"
+        13 DICT_UNION: "union"
+        14 DICT_INTERSECTION: "intersection"
+        15 DICT_DIFFERENCE: "difference"
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
@@ -1012,6 +1200,12 @@ define_builtins! {
         13 SET_WALK_USER_FUNCTION: "#walk_user_function"
         14 SET_CONTAINS: "contains"
     }
+    8 BOX: "Box" => {
+        0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
+        1 BOX_BOX_FUNCTION: "box" // Box.box
+        2 BOX_UNBOX: "unbox"
 
-    num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    }
+
+    num_modules: 9 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

@@ -1,0 +1,26 @@
+Defs(
+    [
+        @0-9 Body(
+            @0-1 Identifier(
+                "x",
+            ),
+            @8-9 SpaceBefore(
+                Num(
+                    "5",
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ],
+    @11-13 SpaceBefore(
+        Num(
+            "42",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

@@ -1,5 +1,5 @@
 interface Bool
-    exposes [ not, and, or, xor, isEq, isNotEq ]
+    exposes [ and, isEq, isNotEq, not, or, xor ]
     imports []
 
 ## Returns `False` when given `True`, and vice versa.
@@ -44,9 +44,9 @@ and : Bool, Bool -> Bool
 ## `a || b` is shorthand for `Bool.or a b`.
 ##
 ## >>> True || True
-#
+##
 ## >>> True || False
-#
+##
 ## >>> False || True
 ##
 ## >>> False || False

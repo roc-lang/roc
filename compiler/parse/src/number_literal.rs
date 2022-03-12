@@ -1,5 +1,6 @@
 use crate::ast::Base;
-use crate::parser::{Number, ParseResult, Parser, Progress, State};
+use crate::parser::{ENumber, ParseResult, Parser, Progress};
+use crate::state::State;
 
 pub enum NumLiteral<'a> {
     Float(&'a str),
@@ -11,33 +12,33 @@ pub enum NumLiteral<'a> {
     },
 }
 
-pub fn positive_number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, Number> {
+pub fn positive_number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber> {
     move |_arena, state: State<'a>| {
-        match state.bytes.get(0) {
+        match state.bytes().get(0) {
             Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
-                parse_number_base(false, state.bytes, state)
+                parse_number_base(false, state.bytes(), state)
             }
             _ => {
                 // this is not a number at all
-                Err((Progress::NoProgress, Number::End, state))
+                Err((Progress::NoProgress, ENumber::End, state))
             }
         }
     }
 }
 
-pub fn number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, Number> {
+pub fn number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber> {
     move |_arena, state: State<'a>| {
-        match state.bytes.get(0) {
+        match state.bytes().get(0) {
             Some(first_byte) if *first_byte == b'-' => {
                 // drop the minus
-                parse_number_base(true, &state.bytes[1..], state)
+                parse_number_base(true, &state.bytes()[1..], state)
             }
             Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
-                parse_number_base(false, state.bytes, state)
+                parse_number_base(false, state.bytes(), state)
             }
             _ => {
                 // this is not a number at all
-                Err((Progress::NoProgress, Number::End, state))
+                Err((Progress::NoProgress, ENumber::End, state))
             }
         }
     }
@@ -47,7 +48,7 @@ fn parse_number_base<'a>(
     is_negated: bool,
     bytes: &'a [u8],
     state: State<'a>,
-) -> ParseResult<'a, NumLiteral<'a>, Number> {
+) -> ParseResult<'a, NumLiteral<'a>, ENumber> {
     match bytes.get(0..2) {
         Some(b"0b") => chomp_number_base(Base::Binary, is_negated, &bytes[2..], state),
         Some(b"0o") => chomp_number_base(Base::Octal, is_negated, &bytes[2..], state),
@@ -61,14 +62,12 @@ fn chomp_number_base<'a>(
     is_negative: bool,
     bytes: &'a [u8],
     state: State<'a>,
-) -> ParseResult<'a, NumLiteral<'a>, Number> {
+) -> ParseResult<'a, NumLiteral<'a>, ENumber> {
     let (_is_float, chomped) = chomp_number(bytes);
 
     let string = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
 
-    let new = state.advance_without_indenting_ee(chomped + 2 + is_negative as usize, |_, _| {
-        Number::LineTooLong
-    })?;
+    let new = state.advance(chomped + 2 + is_negative as usize);
 
     Ok((
         Progress::MadeProgress,
@@ -85,24 +84,23 @@ fn chomp_number_dec<'a>(
     is_negative: bool,
     bytes: &'a [u8],
     state: State<'a>,
-) -> ParseResult<'a, NumLiteral<'a>, Number> {
+) -> ParseResult<'a, NumLiteral<'a>, ENumber> {
     let (is_float, chomped) = chomp_number(bytes);
 
     if is_negative && chomped == 0 {
         // we're probably actually looking at unary negation here
-        return Err((Progress::NoProgress, Number::End, state));
+        return Err((Progress::NoProgress, ENumber::End, state));
     }
 
     if !bytes.get(0).copied().unwrap_or_default().is_ascii_digit() {
         // we're probably actually looking at unary negation here
-        return Err((Progress::NoProgress, Number::End, state));
+        return Err((Progress::NoProgress, ENumber::End, state));
     }
 
     let string =
-        unsafe { std::str::from_utf8_unchecked(&state.bytes[0..chomped + is_negative as usize]) };
+        unsafe { std::str::from_utf8_unchecked(&state.bytes()[0..chomped + is_negative as usize]) };
 
-    let new = state
-        .advance_without_indenting_ee(chomped + is_negative as usize, |_, _| Number::LineTooLong)?;
+    let new = state.advance(chomped + is_negative as usize);
 
     Ok((
         Progress::MadeProgress,

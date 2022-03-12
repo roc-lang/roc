@@ -1,0 +1,21 @@
+Apply(
+    @0-1 Var {
+        module_name: "",
+        ident: "a",
+    },
+    [
+        @2-3 Var {
+            module_name: "",
+            ident: "b",
+        },
+        @4-5 Var {
+            module_name: "",
+            ident: "c",
+        },
+        @6-7 Var {
+            module_name: "",
+            ident: "d",
+        },
+    ],
+    Space,
+)

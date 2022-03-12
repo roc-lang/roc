@@ -1,0 +1,10 @@
+List(
+    Collection {
+        items: [],
+        final_comments: [
+            LineComment(
+                "comment",
+            ),
+        ],
+    },
+)

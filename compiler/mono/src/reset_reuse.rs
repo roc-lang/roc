@@ -1,6 +1,23 @@
+//! This module inserts reset/reuse statements into the mono IR. These statements provide an
+//! opportunity to reduce memory pressure by reusing memory slots of non-shared values. From the
+//! introduction of the relevant paper:
+//!
+//! > [We] have added two additional instructions to our IR: `let y = reset x` and
+//! > `let z = (reuse y in ctor_i w)`. The two instructions are used together; if `x`
+//! > is a shared value, then `y` is set to a special reference, and the reuse instruction
+//! > just allocates a new constructor value `ctor_i w`. If `x` is not shared, then reset
+//! > decrements the reference counters of the components of `x`, and `y` is set to `x`.
+//! > Then, reuse reuses the memory cell used by `x` to store the constructor value `ctor_i w`.
+//!
+//! See also
+//! - [Counting Immutable Beans](https://arxiv.org/pdf/1908.05647.pdf) (Ullrich and Moura, 2020)
+//! - [The lean implementation](https://github.com/leanprover/lean4/blob/master/src/Lean/Compiler/IR/ResetReuse.lean)
+
 use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveVarSet};
-use crate::ir::{BranchInfo, Call, Expr, Proc, Stmt};
-use crate::layout::{Layout, UnionLayout};
+use crate::ir::{
+    BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt, UpdateModeId, UpdateModeIds,
+};
+use crate::layout::{Layout, TagIdIntType, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::MutSet;
@@ -10,12 +27,14 @@ pub fn insert_reset_reuse<'a, 'i>(
     arena: &'a Bump,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
+    update_mode_ids: &'i mut UpdateModeIds,
     mut proc: Proc<'a>,
 ) -> Proc<'a> {
     let mut env = Env {
         arena,
         home,
         ident_ids,
+        update_mode_ids,
         jp_live_vars: Default::default(),
     };
 
@@ -27,17 +46,17 @@ pub fn insert_reset_reuse<'a, 'i>(
 
 #[derive(Debug)]
 struct CtorInfo<'a> {
-    id: u8,
+    id: TagIdIntType,
     layout: UnionLayout<'a>,
 }
 
-fn may_reuse(tag_layout: UnionLayout, tag_id: u8, other: &CtorInfo) -> bool {
+fn may_reuse(tag_layout: UnionLayout, tag_id: TagIdIntType, other: &CtorInfo) -> bool {
     if tag_layout != other.layout {
         return false;
     }
 
     // we should not get here if the tag we matched on is represented as NULL
-    debug_assert!(!tag_layout.tag_is_null(other.id));
+    debug_assert!(!tag_layout.tag_is_null(other.id as _));
 
     // furthermore, we can only use the memory if the tag we're creating is non-NULL
     !tag_layout.tag_is_null(tag_id)
@@ -50,6 +69,7 @@ struct Env<'a, 'i> {
     /// required for creating new `Symbol`s
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
+    update_mode_ids: &'i mut UpdateModeIds,
 
     jp_live_vars: JPLiveVarMap,
 }
@@ -58,15 +78,13 @@ impl<'a, 'i> Env<'a, 'i> {
     fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
-        self.home.register_debug_idents(self.ident_ids);
-
         Symbol::new(self.home, ident_id)
     }
 }
 
 fn function_s<'a, 'i>(
     env: &mut Env<'a, 'i>,
-    w: Symbol,
+    w: Opportunity,
     c: &CtorInfo<'a>,
     stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
@@ -86,7 +104,8 @@ fn function_s<'a, 'i>(
                 let update_tag_id = true;
 
                 let new_expr = Expr::Reuse {
-                    symbol: w,
+                    symbol: w.symbol,
+                    update_mode: w.update_mode,
                     update_tag_id,
                     tag_layout: *tag_layout,
                     tag_id: *tag_id,
@@ -177,13 +196,22 @@ fn function_s<'a, 'i>(
     }
 }
 
+#[derive(Clone, Copy)]
+struct Opportunity {
+    symbol: Symbol,
+    update_mode: UpdateModeId,
+}
+
 fn try_function_s<'a, 'i>(
     env: &mut Env<'a, 'i>,
     x: Symbol,
     c: &CtorInfo<'a>,
     stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
-    let w = env.unique_symbol();
+    let w = Opportunity {
+        symbol: env.unique_symbol(),
+        update_mode: env.update_mode_ids.next_id(),
+    };
 
     let new_stmt = function_s(env, w, c, stmt);
 
@@ -196,7 +224,7 @@ fn try_function_s<'a, 'i>(
 
 fn insert_reset<'a>(
     env: &mut Env<'a, '_>,
-    w: Symbol,
+    w: Opportunity,
     x: Symbol,
     union_layout: UnionLayout<'a>,
     mut stmt: &'a Stmt<'a>,
@@ -211,6 +239,12 @@ fn insert_reset<'a>(
                 stack.push((symbol, expr, expr_layout));
                 stmt = rest;
             }
+
+            ExprBox { .. } | ExprUnbox { .. } => {
+                // TODO
+                break;
+            }
+
             Literal(_)
             | Call(_)
             | Tag { .. }
@@ -218,16 +252,21 @@ fn insert_reset<'a>(
             | Array { .. }
             | EmptyArray
             | Reuse { .. }
-            | Reset(_)
+            | Reset { .. }
             | RuntimeErrorFunction(_) => break,
         }
     }
 
-    let reset_expr = Expr::Reset(x);
+    let reset_expr = Expr::Reset {
+        symbol: x,
+        update_mode: w.update_mode,
+    };
 
     let layout = Layout::Union(union_layout);
 
-    stmt = env.arena.alloc(Stmt::Let(w, reset_expr, layout, stmt));
+    stmt = env
+        .arena
+        .alloc(Stmt::Let(w.symbol, reset_expr, layout, stmt));
 
     for (symbol, expr, expr_layout) in stack.into_iter().rev() {
         stmt = env
@@ -564,8 +603,18 @@ fn has_live_var_expr<'a>(expr: &'a Expr<'a>, needle: Symbol) -> bool {
     match expr {
         Expr::Literal(_) => false,
         Expr::Call(call) => has_live_var_call(call, needle),
-        Expr::Array { elems: fields, .. }
-        | Expr::Tag {
+        Expr::Array { elems: fields, .. } => {
+            for element in fields.iter() {
+                if let ListLiteralElement::Symbol(s) = element {
+                    if *s == needle {
+                        return true;
+                    }
+                }
+            }
+
+            false
+        }
+        Expr::Tag {
             arguments: fields, ..
         }
         | Expr::Struct(fields) => fields.iter().any(|s| *s == needle),
@@ -576,7 +625,9 @@ fn has_live_var_expr<'a>(expr: &'a Expr<'a>, needle: Symbol) -> bool {
         Expr::Reuse {
             symbol, arguments, ..
         } => needle == *symbol || arguments.iter().any(|s| *s == needle),
-        Expr::Reset(symbol) => needle == *symbol,
+        Expr::Reset { symbol, .. } => needle == *symbol,
+        Expr::ExprBox { symbol, .. } => needle == *symbol,
+        Expr::ExprUnbox { symbol, .. } => needle == *symbol,
         Expr::RuntimeErrorFunction(_) => false,
     }
 }

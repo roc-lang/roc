@@ -1,18 +1,14 @@
-{ pkgs ? import <nixpkgs> {}}:
+{ pkgs ? import <nixpkgs> { } }:
 
 pkgs.stdenv.mkDerivation {
   name = "debugir";
   src = pkgs.fetchFromGitHub {
     owner = "vaivaswatha";
     repo = "debugir";
-    rev = "ed454ba264f30d2a70264357a31d94db3dd676eb";
-    sha256 = "08hrn66zn5pa8jk45msl9ipa8d1p7r9gmpknh41fyjr6c7qpmfrk";
+    rev = "db871e6cee7f653e284b226e2567a2574635247c";
+    sha256 = "0rgh9gawf92mjya1plxlgi9azkwca3gq8qa5hri18k4b7sbjm6lx";
   };
-  buildInputs = with pkgs; [
-    cmake
-    libxml2
-    llvmPackages_12.llvm.dev
-  ];
+  buildInputs = with pkgs; [ cmake libxml2 llvmPackages_12.llvm.dev ];
   buildPhase = ''
     mkdir build
     cd build

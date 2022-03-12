@@ -2,12 +2,13 @@
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
-pub mod alias_analysis;
 pub mod borrow;
-pub mod expand_rc;
+pub mod code_gen_help;
 pub mod inc_dec;
 pub mod ir;
 pub mod layout;
+pub mod layout_soa;
+pub mod low_level;
 pub mod reset_reuse;
 pub mod tail_recursion;
 

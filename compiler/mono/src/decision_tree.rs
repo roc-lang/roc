@@ -1,9 +1,10 @@
-use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{
     BranchInfo, DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt,
 };
-use crate::layout::{Builtin, Layout, LayoutCache, UnionLayout};
+use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
+use roc_exhaustive::{Ctor, RenderAs, TagId, Union};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
@@ -80,21 +81,23 @@ enum GuardedTest<'a> {
 #[allow(clippy::enum_variant_names)]
 enum Test<'a> {
     IsCtor {
-        tag_id: u8,
+        tag_id: TagIdIntType,
         tag_name: TagName,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
-    IsInt(i128),
-    IsFloat(u64),
+    IsInt(i128, IntWidth),
+    IsU128(u128),
+    IsFloat(u64, FloatWidth),
     IsDecimal(RocDec),
     IsStr(Box<str>),
     IsBit(bool),
     IsByte {
-        tag_id: u8,
+        tag_id: TagIdIntType,
         num_alts: usize,
     },
 }
+
 use std::hash::{Hash, Hasher};
 impl<'a> Hash for Test<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -106,13 +109,15 @@ impl<'a> Hash for Test<'a> {
                 tag_id.hash(state);
                 // The point of this custom implementation is to not hash the tag arguments
             }
-            IsInt(v) => {
+            IsInt(v, width) => {
                 state.write_u8(1);
                 v.hash(state);
+                width.hash(state);
             }
-            IsFloat(v) => {
+            IsFloat(v, width) => {
                 state.write_u8(2);
                 v.hash(state);
+                width.hash(state);
             }
             IsStr(v) => {
                 state.write_u8(3);
@@ -130,7 +135,11 @@ impl<'a> Hash for Test<'a> {
             IsDecimal(v) => {
                 // TODO: Is this okay?
                 state.write_u8(6);
-                v.0.hash(state);
+                v.hash(state);
+            }
+            IsU128(v) => {
+                state.write_u8(7);
+                v.hash(state);
             }
         }
     }
@@ -306,8 +315,9 @@ fn tests_are_complete_help(last_test: &Test, number_of_tests: usize) -> bool {
         Test::IsCtor { union, .. } => number_of_tests == union.alternatives.len(),
         Test::IsByte { num_alts, .. } => number_of_tests == *num_alts,
         Test::IsBit(_) => number_of_tests == 2,
-        Test::IsInt(_) => false,
-        Test::IsFloat(_) => false,
+        Test::IsInt(_, _) => false,
+        Test::IsU128(_) => false,
+        Test::IsFloat(_, _) => false,
         Test::IsDecimal(_) => false,
         Test::IsStr(_) => false,
     }
@@ -415,10 +425,9 @@ fn gather_edges<'a>(
 
     let check = guarded_tests_are_complete(&relevant_tests);
 
-    // TODO remove clone
     let all_edges = relevant_tests
         .into_iter()
-        .map(|t| edges_for(path, branches.clone(), t))
+        .map(|t| edges_for(path, &branches, t))
         .collect();
 
     let fallbacks = if check {
@@ -556,13 +565,33 @@ fn test_at_path<'a>(
                     union: union.clone(),
                     arguments: arguments.to_vec(),
                 },
+
+                OpaqueUnwrap { opaque, argument } => {
+                    let union = Union {
+                        render_as: RenderAs::Tag,
+                        alternatives: vec![Ctor {
+                            tag_id: TagId(0),
+                            name: TagName::Private(*opaque),
+                            arity: 1,
+                        }],
+                    };
+
+                    IsCtor {
+                        tag_id: 0,
+                        tag_name: TagName::Private(*opaque),
+                        union,
+                        arguments: vec![(**argument).clone()],
+                    }
+                }
+
                 BitLiteral { value, .. } => IsBit(*value),
                 EnumLiteral { tag_id, union, .. } => IsByte {
-                    tag_id: *tag_id,
+                    tag_id: *tag_id as _,
                     num_alts: union.alternatives.len(),
                 },
-                IntLiteral(v) => IsInt(*v),
-                FloatLiteral(v) => IsFloat(*v),
+                IntLiteral(v, precision) => IsInt(*v, *precision),
+                U128Literal(v) => IsU128(*v),
+                FloatLiteral(v, precision) => IsFloat(*v, *precision),
                 DecimalLiteral(v) => IsDecimal(*v),
                 StrLiteral(v) => IsStr(v.clone()),
             };
@@ -579,7 +608,7 @@ fn test_at_path<'a>(
 // understanding: if the test is successful, where could we go?
 fn edges_for<'a>(
     path: &[PathInstruction],
-    branches: Vec<Branch<'a>>,
+    branches: &[Branch<'a>],
     test: GuardedTest<'a>,
 ) -> (GuardedTest<'a>, Vec<Branch<'a>>) {
     let mut new_branches = Vec::new();
@@ -682,6 +711,33 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
+        OpaqueUnwrap { opaque, argument } => match test {
+            IsCtor {
+                tag_name: test_opaque_tag_name,
+                tag_id,
+                ..
+            } => {
+                debug_assert_eq!(test_opaque_tag_name, &TagName::Private(opaque));
+
+                let (argument, _) = *argument;
+
+                let mut new_path = path.to_vec();
+                new_path.push(PathInstruction {
+                    index: 0,
+                    tag_id: *tag_id,
+                });
+
+                start.push((new_path, argument));
+                start.extend(end);
+                Some(Branch {
+                    goal: branch.goal,
+                    guard: branch.guard.clone(),
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
         NewtypeDestructure {
             tag_name,
             arguments,
@@ -737,7 +793,11 @@ fn to_relevant_branch_help<'a>(
 
                     // the test matches the constructor of this pattern
                     match layout {
-                        UnionLayout::NonRecursive([[Layout::Struct([_])]]) => {
+                        UnionLayout::NonRecursive(
+                            [[Layout::Struct {
+                                field_layouts: [_], ..
+                            }]],
+                        ) => {
                             // a one-element record equivalent
                             // Theory: Unbox doesn't have any value for us
                             debug_assert_eq!(arguments.len(), 1);
@@ -807,8 +867,9 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        IntLiteral(int) => match test {
-            IsInt(is_int) if int == *is_int => {
+        IntLiteral(int, p1) => match test {
+            IsInt(is_int, p2) if int == *is_int => {
+                debug_assert_eq!(p1, *p2);
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
@@ -819,8 +880,21 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        FloatLiteral(float) => match test {
-            IsFloat(test_float) if float == *test_float => {
+        U128Literal(int) => match test {
+            IsU128(is_int) if int == *is_int => {
+                start.extend(end);
+                Some(Branch {
+                    goal: branch.goal,
+                    guard: branch.guard.clone(),
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
+        FloatLiteral(float, p1) => match test {
+            IsFloat(test_float, p2) if float == *test_float => {
+                debug_assert_eq!(p1, *p2);
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
@@ -832,7 +906,7 @@ fn to_relevant_branch_help<'a>(
         },
 
         DecimalLiteral(dec) => match test {
-            IsDecimal(test_dec) if dec.0 == test_dec.0 => {
+            IsDecimal(test_dec) if dec.eq(test_dec) => {
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
@@ -858,7 +932,7 @@ fn to_relevant_branch_help<'a>(
         EnumLiteral { tag_id, .. } => match test {
             IsByte {
                 tag_id: test_id, ..
-            } if tag_id == *test_id => {
+            } if tag_id == *test_id as _ => {
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
@@ -926,10 +1000,12 @@ fn needs_tests(pattern: &Pattern) -> bool {
         RecordDestructure(_, _)
         | NewtypeDestructure { .. }
         | AppliedTag { .. }
+        | OpaqueUnwrap { .. }
         | BitLiteral { .. }
         | EnumLiteral { .. }
-        | IntLiteral(_)
-        | FloatLiteral(_)
+        | IntLiteral(_, _)
+        | U128Literal(_)
+        | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | StrLiteral(_) => true,
     }
@@ -1049,9 +1125,19 @@ fn small_defaults(branches: &[Branch], path: &[PathInstruction]) -> usize {
 }
 
 fn small_branching_factor(branches: &[Branch], path: &[PathInstruction]) -> usize {
-    let (edges, fallback) = gather_edges(branches.to_vec(), path);
+    // a specialized version of gather_edges that just counts the number of options
 
-    edges.len() + (if fallback.is_empty() { 0 } else { 1 })
+    let relevant_tests = tests_at_path(path, branches);
+
+    let check = guarded_tests_are_complete(&relevant_tests);
+
+    let fallbacks = if check {
+        false
+    } else {
+        branches.iter().any(|b| is_irrelevant_to(path, b))
+    };
+
+    relevant_tests.len() + (if !fallbacks { 0 } else { 1 })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1165,7 +1251,7 @@ pub fn optimize_when<'a>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PathInstruction {
     index: u64,
-    tag_id: u8,
+    tag_id: TagIdIntType,
 }
 
 fn path_to_expr_help<'a>(
@@ -1192,7 +1278,7 @@ fn path_to_expr_help<'a>(
                     union_layout: *union_layout,
                 };
 
-                let inner_layout = union_layout.layout_at(*tag_id as u8, index as usize);
+                let inner_layout = union_layout.layout_at(*tag_id as TagIdIntType, index as usize);
 
                 symbol = env.unique_symbol();
                 stores.push((symbol, inner_layout, inner_expr));
@@ -1200,7 +1286,7 @@ fn path_to_expr_help<'a>(
                 layout = inner_layout;
             }
 
-            Layout::Struct(field_layouts) => {
+            Layout::Struct { field_layouts, .. } => {
                 debug_assert!(field_layouts.len() > 1);
 
                 let inner_expr = Expr::StructAtIndex {
@@ -1280,30 +1366,39 @@ fn test_to_equality<'a>(
                 _ => unreachable!("{:?}", (cond_layout, union)),
             }
         }
-        Test::IsInt(test_int) => {
+
+        Test::IsInt(test_int, precision) => {
             // TODO don't downcast i128 here
             debug_assert!(test_int <= i64::MAX as i128);
             let lhs = Expr::Literal(Literal::Int(test_int as i128));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
+            stores.push((lhs_symbol, Layout::int_width(precision), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
 
-        Test::IsFloat(test_int) => {
+        Test::IsU128(test_int) => {
+            let lhs = Expr::Literal(Literal::U128(test_int));
+            let lhs_symbol = env.unique_symbol();
+            stores.push((lhs_symbol, Layout::int_width(IntWidth::U128), lhs));
+
+            (stores, lhs_symbol, rhs_symbol, None)
+        }
+
+        Test::IsFloat(test_int, precision) => {
             // TODO maybe we can actually use i64 comparison here?
             let test_float = f64::from_bits(test_int as u64);
             let lhs = Expr::Literal(Literal::Float(test_float));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Float64), lhs));
+            stores.push((lhs_symbol, Layout::float_width(precision), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
 
         Test::IsDecimal(test_dec) => {
-            let lhs = Expr::Literal(Literal::Int(test_dec.0));
+            let lhs = Expr::Literal(Literal::Decimal(test_dec));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int128), lhs));
+            stores.push((lhs_symbol, *cond_layout, lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1311,9 +1406,11 @@ fn test_to_equality<'a>(
         Test::IsByte {
             tag_id: test_byte, ..
         } => {
-            let lhs = Expr::Literal(Literal::Byte(test_byte));
+            debug_assert!(test_byte <= (u8::MAX as u16));
+
+            let lhs = Expr::Literal(Literal::Byte(test_byte as u8));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int8), lhs));
+            stores.push((lhs_symbol, Layout::u8(), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1321,7 +1418,7 @@ fn test_to_equality<'a>(
         Test::IsBit(test_bit) => {
             let lhs = Expr::Literal(Literal::Bool(test_bit));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int1), lhs));
+            stores.push((lhs_symbol, Layout::Builtin(Builtin::Bool), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1442,7 +1539,7 @@ fn compile_test_help<'a>(
 
     cond = Stmt::Switch {
         cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Int1),
+        cond_layout: Layout::Builtin(Builtin::Bool),
         ret_layout,
         branches,
         default_branch,
@@ -1461,7 +1558,7 @@ fn compile_test_help<'a>(
     cond = Stmt::Let(
         test_symbol,
         test,
-        Layout::Builtin(Builtin::Int1),
+        Layout::Builtin(Builtin::Bool),
         arena.alloc(cond),
     );
 
@@ -1498,13 +1595,13 @@ enum ConstructorKnown<'a> {
     Both {
         scrutinee: Symbol,
         layout: Layout<'a>,
-        pass: u8,
-        fail: u8,
+        pass: TagIdIntType,
+        fail: TagIdIntType,
     },
     OnlyPass {
         scrutinee: Symbol,
         layout: Layout<'a>,
-        tag_id: u8,
+        tag_id: TagIdIntType,
     },
     Neither,
 }
@@ -1524,7 +1621,7 @@ impl<'a> ConstructorKnown<'a> {
                             layout: *cond_layout,
                             scrutinee: cond_symbol,
                             pass: *tag_id,
-                            fail: (*tag_id == 0) as u8,
+                            fail: (*tag_id == 0) as _,
                         }
                     } else {
                         ConstructorKnown::OnlyPass {
@@ -1605,7 +1702,7 @@ fn decide_to_branching<'a>(
             let decide = crate::ir::cond(
                 env,
                 test_symbol,
-                Layout::Builtin(Builtin::Int1),
+                Layout::Builtin(Builtin::Bool),
                 pass_expr,
                 fail_expr,
                 ret_layout,
@@ -1614,7 +1711,7 @@ fn decide_to_branching<'a>(
             // calculate the guard value
             let param = Param {
                 symbol: test_symbol,
-                layout: Layout::Builtin(Builtin::Int1),
+                layout: Layout::Builtin(Builtin::Bool),
                 borrow: false,
             };
 
@@ -1737,8 +1834,8 @@ fn decide_to_branching<'a>(
                 );
 
                 let tag = match test {
-                    Test::IsInt(v) => v as u64,
-                    Test::IsFloat(v) => v as u64,
+                    Test::IsInt(v, _) => v as u64,
+                    Test::IsFloat(v, _) => v as u64,
                     Test::IsBit(v) => v as u64,
                     Test::IsByte { tag_id, .. } => tag_id as u64,
                     Test::IsCtor { tag_id, .. } => tag_id as u64,
@@ -1768,7 +1865,7 @@ fn decide_to_branching<'a>(
                 BranchInfo::Constructor {
                     scrutinee: inner_cond_symbol,
                     layout: inner_cond_layout,
-                    tag_id: tag_id_sum as u8,
+                    tag_id: tag_id_sum as u8 as _,
                 }
             } else {
                 BranchInfo::None

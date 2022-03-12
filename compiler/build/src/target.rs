@@ -18,6 +18,11 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             ..
         } => "x86_64-unknown-linux-gnu",
         Triple {
+            architecture: Architecture::X86_32(target_lexicon::X86_32Architecture::I386),
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "i386-unknown-linux-gnu",
+        Triple {
             architecture: Architecture::Wasm32,
             ..
         } => "wasm32-unknown-unknown",
@@ -27,10 +32,20 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             ..
         } => "aarch64-unknown-linux-gnu",
         Triple {
+            architecture: Architecture::Aarch64(_),
+            operating_system: OperatingSystem::Darwin,
+            ..
+        } => "aarch64-apple-darwin",
+        Triple {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Darwin,
             ..
         } => "x86_64-unknown-darwin10",
+        Triple {
+            architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Windows,
+            ..
+        } => "x86_64-pc-windows-gnu",
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
@@ -38,7 +53,9 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
 #[cfg(feature = "llvm")]
 pub fn init_arch(target: &Triple) {
     match target.architecture {
-        Architecture::X86_64 => {
+        Architecture::X86_64 | Architecture::X86_32(_)
+            if cfg!(any(feature = "target-x86", feature = "target-x86_64")) =>
+        {
             Target::initialize_x86(&InitializationConfig::default());
         }
         Architecture::Aarch64(_) if cfg!(feature = "target-aarch64") => {
@@ -47,7 +64,7 @@ pub fn init_arch(target: &Triple) {
         Architecture::Arm(_) if cfg!(feature = "target-arm") => {
             Target::initialize_arm(&InitializationConfig::default());
         }
-        Architecture::Wasm32 if cfg!(feature = "target-webassembly") => {
+        Architecture::Wasm32 if cfg!(feature = "target-wasm32") => {
             Target::initialize_webassembly(&InitializationConfig::default());
         }
         _ => panic!(
@@ -65,7 +82,8 @@ pub fn arch_str(target: &Triple) -> &'static str {
     //
     // https://stackoverflow.com/questions/15036909/clang-how-to-list-supported-target-architectures
     match target.architecture {
-        Architecture::X86_64 => "x86-64",
+        Architecture::X86_64 if cfg!(feature = "target-x86_64") => "x86-64",
+        Architecture::X86_32(_) if cfg!(feature = "target-x86") => "x86",
         Architecture::Aarch64(_) if cfg!(feature = "target-aarch64") => "aarch64",
         Architecture::Arm(_) if cfg!(feature = "target-arm") => "arm",
         Architecture::Wasm32 if cfg!(feature = "target-webassembly") => "wasm32",
@@ -100,7 +118,9 @@ pub fn target_machine(
 #[cfg(feature = "llvm")]
 pub fn convert_opt_level(level: OptLevel) -> OptimizationLevel {
     match level {
-        OptLevel::Normal => OptimizationLevel::None,
+        OptLevel::Development | OptLevel::Normal => OptimizationLevel::None,
+        // Default is O2/Os. If we want Oz, we have to explicitly turn of loop vectorization as well.
+        OptLevel::Size => OptimizationLevel::Default,
         OptLevel::Optimize => OptimizationLevel::Aggressive,
     }
 }

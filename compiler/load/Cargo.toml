@@ -7,6 +7,7 @@ edition = "2018"
 
 [dependencies]
 roc_collections = { path = "../collections" }
+roc_error_macros = { path = "../../error_macros" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
@@ -18,18 +19,18 @@ roc_unify = { path = "../unify" }
 roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
-roc_reporting = { path = "../reporting" }
+roc_target = { path = "../roc_target" }
+roc_reporting = { path = "../../reporting" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
 ven_pretty = { path = "../../vendor/pretty" }
-bumpalo = { version = "3.6.1", features = ["collections"] }
-parking_lot = { version = "0.11", features = ["deadlock_detection"] }
-crossbeam = "0.7"
-num_cpus = "1"
+bumpalo = { version = "3.8.0", features = ["collections"] }
+parking_lot = "0.11.2"
+crossbeam = "0.8.1"
+num_cpus = "1.13.0"
 
 [dev-dependencies]
-tempfile = "3.1.0"
-pretty_assertions = "0.5.1"
-maplit = "1.0.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"
+tempfile = "3.2.0"
+pretty_assertions = "1.0.0"
+maplit = "1.0.2"
+indoc = "1.0.3"
+strip-ansi-escapes = "0.1.1"

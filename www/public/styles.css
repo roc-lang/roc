@@ -282,7 +282,6 @@ code {
   font-family: var(--font-mono);
   color: var(--code-color);
   background-color: var(--code-bg-color);
-  padding: 0 8px;
   display: inline-block;
   line-height: 28px;
 }
@@ -303,13 +302,13 @@ pre {
   overflow-x: auto;
 }
 
-pre code {
-  padding: 6px 8px;
-}
-
 .hidden {
   /* Use !important to win all specificity fights. */
   display: none !important;
+}
+
+.syntax-comment {
+  color: #ff0000;
 }
 
 #module-search:placeholder-shown {

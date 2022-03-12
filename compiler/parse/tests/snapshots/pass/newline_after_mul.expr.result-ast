@@ -1,0 +1,18 @@
+BinOps(
+    [
+        (
+            @0-1 Num(
+                "3",
+            ),
+            @3-4 Star,
+        ),
+    ],
+    @7-8 SpaceBefore(
+        Num(
+            "4",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

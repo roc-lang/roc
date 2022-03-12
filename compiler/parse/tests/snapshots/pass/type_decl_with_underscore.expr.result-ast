@@ -1,0 +1,38 @@
+Defs(
+    [
+        @0-30 Annotation(
+            @0-7 Identifier(
+                "doStuff",
+            ),
+            @20-30 Function(
+                [
+                    @10-16 Apply(
+                        "",
+                        "UserId",
+                        [],
+                    ),
+                ],
+                @20-30 Apply(
+                    "",
+                    "Task",
+                    [
+                        @25-28 Apply(
+                            "",
+                            "Str",
+                            [],
+                        ),
+                        @29-30 Inferred,
+                    ],
+                ),
+            ),
+        ),
+    ],
+    @31-33 SpaceBefore(
+        Num(
+            "42",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

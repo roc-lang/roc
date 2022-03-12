@@ -5,14 +5,19 @@
 # https://docs.netlify.com/routing/headers/#syntax-for-the-netlify-configuration-file
 [build]
   publish = "build/"
-  command = "bash build.sh"
+  command = "bash netlify.sh"
+  # Always build on push - see https://answers.netlify.com/t/builds-cancelled-for-a-new-branch-due-to-no-content-change/17169/2
+  ignore = "/bin/false"
 
 [[headers]]
   for = "/*"
   [headers.values]
     X-Frame-Options = "DENY"
     X-XSS-Protection = "1; mode=block"
-    Content-Security-Policy = "default-src 'self'; img-src *;"
+    # unsafe-eval is needed for wasm compilation in the repl to work on Safari and Chrome;
+    # otherwise they block it.
+    # TODO figure out how to tell Netlify to apply that policy only to the repl, not to everything.
+    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval';"
     X-Content-Type-Options = "nosniff"
 
 # Redirect roc-lang.org/authors to the AUTHORS file in this repo

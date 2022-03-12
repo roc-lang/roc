@@ -1,5 +1,6 @@
 const utils = @import("utils.zig");
 const RocList = @import("list.zig").RocList;
+const UpdateMode = utils.UpdateMode;
 const std = @import("std");
 const mem = std.mem;
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
@@ -15,7 +16,7 @@ const InPlace = enum(u8) {
 };
 
 const SMALL_STR_MAX_LENGTH = small_string_size - 1;
-const small_string_size = 2 * @sizeOf(usize);
+const small_string_size = @sizeOf(RocStr);
 const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);
 
 fn init_blank_small_string(comptime n: usize) [n]u8 {
@@ -36,8 +37,9 @@ pub const RocStr = extern struct {
     pub const alignment = @alignOf(usize);
 
     pub inline fn empty() RocStr {
+        const small_str_flag: isize = std.math.minInt(isize);
         return RocStr{
-            .str_len = 0,
+            .str_len = @bitCast(usize, small_str_flag),
             .str_bytes = null,
         };
     }
@@ -79,7 +81,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn deinit(self: RocStr) void {
-        if (!self.isSmallStr() and !self.isEmpty()) {
+        if (!self.isSmallStr()) {
             utils.decref(self.str_bytes, self.str_len, RocStr.alignment);
         }
     }
@@ -92,7 +94,7 @@ pub const RocStr = extern struct {
         if (length < roc_str_size) {
             return RocStr.empty();
         } else {
-            var new_bytes: []T = utils.alloc(length, RocStr.alignment) catch unreachable;
+            var new_bytes = utils.alloc(length, RocStr.alignment) catch unreachable;
 
             var new_bytes_ptr: [*]u8 = @ptrCast([*]u8, &new_bytes);
 
@@ -104,11 +106,8 @@ pub const RocStr = extern struct {
     }
 
     pub fn eq(self: RocStr, other: RocStr) bool {
-        const self_bytes_ptr: ?[*]const u8 = self.str_bytes;
-        const other_bytes_ptr: ?[*]const u8 = other.str_bytes;
-
         // If they are byte-for-byte equal, they're definitely equal!
-        if (self_bytes_ptr == other_bytes_ptr and self.str_len == other.str_len) {
+        if (self.str_bytes == other.str_bytes and self.str_len == other.str_len) {
             return true;
         }
 
@@ -120,28 +119,34 @@ pub const RocStr = extern struct {
             return false;
         }
 
-        const self_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &self);
-        const other_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &other);
-        const self_bytes: [*]const u8 = if (self.isSmallStr() or self.isEmpty()) self_u8_ptr else self_bytes_ptr orelse unreachable;
-        const other_bytes: [*]const u8 = if (other.isSmallStr() or other.isEmpty()) other_u8_ptr else other_bytes_ptr orelse unreachable;
+        // Now we have to look at the string contents
+        const self_bytes = self.asU8ptr();
+        const other_bytes = other.asU8ptr();
 
-        var index: usize = 0;
-
-        // TODO rewrite this into a for loop
-        const length = self.len();
-        while (index < length) {
-            if (self_bytes[index] != other_bytes[index]) {
+        // It's faster to compare pointer-sized words rather than bytes, as far as possible
+        // The bytes are always pointer-size aligned due to the refcount
+        const self_words = @ptrCast([*]const usize, @alignCast(@alignOf(usize), self_bytes));
+        const other_words = @ptrCast([*]const usize, @alignCast(@alignOf(usize), other_bytes));
+        var w: usize = 0;
+        while (w < self_len / @sizeOf(usize)) : (w += 1) {
+            if (self_words[w] != other_words[w]) {
                 return false;
             }
+        }
 
-            index = index + 1;
+        // Compare the leftover bytes
+        var b = w * @sizeOf(usize);
+        while (b < self_len) : (b += 1) {
+            if (self_bytes[b] != other_bytes[b]) {
+                return false;
+            }
         }
 
         return true;
     }
 
     pub fn clone(in_place: InPlace, str: RocStr) RocStr {
-        if (str.isSmallStr() or str.isEmpty()) {
+        if (str.isSmallStr()) {
             // just return the bytes
             return str;
         } else {
@@ -162,7 +167,7 @@ pub const RocStr = extern struct {
     ) RocStr {
         const element_width = 1;
 
-        if (self.bytes) |source_ptr| {
+        if (self.str_bytes) |source_ptr| {
             if (self.isUnique()) {
                 const new_source = utils.unsafeReallocate(source_ptr, RocStr.alignment, self.len(), new_length, element_width);
 
@@ -170,7 +175,7 @@ pub const RocStr = extern struct {
             }
         }
 
-        return self.reallocateFresh(RocStr.alignment, new_length, element_width);
+        return self.reallocateFresh(new_length);
     }
 
     /// reallocate by explicitly making a new allocation and copying elements over
@@ -213,7 +218,8 @@ pub const RocStr = extern struct {
     }
 
     pub fn isEmpty(self: RocStr) bool {
-        return self.len() == 0;
+        comptime const empty_len = RocStr.empty().str_len;
+        return self.str_len == empty_len;
     }
 
     // If a string happens to be null-terminated already, then we can pass its
@@ -245,7 +251,7 @@ pub const RocStr = extern struct {
         } else {
             // This is a big string, and it's not empty, so we can safely
             // dereference the pointer.
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
             const capacity_or_refcount: isize = (ptr - 1)[0];
 
             // If capacity_or_refcount is positive, then it's a capacity value.
@@ -263,7 +269,7 @@ pub const RocStr = extern struct {
     }
 
     // Returns (@sizeOf(RocStr) - 1) for small strings and the empty string.
-    // Returns 0 for refcounted stirngs and immortal strings.
+    // Returns 0 for refcounted strings and immortal strings.
     // Returns the stored capacity value for all other strings.
     pub fn capacity(self: RocStr) usize {
         const length = self.len();
@@ -276,7 +282,7 @@ pub const RocStr = extern struct {
             // to first change its flag to mark it as a small string!
             return longest_small_str;
         } else {
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
             const capacity_or_refcount: isize = (ptr - 1)[0];
 
             if (capacity_or_refcount > 0) {
@@ -293,18 +299,17 @@ pub const RocStr = extern struct {
     }
 
     pub fn isUnique(self: RocStr) bool {
-        // the empty list is unique (in the sense that copying it will not leak memory)
-        if (self.isEmpty()) {
-            return true;
-        }
-
         // small strings can be copied
         if (self.isSmallStr()) {
             return true;
         }
 
         // otherwise, check if the refcount is one
-        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+        return @call(.{ .modifier = always_inline }, RocStr.isRefcountOne, .{self});
+    }
+
+    fn isRefcountOne(self: RocStr) bool {
+        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
@@ -316,8 +321,8 @@ pub const RocStr = extern struct {
 
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        // return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
-        if (self.isSmallStr() or self.isEmpty()) {
+        // return if (self.isSmallStr()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
+        if (self.isSmallStr()) {
             const as_int = @ptrToInt(&self);
             const as_ptr = @intToPtr([*]u8, as_int);
             return as_ptr;
@@ -337,7 +342,7 @@ pub const RocStr = extern struct {
         @memcpy(dest, src, self.len());
     }
 
-    test "RocStr.eq: equal" {
+    test "RocStr.eq: small, equal" {
         const str1_len = 3;
         var str1: [str1_len]u8 = "abc".*;
         const str1_ptr: [*]u8 = &str1;
@@ -354,7 +359,7 @@ pub const RocStr = extern struct {
         roc_str2.deinit();
     }
 
-    test "RocStr.eq: not equal different length" {
+    test "RocStr.eq: small, not equal, different length" {
         const str1_len = 4;
         var str1: [str1_len]u8 = "abcd".*;
         const str1_ptr: [*]u8 = &str1;
@@ -373,7 +378,7 @@ pub const RocStr = extern struct {
         try expect(!roc_str1.eq(roc_str2));
     }
 
-    test "RocStr.eq: not equal same length" {
+    test "RocStr.eq: small, not equal, same length" {
         const str1_len = 3;
         var str1: [str1_len]u8 = "acb".*;
         const str1_ptr: [*]u8 = &str1;
@@ -390,6 +395,67 @@ pub const RocStr = extern struct {
         }
 
         try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, equal" {
+        const content = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content, content.len);
+        const roc_str2 = RocStr.init(content, content.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, different lengths, unequal" {
+        const content1 = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content1, content1.len);
+        const content2 = "012345678901234567890";
+        const roc_str2 = RocStr.init(content2, content2.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, different content, unequal" {
+        const content1 = "012345678901234567890123456789!!";
+        const roc_str1 = RocStr.init(content1, content1.len);
+        const content2 = "012345678901234567890123456789--";
+        const roc_str2 = RocStr.init(content2, content2.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, garbage after end, equal" {
+        const content = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content, content.len);
+        const roc_str2 = RocStr.init(content, content.len);
+        try expect(roc_str1.str_bytes != roc_str2.str_bytes);
+
+        // Insert garbage after the end of each string
+        roc_str1.str_bytes.?[30] = '!';
+        roc_str1.str_bytes.?[31] = '!';
+        roc_str2.str_bytes.?[30] = '-';
+        roc_str2.str_bytes.?[31] = '-';
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(roc_str1.eq(roc_str2));
     }
 };
 
@@ -408,9 +474,14 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
 }
 
 // Str.fromInt
-pub fn strFromIntC(int: i64) callconv(.C) RocStr {
-    // prepare for having multiple integer types in the future
-    return @call(.{ .modifier = always_inline }, strFromIntHelp, .{ i64, int });
+pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(int: T) callconv(.C) RocStr {
+            return @call(.{ .modifier = always_inline }, strFromIntHelp, .{ T, int });
+        }
+    }.func;
+
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
 fn strFromIntHelp(comptime T: type, int: T) RocStr {
@@ -456,7 +527,7 @@ fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     const delimiter_bytes_ptrs = delimiter.asU8ptr();
     const delimiter_len = delimiter.len();
 
-    if (str_len > delimiter_len) {
+    if (str_len > delimiter_len and delimiter_len > 0) {
         const end_index: usize = str_len - delimiter_len + 1;
         while (str_index <= end_index) {
             var delimiter_index: usize = 0;
@@ -488,6 +559,40 @@ fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     }
 
     array[ret_array_index] = RocStr.init(str_bytes + slice_start_index, str_len - slice_start_index);
+}
+
+test "strSplitInPlace: empty delimiter" {
+    // Str.split "abc" "" == [ "abc" ]
+    const str_arr = "abc";
+    const str = RocStr.init(str_arr, str_arr.len);
+
+    const delimiter_arr = "";
+    const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len);
+
+    var array: [1]RocStr = undefined;
+    const array_ptr: [*]RocStr = &array;
+
+    strSplitInPlace(array_ptr, str, delimiter);
+
+    var expected = [1]RocStr{
+        str,
+    };
+
+    defer {
+        for (array) |roc_str| {
+            roc_str.deinit();
+        }
+
+        for (expected) |roc_str| {
+            roc_str.deinit();
+        }
+
+        str.deinit();
+        delimiter.deinit();
+    }
+
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
 }
 
 test "strSplitInPlace: no delimiter" {
@@ -663,7 +768,7 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
 
     var count: usize = 1;
 
-    if (str_len > delimiter_len) {
+    if (str_len > delimiter_len and delimiter_len > 0) {
         var str_index: usize = 0;
         const end_cond: usize = str_len - delimiter_len + 1;
 
@@ -864,6 +969,22 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
         i += 1;
     }
     return true;
+}
+
+// Str.repeat
+pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
+    const bytes_len = string.len();
+    const bytes_ptr = string.asU8ptr();
+
+    var ret_string = RocStr.allocate(.Clone, count * bytes_len);
+    var ret_string_ptr = ret_string.asU8ptr();
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        @memcpy(ret_string_ptr + (i * bytes_len), bytes_ptr, bytes_len);
+    }
+
+    return ret_string;
 }
 
 // Str.startsWithCodePt
@@ -1131,10 +1252,10 @@ test "RocStr.joinWith: result is big" {
 
 // Str.toUtf8
 pub fn strToUtf8C(arg: RocStr) callconv(.C) RocList {
-    return @call(.{ .modifier = always_inline }, strToBytes, .{arg});
+    return strToBytes(arg);
 }
 
-fn strToBytes(arg: RocStr) RocList {
+inline fn strToBytes(arg: RocStr) RocList {
     if (arg.isEmpty()) {
         return RocList.empty();
     } else if (arg.isSmallStr()) {
@@ -1161,11 +1282,11 @@ const CountAndStart = extern struct {
     start: usize,
 };
 
-pub fn fromUtf8C(arg: RocList, output: *FromUtf8Result) callconv(.C) void {
-    output.* = @call(.{ .modifier = always_inline }, fromUtf8, .{arg});
+pub fn fromUtf8C(arg: RocList, update_mode: UpdateMode, output: *FromUtf8Result) callconv(.C) void {
+    output.* = fromUtf8(arg, update_mode);
 }
 
-fn fromUtf8(arg: RocList) FromUtf8Result {
+inline fn fromUtf8(arg: RocList, update_mode: UpdateMode) FromUtf8Result {
     const bytes = @ptrCast([*]const u8, arg.bytes)[0..arg.length];
 
     if (unicode.utf8ValidateSlice(bytes)) {
@@ -1178,13 +1299,23 @@ fn fromUtf8(arg: RocList) FromUtf8Result {
             const data_bytes = arg.len();
             utils.decref(arg.bytes, data_bytes, RocStr.alignment);
 
-            return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
+            return FromUtf8Result{
+                .is_ok = true,
+                .string = string,
+                .byte_index = 0,
+                .problem_code = Utf8ByteProblem.InvalidStartByte,
+            };
         } else {
-            const byte_list = arg.makeUnique(RocStr.alignment, @sizeOf(u8));
+            const byte_list = arg.makeUniqueExtra(RocStr.alignment, @sizeOf(u8), update_mode);
 
             const string = RocStr{ .str_bytes = byte_list.bytes, .str_len = byte_list.length };
 
-            return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
+            return FromUtf8Result{
+                .is_ok = true,
+                .string = string,
+                .byte_index = 0,
+                .problem_code = Utf8ByteProblem.InvalidStartByte,
+            };
         }
     } else {
         const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
@@ -1193,7 +1324,12 @@ fn fromUtf8(arg: RocList) FromUtf8Result {
         const data_bytes = arg.len();
         utils.decref(arg.bytes, data_bytes, RocStr.alignment);
 
-        return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
+        return FromUtf8Result{
+            .is_ok = false,
+            .string = RocStr.empty(),
+            .byte_index = temp.index,
+            .problem_code = temp.problem,
+        };
     }
 }
 
@@ -1276,11 +1412,11 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8(RocList{ .bytes = bytes, .length = length });
+    return fromUtf8(RocList{ .bytes = bytes, .length = length }, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {
-    return fromUtf8(str);
+    return fromUtf8(str, .Immutable);
 }
 
 fn expectOk(result: FromUtf8Result) !void {
@@ -1440,4 +1576,468 @@ test "validateUtf8Bytes: surrogate halves" {
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
+}
+
+fn isWhitespace(codepoint: u21) bool {
+    // https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt
+    return switch (codepoint) {
+        0x0009...0x000D => true, // control characters
+        0x0020 => true, // space
+        0x0085 => true, // control character
+        0x00A0 => true, // no-break space
+        0x1680 => true, // ogham space
+        0x2000...0x200A => true, // en quad..hair space
+        0x200E...0x200F => true, // left-to-right & right-to-left marks
+        0x2028 => true, // line separator
+        0x2029 => true, // paragraph separator
+        0x202F => true, // narrow no-break space
+        0x205F => true, // medium mathematical space
+        0x3000 => true, // ideographic space
+
+        else => false,
+    };
+}
+
+test "isWhitespace" {
+    try expect(isWhitespace(' '));
+    try expect(isWhitespace('\u{00A0}'));
+    try expect(!isWhitespace('x'));
+}
+
+pub fn strTrim(string: RocStr) callconv(.C) RocStr {
+    if (string.str_bytes) |bytes_ptr| {
+        const leading_bytes = countLeadingWhitespaceBytes(string);
+        const original_len = string.len();
+
+        if (original_len == leading_bytes) {
+            string.deinit();
+            return RocStr.empty();
+        }
+
+        const trailing_bytes = countTrailingWhitespaceBytes(string);
+        const new_len = original_len - leading_bytes - trailing_bytes;
+
+        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
+        if (small_or_shared) {
+            return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+        }
+
+        // nonempty, large, and unique:
+
+        if (leading_bytes > 0) {
+            var i: usize = 0;
+            while (i < new_len) : (i += 1) {
+                const dest = bytes_ptr + i;
+                const source = dest + leading_bytes;
+                @memcpy(dest, source, 1);
+            }
+        }
+
+        var new_string = string;
+        new_string.str_len = new_len;
+
+        return new_string;
+    }
+
+    return RocStr.empty();
+}
+
+pub fn strTrimLeft(string: RocStr) callconv(.C) RocStr {
+    if (string.str_bytes) |bytes_ptr| {
+        const leading_bytes = countLeadingWhitespaceBytes(string);
+        const original_len = string.len();
+
+        if (original_len == leading_bytes) {
+            string.deinit();
+            return RocStr.empty();
+        }
+
+        const new_len = original_len - leading_bytes;
+
+        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
+        if (small_or_shared) {
+            return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+        }
+
+        // nonempty, large, and unique:
+
+        if (leading_bytes > 0) {
+            var i: usize = 0;
+            while (i < new_len) : (i += 1) {
+                const dest = bytes_ptr + i;
+                const source = dest + leading_bytes;
+                @memcpy(dest, source, 1);
+            }
+        }
+
+        var new_string = string;
+        new_string.str_len = new_len;
+
+        return new_string;
+    }
+
+    return RocStr.empty();
+}
+
+pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
+    if (string.str_bytes) |bytes_ptr| {
+        const trailing_bytes = countTrailingWhitespaceBytes(string);
+        const original_len = string.len();
+
+        if (original_len == trailing_bytes) {
+            string.deinit();
+            return RocStr.empty();
+        }
+
+        const new_len = original_len - trailing_bytes;
+
+        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
+        if (small_or_shared) {
+            return RocStr.init(string.asU8ptr(), new_len);
+        }
+
+        // nonempty, large, and unique:
+
+        var i: usize = 0;
+        while (i < new_len) : (i += 1) {
+            const dest = bytes_ptr + i;
+            const source = dest;
+            @memcpy(dest, source, 1);
+        }
+
+        var new_string = string;
+        new_string.str_len = new_len;
+
+        return new_string;
+    }
+
+    return RocStr.empty();
+}
+
+fn countLeadingWhitespaceBytes(string: RocStr) usize {
+    var byte_count: usize = 0;
+
+    var bytes = string.asU8ptr()[0..string.len()];
+    var iter = unicode.Utf8View.initUnchecked(bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        if (isWhitespace(codepoint)) {
+            byte_count += unicode.utf8CodepointSequenceLength(codepoint) catch break;
+        } else {
+            break;
+        }
+    }
+
+    return byte_count;
+}
+
+fn countTrailingWhitespaceBytes(string: RocStr) usize {
+    var byte_count: usize = 0;
+
+    var bytes = string.asU8ptr()[0..string.len()];
+    var iter = ReverseUtf8View.initUnchecked(bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        if (isWhitespace(codepoint)) {
+            byte_count += unicode.utf8CodepointSequenceLength(codepoint) catch break;
+        } else {
+            break;
+        }
+    }
+
+    return byte_count;
+}
+
+/// A backwards version of Utf8View from std.unicode
+const ReverseUtf8View = struct {
+    bytes: []const u8,
+
+    pub fn initUnchecked(s: []const u8) ReverseUtf8View {
+        return ReverseUtf8View{ .bytes = s };
+    }
+
+    pub fn iterator(s: ReverseUtf8View) ReverseUtf8Iterator {
+        return ReverseUtf8Iterator{
+            .bytes = s.bytes,
+            .i = if (s.bytes.len > 0) s.bytes.len - 1 else null,
+        };
+    }
+};
+
+/// A backwards version of Utf8Iterator from std.unicode
+const ReverseUtf8Iterator = struct {
+    bytes: []const u8,
+    // NOTE null signifies complete/empty
+    i: ?usize,
+
+    pub fn nextCodepointSlice(it: *ReverseUtf8Iterator) ?[]const u8 {
+        if (it.i) |index| {
+            var i = index;
+
+            // NOTE this relies on the string being valid utf8 to not run off the end
+            while (!utf8BeginByte(it.bytes[i])) {
+                i -= 1;
+            }
+
+            const cp_len = unicode.utf8ByteSequenceLength(it.bytes[i]) catch unreachable;
+            const slice = it.bytes[i .. i + cp_len];
+
+            it.i = if (i == 0) null else i - 1;
+
+            return slice;
+        } else {
+            return null;
+        }
+    }
+
+    pub fn nextCodepoint(it: *ReverseUtf8Iterator) ?u21 {
+        const slice = it.nextCodepointSlice() orelse return null;
+
+        return switch (slice.len) {
+            1 => @as(u21, slice[0]),
+            2 => unicode.utf8Decode2(slice) catch unreachable,
+            3 => unicode.utf8Decode3(slice) catch unreachable,
+            4 => unicode.utf8Decode4(slice) catch unreachable,
+            else => unreachable,
+        };
+    }
+};
+
+fn utf8BeginByte(byte: u8) bool {
+    return switch (byte) {
+        0b1000_0000...0b1011_1111 => false,
+        else => true,
+    };
+}
+
+test "strTrim: empty" {
+    const trimmedEmpty = strTrim(RocStr.empty());
+    try expect(trimmedEmpty.eq(RocStr.empty()));
+}
+
+test "strTrim: blank" {
+    const original_bytes = "   ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    const trimmed = strTrim(original);
+
+    try expect(trimmed.eq(RocStr.empty()));
+}
+
+test "strTrim: large to large" {
+    const original_bytes = " hello giant world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = "hello giant world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(!expected.isSmallStr());
+
+    const trimmed = strTrim(original);
+
+    try expect(trimmed.eq(expected));
+}
+
+test "strTrim: large to small" {
+    const original_bytes = "             hello world         ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = "hello world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
+    const trimmed = strTrim(original);
+
+    try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
+}
+
+test "strTrim: small to small" {
+    const original_bytes = " hello world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(original.isSmallStr());
+
+    const expected_bytes = "hello world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
+    const trimmed = strTrim(original);
+
+    try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
+}
+
+test "strTrimLeft: empty" {
+    const trimmedEmpty = strTrimLeft(RocStr.empty());
+    try expect(trimmedEmpty.eq(RocStr.empty()));
+}
+
+test "strTrimLeft: blank" {
+    const original_bytes = "   ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    const trimmed = strTrimLeft(original);
+
+    try expect(trimmed.eq(RocStr.empty()));
+}
+
+test "strTrimLeft: large to large" {
+    const original_bytes = " hello giant world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = "hello giant world ";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(!expected.isSmallStr());
+
+    const trimmed = strTrimLeft(original);
+
+    try expect(trimmed.eq(expected));
+}
+
+test "strTrimLeft: large to small" {
+    const original_bytes = "                    hello world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = "hello world ";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
+    const trimmed = strTrimLeft(original);
+
+    try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
+}
+
+test "strTrimLeft: small to small" {
+    const original_bytes = " hello world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(original.isSmallStr());
+
+    const expected_bytes = "hello world ";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
+    const trimmed = strTrimLeft(original);
+
+    try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
+}
+
+test "strTrimRight: empty" {
+    const trimmedEmpty = strTrimRight(RocStr.empty());
+    try expect(trimmedEmpty.eq(RocStr.empty()));
+}
+
+test "strTrimRight: blank" {
+    const original_bytes = "   ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    const trimmed = strTrimRight(original);
+
+    try expect(trimmed.eq(RocStr.empty()));
+}
+
+test "strTrimRight: large to large" {
+    const original_bytes = " hello giant world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = " hello giant world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(!expected.isSmallStr());
+
+    const trimmed = strTrimRight(original);
+
+    try expect(trimmed.eq(expected));
+}
+
+test "strTrimRight: large to small" {
+    const original_bytes = " hello world                    ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = " hello world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
+    const trimmed = strTrimRight(original);
+
+    try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
+}
+
+test "strTrimRight: small to small" {
+    const original_bytes = " hello world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(original.isSmallStr());
+
+    const expected_bytes = " hello world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
+    const trimmed = strTrimRight(original);
+
+    try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
+}
+
+test "ReverseUtf8View: hello world" {
+    const original_bytes = "hello world";
+    const expected_bytes = "dlrow olleh";
+
+    var i: usize = 0;
+    var iter = ReverseUtf8View.initUnchecked(original_bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        try expect(expected_bytes[i] == codepoint);
+        i += 1;
+    }
+}
+
+test "ReverseUtf8View: empty" {
+    const original_bytes = "";
+
+    var iter = ReverseUtf8View.initUnchecked(original_bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        try expect(false);
+    }
 }

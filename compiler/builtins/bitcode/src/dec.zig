@@ -1,5 +1,6 @@
 const std = @import("std");
 const str = @import("str.zig");
+const num_ = @import("num.zig");
 const utils = @import("utils.zig");
 
 const math = std.math;
@@ -25,21 +26,19 @@ pub const RocDec = extern struct {
         return .{ .num = num * one_point_zero_i128 };
     }
 
-    // TODO: There's got to be a better way to do this other than converting to Str
     pub fn fromF64(num: f64) ?RocDec {
-        var digit_bytes: [19]u8 = undefined; // 19 = max f64 digits + '.' + '-'
+        var result: f64 = num * comptime @intToFloat(f64, one_point_zero_i128);
 
-        var fbs = std.io.fixedBufferStream(digit_bytes[0..]);
-        std.fmt.formatFloatDecimal(num, .{}, fbs.writer()) catch
-            return null;
-
-        var dec = RocDec.fromStr(RocStr.init(&digit_bytes, fbs.pos));
-
-        if (dec) |d| {
-            return d;
-        } else {
+        if (result > comptime @intToFloat(f64, math.maxInt(i128))) {
             return null;
         }
+
+        if (result < comptime @intToFloat(f64, math.minInt(i128))) {
+            return null;
+        }
+
+        var ret: RocDec = .{ .num = @floatToInt(i128, result) };
+        return ret;
     }
 
     pub fn fromStr(roc_str: RocStr) ?RocDec {
@@ -728,6 +727,11 @@ test "fromF64" {
     try expectEqual(RocDec{ .num = 25500000000000000000 }, dec.?);
 }
 
+test "fromF64 overflow" {
+    var dec = RocDec.fromF64(1e308);
+    try expectEqual(dec, null);
+}
+
 test "fromStr: empty" {
     var roc_str = RocStr.init("", 0);
     var dec = RocDec.fromStr(roc_str);
@@ -1051,6 +1055,14 @@ test "div: 10 / 3" {
 }
 
 // exports
+
+pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
+    if (@call(.{ .modifier = always_inline }, RocDec.fromStr, .{arg})) |dec| {
+        return .{ .errorcode = 0, .value = dec.num };
+    } else {
+        return .{ .errorcode = 1, .value = 0 };
+    }
+}
 
 pub fn fromF64C(arg: f64) callconv(.C) i128 {
     return if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| dec.num else @panic("TODO runtime exception failing convert f64 to RocDec");

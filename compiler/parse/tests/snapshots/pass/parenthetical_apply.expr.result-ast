@@ -1,0 +1,14 @@
+Apply(
+    @1-5 ParensAround(
+        Var {
+            module_name: "",
+            ident: "whee",
+        },
+    ),
+    [
+        @7-8 Num(
+            "1",
+        ),
+    ],
+    Space,
+)

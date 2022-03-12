@@ -1,7 +1,8 @@
-use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage};
+use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
 use crate::Relocation;
 use bumpalo::collections::Vec;
-use roc_collections::all::MutMap;
+use packed_struct::prelude::*;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::Layout;
 
@@ -42,22 +43,43 @@ pub enum AArch64GeneralReg {
     /// This can mean Zero or Stack Pointer depending on the context.
     ZRSP = 31,
 }
-impl RegTrait for AArch64GeneralReg {}
+
+impl RegTrait for AArch64GeneralReg {
+    fn value(&self) -> u8 {
+        *self as u8
+    }
+}
+
+impl AArch64GeneralReg {
+    #[inline(always)]
+    fn id(&self) -> u8 {
+        *self as u8
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
 pub enum AArch64FloatReg {}
-impl RegTrait for AArch64FloatReg {}
+impl RegTrait for AArch64FloatReg {
+    fn value(&self) -> u8 {
+        *self as u8
+    }
+}
 
+#[derive(Copy, Clone)]
 pub struct AArch64Assembler {}
 
 // AArch64Call may need to eventually be split by OS,
 // but I think with how we use it, they may all be the same.
+#[derive(Copy, Clone)]
 pub struct AArch64Call {}
 
 const STACK_ALIGNMENT: u8 = 16;
 
-impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
+impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64Call {
+    const BASE_PTR_REG: AArch64GeneralReg = AArch64GeneralReg::FP;
+    const STACK_PTR_REG: AArch64GeneralReg = AArch64GeneralReg::ZRSP;
+
     const GENERAL_PARAM_REGS: &'static [AArch64GeneralReg] = &[
         AArch64GeneralReg::X0,
         AArch64GeneralReg::X1,
@@ -133,22 +155,25 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
     }
     #[inline(always)]
     fn float_callee_saved(_reg: &AArch64FloatReg) -> bool {
-        unimplemented!("AArch64 FloatRegs not implemented yet");
+        todo!("AArch64 FloatRegs");
     }
 
     #[inline(always)]
     fn setup_stack(
         buf: &mut Vec<'_, u8>,
-        saved_regs: &[AArch64GeneralReg],
+        saved_general_regs: &[AArch64GeneralReg],
+        saved_float_regs: &[AArch64FloatReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<i32, String> {
+    ) -> i32 {
         // Full size is upcast to i64 to make sure we don't overflow here.
-        let full_stack_size = requested_stack_size
-            .checked_add(8 * saved_regs.len() as i32 + 8) // The extra 8 is space to store the frame pointer.
-            .ok_or("Ran out of stack space")?
-            .checked_add(fn_call_stack_size)
-            .ok_or("Ran out of stack space")?;
+        let full_stack_size = match requested_stack_size
+            .checked_add(8 * (saved_general_regs.len() + saved_float_regs.len()) as i32 + 8) // The extra 8 is space to store the frame pointer.
+            .and_then(|size| size.checked_add(fn_call_stack_size))
+        {
+            Some(size) => size,
+            _ => internal_error!("Ran out of stack space"),
+        };
         let alignment = if full_stack_size <= 0 {
             0
         } else {
@@ -181,26 +206,31 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
                 AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::FP);
 
                 offset = aligned_stack_size - fn_call_stack_size;
-                for reg in saved_regs {
+                for reg in saved_general_regs {
                     offset -= 8;
                     AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
                 }
-                Ok(aligned_stack_size)
+                for reg in saved_float_regs {
+                    offset -= 8;
+                    AArch64Assembler::mov_base32_freg64(buf, offset, *reg);
+                }
+                aligned_stack_size
             } else {
-                Ok(0)
+                0
             }
         } else {
-            Err("Ran out of stack space".to_string())
+            internal_error!("Ran out of stack space");
         }
     }
 
     #[inline(always)]
     fn cleanup_stack(
         buf: &mut Vec<'_, u8>,
-        saved_regs: &[AArch64GeneralReg],
+        saved_general_regs: &[AArch64GeneralReg],
+        saved_float_regs: &[AArch64FloatReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<(), String> {
+    ) {
         if aligned_stack_size > 0 {
             // All the following stores could be optimized by using `STP` to store pairs.
             let mut offset = aligned_stack_size;
@@ -210,9 +240,13 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
             AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, offset);
 
             offset = aligned_stack_size - fn_call_stack_size;
-            for reg in saved_regs {
+            for reg in saved_general_regs {
                 offset -= 8;
                 AArch64Assembler::mov_reg64_base32(buf, *reg, offset);
+            }
+            for reg in saved_float_regs {
+                offset -= 8;
+                AArch64Assembler::mov_freg64_base32(buf, *reg, offset);
             }
             AArch64Assembler::add_reg64_reg64_imm32(
                 buf,
@@ -221,48 +255,77 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
                 aligned_stack_size,
             );
         }
-        Ok(())
     }
 
     #[inline(always)]
     fn load_args<'a>(
-        _symbol_map: &mut MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
         _args: &'a [(Layout<'a>, Symbol)],
         _ret_layout: &Layout<'a>,
-    ) -> Result<(), String> {
-        Err("Loading args not yet implemented for AArch64".to_string())
+    ) {
+        todo!("Loading args for AArch64");
     }
 
     #[inline(always)]
     fn store_args<'a>(
         _buf: &mut Vec<'a, u8>,
-        _symbol_map: &MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
-        _args: &'a [Symbol],
+        _storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
+        _dst: &Symbol,
+        _args: &[Symbol],
         _arg_layouts: &[Layout<'a>],
         _ret_layout: &Layout<'a>,
-    ) -> Result<u32, String> {
-        Err("Storing args not yet implemented for AArch64".to_string())
+    ) {
+        todo!("Storing args for AArch64");
     }
 
-    fn return_struct<'a>(
+    fn return_complex_symbol<'a>(
         _buf: &mut Vec<'a, u8>,
-        _struct_offset: i32,
-        _struct_size: u32,
-        _field_layouts: &[Layout<'a>],
-        _ret_reg: Option<AArch64GeneralReg>,
-    ) -> Result<(), String> {
-        Err("Returning structs not yet implemented for AArch64".to_string())
+        _storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
+        _sym: &Symbol,
+        _layout: &Layout<'a>,
+    ) {
+        todo!("Returning complex symbols for AArch64");
     }
 
-    fn returns_via_arg_pointer(_ret_layout: &Layout) -> Result<bool, String> {
-        Err("Returning via arg pointer not yet implemented for AArch64".to_string())
+    fn load_returned_complex_symbol<'a>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
+        _sym: &Symbol,
+        _layout: &Layout<'a>,
+    ) {
+        todo!("Loading returned complex symbols for AArch64");
     }
 }
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
     fn abs_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64GeneralReg) {
-        unimplemented!("abs_reg64_reg64 is not yet implement for AArch64");
+        todo!("abs_reg64_reg64 for AArch64");
     }
 
     #[inline(always)]
@@ -272,7 +335,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _dst: AArch64FloatReg,
         _src: AArch64FloatReg,
     ) {
-        unimplemented!("abs_reg64_reg64 is not yet implement for AArch64");
+        todo!("abs_reg64_reg64 for AArch64");
     }
 
     #[inline(always)]
@@ -283,13 +346,11 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         imm32: i32,
     ) {
         if imm32 < 0 {
-            unimplemented!("immediate addition with values less than 0 are not yet implemented");
+            todo!("immediate addition with values less than 0");
         } else if imm32 < 0xFFF {
             add_reg64_reg64_imm12(buf, dst, src, imm32 as u16);
         } else {
-            unimplemented!(
-                "immediate additions with values greater than 12bits are not yet implemented"
-            );
+            todo!("immediate additions with values greater than 12bits");
         }
     }
     #[inline(always)]
@@ -308,12 +369,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64FloatReg,
         _src2: AArch64FloatReg,
     ) {
-        unimplemented!("adding floats not yet implemented for AArch64");
+        todo!("adding floats for AArch64");
     }
 
     #[inline(always)]
     fn call(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>, _fn_name: String) {
-        unimplemented!("calling functions literal not yet implemented for AArch64");
+        todo!("calling functions literal for AArch64");
     }
 
     #[inline(always)]
@@ -323,12 +384,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
     ) {
-        unimplemented!("register multiplication not implemented yet for AArch64");
+        todo!("register multiplication for AArch64");
     }
 
     #[inline(always)]
     fn jmp_imm32(_buf: &mut Vec<'_, u8>, _offset: i32) -> usize {
-        unimplemented!("jump instructions not yet implemented for AArch64");
+        todo!("jump instructions for AArch64");
     }
 
     #[inline(always)]
@@ -344,9 +405,18 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _imm: u64,
         _offset: i32,
     ) -> usize {
-        unimplemented!("jump not equal instructions not yet implemented for AArch64");
+        todo!("jump not equal instructions for AArch64");
     }
 
+    #[inline(always)]
+    fn mov_freg32_imm32(
+        _buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        _dst: AArch64FloatReg,
+        _imm: f32,
+    ) {
+        todo!("loading f32 literal for AArch64");
+    }
     #[inline(always)]
     fn mov_freg64_imm64(
         _buf: &mut Vec<'_, u8>,
@@ -354,7 +424,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _dst: AArch64FloatReg,
         _imm: f64,
     ) {
-        unimplemented!("loading float literal not yet implemented for AArch64");
+        todo!("loading f64 literal for AArch64");
     }
     #[inline(always)]
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm: i64) {
@@ -375,7 +445,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
     #[inline(always)]
     fn mov_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
-        unimplemented!("moving data between float registers not yet implemented for AArch64");
+        todo!("moving data between float registers for AArch64");
     }
     #[inline(always)]
     fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
@@ -384,66 +454,132 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn mov_freg64_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
-        unimplemented!(
-            "loading floating point reg from base offset not yet implemented for AArch64"
-        );
+        todo!("loading floating point reg from base offset for AArch64");
     }
     #[inline(always)]
     fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
         if offset < 0 {
-            unimplemented!("negative base offsets are not yet implement for AArch64");
+            todo!("negative base offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             ldr_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
         } else {
-            unimplemented!("base offsets over 32k are not yet implement for AArch64");
+            todo!("base offsets over 32k for AArch64");
         }
     }
     #[inline(always)]
     fn mov_base32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
-        unimplemented!("saving floating point reg to base offset not yet implemented for AArch64");
+        todo!("saving floating point reg to base offset for AArch64");
     }
     #[inline(always)]
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
         if offset < 0 {
-            unimplemented!("negative base offsets are not yet implement for AArch64");
+            todo!("negative base offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             str_reg64_imm12(buf, src, AArch64GeneralReg::FP, (offset as u16) >> 3);
         } else {
-            unimplemented!("base offsets over 32k are not yet implement for AArch64");
+            todo!("base offsets over 32k for AArch64");
+        }
+    }
+
+    #[inline(always)]
+    fn mov_reg64_mem64_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
+        offset: i32,
+    ) {
+        if offset < 0 {
+            todo!("negative mem offsets for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            ldr_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
+        } else {
+            todo!("mem offsets over 32k for AArch64");
+        }
+    }
+    #[inline(always)]
+    fn mov_mem64_offset32_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        offset: i32,
+        src: AArch64GeneralReg,
+    ) {
+        if offset < 0 {
+            todo!("negative mem offsets for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            str_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
+        } else {
+            todo!("mem offsets over 32k for AArch64");
+        }
+    }
+
+    #[inline(always)]
+    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32, size: u8) {
+        debug_assert!(size <= 8);
+        if size == 8 {
+            Self::mov_reg64_base32(buf, dst, offset);
+        } else if size == 4 {
+            todo!("sign extending 4 byte values");
+        } else if size == 2 {
+            todo!("sign extending 2 byte values");
+        } else if size == 1 {
+            todo!("sign extending 1 byte values");
+        } else {
+            internal_error!("Invalid size for sign extension: {}", size);
+        }
+    }
+    #[inline(always)]
+    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32, size: u8) {
+        debug_assert!(size <= 8);
+        if size == 8 {
+            Self::mov_reg64_base32(buf, dst, offset);
+        } else if size == 4 {
+            todo!("zero extending 4 byte values");
+        } else if size == 2 {
+            todo!("zero extending 2 byte values");
+        } else if size == 1 {
+            todo!("zero extending 1 byte values");
+        } else {
+            internal_error!("Invalid size for zero extension: {}", size);
         }
     }
 
     #[inline(always)]
     fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
-        unimplemented!("loading floating point reg from stack not yet implemented for AArch64");
+        todo!("loading floating point reg from stack for AArch64");
     }
     #[inline(always)]
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
         if offset < 0 {
-            unimplemented!("negative stack offsets are not yet implement for AArch64");
+            todo!("negative stack offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             ldr_reg64_imm12(buf, dst, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
         } else {
-            unimplemented!("stack offsets over 32k are not yet implement for AArch64");
+            todo!("stack offsets over 32k for AArch64");
         }
     }
     #[inline(always)]
     fn mov_stack32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
-        unimplemented!("saving floating point reg to stack not yet implemented for AArch64");
+        todo!("saving floating point reg to stack for AArch64");
     }
     #[inline(always)]
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
         if offset < 0 {
-            unimplemented!("negative stack offsets are not yet implement for AArch64");
+            todo!("negative stack offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             str_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
         } else {
-            unimplemented!("stack offsets over 32k are not yet implement for AArch64");
+            todo!("stack offsets over 32k for AArch64");
         }
+    }
+    #[inline(always)]
+    fn neg_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64GeneralReg) {
+        todo!("neg for AArch64");
     }
 
     #[inline(always)]
@@ -454,15 +590,11 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         imm32: i32,
     ) {
         if imm32 < 0 {
-            unimplemented!(
-                "immediate subtractions with values less than 0 are not yet implemented"
-            );
+            todo!("immediate subtractions with values less than 0");
         } else if imm32 < 0xFFF {
             sub_reg64_reg64_imm12(buf, dst, src, imm32 as u16);
         } else {
-            unimplemented!(
-                "immediate subtractions with values greater than 12bits are not yet implemented"
-            );
+            todo!("immediate subtractions with values greater than 12bits");
         }
     }
     #[inline(always)]
@@ -472,7 +604,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
     ) {
-        unimplemented!("registers subtractions not implemented yet for AArch64");
+        todo!("registers subtractions for AArch64");
     }
 
     #[inline(always)]
@@ -482,7 +614,83 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
     ) {
-        unimplemented!("registers equality not implemented yet for AArch64");
+        todo!("registers equality for AArch64");
+    }
+
+    #[inline(always)]
+    fn neq_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers non-equality for AArch64");
+    }
+
+    #[inline(always)]
+    fn lt_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers less than for AArch64");
+    }
+
+    #[inline(always)]
+    fn to_float_freg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64GeneralReg,
+    ) {
+        todo!("registers to float for AArch64");
+    }
+
+    #[inline(always)]
+    fn to_float_freg32_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64GeneralReg,
+    ) {
+        todo!("registers to float for AArch64");
+    }
+
+    #[inline(always)]
+    fn to_float_freg32_freg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64FloatReg,
+    ) {
+        todo!("registers to float for AArch64");
+    }
+
+    #[inline(always)]
+    fn to_float_freg64_freg32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64FloatReg,
+    ) {
+        todo!("registers to float for AArch64");
+    }
+
+    #[inline(always)]
+    fn lte_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers less than or equal for AArch64");
+    }
+
+    #[inline(always)]
+    fn gte_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers greater than or equal for AArch64");
     }
 
     #[inline(always)]
@@ -493,90 +701,165 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
 impl AArch64Assembler {}
 
-/// AArch64Instruction, maps all instructions to an enum.
-/// Decoding the function should be cheap because we will always inline.
-/// All of the operations should resolved by constants, leave just some bit manipulation.
-/// Enums may not be complete since we will only add what we need.
-#[derive(Debug)]
-enum AArch64Instruction {
-    _Reserved,
-    _SVE,
-    DPImm(DPImmGroup),
-    Branch(BranchGroup),
-    LdStr(LdStrGroup),
-    DPReg(DPRegGroup),
-    _DPFloat,
+// Instructions
+// ARM manual section C3
+// https://developer.arm.com/documentation/ddi0487/ga
+// Map all instructions to a packed struct.
+
+trait Aarch64Bytes: PackedStruct {
+    #[inline(always)]
+    fn bytes(&self) -> [u8; 4] {
+        let mut bytes: [u8; 4] = [0, 0, 0, 0];
+
+        self.pack_to_slice(&mut bytes).unwrap();
+
+        bytes.reverse();
+
+        bytes
+    }
 }
 
-#[derive(Debug)]
-enum BranchGroup {
-    UnconditionBranchReg {
-        opc: u8,
-        op2: u8,
-        op3: u8,
-        reg_n: AArch64GeneralReg,
-        op4: u8,
-    },
+#[derive(PackedStruct, Debug)]
+#[packed_struct(endian = "msb")]
+pub struct MoveWideImmediate {
+    sf: bool,
+    opc: Integer<u8, packed_bits::Bits<2>>,
+    fixed: Integer<u8, packed_bits::Bits<6>>, // = 0b100101,
+    hw: Integer<u8, packed_bits::Bits<2>>,
+    imm16: u16,
+    reg_d: Integer<u8, packed_bits::Bits<5>>, // AArch64GeneralReg
 }
 
-#[derive(Debug)]
-enum DPRegGroup {
-    AddSubShifted {
-        sf: bool,
-        subtract: bool,
-        set_flags: bool,
-        shift: u8,
-        reg_m: AArch64GeneralReg,
-        imm6: u8,
-        reg_n: AArch64GeneralReg,
-        reg_d: AArch64GeneralReg,
-    },
-    Logical {
-        sf: bool,
-        op: DPRegLogicalOp,
-        shift: u8,
-        reg_m: AArch64GeneralReg,
-        imm6: u8,
-        reg_n: AArch64GeneralReg,
-        reg_d: AArch64GeneralReg,
-    },
+impl Aarch64Bytes for MoveWideImmediate {}
+
+impl MoveWideImmediate {
+    #[inline(always)]
+    fn new(opc: u8, rd: AArch64GeneralReg, imm16: u16, hw: u8, sf: bool) -> Self {
+        // TODO: revisit this is we change where we want to check the shift
+        // currently this is done in the assembler above
+        // assert!(shift % 16 == 0 && shift <= 48);
+        debug_assert!(hw <= 0b11);
+        debug_assert!(opc <= 0b11);
+
+        Self {
+            reg_d: rd.id().into(),
+            imm16,
+            hw: hw.into(),
+            opc: opc.into(),
+            sf,
+            fixed: 0b100101.into(),
+        }
+    }
 }
 
-#[derive(Debug)]
-enum DPImmGroup {
-    AddSubImm {
-        sf: bool,
-        subtract: bool,
-        set_flags: bool,
-        shift: bool,
+#[derive(PackedStruct, Debug)]
+#[packed_struct(endian = "msb")]
+pub struct ArithmeticImmediate {
+    sf: bool,
+    op: bool, // add or subtract
+    s: bool,
+    fixed: Integer<u8, packed_bits::Bits<6>>, // = 0b100010,
+    sh: bool,                                 // shift
+    imm12: Integer<u16, packed_bits::Bits<12>>,
+    reg_n: Integer<u8, packed_bits::Bits<5>>,
+    reg_d: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for ArithmeticImmediate {}
+
+impl ArithmeticImmediate {
+    #[inline(always)]
+    fn new(
+        op: bool,
+        s: bool,
+        rd: AArch64GeneralReg,
+        rn: AArch64GeneralReg,
         imm12: u16,
-        reg_n: AArch64GeneralReg,
-        reg_d: AArch64GeneralReg,
-    },
-    MoveWide {
-        sf: bool,
-        opc: u8,
-        hw: u8,
-        imm16: u16,
-        reg_d: AArch64GeneralReg,
-    },
+        sh: bool,
+    ) -> Self {
+        debug_assert!(imm12 <= 0xFFF);
+
+        Self {
+            reg_d: rd.id().into(),
+            reg_n: rn.id().into(),
+            imm12: imm12.into(),
+            sh,
+            s,
+            op,
+            // true for 64 bit addition
+            // false for 32 bit addition
+            sf: true,
+            fixed: 0b100010.into(),
+        }
+    }
 }
 
-#[derive(Debug)]
-enum LdStrGroup {
-    UnsignedImm {
-        size: u8,
-        v: bool,
-        opc: u8,
-        imm12: u16,
-        reg_n: AArch64GeneralReg,
-        reg_t: AArch64GeneralReg,
-    },
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+enum ShiftType {
+    LSL = 0,
+    LSR = 1,
+    ASR = 2,
+    ROR = 3,
+}
+
+impl ShiftType {
+    #[inline(always)]
+    fn id(&self) -> u8 {
+        *self as u8
+    }
+}
+
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct ArithmeticShifted {
+    sf: bool,
+    op: bool, // add or subtract
+    s: bool,
+    fixed: Integer<u8, packed_bits::Bits<5>>, // = 0b01011,
+    shift: Integer<u8, packed_bits::Bits<2>>, // shift
+    fixed2: bool,                             // = 0b0,
+    reg_m: Integer<u8, packed_bits::Bits<5>>,
+    imm6: Integer<u8, packed_bits::Bits<6>>,
+    reg_n: Integer<u8, packed_bits::Bits<5>>,
+    reg_d: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for ArithmeticShifted {}
+
+impl ArithmeticShifted {
+    #[inline(always)]
+    fn new(
+        op: bool,
+        s: bool,
+        shift: ShiftType,
+        imm6: u8,
+        rm: AArch64GeneralReg,
+        rn: AArch64GeneralReg,
+        rd: AArch64GeneralReg,
+    ) -> Self {
+        debug_assert!(imm6 <= 0b111111);
+
+        Self {
+            reg_d: rd.id().into(),
+            reg_n: rn.id().into(),
+            imm6: imm6.into(),
+            reg_m: rm.id().into(),
+            fixed2: false,
+            shift: shift.id().into(),
+            fixed: 0b01011.into(),
+            s,
+            op,
+            // true for 64 bit addition
+            // false for 32 bit addition
+            sf: true,
+        }
+    }
 }
 
 #[derive(Debug)]
 #[allow(dead_code)]
-enum DPRegLogicalOp {
+enum LogicalOp {
     AND,
     BIC,
     ORR,
@@ -587,155 +870,142 @@ enum DPRegLogicalOp {
     BICS,
 }
 
-#[inline(always)]
-fn build_instruction(inst: AArch64Instruction) -> [u8; 4] {
-    let mut out: u32 = 0;
-    match inst {
-        AArch64Instruction::Branch(branch) => {
-            out |= 0b101 << 26;
-            match branch {
-                BranchGroup::UnconditionBranchReg {
-                    opc,
-                    op2,
-                    op3,
-                    reg_n,
-                    op4,
-                } => {
-                    debug_assert!(opc <= 0b1111);
-                    debug_assert!(op2 <= 0b11111);
-                    debug_assert!(op3 <= 0b111111);
-                    debug_assert!(op4 <= 0b1111);
-                    out |= 0b1101011 << 25;
-                    out |= (opc as u32) << 21;
-                    out |= (op2 as u32) << 16;
-                    out |= (op3 as u32) << 10;
-                    out |= (reg_n as u32) << 5;
-                    out |= op4 as u32;
-                }
-            }
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct LogicalShiftedRegister {
+    sf: bool,
+    op: Integer<u8, packed_bits::Bits<2>>,
+    fixed: Integer<u8, packed_bits::Bits<5>>, // = 0b01010,
+    shift: Integer<u8, packed_bits::Bits<2>>, // shift
+    n: bool,
+    reg_m: Integer<u8, packed_bits::Bits<5>>,
+    imm6: Integer<u8, packed_bits::Bits<6>>,
+    reg_n: Integer<u8, packed_bits::Bits<5>>,
+    reg_d: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for LogicalShiftedRegister {}
+
+impl LogicalShiftedRegister {
+    #[inline(always)]
+    fn new(
+        op: LogicalOp,
+        shift: ShiftType,
+        imm6: u8,
+        rm: AArch64GeneralReg,
+        rn: AArch64GeneralReg,
+        rd: AArch64GeneralReg,
+    ) -> Self {
+        debug_assert!(imm6 <= 0b111111);
+
+        let (op, n) = match op {
+            LogicalOp::AND => (0b00, false),
+            LogicalOp::BIC => (0b00, true),
+            LogicalOp::ORR => (0b01, false),
+            LogicalOp::ORN => (0b01, true),
+            LogicalOp::EOR => (0b10, false),
+            LogicalOp::EON => (0b10, true),
+            LogicalOp::ANDS => (0b11, false),
+            LogicalOp::BICS => (0b11, true),
+        };
+
+        Self {
+            reg_d: rd.id().into(),
+            reg_n: rn.id().into(),
+            imm6: imm6.into(),
+            reg_m: rm.id().into(),
+            n,
+            shift: shift.id().into(),
+            fixed: 0b01010.into(),
+            op: op.into(),
+            // true for 64 bit addition
+            // false for 32 bit addition
+            sf: true,
         }
-        AArch64Instruction::DPImm(dpimm) => {
-            out |= 0b100 << 26;
-            match dpimm {
-                DPImmGroup::MoveWide {
-                    sf,
-                    opc,
-                    hw,
-                    imm16,
-                    reg_d,
-                } => {
-                    out |= (sf as u32) << 31;
-                    out |= (opc as u32) << 29;
-                    out |= 0b101 << 23;
-                    out |= (hw as u32) << 21;
-                    out |= (imm16 as u32) << 5;
-                    out |= reg_d as u32;
-                }
-                DPImmGroup::AddSubImm {
-                    sf,
-                    subtract,
-                    set_flags,
-                    shift,
-                    imm12,
-                    reg_n,
-                    reg_d,
-                } => {
-                    debug_assert!(imm12 <= 0xFFF);
-                    out |= (sf as u32) << 31;
-                    out |= (subtract as u32) << 30;
-                    out |= (set_flags as u32) << 29;
-                    out |= 0b010 << 23;
-                    out |= (shift as u32) << 22;
-                    out |= (imm12 as u32) << 10;
-                    out |= (reg_n as u32) << 5;
-                    out |= reg_d as u32;
-                }
-            }
-        }
-        AArch64Instruction::DPReg(dpreg) => {
-            out |= 0b101 << 25;
-            match dpreg {
-                DPRegGroup::Logical {
-                    sf,
-                    op,
-                    shift,
-                    reg_m,
-                    imm6,
-                    reg_n,
-                    reg_d,
-                } => {
-                    debug_assert!(shift <= 0b11);
-                    debug_assert!(imm6 <= 0b111111);
-                    let (opc, n) = match op {
-                        DPRegLogicalOp::AND => (0b00, 0),
-                        DPRegLogicalOp::BIC => (0b00, 1),
-                        DPRegLogicalOp::ORR => (0b01, 0),
-                        DPRegLogicalOp::ORN => (0b01, 1),
-                        DPRegLogicalOp::EOR => (0b10, 0),
-                        DPRegLogicalOp::EON => (0b10, 1),
-                        DPRegLogicalOp::ANDS => (0b11, 0),
-                        DPRegLogicalOp::BICS => (0b11, 1),
-                    };
-                    out |= (sf as u32) << 31;
-                    out |= opc << 29;
-                    out |= (shift as u32) << 22;
-                    out |= n << 21;
-                    out |= (reg_m as u32) << 16;
-                    out |= (imm6 as u32) << 10;
-                    out |= (reg_n as u32) << 5;
-                    out |= reg_d as u32;
-                }
-                DPRegGroup::AddSubShifted {
-                    sf,
-                    subtract,
-                    set_flags,
-                    shift,
-                    reg_m,
-                    imm6,
-                    reg_n,
-                    reg_d,
-                } => {
-                    debug_assert!(shift <= 0b11);
-                    debug_assert!(imm6 <= 0b111111);
-                    out |= (sf as u32) << 31;
-                    out |= (subtract as u32) << 30;
-                    out |= (set_flags as u32) << 29;
-                    out |= 0b1 << 24;
-                    out |= (shift as u32) << 22;
-                    out |= (reg_m as u32) << 16;
-                    out |= (imm6 as u32) << 10;
-                    out |= (reg_n as u32) << 5;
-                    out |= reg_d as u32;
-                }
-            }
-        }
-        AArch64Instruction::LdStr(ldstr) => {
-            out |= 0b1 << 27;
-            match ldstr {
-                LdStrGroup::UnsignedImm {
-                    size,
-                    v,
-                    opc,
-                    imm12,
-                    reg_n,
-                    reg_t,
-                } => {
-                    debug_assert!(size <= 0b11);
-                    debug_assert!(imm12 <= 0xFFF);
-                    out |= (size as u32) << 30;
-                    out |= 0b11 << 28;
-                    out |= (v as u32) << 26;
-                    out |= 0b1 << 24;
-                    out |= (opc as u32) << 22;
-                    out |= (imm12 as u32) << 10;
-                    out |= (reg_n as u32) << 5;
-                    out |= reg_t as u32;
-                }
-            }
-        }
-        x => unimplemented!("The instruction, {:?}, has not be implemented yet", x),
     }
-    out.to_le_bytes()
+}
+
+#[derive(PackedStruct)]
+pub struct UnconditionalBranchRegister {
+    fixed: Integer<u8, packed_bits::Bits<7>>,
+    z: bool,
+    fixed2: bool,
+    op: Integer<u8, packed_bits::Bits<2>>,
+    fixed3: Integer<u8, packed_bits::Bits<5>>,
+    fixed4: Integer<u8, packed_bits::Bits<4>>,
+    a: bool,
+    m: bool,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    fixed5: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for UnconditionalBranchRegister {}
+
+impl UnconditionalBranchRegister {
+    #[inline(always)]
+    fn new(op: u8, rn: AArch64GeneralReg) -> Self {
+        debug_assert!(op <= 0b11);
+
+        Self {
+            fixed5: 0b00000.into(),
+            rn: rn.id().into(),
+            m: false,
+            a: false,
+            fixed4: 0b0000.into(),
+            fixed3: 0b11111.into(),
+            op: op.into(),
+            fixed2: false,
+            z: false,
+            fixed: 0b1101011.into(),
+        }
+    }
+}
+
+// Uses unsigned Offset
+// opc = 0b01 means load
+// opc = 0b00 means store
+#[derive(PackedStruct, Debug)]
+#[packed_struct(endian = "msb")]
+pub struct LoadStoreRegisterImmediate {
+    size: Integer<u8, packed_bits::Bits<2>>,
+    fixed: Integer<u8, packed_bits::Bits<3>>, // = 0b111,
+    fixed2: bool,
+    fixed3: Integer<u8, packed_bits::Bits<2>>,
+    opc: Integer<u8, packed_bits::Bits<2>>,
+    imm12: Integer<u16, packed_bits::Bits<12>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    rt: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for LoadStoreRegisterImmediate {}
+
+impl LoadStoreRegisterImmediate {
+    #[inline(always)]
+    fn new(size: u8, opc: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
+        debug_assert!(size <= 0b11);
+        debug_assert!(imm12 <= 0xFFF);
+
+        Self {
+            rt: rt.id().into(),
+            rn: rn.id().into(),
+            imm12: imm12.into(),
+            opc: opc.into(),
+            fixed3: 0b01.into(),
+            fixed2: false,
+            fixed: 0b111.into(),
+            size: size.into(),
+        }
+    }
+
+    #[inline(always)]
+    fn new_load(size: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
+        Self::new(size, 0b01, imm12, rn, rt)
+    }
+
+    #[inline(always)]
+    fn new_store(size: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
+        Self::new(size, 0b00, imm12, rn, rt)
+    }
 }
 
 // Below here are the functions for all of the assembly instructions.
@@ -752,17 +1022,9 @@ fn add_reg64_reg64_imm12(
     src: AArch64GeneralReg,
     imm12: u16,
 ) {
-    buf.extend(&build_instruction(AArch64Instruction::DPImm(
-        DPImmGroup::AddSubImm {
-            sf: true,
-            subtract: false,
-            set_flags: false,
-            shift: false,
-            imm12,
-            reg_n: src,
-            reg_d: dst,
-        },
-    )));
+    let inst = ArithmeticImmediate::new(false, false, dst, src, imm12, false);
+
+    buf.extend(inst.bytes());
 }
 
 /// `ADD Xd, Xm, Xn` -> Add Xm and Xn and place the result into Xd.
@@ -773,18 +1035,9 @@ fn add_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    buf.extend(&build_instruction(AArch64Instruction::DPReg(
-        DPRegGroup::AddSubShifted {
-            sf: true,
-            subtract: false,
-            set_flags: false,
-            shift: 0,
-            reg_m: src1,
-            imm6: 0,
-            reg_n: src2,
-            reg_d: dst,
-        },
-    )));
+    let inst = ArithmeticShifted::new(false, false, ShiftType::LSL, 0, src1, src2, dst);
+
+    buf.extend(inst.bytes());
 }
 
 /// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
@@ -796,66 +1049,41 @@ fn ldr_reg64_imm12(
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
-    debug_assert!(imm12 <= 0xFFF);
-    buf.extend(&build_instruction(AArch64Instruction::LdStr(
-        LdStrGroup::UnsignedImm {
-            size: 0b11,
-            v: false,
-            opc: 0b01,
-            imm12,
-            reg_n: base,
-            reg_t: dst,
-        },
-    )));
+    let inst = LoadStoreRegisterImmediate::new_load(0b11, imm12, base, dst);
+
+    buf.extend(inst.bytes());
 }
 
 /// `MOV Xd, Xm` -> Move Xm to Xd.
 #[inline(always)]
 fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
     // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
-    buf.extend(&build_instruction(AArch64Instruction::DPReg(
-        DPRegGroup::Logical {
-            sf: true,
-            op: DPRegLogicalOp::ORR,
-            shift: 0,
-            reg_m: src,
-            imm6: 0,
-            reg_n: AArch64GeneralReg::ZRSP,
-            reg_d: dst,
-        },
-    )));
+    let inst = LogicalShiftedRegister::new(
+        LogicalOp::ORR,
+        ShiftType::LSL,
+        0,
+        src,
+        AArch64GeneralReg::ZRSP,
+        dst,
+    );
+
+    buf.extend(inst.bytes());
 }
 
 /// `MOVK Xd, imm16` -> Keeps Xd and moves an optionally shifted imm16 to Xd.
 #[inline(always)]
 fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
-    debug_assert!(hw <= 0b11);
-    // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
-    buf.extend(&build_instruction(AArch64Instruction::DPImm(
-        DPImmGroup::MoveWide {
-            sf: true,
-            opc: 0b11,
-            hw,
-            imm16,
-            reg_d: dst,
-        },
-    )));
+    let inst = MoveWideImmediate::new(0b11, dst, imm16, hw, true);
+
+    buf.extend(inst.bytes());
 }
 
 /// `MOVZ Xd, imm16` -> Zeros Xd and moves an optionally shifted imm16 to Xd.
 #[inline(always)]
 fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
-    debug_assert!(hw <= 0b11);
-    // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
-    buf.extend(&build_instruction(AArch64Instruction::DPImm(
-        DPImmGroup::MoveWide {
-            sf: true,
-            opc: 0b10,
-            hw,
-            imm16,
-            reg_d: dst,
-        },
-    )));
+    let inst = MoveWideImmediate::new(0b10, dst, imm16, hw, true);
+
+    buf.extend(inst.bytes());
 }
 
 /// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
@@ -867,17 +1095,9 @@ fn str_reg64_imm12(
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
-    debug_assert!(imm12 <= 0xFFF);
-    buf.extend(&build_instruction(AArch64Instruction::LdStr(
-        LdStrGroup::UnsignedImm {
-            size: 0b11,
-            v: false,
-            opc: 0b00,
-            imm12,
-            reg_n: base,
-            reg_t: src,
-        },
-    )));
+    let inst = LoadStoreRegisterImmediate::new_store(0b11, imm12, base, src);
+
+    buf.extend(inst.bytes());
 }
 
 /// `SUB Xd, Xn, imm12` -> Subtract Xn and imm12 and place the result into Xd.
@@ -888,31 +1108,17 @@ fn sub_reg64_reg64_imm12(
     src: AArch64GeneralReg,
     imm12: u16,
 ) {
-    buf.extend(&build_instruction(AArch64Instruction::DPImm(
-        DPImmGroup::AddSubImm {
-            sf: true,
-            subtract: true,
-            set_flags: false,
-            shift: false,
-            imm12,
-            reg_n: src,
-            reg_d: dst,
-        },
-    )));
+    let inst = ArithmeticImmediate::new(true, false, dst, src, imm12, false);
+
+    buf.extend(inst.bytes());
 }
 
 /// `RET Xn` -> Return to the address stored in Xn.
 #[inline(always)]
 fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
-    buf.extend(&build_instruction(AArch64Instruction::Branch(
-        BranchGroup::UnconditionBranchReg {
-            opc: 0b0010,
-            op2: 0b11111,
-            op3: 0b000000,
-            reg_n: xn,
-            op4: 0b000,
-        },
-    )));
+    let inst = UnconditionalBranchRegister::new(0b10, xn);
+
+    buf.extend(inst.bytes());
 }
 
 #[cfg(test)]

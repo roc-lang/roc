@@ -1,10 +1,9 @@
-use crate::expr::constrain_decls;
 use roc_builtins::std::StdLib;
-use roc_can::constraint::{Constraint, LetConstraint};
+use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
 use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::solved_types::{FreeVars, SolvedType};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, Problem};
@@ -17,37 +16,26 @@ pub enum ExposedModuleTypes {
     Valid(MutMap<Symbol, SolvedType>, MutMap<Symbol, Alias>),
 }
 
-pub struct ConstrainedModule {
-    pub unused_imports: MutMap<ModuleId, Region>,
-    pub constraint: Constraint,
-}
-
 pub fn constrain_module(
-    aliases: &MutMap<Symbol, Alias>,
+    constraints: &mut Constraints,
     declarations: &[Declaration],
     home: ModuleId,
 ) -> Constraint {
-    let mut send_aliases = SendMap::default();
-
-    for (symbol, alias) in aliases.iter() {
-        send_aliases.insert(*symbol, alias.clone());
-    }
-
-    constrain_decls(home, declarations)
+    crate::expr::constrain_decls(constraints, home, declarations)
 }
 
 #[derive(Debug, Clone)]
 pub struct Import {
-    pub loc_symbol: Located<Symbol>,
+    pub loc_symbol: Loc<Symbol>,
     pub solved_type: SolvedType,
 }
 
 pub fn constrain_imported_values(
+    constraints: &mut Constraints,
     imports: Vec<Import>,
     body_con: Constraint,
     var_store: &mut VarStore,
 ) -> (Vec<Variable>, Constraint) {
-    use Constraint::*;
     let mut def_types = SendMap::default();
     let mut rigid_vars = Vec::new();
 
@@ -57,7 +45,7 @@ pub fn constrain_imported_values(
 
         // an imported symbol can be either an alias or a value
         match import.solved_type {
-            SolvedType::Alias(symbol, _, _, _) if symbol == loc_symbol.value => {
+            SolvedType::Alias(symbol, _, _, _, _) if symbol == loc_symbol.value => {
                 // do nothing, in the future the alias definitions should not be in the list of imported values
             }
             _ => {
@@ -69,7 +57,7 @@ pub fn constrain_imported_values(
 
                 def_types.insert(
                     loc_symbol.value,
-                    Located {
+                    Loc {
                         region: loc_symbol.region,
                         value: typ,
                     },
@@ -94,24 +82,19 @@ pub fn constrain_imported_values(
 
     (
         rigid_vars.clone(),
-        Let(Box::new(LetConstraint {
-            rigid_vars,
-            flex_vars: Vec::new(),
-            def_types,
-            defs_constraint: True,
-            ret_constraint: body_con,
-        })),
+        constraints.let_constraint(rigid_vars, [], def_types, Constraint::True, body_con),
     )
 }
 
 /// Run pre_constrain_imports to get imported_symbols and imported_aliases.
 pub fn constrain_imports(
+    constraints: &mut Constraints,
     imported_symbols: Vec<Import>,
     constraint: Constraint,
     var_store: &mut VarStore,
 ) -> Constraint {
     let (_introduced_rigids, constraint) =
-        constrain_imported_values(imported_symbols, constraint, var_store);
+        constrain_imported_values(constraints, imported_symbols, constraint, var_store);
 
     // TODO determine what to do with those rigids
     //    for var in introduced_rigids {
@@ -159,7 +142,7 @@ pub fn pre_constrain_imports(
             // hardcoded builtin map.
             match stdlib.types.get(&symbol) {
                 Some((solved_type, region)) => {
-                    let loc_symbol = Located {
+                    let loc_symbol = Loc {
                         value: symbol,
                         region: *region,
                     };
@@ -185,7 +168,7 @@ pub fn pre_constrain_imports(
         } else if module_id != home {
             // We already have constraints for our own symbols.
             let region = Region::zero(); // TODO this should be the region where this symbol was declared in its home module. Look that up!
-            let loc_symbol = Located {
+            let loc_symbol = Loc {
                 value: symbol,
                 region,
             };

@@ -1,0 +1,62 @@
+Defs(
+    [
+        @15-49 AnnotatedBody {
+            ann_pattern: @0-8 RecordDestructure(
+                [
+                    @2-3 Identifier(
+                        "x",
+                    ),
+                    @5-7 Identifier(
+                        "y",
+                    ),
+                ],
+            ),
+            ann_type: @11-14 Apply(
+                "",
+                "Foo",
+                [],
+            ),
+            comment: None,
+            body_pattern: @15-23 RecordDestructure(
+                [
+                    @17-18 Identifier(
+                        "x",
+                    ),
+                    @20-21 Identifier(
+                        "y",
+                    ),
+                ],
+            ),
+            body_expr: @26-49 Record(
+                [
+                    @28-37 RequiredValue(
+                        @28-29 "x",
+                        [],
+                        @32-37 Str(
+                            PlainLine(
+                                "foo",
+                            ),
+                        ),
+                    ),
+                    @39-47 RequiredValue(
+                        @39-40 "y",
+                        [],
+                        @43-47 Float(
+                            "3.14",
+                        ),
+                    ),
+                ],
+            ),
+        },
+    ],
+    @51-52 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "x",
+        },
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

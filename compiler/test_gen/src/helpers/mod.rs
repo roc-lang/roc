@@ -1,7 +1,20 @@
 extern crate bumpalo;
 
-#[macro_use]
-pub mod eval;
+#[cfg(feature = "gen-dev")]
+pub mod dev;
+pub mod from_wasmer_memory;
+#[cfg(feature = "gen-llvm")]
+pub mod llvm;
+#[cfg(feature = "gen-wasm")]
+pub mod wasm;
+
+#[allow(dead_code)]
+pub fn zig_executable() -> String {
+    match std::env::var("ROC_ZIG") {
+        Ok(path) => path,
+        Err(_) => "zig".into(),
+    }
+}
 
 /// Used in the with_larger_debug_stack() function, for tests that otherwise
 /// run out of stack space in debug builds (but don't in --release builds)
@@ -41,4 +54,11 @@ where
     F: 'static,
 {
     run_test()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefCount {
+    Live(u32),
+    Deallocated,
+    Constant,
 }

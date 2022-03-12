@@ -1,0 +1,22 @@
+RecordUpdate {
+    update: @2-13 Var {
+        module_name: "Foo.Bar",
+        ident: "baz",
+    },
+    fields: [
+        @16-20 RequiredValue(
+            @16-17 "x",
+            [],
+            @19-20 Num(
+                "5",
+            ),
+        ),
+        @22-26 RequiredValue(
+            @22-23 "y",
+            [],
+            @25-26 Num(
+                "0",
+            ),
+        ),
+    ],
+}

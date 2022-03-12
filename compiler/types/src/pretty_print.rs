@@ -1,10 +1,12 @@
-use crate::subs::{Content, FlatType, GetSubsSlice, Subs, UnionTags, Variable};
+use crate::subs::{
+    AliasVariables, Content, FlatType, GetSubsSlice, Subs, SubsIndex, UnionTags, Variable,
+};
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
-static WILDCARD: &str = "*";
+pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
 static EMPTY_TAG_UNION: &str = "[]";
 
@@ -134,20 +136,22 @@ fn find_names_needed(
             }
         }
         RecursionVar {
-            opt_name: Some(name),
+            opt_name: Some(name_index),
             ..
         }
-        | FlexVar(Some(name)) => {
+        | FlexVar(Some(name_index)) => {
             // This root already has a name. Nothing more to do here!
 
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
-            names_taken.insert(name.clone());
+            let name = subs.field_names[name_index.index as usize].clone();
+            names_taken.insert(name);
         }
-        RigidVar(name) => {
+        RigidVar(name_index) => {
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
-            names_taken.insert(name.clone());
+            let name = subs.field_names[name_index.index as usize].clone();
+            names_taken.insert(name);
         }
         Structure(Apply(_, args)) => {
             for index in args.into_iter() {
@@ -197,14 +201,21 @@ fn find_names_needed(
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
             find_names_needed(*rec_var, subs, roots, root_appearances, names_taken);
         }
-        Alias(_symbol, args, _actual) => {
+        Alias(_symbol, args, _actual, _kind) => {
             // only find names for named parameters!
-            for var_index in args.variables().into_iter().take(args.len()) {
+            for var_index in args.into_iter().take(args.len()) {
                 let var = subs[var_index];
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
             // TODO should we also look in the actual variable?
             // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
+        }
+        &RangedNumber(typ, vars) => {
+            find_names_needed(typ, subs, roots, root_appearances, names_taken);
+            for var_index in vars {
+                let var = subs[var_index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            }
         }
         Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
@@ -250,16 +261,19 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
 
     match old_content {
         FlexVar(None) => {
-            let content = FlexVar(Some(name));
+            let name_index = SubsIndex::push_new(&mut subs.field_names, name);
+            let content = FlexVar(Some(name_index));
             subs.set_content(root, content);
         }
         RecursionVar {
             opt_name: None,
             structure,
         } => {
+            let structure = *structure;
+            let name_index = SubsIndex::push_new(&mut subs.field_names, name);
             let content = RecursionVar {
-                structure: *structure,
-                opt_name: Some(name),
+                structure,
+                opt_name: Some(name_index),
             };
             subs.set_content(root, content);
         }
@@ -289,36 +303,56 @@ pub fn content_to_string(
     buf
 }
 
+pub fn get_single_arg<'a>(subs: &'a Subs, args: &'a AliasVariables) -> &'a Content {
+    debug_assert_eq!(args.len(), 1);
+
+    let arg_var_index = args
+        .into_iter()
+        .next()
+        .expect("Num was not applied to a type argument!");
+    let arg_var = subs[arg_var_index];
+    subs.get_content_without_compacting(arg_var)
+}
+
 fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, parens: Parens) {
     use crate::subs::Content::*;
 
     match content {
-        FlexVar(Some(name)) => buf.push_str(name.as_str()),
+        FlexVar(Some(name_index)) => {
+            let name = &subs.field_names[name_index.index as usize];
+            buf.push_str(name.as_str())
+        }
         FlexVar(None) => buf.push_str(WILDCARD),
-        RigidVar(name) => buf.push_str(name.as_str()),
+        RigidVar(name_index) => {
+            let name = &subs.field_names[name_index.index as usize];
+            buf.push_str(name.as_str())
+        }
         RecursionVar { opt_name, .. } => match opt_name {
-            Some(name) => buf.push_str(name.as_str()),
+            Some(name_index) => {
+                let name = &subs.field_names[name_index.index as usize];
+                buf.push_str(name.as_str())
+            }
             None => buf.push_str(WILDCARD),
         },
         Structure(flat_type) => write_flat_type(env, flat_type, subs, buf, parens),
-        Alias(symbol, args, _actual) => {
+        Alias(symbol, args, _actual, _kind) => {
             let write_parens = parens == Parens::InTypeParam && !args.is_empty();
 
             match *symbol {
                 Symbol::NUM_NUM => {
-                    debug_assert_eq!(args.len(), 1);
-
-                    let arg_var_index = args
-                        .variables()
-                        .into_iter()
-                        .next()
-                        .expect("Num was not applied to a type argument!");
-                    let arg_var = subs[arg_var_index];
-                    let content = subs.get_content_without_compacting(arg_var);
-
-                    match &content {
-                        Alias(nested, _, _) => match *nested {
-                            Symbol::NUM_INTEGER => buf.push_str("I64"),
+                    let content = get_single_arg(subs, args);
+                    match *content {
+                        Alias(nested, args, _actual, _kind) => match nested {
+                            Symbol::NUM_INTEGER => {
+                                write_integer(
+                                    env,
+                                    get_single_arg(subs, &args),
+                                    subs,
+                                    buf,
+                                    parens,
+                                    false,
+                                );
+                            }
                             Symbol::NUM_FLOATINGPOINT => buf.push_str("F64"),
 
                             _ => write_parens!(write_parens, buf, {
@@ -334,10 +368,37 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                     }
                 }
 
+                Symbol::NUM_INT => {
+                    let content = get_single_arg(subs, args);
+
+                    write_integer(env, content, subs, buf, parens, write_parens)
+                }
+
+                Symbol::NUM_FLOAT => {
+                    debug_assert_eq!(args.len(), 1);
+
+                    let arg_var_index = args
+                        .into_iter()
+                        .next()
+                        .expect("Num was not applied to a type argument!");
+                    let arg_var = subs[arg_var_index];
+                    let content = subs.get_content_without_compacting(arg_var);
+
+                    match content {
+                        Alias(Symbol::NUM_BINARY32, _, _, _) => buf.push_str("F32"),
+                        Alias(Symbol::NUM_BINARY64, _, _, _) => buf.push_str("F64"),
+                        Alias(Symbol::NUM_DECIMAL, _, _, _) => buf.push_str("Dec"),
+                        _ => write_parens!(write_parens, buf, {
+                            buf.push_str("Float ");
+                            write_content(env, content, subs, buf, parens);
+                        }),
+                    }
+                }
+
                 _ => write_parens!(write_parens, buf, {
                     write_symbol(env, *symbol, buf);
 
-                    for var_index in args.variables() {
+                    for var_index in args.named_type_arguments() {
                         let var = subs[var_index];
                         buf.push(' ');
                         write_content(
@@ -359,7 +420,59 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                 }),
             }
         }
+        RangedNumber(typ, _range_vars) => write_content(
+            env,
+            subs.get_content_without_compacting(*typ),
+            subs,
+            buf,
+            parens,
+        ),
         Error => buf.push_str("<type mismatch>"),
+    }
+}
+
+fn write_integer(
+    env: &Env,
+    content: &Content,
+    subs: &Subs,
+    buf: &mut String,
+    parens: Parens,
+    write_parens: bool,
+) {
+    use crate::subs::Content::*;
+
+    macro_rules! derive_num_writes {
+        ($($lit:expr, $tag:path)*) => {
+            write_parens!(
+                write_parens,
+                buf,
+                match content {
+                    $(
+                    &Alias($tag, _, _, _) => {
+                        buf.push_str($lit)
+                    },
+                    )*
+                    actual => {
+                        buf.push_str("Int ");
+                        write_content(env, actual, subs, buf, parens);
+                    }
+                }
+            )
+        }
+    }
+
+    derive_num_writes! {
+        "U8", Symbol::NUM_UNSIGNED8
+        "U16", Symbol::NUM_UNSIGNED16
+        "U32", Symbol::NUM_UNSIGNED32
+        "U64", Symbol::NUM_UNSIGNED64
+        "U128", Symbol::NUM_UNSIGNED128
+        "I8", Symbol::NUM_SIGNED8
+        "I16", Symbol::NUM_SIGNED16
+        "I32", Symbol::NUM_SIGNED32
+        "I64", Symbol::NUM_SIGNED64
+        "I128", Symbol::NUM_SIGNED128
+        "Nat", Symbol::NUM_NATURAL
     }
 }
 
@@ -407,8 +520,8 @@ fn write_sorted_tags2<'a>(
     ext_var: Variable,
 ) -> ExtContent<'a> {
     // Sort the fields so they always end up in the same order.
-    let (it, new_ext_var) = tags.unsorted_iterator_and_ext(subs, ext_var);
-    let mut sorted_fields: Vec<_> = it.collect();
+    let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
+    let mut sorted_fields = tags.tags;
 
     let interns = &env.interns;
     let home = env.home;
@@ -505,24 +618,14 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
     use crate::subs::FlatType::*;
 
     match flat_type {
-        Apply(symbol, args) => write_apply(
-            env,
-            *symbol,
-            subs.get_subs_slice(*args.as_subs_slice()),
-            subs,
-            buf,
-            parens,
-        ),
+        Apply(symbol, args) => {
+            write_apply(env, *symbol, subs.get_subs_slice(*args), subs, buf, parens)
+        }
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, _closure, ret) => write_fn(
-            env,
-            subs.get_subs_slice(*args.as_subs_slice()),
-            *ret,
-            subs,
-            buf,
-            parens,
-        ),
+        Func(args, _closure, ret) => {
+            write_fn(env, subs.get_subs_slice(*args), *ret, subs, buf, parens)
+        }
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 
@@ -530,7 +633,8 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
             let RecordStructure {
                 fields: sorted_fields,
                 ext,
-            } = gather_fields(subs, *fields, *ext_var);
+            } = gather_fields(subs, *fields, *ext_var)
+                .expect("Something ended up weird in this record type");
             let ext_var = ext;
 
             if fields.is_empty() {
@@ -641,7 +745,7 @@ pub fn chase_ext_tag_union<'a>(
         Content::Structure(TagUnion(tags, ext_var)) => {
             for (name_index, slice_index) in tags.iter_all() {
                 let subs_slice = subs[slice_index];
-                let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+                let slice = subs.get_subs_slice(subs_slice);
                 let tag_name = subs[name_index].clone();
 
                 fields.push((tag_name, slice.to_vec()));
@@ -653,7 +757,7 @@ pub fn chase_ext_tag_union<'a>(
         Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
             for (name_index, slice_index) in tags.iter_all() {
                 let subs_slice = subs[slice_index];
-                let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+                let slice = subs.get_subs_slice(subs_slice);
                 let tag_name = subs[name_index].clone();
 
                 fields.push((tag_name, slice.to_vec()));
@@ -667,7 +771,7 @@ pub fn chase_ext_tag_union<'a>(
             chase_ext_tag_union(subs, *ext_var, fields)
         }
 
-        Content::Alias(_, _, var) => chase_ext_tag_union(subs, *var, fields),
+        Content::Alias(_, _, var, _) => chase_ext_tag_union(subs, *var, fields),
 
         content => Err((var, content)),
     }

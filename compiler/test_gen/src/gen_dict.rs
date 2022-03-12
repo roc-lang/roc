@@ -1,11 +1,19 @@
-#![cfg(test)]
+#![cfg(feature = "gen-llvm")]
 
-use crate::assert_evals_to;
-use crate::assert_llvm_evals_to;
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::assert_evals_to;
+
+// #[cfg(feature = "gen-dev")]
+// use crate::helpers::dev::assert_evals_to;
+
+// #[cfg(feature = "gen-wasm")]
+// use crate::helpers::wasm::assert_evals_to;
+
 use indoc::indoc;
-use roc_std::RocStr;
+use roc_std::{RocList, RocStr};
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn dict_empty_len() {
     assert_evals_to!(
         indoc!(
@@ -19,6 +27,7 @@ fn dict_empty_len() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn dict_insert_empty() {
     assert_evals_to!(
         indoc!(
@@ -33,6 +42,7 @@ fn dict_insert_empty() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn dict_empty_contains() {
     assert_evals_to!(
         indoc!(
@@ -49,6 +59,7 @@ fn dict_empty_contains() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn dict_nonempty_contains() {
     assert_evals_to!(
         indoc!(
@@ -65,6 +76,7 @@ fn dict_nonempty_contains() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn dict_empty_remove() {
     assert_evals_to!(
         indoc!(
@@ -83,6 +95,7 @@ fn dict_empty_remove() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn dict_nonempty_remove() {
     assert_evals_to!(
         indoc!(
@@ -101,6 +114,7 @@ fn dict_nonempty_remove() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn dict_nonempty_get() {
     assert_evals_to!(
         indoc!(
@@ -143,6 +157,7 @@ fn dict_nonempty_get() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn keys() {
     assert_evals_to!(
         indoc!(
@@ -158,12 +173,13 @@ fn keys() {
             Dict.keys myDict
             "#
         ),
-        &[0, 1, 2],
-        &[i64]
+        RocList::from_slice(&[0, 1, 2]),
+        RocList<i64>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn values() {
     assert_evals_to!(
         indoc!(
@@ -179,12 +195,13 @@ fn values() {
             Dict.values myDict
             "#
         ),
-        &[100, 200, 300],
-        &[i64]
+        RocList::from_slice(&[100, 200, 300]),
+        RocList<i64>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn from_list_with_fold() {
     assert_evals_to!(
         indoc!(
@@ -192,13 +209,13 @@ fn from_list_with_fold() {
             myDict : Dict I64 I64
             myDict =
                 [1,2,3]
-                    |> List.walk (\value, accum -> Dict.insert accum value value) Dict.empty
+                    |> List.walk Dict.empty (\accum, value -> Dict.insert accum value value)
 
             Dict.values myDict
             "#
         ),
-        &[2, 3, 1],
-        &[i64]
+        RocList::from_slice(&[2, 3, 1]),
+        RocList<i64>
     );
 
     assert_evals_to!(
@@ -215,7 +232,7 @@ fn from_list_with_fold() {
             myDict =
                 # 25 elements (8 + 16 + 1) is guaranteed to overflow/reallocate at least twice
                 range 0 25 []
-                    |> List.walk (\value, accum -> Dict.insert accum value value) Dict.empty
+                    |> List.walk Dict.empty (\accum, value -> Dict.insert accum value value)
 
             Dict.values myDict
                 |> List.len
@@ -227,6 +244,7 @@ fn from_list_with_fold() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn small_str_keys() {
     assert_evals_to!(
         indoc!(
@@ -242,12 +260,13 @@ fn small_str_keys() {
             Dict.keys myDict
             "#
         ),
-        &[RocStr::from("c"), RocStr::from("a"), RocStr::from("b"),],
-        &[RocStr]
+        RocList::from_slice(&[RocStr::from("c"), RocStr::from("a"), RocStr::from("b"),],),
+        RocList<RocStr>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn big_str_keys() {
     assert_evals_to!(
         indoc!(
@@ -263,16 +282,17 @@ fn big_str_keys() {
             Dict.keys myDict
             "#
         ),
-        &[
+        RocList::from_slice(&[
             RocStr::from("Leverage agile frameworks to provide a robust"),
             RocStr::from("to corporate strategy foster collaborative thinking to"),
             RocStr::from("synopsis for high level overviews. Iterative approaches"),
-        ],
-        &[RocStr]
+        ]),
+        RocList<RocStr>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn big_str_values() {
     assert_evals_to!(
         indoc!(
@@ -287,16 +307,17 @@ fn big_str_values() {
             Dict.values myDict
             "#
         ),
-        &[
+        RocList::from_slice(&[
             RocStr::from("Leverage agile frameworks to provide a robust"),
             RocStr::from("to corporate strategy foster collaborative thinking to"),
             RocStr::from("synopsis for high level overviews. Iterative approaches"),
-        ],
-        &[RocStr]
+        ]),
+        RocList<RocStr>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn unit_values() {
     assert_evals_to!(
         indoc!(
@@ -318,6 +339,7 @@ fn unit_values() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn single() {
     assert_evals_to!(
         indoc!(
@@ -335,6 +357,7 @@ fn single() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn union() {
     assert_evals_to!(
         indoc!(
@@ -352,6 +375,7 @@ fn union() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn union_prefer_first() {
     assert_evals_to!(
         indoc!(
@@ -363,18 +387,19 @@ fn union_prefer_first() {
             Dict.values myDict
             "#
         ),
-        &[100],
-        &[i64]
+        RocList::from_slice(&[100]),
+        RocList<i64>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn intersection() {
     assert_evals_to!(
         indoc!(
             r#"
             dict1 : Dict I64 {}
-            dict1 = 
+            dict1 =
                 Dict.empty
                     |> Dict.insert 1 {}
                     |> Dict.insert 2 {}
@@ -383,14 +408,14 @@ fn intersection() {
                     |> Dict.insert 5 {}
 
             dict2 : Dict I64 {}
-            dict2 = 
+            dict2 =
                 Dict.empty
                     |> Dict.insert 0 {}
                     |> Dict.insert 2 {}
                     |> Dict.insert 4 {}
 
-            Dict.intersection dict1 dict2 
-                |> Dict.len 
+            Dict.intersection dict1 dict2
+                |> Dict.len
             "#
         ),
         2,
@@ -399,12 +424,13 @@ fn intersection() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn intersection_prefer_first() {
     assert_evals_to!(
         indoc!(
             r#"
             dict1 : Dict I64 I64
-            dict1 = 
+            dict1 =
                 Dict.empty
                     |> Dict.insert 1 1
                     |> Dict.insert 2 2
@@ -413,28 +439,29 @@ fn intersection_prefer_first() {
                     |> Dict.insert 5 5
 
             dict2 : Dict I64 I64
-            dict2 = 
+            dict2 =
                 Dict.empty
                     |> Dict.insert 0 100
                     |> Dict.insert 2 200
                     |> Dict.insert 4 300
 
-            Dict.intersection dict1 dict2 
-                |> Dict.values 
+            Dict.intersection dict1 dict2
+                |> Dict.values
             "#
         ),
-        &[4, 2],
-        &[i64]
+        RocList::from_slice(&[4, 2]),
+        RocList<i64>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn difference() {
     assert_evals_to!(
         indoc!(
             r#"
             dict1 : Dict I64 {}
-            dict1 = 
+            dict1 =
                 Dict.empty
                     |> Dict.insert 1 {}
                     |> Dict.insert 2 {}
@@ -443,14 +470,14 @@ fn difference() {
                     |> Dict.insert 5 {}
 
             dict2 : Dict I64 {}
-            dict2 = 
+            dict2 =
                 Dict.empty
                     |> Dict.insert 0 {}
                     |> Dict.insert 2 {}
                     |> Dict.insert 4 {}
 
-            Dict.difference dict1 dict2 
-                |> Dict.len 
+            Dict.difference dict1 dict2
+                |> Dict.len
             "#
         ),
         3,
@@ -459,12 +486,13 @@ fn difference() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn difference_prefer_first() {
     assert_evals_to!(
         indoc!(
             r#"
             dict1 : Dict I64 I64
-            dict1 = 
+            dict1 =
                 Dict.empty
                     |> Dict.insert 1 1
                     |> Dict.insert 2 2
@@ -473,28 +501,29 @@ fn difference_prefer_first() {
                     |> Dict.insert 5 5
 
             dict2 : Dict I64 I64
-            dict2 = 
+            dict2 =
                 Dict.empty
                     |> Dict.insert 0 100
                     |> Dict.insert 2 200
                     |> Dict.insert 4 300
 
-            Dict.difference dict1 dict2 
-                |> Dict.values 
+            Dict.difference dict1 dict2
+                |> Dict.values
             "#
         ),
-        &[5, 3, 1],
-        &[i64]
+        RocList::from_slice(&[5, 3, 1]),
+        RocList<i64>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn walk_sum_keys() {
     assert_evals_to!(
         indoc!(
             r#"
             dict1 : Dict I64 I64
-            dict1 = 
+            dict1 =
                 Dict.empty
                     |> Dict.insert 1 1
                     |> Dict.insert 2 2
@@ -502,7 +531,7 @@ fn walk_sum_keys() {
                     |> Dict.insert 4 4
                     |> Dict.insert 5 5
 
-            Dict.walk dict1 (\k, _, a -> k + a) 0 
+            Dict.walk dict1 0 \k, _, a -> k + a
             "#
         ),
         15,

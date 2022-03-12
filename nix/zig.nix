@@ -1,7 +1,7 @@
 { pkgs }:
 
 let
-  version = "0.8.0";
+  version = "0.8.1";
 
   osName = if pkgs.stdenv.isDarwin then "macos" else "linux";
 
@@ -14,13 +14,13 @@ let
   # If your system is not aarch64, we assume it's x86_64
   sha256 = if pkgs.stdenv.isDarwin then
     if isAarch64 then
-      "b32d13f66d0e1ff740b3326d66a469ee6baddbd7211fa111c066d3bd57683111"
+      "5351297e3b8408213514b29c0a938002c5cf9f97eee28c2f32920e1227fd8423" # macos-aarch64
     else
-      "279f9360b5cb23103f0395dc4d3d0d30626e699b1b4be55e98fd985b62bc6fbe"
+      "16b0e1defe4c1807f2e128f72863124bffdd906cefb21043c34b673bf85cd57f" # macos-x86_64
   else if isAarch64 then
-    "ee204ca2c2037952cf3f8b10c609373a08a291efa4af7b3c73be0f2b27720470"
+    "2166dc9f2d8df387e8b4122883bb979d739281e1ff3f3d5483fec3a23b957510" # linux-aarch64
   else
-    "502625d3da3ae595c5f44a809a87714320b7a40e6dff4a895b5fa7df3391d01e";
+    "6c032fc61b5d77a3f3cf781730fa549f8f059ffdb3b3f6ad1c2994d2b2d87983"; # linux-x86_64
 in pkgs.stdenv.mkDerivation {
   pname = "zig";
   version = version;

@@ -1,10 +1,19 @@
-#![cfg(test)]
+#![cfg(feature = "gen-llvm")]
 
-use crate::assert_evals_to;
-use crate::assert_llvm_evals_to;
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::assert_evals_to;
+
+// #[cfg(feature = "gen-dev")]
+// use crate::helpers::dev::assert_evals_to;
+
+// #[cfg(feature = "gen-wasm")]
+// use crate::helpers::wasm::assert_evals_to;
+
 use indoc::indoc;
+use roc_std::RocList;
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn empty_len() {
     assert_evals_to!(
         indoc!(
@@ -18,6 +27,7 @@ fn empty_len() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn single_len() {
     assert_evals_to!(
         indoc!(
@@ -31,6 +41,7 @@ fn single_len() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn single_to_list() {
     assert_evals_to!(
         indoc!(
@@ -38,8 +49,8 @@ fn single_to_list() {
             Set.toList (Set.single 42)
             "#
         ),
-        &[42],
-        &[i64]
+        RocList::from_slice(&[42]),
+        RocList<i64>
     );
 
     assert_evals_to!(
@@ -48,8 +59,8 @@ fn single_to_list() {
             Set.toList (Set.single 1)
             "#
         ),
-        &[1],
-        &[i64]
+        RocList::from_slice(&[1]),
+        RocList<i64>
     );
 
     assert_evals_to!(
@@ -58,12 +69,13 @@ fn single_to_list() {
             Set.toList (Set.single 1.0)
             "#
         ),
-        &[1.0],
-        &[f64]
+        RocList::from_slice(&[1.0]),
+        RocList<f64>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn insert() {
     assert_evals_to!(
         indoc!(
@@ -75,12 +87,13 @@ fn insert() {
                 |> Set.toList
             "#
         ),
-        &[0, 1, 2],
-        &[i64]
+        RocList::from_slice(&[0, 1, 2]),
+        RocList<i64>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn remove() {
     assert_evals_to!(
         indoc!(
@@ -93,12 +106,13 @@ fn remove() {
                 |> Set.toList
             "#
         ),
-        &[0],
-        &[i64]
+        RocList::from_slice(&[0]),
+        RocList<i64>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn union() {
     assert_evals_to!(
         indoc!(
@@ -107,18 +121,19 @@ fn union() {
             set1 = Set.fromList [1,2]
 
             set2 : Set I64
-            set2 = Set.fromList [1,3,4] 
+            set2 = Set.fromList [1,3,4]
 
             Set.union set1 set2
                 |> Set.toList
             "#
         ),
-        &[4, 2, 3, 1],
-        &[i64]
+        RocList::from_slice(&[4, 2, 3, 1]),
+        RocList<i64>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn difference() {
     assert_evals_to!(
         indoc!(
@@ -127,18 +142,19 @@ fn difference() {
             set1 = Set.fromList [1,2]
 
             set2 : Set I64
-            set2 = Set.fromList [1,3,4] 
+            set2 = Set.fromList [1,3,4]
 
             Set.difference set1 set2
                 |> Set.toList
             "#
         ),
-        &[2],
-        &[i64]
+        RocList::from_slice(&[2]),
+        RocList<i64>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn intersection() {
     assert_evals_to!(
         indoc!(
@@ -147,23 +163,24 @@ fn intersection() {
             set1 = Set.fromList [1,2]
 
             set2 : Set I64
-            set2 = Set.fromList [1,3,4] 
+            set2 = Set.fromList [1,3,4]
 
             Set.intersection set1 set2
                 |> Set.toList
             "#
         ),
-        &[1],
-        &[i64]
+        RocList::from_slice(&[1]),
+        RocList<i64>
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn walk_sum() {
     assert_evals_to!(
         indoc!(
             r#"
-            Set.walk (Set.fromList [1,2,3]) (\x, y -> x + y) 0
+            Set.walk (Set.fromList [1,2,3]) 0 (\x, y -> x + y)
             "#
         ),
         6,
@@ -172,6 +189,7 @@ fn walk_sum() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn contains() {
     assert_evals_to!(
         indoc!(
@@ -195,9 +213,8 @@ fn contains() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn from_list() {
-    let empty_list: &'static [i64] = &[];
-
     assert_evals_to!(
         indoc!(
             r#"
@@ -206,20 +223,8 @@ fn from_list() {
                 |> Set.toList
             "#
         ),
-        &[4, 2, 3, 1],
-        &[i64]
-    );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
-            []
-                |> Set.fromList
-                |> Set.toList
-            "#
-        ),
-        empty_list,
-        &[i64]
+        RocList::from_slice(&[4, 2, 3, 1]),
+        RocList<i64>
     );
 
     assert_evals_to!(
@@ -233,7 +238,43 @@ fn from_list() {
                 |> Set.toList
             "#
         ),
-        empty_list,
-        &[i64]
+        RocList::<i64>::default(),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn from_list_void() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            []
+                |> Set.fromList
+                |> Set.toList
+            "#
+        ),
+        RocList::<i64>::default(),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn from_list_result() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Result Str {}
+            x = Ok "foo"
+
+            [ x ]
+                |> Set.fromList
+                |> Set.toList
+                |> List.len
+            "#
+        ),
+        1,
+        i64
     );
 }

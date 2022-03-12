@@ -1,5 +1,7 @@
 use crate::borrow::{ParamMap, BORROWED, OWNED};
-use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt};
+use crate::ir::{
+    CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
+};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -95,11 +97,11 @@ pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
 
         Call(call) => occurring_variables_call(call, result),
 
-        Tag { arguments, .. }
-        | Struct(arguments)
-        | Array {
+        Array {
             elems: arguments, ..
-        } => {
+        } => result.extend(arguments.iter().filter_map(|e| e.to_symbol())),
+
+        Tag { arguments, .. } | Struct(arguments) => {
             result.extend(arguments.iter().copied());
         }
         Reuse {
@@ -108,8 +110,12 @@ pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.extend(arguments.iter().copied());
             result.insert(*symbol);
         }
-        Reset(x) => {
+        Reset { symbol: x, .. } => {
             result.insert(*x);
+        }
+
+        ExprBox { symbol } | ExprUnbox { symbol } => {
+            result.insert(*symbol);
         }
 
         EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
@@ -149,8 +155,7 @@ pub type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
 struct Context<'a> {
     arena: &'a Bump,
     vars: VarMap,
-    jp_live_vars: JPLiveVarMap,      // map: join point => live variables
-    local_context: LocalContext<'a>, // we use it to store the join point declarations
+    jp_live_vars: JPLiveVarMap, // map: join point => live variables
     param_map: &'a ParamMap<'a>,
 }
 
@@ -242,7 +247,6 @@ impl<'a> Context<'a> {
             arena,
             vars,
             jp_live_vars: MutMap::default(),
-            local_context: LocalContext::default(),
             param_map,
         }
     }
@@ -463,26 +467,31 @@ impl<'a> Context<'a> {
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            HigherOrderLowLevel {
+            HigherOrder(HigherOrderLowLevel {
                 op,
                 closure_env_layout,
-                specialization_id,
-                arg_layouts,
-                ret_layout,
+                update_mode,
+                passed_function,
                 ..
-            } => {
+            }) => {
+                // setup
+                use crate::low_level::HigherOrder::*;
+
                 macro_rules! create_call {
                     ($borrows:expr) => {
                         Expr::Call(crate::ir::Call {
                             call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
-                                HigherOrderLowLevel {
+                                let mut passed_function = *passed_function;
+                                passed_function.owns_captured_environment = true;
+
+                                let higher_order = HigherOrderLowLevel {
                                     op: *op,
                                     closure_env_layout: *closure_env_layout,
-                                    function_owns_closure_data: true,
-                                    specialization_id: *specialization_id,
-                                    arg_layouts,
-                                    ret_layout: *ret_layout,
-                                }
+                                    update_mode: *update_mode,
+                                    passed_function,
+                                };
+
+                                CallType::HigherOrder(self.arena.alloc(higher_order))
                             } else {
                                 call_type
                             },
@@ -508,171 +517,132 @@ impl<'a> Context<'a> {
                 const CLOSURE_DATA: bool = BORROWED;
 
                 let function_layout = ProcLayout {
-                    arguments: arg_layouts,
-                    result: *ret_layout,
+                    arguments: passed_function.argument_layouts,
+                    result: passed_function.return_layout,
+                };
+
+                let function_ps = match self
+                    .param_map
+                    .get_symbol(passed_function.name, function_layout)
+                {
+                    Some(function_ps) => function_ps,
+                    None => unreachable!(),
                 };
 
                 match op {
-                    roc_module::low_level::LowLevel::ListMap
-                    | roc_module::low_level::LowLevel::ListKeepIf
-                    | roc_module::low_level::LowLevel::ListKeepOks
-                    | roc_module::low_level::LowLevel::ListKeepErrs => {
-                        match self.param_map.get_symbol(arguments[1], function_layout) {
-                            Some(function_ps) => {
-                                let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
+                    ListMap { xs }
+                    | ListKeepIf { xs }
+                    | ListKeepOks { xs }
+                    | ListKeepErrs { xs }
+                    | ListAny { xs }
+                    | ListAll { xs }
+                    | ListFindUnsafe { xs } => {
+                        let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                // if the list is owned, then all elements have been consumed, but not the list itself
-                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+                        // if the list is owned, then all elements have been consumed, but not the list itself
+                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
 
-                                let v = create_call!(function_ps.get(1));
+                        let v = create_call!(function_ps.get(1));
 
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
-                    roc_module::low_level::LowLevel::ListMapWithIndex => {
-                        match self.param_map.get_symbol(arguments[1], function_layout) {
-                            Some(function_ps) => {
-                                let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
+                    ListMap2 { xs, ys } => {
+                        let borrows = [
+                            function_ps[0].borrow,
+                            function_ps[1].borrow,
+                            FUNCTION,
+                            CLOSURE_DATA,
+                        ];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                let b = decref_if_owned!(function_ps[1].borrow, arguments[0], b);
+                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
 
-                                let v = create_call!(function_ps.get(2));
+                        let v = create_call!(function_ps.get(2));
 
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
-                    roc_module::low_level::LowLevel::ListMap2 => {
-                        match self.param_map.get_symbol(arguments[2], function_layout) {
-                            Some(function_ps) => {
-                                let borrows = [
-                                    function_ps[0].borrow,
-                                    function_ps[1].borrow,
-                                    FUNCTION,
-                                    CLOSURE_DATA,
-                                ];
+                    ListMap3 { xs, ys, zs } => {
+                        let borrows = [
+                            function_ps[0].borrow,
+                            function_ps[1].borrow,
+                            function_ps[2].borrow,
+                            FUNCTION,
+                            CLOSURE_DATA,
+                        ];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
-                                let b = decref_if_owned!(function_ps[1].borrow, arguments[1], b);
+                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
+                        let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
 
-                                let v = create_call!(function_ps.get(2));
+                        let v = create_call!(function_ps.get(3));
 
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
-                    roc_module::low_level::LowLevel::ListMap3 => {
-                        match self.param_map.get_symbol(arguments[3], function_layout) {
-                            Some(function_ps) => {
-                                let borrows = [
-                                    function_ps[0].borrow,
-                                    function_ps[1].borrow,
-                                    function_ps[2].borrow,
-                                    FUNCTION,
-                                    CLOSURE_DATA,
-                                ];
+                    ListMap4 { xs, ys, zs, ws } => {
+                        let borrows = [
+                            function_ps[0].borrow,
+                            function_ps[1].borrow,
+                            function_ps[2].borrow,
+                            function_ps[3].borrow,
+                            FUNCTION,
+                            CLOSURE_DATA,
+                        ];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
-                                let b = decref_if_owned!(function_ps[1].borrow, arguments[1], b);
-                                let b = decref_if_owned!(function_ps[2].borrow, arguments[2], b);
+                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
+                        let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
+                        let b = decref_if_owned!(function_ps[3].borrow, *ws, b);
 
-                                let v = create_call!(function_ps.get(3));
+                        let v = create_call!(function_ps.get(3));
 
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
-                    roc_module::low_level::LowLevel::ListSortWith => {
-                        match self.param_map.get_symbol(arguments[1], function_layout) {
-                            Some(function_ps) => {
-                                let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
+                    ListMapWithIndex { xs } => {
+                        let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                let v = create_call!(function_ps.get(2));
+                        let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
 
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
+                        let v = create_call!(function_ps.get(2));
+
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
-                    roc_module::low_level::LowLevel::ListWalk
-                    | roc_module::low_level::LowLevel::ListWalkUntil
-                    | roc_module::low_level::LowLevel::ListWalkBackwards
-                    | roc_module::low_level::LowLevel::DictWalk => {
-                        match self.param_map.get_symbol(arguments[2], function_layout) {
-                            Some(function_ps) => {
-                                // borrow data structure based on first argument of the folded function
-                                // borrow the default based on second argument of the folded function
-                                let borrows = [
-                                    function_ps[0].borrow,
-                                    function_ps[1].borrow,
-                                    FUNCTION,
-                                    CLOSURE_DATA,
-                                ];
+                    ListSortWith { xs: _ } => {
+                        let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+                        let v = create_call!(function_ps.get(2));
 
-                                let v = create_call!(function_ps.get(2));
-
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
-                    _ => {
-                        let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
-                        let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
+                    ListWalk { xs, state: _ }
+                    | ListWalkUntil { xs, state: _ }
+                    | ListWalkBackwards { xs, state: _ }
+                    | DictWalk { xs, state: _ } => {
+                        // borrow data structure based on first argument of the folded function
+                        // borrow the default based on second argument of the folded function
+                        let borrows = [
+                            function_ps[1].borrow,
+                            function_ps[0].borrow,
+                            FUNCTION,
+                            CLOSURE_DATA,
+                        ];
 
-                        let v = Expr::Call(crate::ir::Call {
-                            call_type,
-                            arguments,
-                        });
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+
+                        let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
+
+                        let v = create_call!(function_ps.get(2));
 
                         &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
@@ -697,7 +667,7 @@ impl<'a> Context<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+                let top_level = ProcLayout::new(self.arena, arg_layouts, **ret_layout);
 
                 // get the borrow signature
                 let ps = self
@@ -733,14 +703,21 @@ impl<'a> Context<'a> {
         live_vars.remove(&z);
 
         let new_b = match v {
-            Reuse { arguments: ys, .. }
-            | Tag { arguments: ys, .. }
-            | Struct(ys)
-            | Array { elems: ys, .. } => self.add_inc_before_consume_all(
-                ys,
-                self.arena.alloc(Stmt::Let(z, v, l, b)),
-                b_live_vars,
-            ),
+            Reuse { arguments: ys, .. } | Tag { arguments: ys, .. } | Struct(ys) => self
+                .add_inc_before_consume_all(
+                    ys,
+                    self.arena.alloc(Stmt::Let(z, v, l, b)),
+                    b_live_vars,
+                ),
+
+            Array { elems, .. } => {
+                let ys = Vec::from_iter_in(elems.iter().filter_map(|e| e.to_symbol()), self.arena);
+                self.add_inc_before_consume_all(
+                    &ys,
+                    self.arena.alloc(Stmt::Let(z, v, l, b)),
+                    b_live_vars,
+                )
+            }
 
             Call(crate::ir::Call {
                 call_type,
@@ -783,7 +760,29 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
+            ExprBox { symbol: x } => {
+                // mimics Tag
+                self.add_inc_before_consume_all(
+                    &[x],
+                    self.arena.alloc(Stmt::Let(z, v, l, b)),
+                    b_live_vars,
+                )
+            }
+
+            ExprUnbox { symbol: x } => {
+                // mimics UnionAtIndex
+                let b = self.add_dec_if_needed(x, b, b_live_vars);
+                let info_x = self.get_var_info(x);
+                let b = if info_x.consume {
+                    self.add_inc(z, 1, b)
+                } else {
+                    b
+                };
+
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            EmptyArray | Literal(_) | Reset { .. } | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated
                 // function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))
@@ -801,7 +800,7 @@ impl<'a> Context<'a> {
         // must this value be consumed?
         let consume = consume_expr(&self.vars, expr);
 
-        let reset = matches!(expr, Expr::Reset(_));
+        let reset = matches!(expr, Expr::Reset { .. });
 
         self.update_var_info_help(symbol, layout, persistent, consume, reset)
     }
@@ -981,7 +980,6 @@ impl<'a> Context<'a> {
                 };
                 // TODO use borrow signature here?
                 let ps = self.param_map.get_join_point(*j);
-                // let ps = self.local_context.join_points.get(j).unwrap().0;
 
                 let b = self.add_inc_before(xs, ps, stmt, j_live_vars);
 
@@ -1037,11 +1035,6 @@ impl<'a> Context<'a> {
             RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct LocalContext<'a> {
-    join_points: MutMap<JoinPointId, (&'a [Param<'a>], &'a Stmt<'a>)>,
 }
 
 pub fn collect_stmt(

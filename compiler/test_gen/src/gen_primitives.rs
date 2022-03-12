@@ -1,22 +1,46 @@
-#![cfg(test)]
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::assert_evals_to;
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::assert_expect_failed;
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::assert_non_opt_evals_to;
 
-use crate::assert_evals_to;
-use crate::assert_llvm_evals_to;
-use crate::assert_non_opt_evals_to;
+#[cfg(feature = "gen-dev")]
+use crate::helpers::dev::assert_evals_to;
+// #[cfg(feature = "gen-dev")]
+// use crate::helpers::dev::assert_expect_failed;
+// #[cfg(feature = "gen-dev")]
+// use crate::helpers::dev::assert_evals_to as assert_llvm_evals_to;
+// #[cfg(feature = "gen-dev")]
+// use crate::helpers::dev::assert_evals_to as assert_non_opt_evals_to;
+
+#[cfg(feature = "gen-wasm")]
+use crate::helpers::wasm::assert_evals_to;
+// #[cfg(feature = "gen-wasm")]
+// use crate::helpers::dev::assert_expect_failed;
+// #[cfg(feature = "gen-wasm")]
+// use crate::helpers::wasm::assert_evals_to as assert_llvm_evals_to;
+// #[cfg(feature = "gen-wasm")]
+// use crate::helpers::wasm::assert_evals_to as assert_non_opt_evals_to;
+
 use indoc::indoc;
+#[allow(unused_imports)]
 use roc_std::RocStr;
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn basic_int() {
     assert_evals_to!("123", 123, i64);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn basic_float() {
     assert_evals_to!("1234.0", 1234.0, f64);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn branch_first_float() {
     assert_evals_to!(
         indoc!(
@@ -32,6 +56,7 @@ fn branch_first_float() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn branch_second_float() {
     assert_evals_to!(
         indoc!(
@@ -47,6 +72,7 @@ fn branch_second_float() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn branch_third_float() {
     assert_evals_to!(
         indoc!(
@@ -63,6 +89,7 @@ fn branch_third_float() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn branch_first_int() {
     assert_evals_to!(
         indoc!(
@@ -78,6 +105,7 @@ fn branch_first_int() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn branch_second_int() {
     assert_evals_to!(
         indoc!(
@@ -93,6 +121,7 @@ fn branch_second_int() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn branch_third_int() {
     assert_evals_to!(
         indoc!(
@@ -109,6 +138,7 @@ fn branch_third_int() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn branch_store_variable() {
     assert_evals_to!(
         indoc!(
@@ -124,6 +154,7 @@ fn branch_store_variable() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn when_one_element_tag() {
     assert_evals_to!(
         indoc!(
@@ -141,6 +172,7 @@ fn when_one_element_tag() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn when_two_element_tag_first() {
     assert_evals_to!(
         indoc!(
@@ -159,6 +191,7 @@ fn when_two_element_tag_first() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn when_two_element_tag_second() {
     assert_evals_to!(
         indoc!(
@@ -177,6 +210,7 @@ fn when_two_element_tag_second() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn gen_when_one_branch() {
     assert_evals_to!(
         indoc!(
@@ -191,6 +225,7 @@ fn gen_when_one_branch() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_large_when_int() {
     assert_evals_to!(
         indoc!(
@@ -212,29 +247,31 @@ fn gen_large_when_int() {
     );
 }
 
-// #[test]
-// fn gen_large_when_float() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                 foo = \num ->
-//                     when num is
-//                         0.5 -> 200.1
-//                         -3.6 -> 111.2 # TODO adding more negative numbers reproduces parsing bugs here
-//                         3.6 -> 789.5
-//                         1.7 -> 123.3
-//                         2.8 -> 456.4
-//                         _ -> 1000.6
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn gen_large_when_float() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                foo = \num ->
+                    when num is
+                        0.5 -> 200.1
+                        -3.6 -> 111.2 # TODO adding more negative numbers reproduces parsing bugs here
+                        3.6 -> 789.5
+                        1.7 -> 123.3
+                        2.8 -> 456.4
+                        _ -> 1000.6
 
-//                 foo -3.6
-//             "#
-//         ),
-//         111.2,
-//         f64
-//     );
-// }
+                foo -3.6
+            "#
+        ),
+        111.2,
+        f64
+    );
+}
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn or_pattern() {
     assert_evals_to!(
         indoc!(
@@ -250,6 +287,7 @@ fn or_pattern() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn apply_identity() {
     assert_evals_to!(
         indoc!(
@@ -265,6 +303,7 @@ fn apply_identity() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn apply_unnamed_identity() {
     assert_evals_to!(
         indoc!(
@@ -281,6 +320,7 @@ fn apply_unnamed_identity() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn return_unnamed_fn() {
     assert_evals_to!(
         indoc!(
@@ -301,6 +341,7 @@ fn return_unnamed_fn() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_when_fn() {
     assert_evals_to!(
         indoc!(
@@ -320,6 +361,7 @@ fn gen_when_fn() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn gen_basic_def() {
     assert_evals_to!(
         indoc!(
@@ -347,6 +389,7 @@ fn gen_basic_def() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_multiple_defs() {
     assert_evals_to!(
         indoc!(
@@ -380,6 +423,7 @@ fn gen_multiple_defs() {
 // These tests caught a bug in how Defs are converted to the mono IR
 // but they have UnusedDef or UnusedArgument problems, and don't run any more
 //    #[test]
+// #[cfg(any(feature = "gen-llvm"))]
 //    fn gen_chained_defs() {
 //        assert_evals_to!(
 //            indoc!(
@@ -399,6 +443,7 @@ fn gen_multiple_defs() {
 //    }
 //
 //    #[test]
+// #[cfg(any(feature = "gen-llvm"))]
 //    fn gen_nested_defs_old() {
 //        assert_evals_to!(
 //            indoc!(
@@ -440,6 +485,7 @@ fn gen_multiple_defs() {
 //    }
 //
 //    #[test]
+// #[cfg(any(feature = "gen-llvm"))]
 //    fn let_x_in_x() {
 //        assert_evals_to!(
 //            indoc!(
@@ -462,6 +508,7 @@ fn gen_multiple_defs() {
 //    }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn factorial() {
     assert_evals_to!(
         indoc!(
@@ -483,6 +530,7 @@ fn factorial() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn peano1() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -503,6 +551,7 @@ fn peano1() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn peano2() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -524,6 +573,7 @@ fn peano2() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn top_level_constant() {
     assert_evals_to!(
         indoc!(
@@ -542,6 +592,7 @@ fn top_level_constant() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_len_0() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -569,6 +620,7 @@ fn linked_list_len_0() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_len_twice_0() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -596,6 +648,7 @@ fn linked_list_len_twice_0() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_len_1() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -623,6 +676,7 @@ fn linked_list_len_1() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_len_twice_1() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -650,6 +704,7 @@ fn linked_list_len_twice_1() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_len_3() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -678,6 +733,7 @@ fn linked_list_len_3() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_sum_num_a() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -706,6 +762,7 @@ fn linked_list_sum_num_a() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_sum_int() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -733,6 +790,7 @@ fn linked_list_sum_int() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_map() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -766,6 +824,7 @@ fn linked_list_map() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn when_nested_maybe() {
     assert_evals_to!(
         indoc!(
@@ -822,6 +881,7 @@ fn when_nested_maybe() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn when_peano() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -879,6 +939,7 @@ fn when_peano() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn overflow_frees_list() {
     assert_evals_to!(
@@ -891,6 +952,7 @@ fn overflow_frees_list() {
             n : I64
             n = 9_223_372_036_854_775_807 + (Num.intCast (List.len myList))
 
+            index : Nat
             index = Num.intCast n
 
             List.get myList index
@@ -902,6 +964,7 @@ fn overflow_frees_list() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn undefined_variable() {
     assert_evals_to!(
@@ -919,6 +982,7 @@ fn undefined_variable() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn annotation_without_body() {
     assert_evals_to!(
@@ -936,6 +1000,7 @@ fn annotation_without_body() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn simple_closure() {
     assert_evals_to!(
         indoc!(
@@ -957,6 +1022,7 @@ fn simple_closure() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn nested_closure() {
     assert_evals_to!(
         indoc!(
@@ -980,6 +1046,7 @@ fn nested_closure() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn closure_in_list() {
     assert_evals_to!(
         indoc!(
@@ -1005,6 +1072,7 @@ fn closure_in_list() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn specialize_closure() {
     use roc_std::RocList;
 
@@ -1018,7 +1086,7 @@ fn specialize_closure() {
                 y = [1]
 
                 f = \{} -> x
-                g = \{} -> x + List.len y
+                g = \{} -> x + Num.intCast (List.len y)
 
                 [ f, g ]
 
@@ -1036,6 +1104,7 @@ fn specialize_closure() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn io_poc_effect() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1066,6 +1135,7 @@ fn io_poc_effect() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn io_poc_desugared() {
     assert_evals_to!(
         indoc!(
@@ -1093,6 +1163,7 @@ fn io_poc_desugared() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn return_wrapped_function_pointer() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1115,6 +1186,7 @@ fn return_wrapped_function_pointer() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn return_wrapped_function_pointer_b() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1136,6 +1208,7 @@ fn return_wrapped_function_pointer_b() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn return_wrapped_closure() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1161,6 +1234,7 @@ fn return_wrapped_closure() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_is_singleton() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1195,6 +1269,7 @@ fn linked_list_is_singleton() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_is_empty_1() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1229,6 +1304,7 @@ fn linked_list_is_empty_1() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_is_empty_2() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1260,6 +1336,7 @@ fn linked_list_is_empty_2() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_singleton() {
     // verifies only that valid llvm is produced
     assert_non_opt_evals_to!(
@@ -1280,6 +1357,7 @@ fn linked_list_singleton() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn recursive_function_with_rigid() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1306,6 +1384,7 @@ fn recursive_function_with_rigid() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn rbtree_insert() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1387,12 +1466,13 @@ fn rbtree_insert() {
                 show (insert 0 {} Empty)
             "#
         ),
-        RocStr::from_slice("Node".as_bytes()),
+        RocStr::from("Node"),
         RocStr
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn rbtree_balance_3() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1417,6 +1497,7 @@ fn rbtree_balance_3() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 fn rbtree_layout_issue() {
     // there is a flex var in here somewhere that blows up layout creation
@@ -1452,12 +1533,13 @@ fn rbtree_layout_issue() {
             main = show (balance Red zero zero Empty)
             "#
         ),
-        RocStr::from_slice("Empty".as_bytes()),
+        RocStr::from("Empty"),
         RocStr
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 fn rbtree_balance_mono_problem() {
     // because of how the function is written, only `Red` is used and so in the function's
@@ -1505,12 +1587,13 @@ fn rbtree_balance_mono_problem() {
             main = show (balance Red 0 0 Empty Empty)
             "#
         ),
-        RocStr::from_slice("Empty".as_bytes()),
+        RocStr::from("Empty"),
         RocStr
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn rbtree_balance_full() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1562,6 +1645,7 @@ fn rbtree_balance_full() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn nested_pattern_match_two_ways() {
     // exposed an issue in the ordering of pattern match checks when ran with `--release` mode
     assert_non_opt_evals_to!(
@@ -1615,6 +1699,7 @@ fn nested_pattern_match_two_ways() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_guarded_double_pattern_match() {
     // the important part here is that the first case (with the nested Cons) does not match
     // TODO this also has undefined behavior
@@ -1646,6 +1731,7 @@ fn linked_list_guarded_double_pattern_match() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn linked_list_double_pattern_match() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1671,6 +1757,7 @@ fn linked_list_double_pattern_match() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn binary_tree_double_pattern_match() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1696,6 +1783,7 @@ fn binary_tree_double_pattern_match() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn unified_empty_closure_bool() {
     // none of the Closure tags will have a payload
     // this was not handled correctly in the past
@@ -1720,6 +1808,7 @@ fn unified_empty_closure_bool() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn unified_empty_closure_byte() {
     // none of the Closure tags will have a payload
     // this was not handled correctly in the past
@@ -1745,6 +1834,7 @@ fn unified_empty_closure_byte() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn task_always_twice() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1789,6 +1879,7 @@ fn task_always_twice() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn wildcard_rigid() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1818,6 +1909,7 @@ fn wildcard_rigid() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 fn todo_bad_error_message() {
     assert_non_opt_evals_to!(
@@ -1865,6 +1957,7 @@ fn todo_bad_error_message() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn hof_conditional() {
     // exposed issue with the if condition being just a symbol
     assert_evals_to!(
@@ -1881,8 +1974,9 @@ fn hof_conditional() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[should_panic(
-    expected = "Roc failed with message: \"Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 6-6, C 8-9| Ident"
+    expected = "Roc failed with message: \"Shadowing { original_region: @57-58, shadow: @90-91 Ident"
 )]
 fn pattern_shadowing() {
     assert_evals_to!(
@@ -1900,25 +1994,7 @@ fn pattern_shadowing() {
 }
 
 #[test]
-#[should_panic(expected = "TODO non-exhaustive pattern")]
-fn non_exhaustive_pattern_let() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            x : Result (Int a) (Float b)
-            x = Ok 4
-
-            (Ok y) = x
-
-            y
-            "#
-        ),
-        0,
-        i64
-    );
-}
-
-#[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 #[should_panic(expected = "")]
 fn unsupported_pattern_str_interp() {
@@ -1936,6 +2012,7 @@ fn unsupported_pattern_str_interp() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 fn fingertree_basic() {
     assert_non_opt_evals_to!(
@@ -1977,6 +2054,7 @@ fn fingertree_basic() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn case_or_pattern() {
     // the `0` branch body should only be generated once in the future
     // it is currently duplicated
@@ -1997,6 +2075,7 @@ fn case_or_pattern() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 fn rosetree_basic() {
     assert_non_opt_evals_to!(
@@ -2024,6 +2103,7 @@ fn rosetree_basic() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn case_jump() {
     // the decision tree will generate a jump to the `1` branch here
     assert_evals_to!(
@@ -2049,6 +2129,7 @@ fn case_jump() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn nullable_eval_cfold() {
     // the decision tree will generate a jump to the `1` branch here
     assert_evals_to!(
@@ -2085,6 +2166,7 @@ fn nullable_eval_cfold() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn nested_switch() {
     // exposed bug with passing the right symbol/layout down into switch branch generation
     assert_evals_to!(
@@ -2127,6 +2209,7 @@ fn nested_switch() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn count_deriv_x() {
     // exposed bug with basing the block_of_memory on a specific (smaller) tag layout
     assert_evals_to!(
@@ -2153,6 +2236,7 @@ fn count_deriv_x() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn deriv_pow() {
     // exposed bug with ordering of variable declarations before switch
     assert_evals_to!(
@@ -2189,6 +2273,7 @@ fn deriv_pow() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn multiple_increment() {
     // the `leaf` value will be incremented multiple times at once
     assert_evals_to!(
@@ -2222,6 +2307,7 @@ fn multiple_increment() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn switch_fuse_rc_non_exhaustive() {
     assert_evals_to!(
         indoc!(
@@ -2251,6 +2337,7 @@ fn switch_fuse_rc_non_exhaustive() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn switch_fuse_rc_exhaustive() {
     assert_evals_to!(
         indoc!(
@@ -2279,6 +2366,7 @@ fn switch_fuse_rc_exhaustive() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn build_then_apply_closure() {
     assert_evals_to!(
         indoc!(
@@ -2292,12 +2380,13 @@ fn build_then_apply_closure() {
                 (\_ -> x) {}
             "#
         ),
-        "long string that is malloced",
-        &'static str
+        RocStr::from("long string that is malloced"),
+        RocStr
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn expanded_result() {
     assert_evals_to!(
         indoc!(
@@ -2328,6 +2417,7 @@ fn expanded_result() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 fn backpassing_result() {
     assert_evals_to!(
@@ -2361,9 +2451,8 @@ fn backpassing_result() {
 }
 
 #[test]
-#[should_panic(
-    expected = "Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 5-5, C 6-7| Ident"
-)]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(expected = "Shadowing { original_region: @57-58, shadow: @74-75 Ident")]
 fn function_malformed_pattern() {
     assert_evals_to!(
         indoc!(
@@ -2379,9 +2468,10 @@ fn function_malformed_pattern() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Hit an erroneous type when creating a layout for")]
 fn call_invalid_layout() {
-    assert_llvm_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 f : I64 -> I64
@@ -2398,9 +2488,10 @@ fn call_invalid_layout() {
 }
 
 #[test]
-#[should_panic(expected = "An expectation failed!")]
+#[cfg(any(feature = "gen-llvm"))]
+#[should_panic(expected = "Failed with 1 failures. Failures: ")]
 fn expect_fail() {
-    assert_evals_to!(
+    assert_expect_failed!(
         indoc!(
             r#"
             expect 1 == 2
@@ -2414,6 +2505,7 @@ fn expect_fail() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn increment_or_double_closure() {
     assert_evals_to!(
         indoc!(
@@ -2451,6 +2543,7 @@ fn increment_or_double_closure() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn module_thunk_is_function() {
     assert_evals_to!(
         indoc!(
@@ -2461,12 +2554,13 @@ fn module_thunk_is_function() {
                 helper = Str.concat
             "#
         ),
-        RocStr::from_slice(b"foobar"),
+        RocStr::from("foobar"),
         RocStr
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn hit_unresolved_type_variable() {
     assert_evals_to!(
@@ -2484,12 +2578,13 @@ fn hit_unresolved_type_variable() {
                     \input -> input
             "#
         ),
-        RocStr::from_slice(b"B"),
+        RocStr::from("B"),
         RocStr
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn pattern_match_empty_record() {
     assert_evals_to!(
         indoc!(
@@ -2509,6 +2604,7 @@ fn pattern_match_empty_record() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn pattern_match_unit_tag() {
     assert_evals_to!(
         indoc!(
@@ -2530,7 +2626,10 @@ fn pattern_match_unit_tag() {
     );
 }
 
+// see for why this is disabled on wasm32 https://github.com/rtfeldman/roc/issues/1687
+#[cfg(not(feature = "wasm-cli-run"))]
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn mirror_llvm_alignment_padding() {
     // see https://github.com/rtfeldman/roc/issues/1569
     assert_evals_to!(
@@ -2547,12 +2646,13 @@ fn mirror_llvm_alignment_padding() {
 
             "#
         ),
-        RocStr::from_slice(b"pass\npass"),
+        RocStr::from("pass\npass"),
         RocStr
     );
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn lambda_set_bool() {
     assert_evals_to!(
         indoc!(
@@ -2577,6 +2677,7 @@ fn lambda_set_bool() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn lambda_set_byte() {
     assert_evals_to!(
         indoc!(
@@ -2602,6 +2703,7 @@ fn lambda_set_byte() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn lambda_set_struct_byte() {
     assert_evals_to!(
         indoc!(
@@ -2615,7 +2717,8 @@ fn lambda_set_struct_byte() {
                     r = Red
 
                     p1 = (\u -> r == u)
-                    oneOfResult = List.map [p1, p1] (\p -> p Green)
+                    foobarbaz = (\p -> p Green)
+                    oneOfResult = List.map [p1, p1] foobarbaz
 
                     when oneOfResult is
                         _ -> 32
@@ -2628,6 +2731,7 @@ fn lambda_set_struct_byte() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn lambda_set_enum_byte_byte() {
     assert_evals_to!(
         indoc!(
@@ -2658,6 +2762,7 @@ fn lambda_set_enum_byte_byte() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_walk_until() {
     // see https://github.com/rtfeldman/roc/issues/1576
     assert_evals_to!(
@@ -2670,7 +2775,7 @@ fn list_walk_until() {
             satisfyA = \_ -> []
 
             oneOfResult =
-                List.walkUntil [ satisfyA ] (\_, _ -> Stop []) []
+                List.walkUntil [ satisfyA ] [] \_, _ -> Stop []
 
             main =
                 when oneOfResult is
@@ -2683,6 +2788,7 @@ fn list_walk_until() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn int_literal_not_specialized_with_annotation() {
     // see https://github.com/rtfeldman/roc/issues/1600
     assert_evals_to!(
@@ -2710,6 +2816,7 @@ fn int_literal_not_specialized_with_annotation() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn int_literal_not_specialized_no_annotation() {
     // see https://github.com/rtfeldman/roc/issues/1600
     assert_evals_to!(
@@ -2736,6 +2843,7 @@ fn int_literal_not_specialized_no_annotation() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn unresolved_tvar_when_capture_is_unused() {
     // see https://github.com/rtfeldman/roc/issues/1585
     assert_evals_to!(
@@ -2762,6 +2870,7 @@ fn unresolved_tvar_when_capture_is_unused() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn value_not_exposed_hits_panic() {
     assert_evals_to!(
@@ -2777,4 +2886,361 @@ fn value_not_exposed_hits_panic() {
         32,
         i64
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn mix_function_and_closure() {
+    // see https://github.com/rtfeldman/roc/pull/1706
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                # foo does not capture any variables
+                # but through unification will get a lambda set that does store information
+                # we must handle that correctly
+                foo = \x -> x
+
+                bar = \y -> \_ -> y
+
+                main : Str
+                main =
+                    (if 1 == 1 then foo else (bar "nope nope nope")) "hello world"
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn mix_function_and_closure_level_of_indirection() {
+    // see https://github.com/rtfeldman/roc/pull/1706
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                foo = \x -> x
+
+                bar = \y -> \_ -> y
+
+                f = (if 1 == 1 then foo else (bar "nope nope nope"))
+
+                main : Str
+                main =
+                    f "hello world"
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn do_pass_bool_byte_closure_layout() {
+    // see https://github.com/rtfeldman/roc/pull/1706
+    // the distinction is actually important, dropping that info means some functions just get
+    // skipped
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            ## PARSER
+
+            Parser a : List U8 -> List [Pair a (List U8)]
+
+
+            ## ANY
+
+            # If successful, the any parser consumes one character
+
+            any: Parser U8
+            any = \inp ->
+               when List.first inp is
+                 Ok u -> [Pair u (List.drop inp 1)]
+                 _ -> [ ]
+
+
+
+            ## SATISFY
+
+            satisfy : (U8 -> Bool) -> Parser U8
+            satisfy = \predicate ->
+                \input ->
+                    walker = \accum, (Pair u rest) ->
+                        if predicate u then
+                            Stop [ Pair u rest ]
+
+                        else
+                            Stop accum
+
+                    List.walkUntil (any input) [] walker
+
+
+
+            oneOf : List (Parser a) -> Parser a
+            oneOf = \parserList ->
+                \input ->
+                    walker = \accum, p ->
+                        output = p input
+                        if List.len output == 1 then
+                            Stop output
+
+                        else
+                            Continue accum
+
+                    List.walkUntil parserList [] walker
+
+
+            satisfyA = satisfy (\u -> u == 97) # recognize 97
+            satisfyB = satisfy (\u -> u == 98) # recognize 98
+
+            test1 = if List.len ((oneOf [satisfyA, satisfyB]) [97, 98, 99, 100] ) == 1  then "PASS" else "FAIL"
+            test2 = if List.len ((oneOf [satisfyA, satisfyB]) [98, 99, 100, 97] ) == 1  then "PASS" else "FAIL"
+            test3 = if List.len ((oneOf [satisfyB , satisfyA]) [98, 99, 100, 97] ) == 1  then "PASS" else "FAIL"
+            test4 = if List.len ((oneOf [satisfyA, satisfyB]) [99, 100, 101] ) == 0  then "PASS" else "FAIL"
+
+
+            main : Str
+            main = [test1, test2, test3, test4] |> Str.joinWith ", "
+       "#
+        ),
+        RocStr::from("PASS, PASS, PASS, PASS"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn nested_rigid_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                foo : List a -> List a
+                foo = \list ->
+                    p2 : List a
+                    p2 = list
+
+                    p2
+
+                main =
+                    when foo [] is
+                        _ -> "hello world"
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn nested_rigid_alias() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                Identity a : [ @Identity a ]
+
+                foo : Identity a -> Identity a
+                foo = \list ->
+                    p2 : Identity a
+                    p2 = list
+
+                    p2
+
+                main =
+                    when foo (@Identity "foo") is
+                        _ -> "hello world"
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn nested_rigid_tag_union() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                foo : [ @Identity a ] -> [ @Identity a ]
+                foo = \list ->
+                    p2 : [ @Identity a ]
+                    p2 = list
+
+                    p2
+
+                main =
+                    when foo (@Identity "foo") is
+                        _ -> "hello world"
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn call_that_needs_closure_parameter() {
+    // here both p2 is lifted to the top-level, which means that `list` must be
+    // passed to it from `manyAux`.
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Step state a : [ Loop state, Done a ]
+
+            manyAux : List a -> [ Pair (Step (List a) (List a))]
+            manyAux = \list ->
+                    p2 = \_ -> Pair (Done list)
+
+                    p2 "foo"
+
+            manyAuxTest =  (manyAux [ ]) == Pair (Loop [97])
+
+            runTest = \t -> if t then "PASS" else "FAIL"
+
+            runTest manyAuxTest
+            "#
+        ),
+        RocStr::from("FAIL"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn alias_defined_out_of_order() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main : Foo
+            main = "foo"
+
+            Foo : Bar
+            Bar : Str
+
+            "#
+        ),
+        RocStr::from("foo"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn recursively_build_effect() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            greeting =
+                hi = "Hello"
+                name = "World"
+
+                "\(hi), \(name)!"
+
+            main =
+                when nestHelp 4 is
+                    _ -> greeting
+
+            nestHelp : I64 -> XEffect {}
+            nestHelp = \m ->
+                when m is
+                    0 ->
+                        always {}
+
+                    _ ->
+                        always {} |> after \_ -> nestHelp (m - 1)
+
+
+            XEffect a : [ @XEffect ({} -> a) ]
+
+            always : a -> XEffect a
+            always = \x -> @XEffect (\{} -> x)
+
+            after : XEffect a, (a -> XEffect b) -> XEffect b
+            after = \(@XEffect e), toB ->
+                @XEffect \{} ->
+                    when toB (e {}) is
+                        @XEffect e2 ->
+                            e2 {}
+            "#
+        ),
+        RocStr::from("Hello, World!"),
+        RocStr
+    );
+}
+
+#[test]
+#[ignore = "TODO; currently generates bad code because `a` isn't specialized inside the closure."]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymophic_expression_captured_inside_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            asU8 : U8 -> U8
+            asU8 = \_ -> 30
+
+            main =
+                a = 15
+                f = \{} ->
+                    asU8 a
+
+                f {}
+            "#
+        ),
+        30,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2322() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            double = \x -> x * 2
+            doubleBind = \x -> (\_ -> double x)
+            doubleThree = doubleBind 3
+            doubleThree {}
+            "#
+        ),
+        6,
+        i64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn box_and_unbox_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box (Str.concat "Leverage " "agile frameworks to provide a robust synopsis for high level overviews"))
+            "#
+        ),
+        RocStr::from(
+            "Leverage agile frameworks to provide a robust synopsis for high level overviews"
+        ),
+        RocStr
+    )
 }

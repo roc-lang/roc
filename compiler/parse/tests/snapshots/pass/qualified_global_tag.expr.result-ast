@@ -1,0 +1,6 @@
+MalformedIdent(
+    "One.Two.Whee",
+    QualifiedTag(
+        @12,
+    ),
+)

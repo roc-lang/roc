@@ -15,7 +15,10 @@ type Key<S: UnificationStore> = <S as UnificationStore>::Key;
 /// backing store types. The most common such type is `InPlace`,
 /// which indicates a standard, mutable unification table.
 pub trait UnificationStore:
-    ops::Index<usize, Output = VarValue<Key<Self>>> + Clone + Default
+    ops::Index<usize, Output = VarValue<Key<Self>>>
+    + ops::IndexMut<usize, Output = VarValue<Key<Self>>>
+    + Clone
+    + Default
 {
     type Key: UnifyKey<Value = Self::Value>;
     type Value: Clone + Debug;
@@ -100,8 +103,8 @@ impl<K: UnifyKey> UnificationStore for InPlace<K> {
     }
 
     #[inline]
-    fn reset_unifications(&mut self, mut value: impl FnMut(usize) -> VarValue<Self::Key>) {
-        self.values.set_all(|i| value(i));
+    fn reset_unifications(&mut self, value: impl FnMut(usize) -> VarValue<Self::Key>) {
+        self.values.set_all(value);
     }
 
     fn len(&self) -> usize {
@@ -138,6 +141,15 @@ where
     type Output = VarValue<K>;
     fn index(&self, index: usize) -> &VarValue<K> {
         &self.values[index]
+    }
+}
+
+impl<K> ops::IndexMut<usize> for InPlace<K>
+where
+    K: UnifyKey,
+{
+    fn index_mut(&mut self, index: usize) -> &mut VarValue<K> {
+        &mut self.values[index]
     }
 }
 

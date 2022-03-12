@@ -1,9 +1,16 @@
-use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage, PTR_SIZE};
-use crate::Relocation;
+use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
+use crate::{
+    single_register_floats, single_register_int_builtins, single_register_integers,
+    single_register_layouts, Relocation,
+};
 use bumpalo::collections::Vec;
-use roc_collections::all::MutMap;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
+use roc_target::TargetInfo;
+
+const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
 
 // Not sure exactly how I want to represent registers.
 // If we want max speed, we would likely make them structs that impl the same trait to avoid ifs.
@@ -26,7 +33,11 @@ pub enum X86_64GeneralReg {
     R14 = 14,
     R15 = 15,
 }
-impl RegTrait for X86_64GeneralReg {}
+impl RegTrait for X86_64GeneralReg {
+    fn value(&self) -> u8 {
+        *self as u8
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub enum X86_64FloatReg {
@@ -47,15 +58,25 @@ pub enum X86_64FloatReg {
     XMM14 = 14,
     XMM15 = 15,
 }
-impl RegTrait for X86_64FloatReg {}
+impl RegTrait for X86_64FloatReg {
+    fn value(&self) -> u8 {
+        *self as u8
+    }
+}
 
+#[derive(Copy, Clone)]
 pub struct X86_64Assembler {}
+#[derive(Copy, Clone)]
 pub struct X86_64WindowsFastcall {}
+#[derive(Copy, Clone)]
 pub struct X86_64SystemV {}
 
 const STACK_ALIGNMENT: u8 = 16;
 
-impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
+impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64SystemV {
+    const BASE_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RBP;
+    const STACK_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RSP;
+
     const GENERAL_PARAM_REGS: &'static [X86_64GeneralReg] = &[
         X86_64GeneralReg::RDI,
         X86_64GeneralReg::RSI,
@@ -80,7 +101,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         X86_64GeneralReg::RAX,
         X86_64GeneralReg::RCX,
         X86_64GeneralReg::RDX,
-        // Don't use stack pionter: X86_64GeneralReg::RSP,
+        // Don't use stack pointer: X86_64GeneralReg::RSP,
         X86_64GeneralReg::RSI,
         X86_64GeneralReg::RDI,
         X86_64GeneralReg::R8,
@@ -146,13 +167,15 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
     #[inline(always)]
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        general_saved_regs: &[X86_64GeneralReg],
+        saved_general_regs: &[X86_64GeneralReg],
+        saved_float_regs: &[X86_64FloatReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<i32, String> {
+    ) -> i32 {
         x86_64_generic_setup_stack(
             buf,
-            general_saved_regs,
+            saved_general_regs,
+            saved_float_regs,
             requested_stack_size,
             fn_call_stack_size,
         )
@@ -161,13 +184,15 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
     #[inline(always)]
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        general_saved_regs: &[X86_64GeneralReg],
+        saved_general_regs: &[X86_64GeneralReg],
+        saved_float_regs: &[X86_64FloatReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<(), String> {
+    ) {
         x86_64_generic_cleanup_stack(
             buf,
-            general_saved_regs,
+            saved_general_regs,
+            saved_float_regs,
             aligned_stack_size,
             fn_call_stack_size,
         )
@@ -175,217 +200,321 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
 
     #[inline(always)]
     fn load_args<'a>(
-        symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64SystemV,
+        >,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
-    ) -> Result<(), String> {
-        let mut base_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
+    ) {
+        let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
         let mut general_i = 0;
         let mut float_i = 0;
-        if X86_64SystemV::returns_via_arg_pointer(ret_layout)? {
-            symbol_map.insert(
-                Symbol::RET_POINTER,
-                SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[general_i]),
-            );
+        if X86_64SystemV::returns_via_arg_pointer(ret_layout) {
+            storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[0]);
             general_i += 1;
         }
         for (layout, sym) in args.iter() {
+            let stack_size = layout.stack_size(TARGET_INFO);
             match layout {
-                Layout::Builtin(Builtin::Int64) => {
+                single_register_integers!() => {
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
-                        symbol_map.insert(
-                            *sym,
-                            SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[general_i]),
-                        );
+                        storage_manager.general_reg_arg(sym, Self::GENERAL_PARAM_REGS[general_i]);
                         general_i += 1;
                     } else {
-                        base_offset += 8;
-                        symbol_map.insert(*sym, SymbolStorage::Base(base_offset));
+                        storage_manager.primitive_stack_arg(sym, arg_offset);
+                        arg_offset += 8;
                     }
                 }
-                Layout::Builtin(Builtin::Float64) => {
+                single_register_floats!() => {
                     if float_i < Self::FLOAT_PARAM_REGS.len() {
-                        symbol_map.insert(
-                            *sym,
-                            SymbolStorage::FloatReg(Self::FLOAT_PARAM_REGS[float_i]),
-                        );
+                        storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[float_i]);
                         float_i += 1;
                     } else {
-                        base_offset += 8;
-                        symbol_map.insert(*sym, SymbolStorage::Base(base_offset));
+                        storage_manager.primitive_stack_arg(sym, arg_offset);
+                        arg_offset += 8;
                     }
                 }
+                Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
+                    if general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+                        // Load the value from the param reg into a useable base offset.
+                        let src1 = Self::GENERAL_PARAM_REGS[general_i];
+                        let src2 = Self::GENERAL_PARAM_REGS[general_i + 1];
+                        let base_offset = storage_manager.claim_stack_area(sym, 16);
+                        X86_64Assembler::mov_base32_reg64(buf, base_offset, src1);
+                        X86_64Assembler::mov_base32_reg64(buf, base_offset + 8, src2);
+                        general_i += 2;
+                    } else {
+                        todo!("loading lists and strings args on the stack");
+                    }
+                }
+                _ if stack_size == 0 => {
+                    storage_manager.no_data_arg(sym);
+                }
+                _ if stack_size > 16 => {
+                    // TODO: Double check this.
+                    storage_manager.complex_stack_arg(sym, arg_offset, stack_size);
+                    arg_offset += stack_size as i32;
+                }
                 x => {
-                    return Err(format!(
-                        "Loading args with layout {:?} not yet implementd",
-                        x
-                    ));
+                    todo!("Loading args with layout {:?}", x);
                 }
             }
         }
-        Ok(())
     }
 
     #[inline(always)]
     fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
-        symbol_map: &MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
-        args: &'a [Symbol],
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64SystemV,
+        >,
+        dst: &Symbol,
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
-    ) -> Result<u32, String> {
-        let mut stack_offset = Self::SHADOW_SPACE_SIZE as i32;
+    ) {
+        let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
         let mut general_i = 0;
         let mut float_i = 0;
-        // For most return layouts we will do nothing.
-        // In some cases, we need to put the return address as the first arg.
-        match ret_layout {
-            Layout::Builtin(Builtin::Int64) => {}
-            Layout::Builtin(Builtin::Float64) => {}
-            x => {
-                return Err(format!(
-                    "receiving return type, {:?}, is not yet implemented",
-                    x
-                ));
-            }
+        if Self::returns_via_arg_pointer(ret_layout) {
+            // Save space on the stack for the result we will be return.
+            let base_offset =
+                storage_manager.claim_stack_area(dst, ret_layout.stack_size(TARGET_INFO));
+            // Set the first reg to the address base + offset.
+            let ret_reg = Self::GENERAL_PARAM_REGS[general_i];
+            general_i += 1;
+            X86_64Assembler::add_reg64_reg64_imm32(
+                buf,
+                ret_reg,
+                X86_64GeneralReg::RBP,
+                base_offset,
+            );
         }
-        for (i, layout) in arg_layouts.iter().enumerate() {
+        for (sym, layout) in args.iter().zip(arg_layouts.iter()) {
             match layout {
-                Layout::Builtin(Builtin::Int64) => {
+                single_register_integers!() => {
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
-                        // Load the value to the param reg.
-                        let dst = Self::GENERAL_PARAM_REGS[general_i];
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
-                            SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg(reg, _) => {
-                                X86_64Assembler::mov_reg64_reg64(buf, dst, *reg);
-                            }
-                            SymbolStorage::Base(offset) => {
-                                X86_64Assembler::mov_reg64_base32(buf, dst, *offset);
-                            }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg(_, _) => {
-                                return Err(
-                                    "Cannot load floating point symbol into GeneralReg".to_string()
-                                )
-                            }
-                        }
+                        storage_manager.load_to_specified_general_reg(
+                            buf,
+                            sym,
+                            Self::GENERAL_PARAM_REGS[general_i],
+                        );
                         general_i += 1;
                     } else {
-                        // Load the value to the stack.
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
-                            SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg(reg, _) => {
-                                X86_64Assembler::mov_stack32_reg64(buf, stack_offset, *reg);
-                            }
-                            SymbolStorage::Base(offset) => {
-                                // Use RAX as a tmp reg because it will be free before function calls.
-                                X86_64Assembler::mov_reg64_base32(
-                                    buf,
-                                    X86_64GeneralReg::RAX,
-                                    *offset,
-                                );
-                                X86_64Assembler::mov_stack32_reg64(
-                                    buf,
-                                    stack_offset,
-                                    X86_64GeneralReg::RAX,
-                                );
-                            }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg(_, _) => {
-                                return Err(
-                                    "Cannot load floating point symbol into GeneralReg".to_string()
-                                )
-                            }
-                        }
-                        stack_offset += 8;
+                        // Copy to stack using return reg as buffer.
+                        storage_manager.load_to_specified_general_reg(
+                            buf,
+                            sym,
+                            Self::GENERAL_RETURN_REGS[0],
+                        );
+                        X86_64Assembler::mov_stack32_reg64(
+                            buf,
+                            tmp_stack_offset,
+                            Self::GENERAL_RETURN_REGS[0],
+                        );
+                        tmp_stack_offset += 8;
                     }
                 }
-                Layout::Builtin(Builtin::Float64) => {
+                single_register_floats!() => {
                     if float_i < Self::FLOAT_PARAM_REGS.len() {
-                        // Load the value to the param reg.
-                        let dst = Self::FLOAT_PARAM_REGS[float_i];
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
-                            SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg(reg, _) => {
-                                X86_64Assembler::mov_freg64_freg64(buf, dst, *reg);
-                            }
-                            SymbolStorage::Base(offset) => {
-                                X86_64Assembler::mov_freg64_base32(buf, dst, *offset);
-                            }
-                            SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg(_, _) => {
-                                return Err("Cannot load general symbol into FloatReg".to_string())
-                            }
-                        }
+                        storage_manager.load_to_specified_float_reg(
+                            buf,
+                            sym,
+                            Self::FLOAT_PARAM_REGS[float_i],
+                        );
                         float_i += 1;
                     } else {
-                        // Load the value to the stack.
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
-                            SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg(reg, _) => {
-                                X86_64Assembler::mov_stack32_freg64(buf, stack_offset, *reg);
-                            }
-                            SymbolStorage::Base(offset) => {
-                                // Use XMM0 as a tmp reg because it will be free before function calls.
-                                X86_64Assembler::mov_freg64_base32(
-                                    buf,
-                                    X86_64FloatReg::XMM0,
-                                    *offset,
-                                );
-                                X86_64Assembler::mov_stack32_freg64(
-                                    buf,
-                                    stack_offset,
-                                    X86_64FloatReg::XMM0,
-                                );
-                            }
-                            SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg(_, _) => {
-                                return Err("Cannot load general symbol into FloatReg".to_string())
-                            }
-                        }
-                        stack_offset += 8;
+                        // Copy to stack using return reg as buffer.
+                        storage_manager.load_to_specified_float_reg(
+                            buf,
+                            sym,
+                            Self::FLOAT_RETURN_REGS[0],
+                        );
+                        X86_64Assembler::mov_stack32_freg64(
+                            buf,
+                            tmp_stack_offset,
+                            Self::FLOAT_RETURN_REGS[0],
+                        );
+                        tmp_stack_offset += 8;
                     }
                 }
+                Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
+                    if general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+                        let (base_offset, _size) = storage_manager.stack_offset_and_size(sym);
+                        debug_assert_eq!(base_offset % 8, 0);
+                        X86_64Assembler::mov_reg64_base32(
+                            buf,
+                            Self::GENERAL_PARAM_REGS[general_i],
+                            base_offset,
+                        );
+                        X86_64Assembler::mov_reg64_base32(
+                            buf,
+                            Self::GENERAL_PARAM_REGS[general_i + 1],
+                            base_offset + 8,
+                        );
+                        general_i += 2;
+                    } else {
+                        todo!("calling functions with strings on the stack");
+                    }
+                }
+                x if x.stack_size(TARGET_INFO) == 0 => {}
+                x if x.stack_size(TARGET_INFO) > 16 => {
+                    // TODO: Double check this.
+                    // Just copy onto the stack.
+                    let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
+                    debug_assert_eq!(base_offset % 8, 0);
+                    storage_manager.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
+                        for i in (0..size as i32).step_by(8) {
+                            X86_64Assembler::mov_reg64_base32(buf, reg, base_offset + i);
+                            X86_64Assembler::mov_stack32_reg64(buf, tmp_stack_offset + i, reg);
+                        }
+                    });
+                    tmp_stack_offset += size as i32;
+                }
                 x => {
-                    return Err(format!(
-                        "calling with arg type, {:?}, is not yet implemented",
-                        x
-                    ));
+                    todo!("calling with arg type, {:?}", x);
                 }
             }
         }
-        Ok(stack_offset as u32)
+        storage_manager.update_fn_call_stack_size(tmp_stack_offset as u32);
     }
 
-    fn return_struct<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _struct_offset: i32,
-        _struct_size: u32,
-        _field_layouts: &[Layout<'a>],
-        _ret_reg: Option<X86_64GeneralReg>,
-    ) -> Result<(), String> {
-        Err("Returning structs not yet implemented for X86_64".to_string())
+    fn return_complex_symbol<'a>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64SystemV,
+        >,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+    ) {
+        match layout {
+            single_register_layouts!() => {
+                internal_error!("single register layouts are not complex symbols");
+            }
+            Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
+                let (base_offset, _size) = storage_manager.stack_offset_and_size(sym);
+                debug_assert_eq!(base_offset % 8, 0);
+                X86_64Assembler::mov_reg64_base32(buf, Self::GENERAL_RETURN_REGS[0], base_offset);
+                X86_64Assembler::mov_reg64_base32(
+                    buf,
+                    Self::GENERAL_RETURN_REGS[1],
+                    base_offset + 8,
+                );
+            }
+            x if x.stack_size(TARGET_INFO) == 0 => {}
+            x if !Self::returns_via_arg_pointer(x) => {
+                let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
+                debug_assert_eq!(base_offset % 8, 0);
+                if size <= 8 {
+                    X86_64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[0],
+                        base_offset,
+                    );
+                } else if size <= 16 {
+                    X86_64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[0],
+                        base_offset,
+                    );
+                    X86_64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[1],
+                        base_offset + 8,
+                    );
+                } else {
+                    internal_error!(
+                        "types that don't return via arg pointer must be less than 16 bytes"
+                    );
+                }
+            }
+            _ => {
+                // This is a large type returned via the arg pointer.
+                storage_manager.copy_symbol_to_arg_pointer(buf, sym, layout);
+                // Also set the return reg to the arg pointer.
+                storage_manager.load_to_specified_general_reg(
+                    buf,
+                    &Symbol::RET_POINTER,
+                    Self::GENERAL_RETURN_REGS[0],
+                );
+            }
+        }
     }
 
-    fn returns_via_arg_pointer(ret_layout: &Layout) -> Result<bool, String> {
-        // TODO: This may need to be more complex/extended to fully support the calling convention.
-        // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
-        Ok(ret_layout.stack_size(PTR_SIZE) > 16)
+    fn load_returned_complex_symbol<'a>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64SystemV,
+        >,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+    ) {
+        match layout {
+            single_register_layouts!() => {
+                internal_error!("single register layouts are not complex symbols");
+            }
+            Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
+                let offset = storage_manager.claim_stack_area(sym, 16);
+                X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+                X86_64Assembler::mov_base32_reg64(buf, offset + 8, Self::GENERAL_RETURN_REGS[1]);
+            }
+            x if x.stack_size(TARGET_INFO) == 0 => {}
+            x if !Self::returns_via_arg_pointer(x) => {
+                let size = layout.stack_size(TARGET_INFO);
+                let offset = storage_manager.claim_stack_area(sym, size);
+                if size <= 8 {
+                    X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+                } else if size <= 16 {
+                    X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+                    X86_64Assembler::mov_base32_reg64(
+                        buf,
+                        offset + 8,
+                        Self::GENERAL_RETURN_REGS[1],
+                    );
+                } else {
+                    internal_error!(
+                        "types that don't return via arg pointer must be less than 16 bytes"
+                    );
+                }
+            }
+            _ => {
+                // This should have been recieved via an arg pointer.
+                // That means the value is already loaded onto the stack area we allocated before the call.
+                // Nothing to do.
+            }
+        }
     }
 }
 
-impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
+impl X86_64SystemV {
+    fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
+        // TODO: This will need to be more complex/extended to fully support the calling convention.
+        // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
+        ret_layout.stack_size(TARGET_INFO) > 16
+    }
+}
+
+impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64WindowsFastcall {
+    const BASE_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RBP;
+    const STACK_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RSP;
+
     const GENERAL_PARAM_REGS: &'static [X86_64GeneralReg] = &[
         X86_64GeneralReg::RCX,
         X86_64GeneralReg::RDX,
@@ -397,7 +526,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         // The regs we want to use first should be at the end of this vec.
         // We will use pop to get which reg to use next
 
-        // Don't use stack pionter: X86_64GeneralReg::RSP,
+        // Don't use stack pointer: X86_64GeneralReg::RSP,
         // Don't use frame pointer: X86_64GeneralReg::RBP,
 
         // Use callee saved regs last.
@@ -480,246 +609,227 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
     #[inline(always)]
     fn setup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        saved_regs: &[X86_64GeneralReg],
+        saved_general_regs: &[X86_64GeneralReg],
+        saved_float_regs: &[X86_64FloatReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<i32, String> {
-        x86_64_generic_setup_stack(buf, saved_regs, requested_stack_size, fn_call_stack_size)
+    ) -> i32 {
+        x86_64_generic_setup_stack(
+            buf,
+            saved_general_regs,
+            saved_float_regs,
+            requested_stack_size,
+            fn_call_stack_size,
+        )
     }
 
     #[inline(always)]
     fn cleanup_stack<'a>(
         buf: &mut Vec<'a, u8>,
-        saved_regs: &[X86_64GeneralReg],
+        saved_general_regs: &[X86_64GeneralReg],
+        saved_float_regs: &[X86_64FloatReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<(), String> {
-        x86_64_generic_cleanup_stack(buf, saved_regs, aligned_stack_size, fn_call_stack_size)
+    ) {
+        x86_64_generic_cleanup_stack(
+            buf,
+            saved_general_regs,
+            saved_float_regs,
+            aligned_stack_size,
+            fn_call_stack_size,
+        )
     }
 
     #[inline(always)]
     fn load_args<'a>(
-        symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
+        _buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64WindowsFastcall,
+        >,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
-    ) -> Result<(), String> {
-        let mut base_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
+    ) {
+        let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
         let mut i = 0;
-        if X86_64WindowsFastcall::returns_via_arg_pointer(ret_layout)? {
-            symbol_map.insert(
-                Symbol::RET_POINTER,
-                SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[i]),
-            );
+        if X86_64WindowsFastcall::returns_via_arg_pointer(ret_layout) {
+            storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[i]);
             i += 1;
         }
         for (layout, sym) in args.iter() {
             if i < Self::GENERAL_PARAM_REGS.len() {
                 match layout {
-                    Layout::Builtin(Builtin::Int64) => {
-                        symbol_map
-                            .insert(*sym, SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[i]));
+                    single_register_integers!() => {
+                        storage_manager.general_reg_arg(sym, Self::GENERAL_PARAM_REGS[i]);
+                        i += 1;
                     }
-                    Layout::Builtin(Builtin::Float64) => {
-                        symbol_map.insert(*sym, SymbolStorage::FloatReg(Self::FLOAT_PARAM_REGS[i]));
+                    single_register_floats!() => {
+                        storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[i]);
+                        i += 1;
                     }
+                    Layout::Builtin(Builtin::Str) => {
+                        // I think this just needs to be passed on the stack, so not a huge deal.
+                        todo!("Passing str args with Windows fast call");
+                    }
+                    x if x.stack_size(TARGET_INFO) == 0 => {}
                     x => {
-                        return Err(format!(
-                            "Loading args with layout {:?} not yet implementd",
-                            x
-                        ));
+                        todo!("Loading args with layout {:?}", x);
                     }
                 }
-                i += 1;
             } else {
-                base_offset += match layout {
-                    Layout::Builtin(Builtin::Int64) => 8,
-                    Layout::Builtin(Builtin::Float64) => 8,
+                match layout {
+                    single_register_layouts!() => {
+                        storage_manager.primitive_stack_arg(sym, arg_offset);
+                        arg_offset += 8;
+                    }
                     x => {
-                        return Err(format!(
-                            "Loading args with layout {:?} not yet implemented",
-                            x
-                        ));
+                        todo!("Loading args with layout {:?}", x);
                     }
                 };
-                symbol_map.insert(*sym, SymbolStorage::Base(base_offset));
             }
         }
-        Ok(())
     }
 
     #[inline(always)]
     fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
-        symbol_map: &MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
-        args: &'a [Symbol],
+        storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64WindowsFastcall,
+        >,
+        dst: &Symbol,
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
-    ) -> Result<u32, String> {
-        let mut stack_offset = Self::SHADOW_SPACE_SIZE as i32;
-        let mut reg_i = 0;
-        // For most return layouts we will do nothing.
-        // In some cases, we need to put the return address as the first arg.
-        match ret_layout {
-            Layout::Builtin(Builtin::Int64) => {}
-            Layout::Builtin(Builtin::Float64) => {}
-            x => {
-                return Err(format!(
-                    "receiving return type, {:?}, is not yet implemented",
-                    x
-                ));
-            }
+    ) {
+        let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
+        if Self::returns_via_arg_pointer(ret_layout) {
+            // Save space on the stack for the arg we will return.
+            storage_manager.claim_stack_area(dst, ret_layout.stack_size(TARGET_INFO));
+            todo!("claim first parama reg for the address");
         }
-        for (i, layout) in arg_layouts.iter().enumerate() {
+        for (i, (sym, layout)) in args.iter().zip(arg_layouts.iter()).enumerate() {
             match layout {
-                Layout::Builtin(Builtin::Int64) => {
+                single_register_integers!() => {
                     if i < Self::GENERAL_PARAM_REGS.len() {
-                        // Load the value to the param reg.
-                        let dst = Self::GENERAL_PARAM_REGS[reg_i];
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
-                            SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg(reg, _) => {
-                                X86_64Assembler::mov_reg64_reg64(buf, dst, *reg);
-                            }
-                            SymbolStorage::Base(offset) => {
-                                X86_64Assembler::mov_reg64_base32(buf, dst, *offset);
-                            }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg(_, _) => {
-                                return Err(
-                                    "Cannot load floating point symbol into GeneralReg".to_string()
-                                )
-                            }
-                        }
-                        reg_i += 1;
+                        storage_manager.load_to_specified_general_reg(
+                            buf,
+                            sym,
+                            Self::GENERAL_PARAM_REGS[i],
+                        );
                     } else {
-                        // Load the value to the stack.
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
-                            SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg(reg, _) => {
-                                X86_64Assembler::mov_stack32_reg64(buf, stack_offset, *reg);
-                            }
-                            SymbolStorage::Base(offset) => {
-                                // Use RAX as a tmp reg because it will be free before function calls.
-                                X86_64Assembler::mov_reg64_base32(
-                                    buf,
-                                    X86_64GeneralReg::RAX,
-                                    *offset,
-                                );
-                                X86_64Assembler::mov_stack32_reg64(
-                                    buf,
-                                    stack_offset,
-                                    X86_64GeneralReg::RAX,
-                                );
-                            }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg(_, _) => {
-                                return Err(
-                                    "Cannot load floating point symbol into GeneralReg".to_string()
-                                )
-                            }
-                        }
-                        stack_offset += 8;
+                        // Copy to stack using return reg as buffer.
+                        storage_manager.load_to_specified_general_reg(
+                            buf,
+                            sym,
+                            Self::GENERAL_RETURN_REGS[0],
+                        );
+                        X86_64Assembler::mov_stack32_reg64(
+                            buf,
+                            tmp_stack_offset,
+                            Self::GENERAL_RETURN_REGS[0],
+                        );
+                        tmp_stack_offset += 8;
                     }
                 }
-                Layout::Builtin(Builtin::Float64) => {
+                single_register_floats!() => {
                     if i < Self::FLOAT_PARAM_REGS.len() {
-                        // Load the value to the param reg.
-                        let dst = Self::FLOAT_PARAM_REGS[reg_i];
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
-                            SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg(reg, _) => {
-                                X86_64Assembler::mov_freg64_freg64(buf, dst, *reg);
-                            }
-                            SymbolStorage::Base(offset) => {
-                                X86_64Assembler::mov_freg64_base32(buf, dst, *offset);
-                            }
-                            SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg(_, _) => {
-                                return Err("Cannot load general symbol into FloatReg".to_string())
-                            }
-                        }
-                        reg_i += 1;
+                        storage_manager.load_to_specified_float_reg(
+                            buf,
+                            sym,
+                            Self::FLOAT_PARAM_REGS[i],
+                        );
                     } else {
-                        // Load the value to the stack.
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
-                            SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg(reg, _) => {
-                                X86_64Assembler::mov_stack32_freg64(buf, stack_offset, *reg);
-                            }
-                            SymbolStorage::Base(offset) => {
-                                // Use XMM0 as a tmp reg because it will be free before function calls.
-                                X86_64Assembler::mov_freg64_base32(
-                                    buf,
-                                    X86_64FloatReg::XMM0,
-                                    *offset,
-                                );
-                                X86_64Assembler::mov_stack32_freg64(
-                                    buf,
-                                    stack_offset,
-                                    X86_64FloatReg::XMM0,
-                                );
-                            }
-                            SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg(_, _) => {
-                                return Err("Cannot load general symbol into FloatReg".to_string())
-                            }
-                        }
-                        stack_offset += 8;
+                        // Copy to stack using return reg as buffer.
+                        storage_manager.load_to_specified_float_reg(
+                            buf,
+                            sym,
+                            Self::FLOAT_RETURN_REGS[0],
+                        );
+                        X86_64Assembler::mov_stack32_freg64(
+                            buf,
+                            tmp_stack_offset,
+                            Self::FLOAT_RETURN_REGS[0],
+                        );
+                        tmp_stack_offset += 8;
                     }
                 }
+                Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
+                    // I think this just needs to be passed on the stack, so not a huge deal.
+                    todo!("Passing str args with Windows fast call");
+                }
+                x if x.stack_size(TARGET_INFO) == 0 => {}
                 x => {
-                    return Err(format!(
-                        "calling with arg type, {:?}, is not yet implemented",
-                        x
-                    ));
+                    todo!("calling with arg type, {:?}", x);
                 }
             }
         }
-        Ok(stack_offset as u32)
+        storage_manager.update_fn_call_stack_size(tmp_stack_offset as u32);
     }
 
-    fn return_struct<'a>(
+    fn return_complex_symbol<'a>(
         _buf: &mut Vec<'a, u8>,
-        _struct_offset: i32,
-        _struct_size: u32,
-        _field_layouts: &[Layout<'a>],
-        _ret_reg: Option<X86_64GeneralReg>,
-    ) -> Result<(), String> {
-        Err("Returning structs not yet implemented for X86_64WindowsFastCall".to_string())
+        _storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64WindowsFastcall,
+        >,
+        _sym: &Symbol,
+        _layout: &Layout<'a>,
+    ) {
+        todo!("Returning complex symbols for X86_64");
     }
 
-    fn returns_via_arg_pointer(ret_layout: &Layout) -> Result<bool, String> {
+    fn load_returned_complex_symbol<'a>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<
+            'a,
+            X86_64GeneralReg,
+            X86_64FloatReg,
+            X86_64Assembler,
+            X86_64WindowsFastcall,
+        >,
+        _sym: &Symbol,
+        _layout: &Layout<'a>,
+    ) {
+        todo!("Loading returned complex symbols for X86_64");
+    }
+}
+
+impl X86_64WindowsFastcall {
+    fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
         // TODO: This is not fully correct there are some exceptions for "vector" types.
         // details here: https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160#return-values
-        Ok(ret_layout.stack_size(PTR_SIZE) > 8)
+        ret_layout.stack_size(TARGET_INFO) > 8
     }
 }
 
 #[inline(always)]
 fn x86_64_generic_setup_stack<'a>(
     buf: &mut Vec<'a, u8>,
-    saved_regs: &[X86_64GeneralReg],
+    saved_general_regs: &[X86_64GeneralReg],
+    saved_float_regs: &[X86_64FloatReg],
     requested_stack_size: i32,
     fn_call_stack_size: i32,
-) -> Result<i32, String> {
+) -> i32 {
     X86_64Assembler::push_reg64(buf, X86_64GeneralReg::RBP);
     X86_64Assembler::mov_reg64_reg64(buf, X86_64GeneralReg::RBP, X86_64GeneralReg::RSP);
 
-    let full_stack_size = requested_stack_size
-        .checked_add(8 * saved_regs.len() as i32)
-        .ok_or("Ran out of stack space")?
-        .checked_add(fn_call_stack_size)
-        .ok_or("Ran out of stack space")?;
+    let full_stack_size = match requested_stack_size
+        .checked_add(8 * (saved_general_regs.len() + saved_float_regs.len()) as i32)
+        .and_then(|size| size.checked_add(fn_call_stack_size))
+    {
+        Some(size) => size,
+        _ => internal_error!("Ran out of stack space"),
+    };
     let alignment = if full_stack_size <= 0 {
         0
     } else {
@@ -741,16 +851,20 @@ fn x86_64_generic_setup_stack<'a>(
 
             // Put values at the top of the stack to avoid conflicts with previously saved variables.
             let mut offset = aligned_stack_size - fn_call_stack_size;
-            for reg in saved_regs {
+            for reg in saved_general_regs {
                 X86_64Assembler::mov_base32_reg64(buf, -offset, *reg);
                 offset -= 8;
             }
-            Ok(aligned_stack_size)
+            for reg in saved_float_regs {
+                X86_64Assembler::mov_base32_freg64(buf, -offset, *reg);
+                offset -= 8;
+            }
+            aligned_stack_size
         } else {
-            Ok(0)
+            0
         }
     } else {
-        Err("Ran out of stack space".to_string())
+        internal_error!("Ran out of stack space");
     }
 }
 
@@ -758,14 +872,19 @@ fn x86_64_generic_setup_stack<'a>(
 #[allow(clippy::unnecessary_wraps)]
 fn x86_64_generic_cleanup_stack<'a>(
     buf: &mut Vec<'a, u8>,
-    saved_regs: &[X86_64GeneralReg],
+    saved_general_regs: &[X86_64GeneralReg],
+    saved_float_regs: &[X86_64FloatReg],
     aligned_stack_size: i32,
     fn_call_stack_size: i32,
-) -> Result<(), String> {
+) {
     if aligned_stack_size > 0 {
         let mut offset = aligned_stack_size - fn_call_stack_size;
-        for reg in saved_regs {
+        for reg in saved_general_regs {
             X86_64Assembler::mov_reg64_base32(buf, *reg, -offset);
+            offset -= 8;
+        }
+        for reg in saved_float_regs {
+            X86_64Assembler::mov_freg64_base32(buf, *reg, -offset);
             offset -= 8;
         }
         X86_64Assembler::add_reg64_reg64_imm32(
@@ -777,7 +896,6 @@ fn x86_64_generic_cleanup_stack<'a>(
     }
     //X86_64Assembler::mov_reg64_reg64(buf, X86_64GeneralReg::RSP, X86_64GeneralReg::RBP);
     X86_64Assembler::pop_reg64(buf, X86_64GeneralReg::RBP);
-    Ok(())
 }
 
 impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
@@ -898,15 +1016,26 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     ) -> usize {
         buf.reserve(13);
         if imm > i32::MAX as u64 {
-            unimplemented!(
-                "comparison with values greater than i32::max not yet implemented for jne"
-            );
+            todo!("comparison with values greater than i32::max");
         }
         cmp_reg64_imm32(buf, reg, imm as i32);
         jne_imm32(buf, offset);
         buf.len()
     }
 
+    #[inline(always)]
+    fn mov_freg32_imm32(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: X86_64FloatReg,
+        imm: f32,
+    ) {
+        movss_freg32_rip_offset32(buf, dst, 0);
+        relocs.push(Relocation::LocalData {
+            offset: buf.len() as u64 - 4,
+            data: imm.to_le_bytes().to_vec(),
+        });
+    }
     #[inline(always)]
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
@@ -951,6 +1080,56 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn mov_reg64_mem64_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        mov_reg64_base64_offset32(buf, dst, src, offset)
+    }
+    #[inline(always)]
+    fn mov_mem64_offset32_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        offset: i32,
+        src: X86_64GeneralReg,
+    ) {
+        mov_base64_offset32_reg64(buf, dst, offset, src)
+    }
+
+    #[inline(always)]
+    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
+        debug_assert!(size <= 8);
+        if size == 8 {
+            Self::mov_reg64_base32(buf, dst, offset);
+        } else if size == 4 {
+            todo!("sign extending 4 byte values");
+        } else if size == 2 {
+            todo!("sign extending 2 byte values");
+        } else if size == 1 {
+            todo!("sign extending 1 byte values");
+        } else {
+            internal_error!("Invalid size for sign extension: {}", size);
+        }
+    }
+    #[inline(always)]
+    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
+        debug_assert!(size <= 8);
+        if size == 8 {
+            Self::mov_reg64_base32(buf, dst, offset);
+        } else if size == 4 {
+            todo!("zero extending 4 byte values");
+        } else if size == 2 {
+            todo!("zero extending 2 byte values");
+        } else if size == 1 {
+            movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset);
+        } else {
+            internal_error!("Invalid size for zero extension: {}", size);
+        }
+    }
+
+    #[inline(always)]
     fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: i32) {
         movsd_freg64_base64_offset32(buf, dst, X86_64GeneralReg::RSP, offset)
     }
@@ -965,6 +1144,12 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
         mov_base64_offset32_reg64(buf, X86_64GeneralReg::RSP, offset, src)
+    }
+
+    #[inline(always)]
+    fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+        mov_reg64_reg64(buf, dst, src);
+        neg_reg64(buf, dst);
     }
 
     #[inline(always)]
@@ -1006,6 +1191,70 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn neq_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        setne_reg64(buf, dst);
+    }
+
+    #[inline(always)]
+    fn lt_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        setl_reg64(buf, dst);
+    }
+
+    #[inline(always)]
+    fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
+        cvtsi2ss_freg64_reg64(buf, dst, src);
+    }
+
+    #[inline(always)]
+    fn to_float_freg32_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+        cvtsd2ss_freg32_freg64(buf, dst, src);
+    }
+
+    #[inline(always)]
+    fn to_float_freg64_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+        cvtss2sd_freg64_freg32(buf, dst, src);
+    }
+
+    #[inline(always)]
+    fn to_float_freg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
+        cvtsi2sd_freg64_reg64(buf, dst, src);
+    }
+
+    #[inline(always)]
+    fn lte_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        setle_reg64(buf, dst);
+    }
+
+    #[inline(always)]
+    fn gte_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        setge_reg64(buf, dst);
+    }
+
+    #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret(buf);
     }
@@ -1026,8 +1275,8 @@ const REX: u8 = 0x40;
 const REX_W: u8 = REX + 0x8;
 
 #[inline(always)]
-const fn add_rm_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
-    if reg as u8 > 7 {
+fn add_rm_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
+    if reg.value() > 7 {
         byte + 1
     } else {
         byte
@@ -1035,13 +1284,13 @@ const fn add_rm_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
 }
 
 #[inline(always)]
-const fn add_opcode_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
+fn add_opcode_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
     add_rm_extension(reg, byte)
 }
 
 #[inline(always)]
-const fn add_reg_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
-    if reg as u8 > 7 {
+fn add_reg_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
+    if reg.value() > 7 {
         byte + 4
     } else {
         byte
@@ -1173,6 +1422,13 @@ fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gene
     binop_reg64_reg64(0x39, buf, dst, src);
 }
 
+/// `TEST r/m64,r64` -> AND r64 with r/m64; set SF, ZF, PF according to result.
+#[allow(dead_code)]
+#[inline(always)]
+fn test_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    binop_reg64_reg64(0x85, buf, dst, src);
+}
+
 /// `IMUL r64,r/m64` -> Signed Multiply r/m64 to r64.
 #[inline(always)]
 fn imul_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
@@ -1274,9 +1530,33 @@ fn mov_reg64_base64_offset32(
     buf.extend(&offset.to_le_bytes());
 }
 
+/// `MOVZX r64,r/m8` -> Move r/m8 with zero extention to r64, where m8 references a base + offset.
+#[inline(always)]
+fn movzx_reg64_base8_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(9);
+    buf.extend(&[rex, 0x0F, 0xB6, 0x80 + dst_mod + base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(&offset.to_le_bytes());
+}
+
 /// `MOVSD xmm1,xmm2` -> Move scalar double-precision floating-point value from xmm2 to xmm1 register.
 #[inline(always)]
 fn movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    if dst == src {
+        return;
+    }
     let dst_high = dst as u8 > 7;
     let dst_mod = dst as u8 % 8;
     let src_high = src as u8 > 7;
@@ -1294,6 +1574,20 @@ fn movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
     }
 }
 
+// `MOVSS xmm, m32` -> Load scalar single-precision floating-point value from m32 to xmm register.
+#[inline(always)]
+fn movss_freg32_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: u32) {
+    let dst_mod = dst as u8 % 8;
+    if dst as u8 > 7 {
+        buf.reserve(9);
+        buf.extend(&[0xF3, 0x44, 0x0F, 0x10, 0x05 + (dst_mod << 3)]);
+    } else {
+        buf.reserve(8);
+        buf.extend(&[0xF3, 0x0F, 0x10, 0x05 + (dst_mod << 3)]);
+    }
+    buf.extend(&offset.to_le_bytes());
+}
+
 // `MOVSD xmm, m64` -> Load scalar double-precision floating-point value from m64 to xmm register.
 #[inline(always)]
 fn movsd_freg64_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: u32) {
@@ -1308,7 +1602,7 @@ fn movsd_freg64_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset:
     buf.extend(&offset.to_le_bytes());
 }
 
-/// `MOVSD r/m64,xmm1` -> Move xmm1 to r/m64. where m64 references the base pionter.
+/// `MOVSD r/m64,xmm1` -> Move xmm1 to r/m64. where m64 references the base pointer.
 #[inline(always)]
 fn movsd_base64_offset32_freg64(
     buf: &mut Vec<'_, u8>,
@@ -1331,7 +1625,7 @@ fn movsd_base64_offset32_freg64(
     buf.extend(&offset.to_le_bytes());
 }
 
-/// `MOVSD xmm1,r/m64` -> Move r/m64 to xmm1. where m64 references the base pionter.
+/// `MOVSD xmm1,r/m64` -> Move r/m64 to xmm1. where m64 references the base pointer.
 #[inline(always)]
 fn movsd_freg64_base64_offset32(
     buf: &mut Vec<'_, u8>,
@@ -1362,9 +1656,9 @@ fn neg_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     buf.extend(&[rex, 0xF7, 0xD8 + reg_mod]);
 }
 
-/// `SETE r/m64` -> Set Byte on Condition - zero/equal (ZF=1)
+// helper function for `set*` instructions
 #[inline(always)]
-fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+fn set_reg64_help(op_code: u8, buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     // XOR needs 3 bytes, actual SETE instruction need 3 or 4 bytes
     buf.reserve(7);
 
@@ -1372,16 +1666,108 @@ fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     let reg_mod = reg as u8 % 8;
     use X86_64GeneralReg::*;
     match reg {
-        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, 0x94, 0xC0 + reg_mod]),
-        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, 0x94, 0xC0 + reg_mod]),
+        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, op_code, 0xC0 + reg_mod]),
+        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, op_code, 0xC0 + reg_mod]),
         R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 => {
-            buf.extend(&[REX + 1, 0x0F, 0x94, 0xC0 + reg_mod])
+            buf.extend(&[REX + 1, 0x0F, op_code, 0xC0 + reg_mod])
         }
     }
 
     // We and reg with 1 because the SETE instruction only applies
     // to the lower bits of the register
     and_reg64_imm8(buf, reg, 1);
+}
+
+#[inline(always)]
+fn cvtsi2_help<T: RegTrait, U: RegTrait>(
+    buf: &mut Vec<'_, u8>,
+    op_code1: u8,
+    op_code2: u8,
+    dst: T,
+    src: U,
+) {
+    let rex = add_rm_extension(src, REX_W);
+    let rex = add_reg_extension(dst, rex);
+    let mod1 = (dst.value() % 8) << 3;
+    let mod2 = src.value() % 8;
+
+    buf.extend(&[op_code1, rex, 0x0F, op_code2, 0xC0 + mod1 + mod2])
+}
+
+#[inline(always)]
+fn cvtsx2_help<T: RegTrait, V: RegTrait>(
+    buf: &mut Vec<'_, u8>,
+    op_code1: u8,
+    op_code2: u8,
+    dst: T,
+    src: V,
+) {
+    let mod1 = (dst.value() % 8) << 3;
+    let mod2 = src.value() % 8;
+
+    buf.extend(&[op_code1, 0x0F, op_code2, 0xC0 + mod1 + mod2])
+}
+
+/// `SETE r/m64` -> Set Byte on Condition - zero/equal (ZF=1)
+#[inline(always)]
+fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x94, buf, reg);
+}
+
+/// `CVTSS2SD xmm` -> Convert one single-precision floating-point value in xmm/m32 to one double-precision floating-point value in xmm.
+#[inline(always)]
+fn cvtss2sd_freg64_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    cvtsx2_help(buf, 0xF3, 0x5A, dst, src)
+}
+
+/// `CVTSD2SS xmm` -> Convert one double-precision floating-point value in xmm to one single-precision floating-point value and merge with high bits.
+#[inline(always)]
+fn cvtsd2ss_freg32_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    cvtsx2_help(buf, 0xF2, 0x5A, dst, src)
+}
+
+/// `CVTSI2SD r/m64` -> Convert one signed quadword integer from r/m64 to one double-precision floating-point value in xmm.
+#[inline(always)]
+fn cvtsi2sd_freg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
+    cvtsi2_help(buf, 0xF2, 0x2A, dst, src)
+}
+
+/// `CVTSI2SS r/m64` -> Convert one signed quadword integer from r/m64 to one single-precision floating-point value in xmm.
+#[allow(dead_code)]
+#[inline(always)]
+fn cvtsi2ss_freg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
+    cvtsi2_help(buf, 0xF3, 0x2A, dst, src)
+}
+
+/// `CVTTSS2SI xmm/m32` -> Convert one single-precision floating-point value from xmm/m32 to one signed quadword integer in r64 using truncation.
+#[allow(dead_code)]
+#[inline(always)]
+fn cvttss2si_reg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64FloatReg) {
+    cvtsi2_help(buf, 0xF3, 0x2C, dst, src)
+}
+
+/// `SETNE r/m64` -> Set byte if not equal (ZF=0).
+#[inline(always)]
+fn setne_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x95, buf, reg);
+}
+
+/// `SETL r/m64` -> Set byte if less (SF≠ OF).
+#[inline(always)]
+fn setl_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x9c, buf, reg);
+}
+
+/// `SETLE r/m64` -> Set byte if less or equal (ZF=1 or SF≠ OF).
+#[inline(always)]
+fn setle_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x9e, buf, reg);
+}
+
+/// `SETGE r/m64` -> Set byte if greater or equal (SF=OF).
+#[inline(always)]
+fn setge_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x9d, buf, reg);
 }
 
 /// `RET` -> Near return to calling procedure.
@@ -1486,6 +1872,34 @@ mod tests {
         ] {
             buf.clear();
             add_reg64_reg64(&mut buf, *dst, *src);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_sub_reg64_reg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, src), expected) in &[
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
+                [0x48, 0x29, 0xC0],
+            ),
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
+                [0x4C, 0x29, 0xF8],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
+                [0x49, 0x29, 0xC7],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
+                [0x4D, 0x29, 0xFF],
+            ),
+        ] {
+            buf.clear();
+            sub_reg64_reg64(&mut buf, *dst, *src);
             assert_eq!(expected, &buf[..]);
         }
     }
@@ -1847,6 +2261,35 @@ mod tests {
     }
 
     #[test]
+    fn test_movzx_reg64_base8_offset32() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, src, offset), expected) in &[
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::RBP, TEST_I32),
+                vec![0x48, 0x0F, 0xB6, 0x85],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::RBP, TEST_I32),
+                vec![0x4C, 0x0F, 0xB6, 0xBD],
+            ),
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::RSP, TEST_I32),
+                vec![0x48, 0x0F, 0xB6, 0x84, 0x24],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::RSP, TEST_I32),
+                vec![0x4C, 0x0F, 0xB6, 0xBC, 0x24],
+            ),
+        ] {
+            buf.clear();
+            movzx_reg64_base8_offset32(&mut buf, *dst, *src, *offset);
+            assert_eq!(expected, &buf[..expected.len()]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[expected.len()..]);
+        }
+    }
+
+    #[test]
     fn test_mov_reg64_stack32() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
@@ -1881,10 +2324,7 @@ mod tests {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         for ((dst, src), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x0F, 0x10, 0xC0],
-            ),
+            ((X86_64FloatReg::XMM0, X86_64FloatReg::XMM0), vec![]),
             (
                 (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
                 vec![0xF2, 0x41, 0x0F, 0x10, 0xC7],
@@ -1893,14 +2333,32 @@ mod tests {
                 (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
                 vec![0xF2, 0x44, 0x0F, 0x10, 0xF8],
             ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x45, 0x0F, 0x10, 0xFF],
-            ),
+            ((X86_64FloatReg::XMM15, X86_64FloatReg::XMM15), vec![]),
         ] {
             buf.clear();
             movsd_freg64_freg64(&mut buf, *dst, *src);
             assert_eq!(&expected[..], &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_movss_freg32_rip_offset32() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, offset), expected) in &[
+            (
+                (X86_64FloatReg::XMM0, TEST_I32),
+                vec![0xF3, 0x0F, 0x10, 0x05],
+            ),
+            (
+                (X86_64FloatReg::XMM15, TEST_I32),
+                vec![0xF3, 0x44, 0x0F, 0x10, 0x3D],
+            ),
+        ] {
+            buf.clear();
+            movss_freg32_rip_offset32(&mut buf, *dst, *offset as u32);
+            assert_eq!(&expected[..], &buf[..(buf.len() - 4)]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[(buf.len() - 4)..]);
         }
     }
 
@@ -1940,7 +2398,95 @@ mod tests {
     }
 
     #[test]
-    fn test_sete_reg64() {
+    fn test_cvtsi2_help() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        let cvtsi2ss_code: u8 = 0x2A;
+        let cvttss2si_code: u8 = 0x2C;
+
+        for (op_code, reg1, reg2, expected) in &[
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xC7],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM15,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x4C, 0x0F, 0x2A, 0xFF],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::RAX,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xC0],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::R15,
+                [0xF3, 0x49, 0x0F, 0x2A, 0xC7],
+            ),
+        ] {
+            buf.clear();
+            cvtsi2_help(&mut buf, 0xF3, *op_code, *reg1, *reg2);
+            assert_eq!(expected, &buf[..]);
+        }
+
+        for (op_code, reg1, reg2, expected) in &[
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM15,
+                [0xF3, 0x49, 0x0F, 0x2C, 0xC7],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::R15,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x4C, 0x0F, 0x2C, 0xF8],
+            ),
+        ] {
+            buf.clear();
+            cvtsi2_help(&mut buf, 0xF3, *op_code, *reg1, *reg2);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_cvtsx2_help() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        let cvtss2sd_code: u8 = 0x5A;
+
+        for (op_code, reg1, reg2, expected) in &[(
+            cvtss2sd_code,
+            X86_64FloatReg::XMM1,
+            X86_64FloatReg::XMM0,
+            [0xF3, 0x0F, 0x5A, 0xC8],
+        )] {
+            buf.clear();
+            cvtsx2_help(&mut buf, 0xF3, *op_code, *reg1, *reg2);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_set_reg64_help() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
 
@@ -1953,7 +2499,7 @@ mod tests {
             ],
         );
         buf.clear();
-        sete_reg64(&mut buf, reg);
+        set_reg64_help(0x94, &mut buf, reg); // sete_reg64
         assert_eq!(expected, &buf[..]);
 
         // tests for 8 bytes in the output buffer
@@ -1978,7 +2524,7 @@ mod tests {
             ),
         ] {
             buf.clear();
-            sete_reg64(&mut buf, *reg);
+            set_reg64_help(0x94, &mut buf, *reg); // sete_reg64
             assert_eq!(expected, &buf[..]);
         }
     }

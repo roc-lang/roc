@@ -1,15 +1,76 @@
-use crate::header::{AppHeader, ImportsEntry, InterfaceHeader, PlatformHeader, TypedIdent};
+use std::fmt::Debug;
+
+use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PlatformHeader};
 use crate::ident::Ident;
-use bumpalo::collections::String;
+use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
-use roc_module::operator::{BinOp, CalledVia, UnaryOp};
+use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
+
+#[derive(Debug)]
+pub struct Spaces<'a, T> {
+    pub before: &'a [CommentOrNewline<'a>],
+    pub item: T,
+    pub after: &'a [CommentOrNewline<'a>],
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub enum Spaced<'a, T> {
+    Item(T),
+
+    // Spaces
+    SpaceBefore(&'a Spaced<'a, T>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Spaced<'a, T>, &'a [CommentOrNewline<'a>]),
+}
+
+impl<'a, T: Debug> Debug for Spaced<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Item(item) => item.fmt(f),
+            Self::SpaceBefore(item, space) => f
+                .debug_tuple("SpaceBefore")
+                .field(item)
+                .field(space)
+                .finish(),
+            Self::SpaceAfter(item, space) => f
+                .debug_tuple("SpaceAfter")
+                .field(item)
+                .field(space)
+                .finish(),
+        }
+    }
+}
+
+pub trait ExtractSpaces<'a>: Sized + Copy {
+    type Item;
+    fn extract_spaces(&self) -> Spaces<'a, Self::Item>;
+}
+
+impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for &'a T {
+    type Item = T::Item;
+    fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
+        (*self).extract_spaces()
+    }
+}
+
+impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
+    type Item = T::Item;
+    fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
+        let spaces = self.value.extract_spaces();
+        Spaces {
+            before: spaces.before,
+            item: spaces.item,
+            after: spaces.after,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
     Interface { header: InterfaceHeader<'a> },
     App { header: AppHeader<'a> },
     Platform { header: PlatformHeader<'a> },
+    Hosted { header: HostedHeader<'a> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -91,27 +152,22 @@ pub enum Expr<'a> {
     Access(&'a Expr<'a>, &'a str),
     /// e.g. `.foo`
     AccessorFunction(&'a str),
+    /// eg 'b'
+    SingleQuote(&'a str),
 
     // Collection Literals
-    List {
-        items: &'a [&'a Loc<Expr<'a>>],
-        final_comments: &'a [CommentOrNewline<'a>],
-    },
+    List(Collection<'a, &'a Loc<Expr<'a>>>),
 
     RecordUpdate {
         update: &'a Loc<Expr<'a>>,
-        fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
-        final_comments: &'a &'a [CommentOrNewline<'a>],
+        fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
     },
 
-    Record {
-        fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
-        final_comments: &'a [CommentOrNewline<'a>],
-    },
+    Record(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     // Lookups
     Var {
-        module_name: &'a str,
+        module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
         ident: &'a str,
     },
 
@@ -120,6 +176,10 @@ pub enum Expr<'a> {
     // Tags
     GlobalTag(&'a str),
     PrivateTag(&'a str),
+
+    // Reference to an opaque type, e.g. $Opaq
+    // TODO(opaques): $->@ in the above comment
+    OpaqueRef(&'a str),
 
     // Pattern Matching
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
@@ -173,6 +233,22 @@ pub struct PrecedenceConflict<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TypeHeader<'a> {
+    pub name: Loc<&'a str>,
+    pub vars: &'a [Loc<Pattern<'a>>],
+}
+
+impl<'a> TypeHeader<'a> {
+    pub fn region(&self) -> Region {
+        Region::across_all(
+            [self.name.region]
+                .iter()
+                .chain(self.vars.iter().map(|v| &v.region)),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns
     // are allowed in annotations.
@@ -183,9 +259,14 @@ pub enum Def<'a> {
     ///
     /// Foo : Bar Baz
     Alias {
-        name: Loc<&'a str>,
-        vars: &'a [Loc<Pattern<'a>>],
+        header: TypeHeader<'a>,
         ann: Loc<TypeAnnotation<'a>>,
+    },
+
+    /// An opaque type, wrapping its inner type. E.g. Age := U64.
+    Opaque {
+        header: TypeHeader<'a>,
+        typ: Loc<TypeAnnotation<'a>>,
     },
 
     // TODO in canonicalization, check to see if there are any newlines after the
@@ -212,6 +293,17 @@ pub enum Def<'a> {
     NotYetImplemented(&'static str),
 }
 
+impl<'a> Def<'a> {
+    pub fn unroll_spaces_before(&self) -> (&'a [CommentOrNewline<'a>], &Def) {
+        let (spaces, def): (&'a [_], &Def) = match self {
+            Def::SpaceBefore(def, spaces) => (spaces, def),
+            def => (&[], def),
+        };
+        debug_assert!(!matches!(def, Def::SpaceBefore(_, _)));
+        (spaces, def)
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
     /// A function. The types of its arguments, then the type of its return value.
@@ -227,25 +319,26 @@ pub enum TypeAnnotation<'a> {
     As(
         &'a Loc<TypeAnnotation<'a>>,
         &'a [CommentOrNewline<'a>],
-        &'a Loc<TypeAnnotation<'a>>,
+        TypeHeader<'a>,
     ),
 
     Record {
-        fields: &'a [Loc<AssignedField<'a, TypeAnnotation<'a>>>],
+        fields: Collection<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>,
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
         /// This is None if it's a closed record annotation like `{ name: Str }`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
-        final_comments: &'a [CommentOrNewline<'a>],
     },
 
     /// A tag union, e.g. `[
     TagUnion {
-        tags: &'a [Loc<Tag<'a>>],
         /// The row type variable in an open tag union, e.g. the `a` in `[ Foo, Bar ]a`.
         /// This is None if it's a closed tag union like `[ Foo, Bar]`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
-        final_comments: &'a [CommentOrNewline<'a>],
+        tags: Collection<'a, Loc<Tag<'a>>>,
     },
+
+    /// '_', indicating the compiler should infer the type
+    Inferred,
 
     /// The `*` type variable, e.g. in (List *)
     Wildcard,
@@ -325,6 +418,15 @@ impl<'a> CommentOrNewline<'a> {
             DocComment(_) => false,
         }
     }
+
+    pub fn to_string_repr(&self) -> std::string::String {
+        use CommentOrNewline::*;
+        match self {
+            Newline => "\n".to_owned(),
+            LineComment(comment_str) => format!("#{}", comment_str),
+            DocComment(comment_str) => format!("##{}", comment_str),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -334,11 +436,15 @@ pub enum Pattern<'a> {
 
     GlobalTag(&'a str),
     PrivateTag(&'a str),
+
+    OpaqueRef(&'a str),
+
     Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
-    /// This is Loc<Pattern> rather than Loc<str> so we can record comments
+
+    /// This is Located<Pattern> rather than Located<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
-    RecordDestructure(&'a [Loc<Pattern<'a>>]),
+    RecordDestructure(Collection<'a, Loc<Pattern<'a>>>),
 
     /// A required field pattern, e.g. { x: Just 0 } -> ...
     /// Can only occur inside of a RecordDestructure
@@ -358,6 +464,7 @@ pub enum Pattern<'a> {
     FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
     Underscore(&'a str),
+    SingleQuote(&'a str),
 
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
@@ -385,6 +492,7 @@ impl<'a> Pattern<'a> {
         match ident {
             Ident::GlobalTag(string) => Pattern::GlobalTag(string),
             Ident::PrivateTag(string) => Pattern::PrivateTag(string),
+            Ident::OpaqueRef(string) => Pattern::OpaqueRef(string),
             Ident::Access { module_name, parts } => {
                 if parts.len() == 1 {
                     // This is valid iff there is no module.
@@ -497,6 +605,126 @@ impl<'a> Pattern<'a> {
         }
     }
 }
+#[derive(Copy, Clone)]
+pub struct Collection<'a, T> {
+    pub items: &'a [T],
+    // Use a pointer to a slice (rather than just a slice), in order to avoid bloating
+    // Ast variants. The final_comments field is rarely accessed in the hot path, so
+    // this shouldn't matter much for perf.
+    // Use an Option, so it's possible to initialize without allocating.
+    final_comments: Option<&'a &'a [CommentOrNewline<'a>]>,
+}
+
+impl<'a, T> Collection<'a, T> {
+    pub fn empty() -> Collection<'a, T> {
+        Collection {
+            items: &[],
+            final_comments: None,
+        }
+    }
+
+    pub fn with_items(items: &'a [T]) -> Collection<'a, T> {
+        Collection {
+            items,
+            final_comments: None,
+        }
+    }
+
+    pub fn with_items_and_comments(
+        arena: &'a Bump,
+        items: &'a [T],
+        comments: &'a [CommentOrNewline<'a>],
+    ) -> Collection<'a, T> {
+        Collection {
+            items,
+            final_comments: if comments.is_empty() {
+                None
+            } else {
+                Some(arena.alloc(comments))
+            },
+        }
+    }
+
+    pub fn replace_items<V>(&self, new_items: &'a [V]) -> Collection<'a, V> {
+        Collection {
+            items: new_items,
+            final_comments: self.final_comments,
+        }
+    }
+
+    pub fn ptrify_items(&self, arena: &'a Bump) -> Collection<'a, &'a T> {
+        let mut allocated = Vec::with_capacity_in(self.len(), arena);
+
+        for parsed_elem in self.items {
+            allocated.push(parsed_elem);
+        }
+
+        self.replace_items(allocated.into_bump_slice())
+    }
+
+    pub fn map_items<V: 'a>(&self, arena: &'a Bump, f: impl Fn(&'a T) -> V) -> Collection<'a, V> {
+        let mut allocated = Vec::with_capacity_in(self.len(), arena);
+
+        for parsed_elem in self.items {
+            allocated.push(f(parsed_elem));
+        }
+
+        self.replace_items(allocated.into_bump_slice())
+    }
+
+    pub fn map_items_result<V: 'a, E>(
+        &self,
+        arena: &'a Bump,
+        f: impl Fn(&T) -> Result<V, E>,
+    ) -> Result<Collection<'a, V>, E> {
+        let mut allocated = Vec::with_capacity_in(self.len(), arena);
+
+        for parsed_elem in self.items {
+            allocated.push(f(parsed_elem)?);
+        }
+
+        Ok(self.replace_items(allocated.into_bump_slice()))
+    }
+
+    pub fn final_comments(&self) -> &'a [CommentOrNewline<'a>] {
+        if let Some(final_comments) = self.final_comments {
+            *final_comments
+        } else {
+            &[]
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &'a T> {
+        self.items.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+impl<'a, T: PartialEq> PartialEq for Collection<'a, T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.items == other.items && self.final_comments() == other.final_comments()
+    }
+}
+
+impl<'a, T: Debug> Debug for Collection<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.final_comments().is_empty() {
+            f.debug_list().entries(self.items.iter()).finish()
+        } else {
+            f.debug_struct("Collection")
+                .field("items", &self.items)
+                .field("final_comments", &self.final_comments())
+                .finish()
+        }
+    }
+}
 
 pub trait Spaceable<'a> {
     fn before(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
@@ -520,6 +748,15 @@ pub trait Spaceable<'a> {
             region,
             value: self.after(spaces),
         }
+    }
+}
+
+impl<'a, T> Spaceable<'a> for Spaced<'a, T> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Spaced::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Spaced::SpaceAfter(self, spaces)
     }
 }
 
@@ -547,24 +784,6 @@ impl<'a> Spaceable<'a> for TypeAnnotation<'a> {
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         TypeAnnotation::SpaceAfter(self, spaces)
-    }
-}
-
-impl<'a> Spaceable<'a> for ImportsEntry<'a> {
-    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ImportsEntry::SpaceBefore(self, spaces)
-    }
-    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ImportsEntry::SpaceAfter(self, spaces)
-    }
-}
-
-impl<'a> Spaceable<'a> for TypedIdent<'a> {
-    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        TypedIdent::SpaceBefore(self, spaces)
-    }
-    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        TypedIdent::SpaceAfter(self, spaces)
     }
 }
 
@@ -607,6 +826,125 @@ impl<'a> Expr<'a> {
         Loc {
             region,
             value: self,
+        }
+    }
+
+    pub fn is_tag(&self) -> bool {
+        matches!(self, Expr::GlobalTag(_) | Expr::PrivateTag(_))
+    }
+}
+
+macro_rules! impl_extract_spaces {
+    ($t:ident $(< $($generic_args:ident),* >)?) => {
+
+        impl<'a, $($($generic_args: Copy),*)?> ExtractSpaces<'a> for $t<'a, $($($generic_args),*)?> {
+            type Item = Self;
+            fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
+                match self {
+                    $t::SpaceBefore(item, before) => {
+                        match item {
+                            $t::SpaceBefore(_, _) => todo!(),
+                            $t::SpaceAfter(item, after) => {
+                                Spaces {
+                                    before,
+                                    item: **item,
+                                    after,
+                                }
+                            }
+                            _ => {
+                                Spaces {
+                                    before,
+                                    item: **item,
+                                    after: &[],
+                                }
+                            }
+                        }
+                    },
+                    $t::SpaceAfter(item, after) => {
+                        match item {
+                            $t::SpaceBefore(item, before) => {
+                                Spaces {
+                                    before,
+                                    item: **item,
+                                    after,
+                                }
+                            }
+                            $t::SpaceAfter(_, _) => todo!(),
+                            _ => {
+                                Spaces {
+                                    before: &[],
+                                    item: **item,
+                                    after,
+                                }
+                            }
+                        }
+                    },
+                    _ => {
+                        Spaces {
+                            before: &[],
+                            item: *self,
+                            after: &[],
+                        }
+                    }
+                }
+            }
+        }
+    };
+}
+
+impl_extract_spaces!(Expr);
+impl_extract_spaces!(Pattern);
+impl_extract_spaces!(Tag);
+impl_extract_spaces!(AssignedField<T>);
+
+impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
+    type Item = T;
+
+    fn extract_spaces(&self) -> Spaces<'a, T> {
+        match self {
+            Spaced::SpaceBefore(item, before) => match item {
+                Spaced::SpaceBefore(_, _) => todo!(),
+                Spaced::SpaceAfter(item, after) => {
+                    if let Spaced::Item(item) = item {
+                        Spaces {
+                            before,
+                            item: *item,
+                            after,
+                        }
+                    } else {
+                        todo!();
+                    }
+                }
+                Spaced::Item(item) => Spaces {
+                    before,
+                    item: *item,
+                    after: &[],
+                },
+            },
+            Spaced::SpaceAfter(item, after) => match item {
+                Spaced::SpaceBefore(item, before) => {
+                    if let Spaced::Item(item) = item {
+                        Spaces {
+                            before,
+                            item: *item,
+                            after,
+                        }
+                    } else {
+                        todo!();
+                    }
+                }
+                Spaced::SpaceAfter(_, _) => todo!(),
+                Spaced::Item(item) => Spaces {
+                    before: &[],
+                    item: *item,
+                    after,
+                },
+            },
+            Spaced::Item(item) => Spaces {
+                before: &[],
+                item: *item,
+                after: &[],
+            },
         }
     }
 }

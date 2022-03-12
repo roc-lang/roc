@@ -4,7 +4,7 @@ use std::fmt;
 
 /// This could be uppercase or lowercase, qualified or unqualified.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Ident(IdentStr);
+pub struct Ident(pub IdentStr);
 
 impl Ident {
     pub fn as_inline_str(&self) -> &IdentStr {
@@ -29,16 +29,18 @@ impl std::ops::Deref for ModuleName {
 }
 
 /// An uncapitalized identifier, such as a field name or local variable
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Lowercase(IdentStr);
 
 /// A capitalized identifier, such as a tag name or module name
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uppercase(IdentStr);
 
 /// A string representing a foreign (linked-in) symbol
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct ForeignSymbol(IdentStr);
+
+pub type TagIdIntType = u16;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TagName {
@@ -59,7 +61,9 @@ pub enum TagName {
     Closure(Symbol),
 }
 
-static_assertions::assert_eq_size!([u8; 24], TagName);
+roc_error_macros::assert_sizeof_aarch64!(TagName, 24);
+roc_error_macros::assert_sizeof_wasm!(TagName, 16);
+roc_error_macros::assert_sizeof_default!(TagName, 24);
 
 impl TagName {
     pub fn as_ident_str(&self, interns: &Interns, home: ModuleId) -> IdentStr {
