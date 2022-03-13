@@ -404,10 +404,11 @@ impl Constraints {
     /// we use a StorageSubs to store the data, and copy over the relevant
     /// variables/content/flattype/tagname etc.
     ///
-    /// The aim of that process is to simulate what `type_to_var` (solve.rs) does to a `Type`.
+    /// The general idea is to let-generalize the imorted types in the target module.
+    /// More concretely, we need to simulate what `type_to_var` (solve.rs) does to a `Type`.
     /// While the copying puts all the data the right place, it misses that `type_to_var` puts
     /// the variables that it creates (to store the nodes of a Type in Subs) in the pool of the
-    /// current rank.
+    /// current rank (so they can be generalized).
     ///
     /// So, during copying of an import (`copy_import_to`, subs.rs) we track the variables that
     /// we need to put into the pool (simulating what `type_to_var` would do). Those variables
@@ -418,7 +419,7 @@ impl Constraints {
         &mut self,
         rigid_vars: I1,
         def_types: I2,
-        ret_constraint: Constraint,
+        module_constraint: Constraint,
         pool_variables: &[Variable],
     ) -> Constraint
     where
@@ -430,7 +431,7 @@ impl Constraints {
         let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
         self.constraints.push(Constraint::True);
-        self.constraints.push(ret_constraint);
+        self.constraints.push(module_constraint);
 
         let let_contraint = LetConstraint {
             rigid_vars: self.variable_slice(rigid_vars),
