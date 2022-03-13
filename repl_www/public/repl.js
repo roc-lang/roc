@@ -1,3 +1,8 @@
+console.error = function monkeyPatchedConsoleErrorPleaseForgiveMe(...args) {
+  const message = args.join("\n");
+  updateHistoryEntry(repl.inputHistoryIndex, false, message);
+};
+
 // wasm_bindgen treats our `extern` declarations as JS globals, so let's keep it happy
 window.js_create_app = js_create_app;
 window.js_run_app = js_run_app;
