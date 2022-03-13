@@ -64,6 +64,10 @@ impl ExposedForModule {
         let mut imported_symbols = Vec::new();
 
         for symbol in it {
+            // Today, builtins are not actually imported,
+            // but generated in each module that uses them
+            //
+            // This will change when we write builtins in roc
             if symbol.is_builtin() {
                 continue;
             }
