@@ -119,11 +119,11 @@ pub fn introduce_builtin_imports(
     var_store: &mut VarStore,
 ) -> Constraint {
     let stdlib = roc_builtins::std::borrow_stdlib();
-    let (rigid_vars, def_types) = constrain_imports(stdlib, imports, var_store);
+    let (rigid_vars, def_types) = constrain_builtin_imports(stdlib, imports, var_store);
     constraints.let_import_constraint(rigid_vars, def_types, body_con, &[])
 }
 
-pub fn constrain_imports(
+pub fn constrain_builtin_imports(
     stdlib: &StdLib,
     imports: Vec<Symbol>,
     var_store: &mut VarStore,

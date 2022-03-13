@@ -10,7 +10,8 @@ use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
-    constrain_imports, constrain_module, ExposedByModule, ExposedForModule, ExposedModuleTypes,
+    constrain_builtin_imports, constrain_module, ExposedByModule, ExposedForModule,
+    ExposedModuleTypes,
 };
 use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
@@ -3081,7 +3082,7 @@ fn run_solve<'a>(
     let mut unused_imports = imported_modules;
 
     let (mut rigid_vars, mut def_types) =
-        constrain_imports(borrow_stdlib(), imported_builtins, &mut var_store);
+        constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
 
     let constrain_end = SystemTime::now();
 
