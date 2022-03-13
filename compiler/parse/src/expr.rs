@@ -1136,7 +1136,18 @@ mod ability {
                                 initial,
                             ))
                         }
-                        IndentLevel::Exact(wanted) if state.column() != wanted => {
+                        IndentLevel::Exact(wanted) if state.column() < wanted => {
+                            // This demand is not indented correctly
+                            let indent_difference = state.column() as i32 - wanted as i32;
+                            Err((
+                                // Rollback because the deindent may be because there is a next
+                                // expression
+                                NoProgress,
+                                EAbility::DemandAlignment(indent_difference, state.pos()),
+                                initial,
+                            ))
+                        }
+                        IndentLevel::Exact(wanted) if state.column() > wanted => {
                             // This demand is not indented correctly
                             let indent_difference = state.column() as i32 - wanted as i32;
                             Err((
