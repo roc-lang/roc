@@ -129,7 +129,7 @@ pub fn constrain_expr(
 
                 let record_con = constraints.equal_types_with_storage(
                     record_type,
-                    expected.clone(),
+                    expected,
                     Category::Record,
                     region,
                     *record_var,
