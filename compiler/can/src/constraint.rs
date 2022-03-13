@@ -529,6 +529,18 @@ impl Constraints {
 
         Constraint::Store(type_index, variable, string_index, line_number)
     }
+
+    pub fn store_index(
+        &mut self,
+        type_index: EitherIndex<Type, Variable>,
+        variable: Variable,
+        filename: &'static str,
+        line_number: u32,
+    ) -> Constraint {
+        let string_index = Index::push_new(&mut self.strings, filename);
+
+        Constraint::Store(type_index, variable, string_index, line_number)
+    }
 }
 
 roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);

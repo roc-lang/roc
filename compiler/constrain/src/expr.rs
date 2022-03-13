@@ -1476,6 +1476,8 @@ fn constrain_def(
                     vars.push(*fn_var);
                     let defs_constraint = constraints.and_constraint(state.constraints);
 
+                    let signature_closure_type = *signature_closure_type.clone();
+                    let signature_index = constraints.push_type(signature);
                     let cons = [
                         constraints.let_constraint(
                             [],
@@ -1492,13 +1494,23 @@ fn constrain_def(
                                 AnnotationSource::TypedBody {
                                     region: annotation.region,
                                 },
-                                *signature_closure_type.clone(),
+                                signature_closure_type,
                             ),
                             Category::ClosureSize,
                             region,
                         ),
-                        constraints.store(signature.clone(), *fn_var, std::file!(), std::line!()),
-                        constraints.store(signature, expr_var, std::file!(), std::line!()),
+                        constraints.store_index(
+                            signature_index,
+                            *fn_var,
+                            std::file!(),
+                            std::line!(),
+                        ),
+                        constraints.store_index(
+                            signature_index,
+                            expr_var,
+                            std::file!(),
+                            std::line!(),
+                        ),
                         constraints.store(ret_type, ret_var, std::file!(), std::line!()),
                         closure_constraint,
                     ];
@@ -1925,6 +1937,7 @@ pub fn rec_defs_help(
 
                         vars.push(*fn_var);
 
+                        let signature_index = constraints.push_type(signature);
                         let state_constraints = constraints.and_constraint(state.constraints);
                         let cons = [
                             constraints.let_constraint(
@@ -1942,13 +1955,18 @@ pub fn rec_defs_help(
                             ),
                             // "fn_var is equal to the closure's type" - fn_var is used in code gen
                             // Store type into AST vars. We use Store so errors aren't reported twice
-                            constraints.store(
-                                signature.clone(),
+                            constraints.store_index(
+                                signature_index,
                                 *fn_var,
                                 std::file!(),
                                 std::line!(),
                             ),
-                            constraints.store(signature, expr_var, std::file!(), std::line!()),
+                            constraints.store_index(
+                                signature_index,
+                                expr_var,
+                                std::file!(),
+                                std::line!(),
+                            ),
                             constraints.store(ret_type, ret_var, std::file!(), std::line!()),
                             closure_constraint,
                         ];
