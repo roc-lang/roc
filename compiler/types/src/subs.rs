@@ -3613,7 +3613,8 @@ fn deep_copy_var_to_help<'a>(
         // return var;
         //
         // but we cannot, because this `var` is in the source, not the target, and we
-        // should only return variables in the target
+        // should only return variables in the target. so, we have to create a new
+        // variable in the target.
     }
 
     visited.push(var);
@@ -3903,6 +3904,17 @@ fn deep_copy_var_to_help<'a>(
     }
 }
 
+/// Bookkeeping to correctly move these types into the target subs
+///
+/// We track the rigid/flex variables because they need to be part of a `Let`
+/// constraint, introducing these variables at the right rank
+///
+/// We also track `registered` variables. An import should be equivalent to
+/// a call to `type_to_var` (solve.rs). The `copy_import_to` function puts
+/// the right `Contents` into the target `Subs` at the right locations,
+/// but `type_to_var` furthermore adds the variables used to store those `Content`s
+/// to `Pools` at the right rank. Here we remember the variables used to store `Content`s
+/// so that we can later add them to `Pools`
 #[derive(Debug)]
 pub struct CopiedImport {
     pub variable: Variable,
@@ -4014,7 +4026,8 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         // return var;
         //
         // but we cannot, because this `var` is in the source, not the target, and we
-        // should only return variables in the target
+        // should only return variables in the target. so, we have to create a new
+        // variable in the target.
     }
 
     env.visited.push(var);

@@ -3121,7 +3121,10 @@ fn run_solve<'a>(
                 } => {
                     let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
                         None => {
-                            // TODO happens for imported types
+                            // Today we define builtins in each module that uses them
+                            // so even though they have a different module name from
+                            // the surrounding module, they are not technically imported
+                            debug_assert!(symbol.is_builtin());
                             continue;
                         }
                         Some((_, x)) => *x,

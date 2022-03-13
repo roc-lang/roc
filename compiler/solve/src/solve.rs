@@ -227,7 +227,10 @@ enum Work<'a> {
         rank: Rank,
         let_con: &'a LetConstraint,
 
-        /// Used for imports
+        /// The variables used to store imported types in the Subs.
+        /// The `Contents` are copied from the source module, but to
+        /// mimic `type_to_var`, we must add these variables to `Pools`
+        /// at the correct rank
         pool_variables: &'a [Variable],
     },
     /// The ret_con part of a let constraint that introduces rigid and/or flex variables
@@ -239,7 +242,10 @@ enum Work<'a> {
         rank: Rank,
         let_con: &'a LetConstraint,
 
-        /// Used for imports
+        /// The variables used to store imported types in the Subs.
+        /// The `Contents` are copied from the source module, but to
+        /// mimic `type_to_var`, we must add these variables to `Pools`
+        /// at the correct rank
         pool_variables: &'a [Variable],
     },
 }
