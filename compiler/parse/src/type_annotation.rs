@@ -373,7 +373,7 @@ fn loc_applied_args_e<'a>(
 
 fn has_clause<'a>(min_indent: u32) -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
     map!(
-        // Suppose we are trying to has "a has Hash"
+        // Suppose we are trying to parse "a has Hash"
         and!(
             space0_around_ee(
                 // Parse "a", with appropriate spaces
