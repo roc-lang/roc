@@ -890,8 +890,8 @@ fn either_type_index_to_var(
             type_to_var(subs, rank, pools, _alias_map, typ)
         }
         Err(var_index) => {
-            let var = constraints.variables[var_index.index()];
-            var
+            // we cheat, and  store the variable directly in the index
+            unsafe { Variable::from_index(var_index.index() as _) }
         }
     }
 }

@@ -125,7 +125,10 @@ impl Constraints {
             Type::EmptyRec => EitherIndex::from_left(Self::EMPTY_RECORD),
             Type::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
             Type::Variable(var) => {
-                let index: Index<Variable> = Index::push_new(&mut self.variables, var);
+                // that's right, we use the variable's integer value as the index
+                // that way, we don't need to push anything onto a vector
+                let index: Index<Variable> = Index::new(var.index());
+
                 EitherIndex::from_right(index)
             }
             other => {
