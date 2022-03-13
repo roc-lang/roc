@@ -501,7 +501,6 @@ enum Msg<'a> {
         decls: Vec<Declaration>,
         dep_idents: MutMap<ModuleId, IdentIds>,
         module_timing: ModuleTiming,
-        unused_imports: MutMap<ModuleId, Region>,
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
@@ -736,7 +735,6 @@ enum BuildTask<'a> {
         var_store: VarStore,
         declarations: Vec<Declaration>,
         dep_idents: MutMap<ModuleId, IdentIds>,
-        unused_imported_modules: MutMap<ModuleId, Region>,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -1778,7 +1776,6 @@ fn update<'a>(
             decls,
             dep_idents,
             mut module_timing,
-            mut unused_imports,
         } => {
             log!("solved types for {:?}", module_id);
             module_timing.end_time = SystemTime::now();
@@ -1787,15 +1784,6 @@ fn update<'a>(
                 .module_cache
                 .type_problems
                 .insert(module_id, solved_module.problems);
-
-            let existing = match state.module_cache.can_problems.entry(module_id) {
-                Vacant(entry) => entry.insert(std::vec::Vec::new()),
-                Occupied(entry) => entry.into_mut(),
-            };
-
-            for (unused, region) in unused_imports.drain() {
-                existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
-            }
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
@@ -3095,7 +3083,6 @@ impl<'a> BuildTask<'a> {
             declarations,
             dep_idents,
             module_timing,
-            unused_imported_modules,
         }
     }
 }
@@ -3111,7 +3098,6 @@ fn run_solve<'a>(
     mut var_store: VarStore,
     decls: Vec<Declaration>,
     dep_idents: MutMap<ModuleId, IdentIds>,
-    unused_imports: MutMap<ModuleId, Region>,
 ) -> Msg<'a> {
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
@@ -3173,7 +3159,6 @@ fn run_solve<'a>(
         dep_idents,
         solved_module,
         module_timing,
-        unused_imports,
     }
 }
 
@@ -3793,7 +3778,6 @@ fn run_task<'a>(
             ident_ids,
             declarations,
             dep_idents,
-            unused_imported_modules,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -3804,7 +3788,6 @@ fn run_task<'a>(
             var_store,
             declarations,
             dep_idents,
-            unused_imported_modules,
         )),
         BuildPendingSpecializations {
             module_id,
