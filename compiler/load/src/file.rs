@@ -501,7 +501,6 @@ enum Msg<'a> {
         decls: Vec<Declaration>,
         dep_idents: MutMap<ModuleId, IdentIds>,
         module_timing: ModuleTiming,
-        unused_imports: MutMap<ModuleId, Region>,
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
@@ -733,8 +732,6 @@ enum BuildTask<'a> {
         var_store: VarStore,
         declarations: Vec<Declaration>,
         dep_idents: MutMap<ModuleId, IdentIds>,
-        /// Modules that this module imports, and where they are imported
-        imported_modules: MutMap<ModuleId, Region>,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -1543,6 +1540,32 @@ fn debug_print_ir(state: &State, flag: &str) {
     println!("{}", result);
 }
 
+/// Report modules that are imported, but from which nothing is used
+fn report_unused_imported_modules<'a>(
+    state: &mut State<'a>,
+    module_id: ModuleId,
+    constrained_module: &ConstrainedModule,
+) {
+    let mut unused_imported_modules = constrained_module.imported_modules.clone();
+
+    for symbol in constrained_module.module.referenced_values.iter() {
+        unused_imported_modules.remove(&symbol.module_id());
+    }
+
+    for symbol in constrained_module.module.referenced_types.iter() {
+        unused_imported_modules.remove(&symbol.module_id());
+    }
+
+    let existing = match state.module_cache.can_problems.entry(module_id) {
+        Vacant(entry) => entry.insert(std::vec::Vec::new()),
+        Occupied(entry) => entry.into_mut(),
+    };
+
+    for (unused, region) in unused_imported_modules.drain() {
+        existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+    }
+}
+
 fn update<'a>(
     mut state: State<'a>,
     msg: Msg<'a>,
@@ -1720,6 +1743,8 @@ fn update<'a>(
                 state.module_cache.documentation.insert(module_id, docs);
             }
 
+            report_unused_imported_modules(&mut state, module_id, &constrained_module);
+
             state
                 .module_cache
                 .aliases
@@ -1746,7 +1771,6 @@ fn update<'a>(
             decls,
             dep_idents,
             mut module_timing,
-            mut unused_imports,
         } => {
             log!("solved types for {:?}", module_id);
             module_timing.end_time = SystemTime::now();
@@ -1755,15 +1779,6 @@ fn update<'a>(
                 .module_cache
                 .type_problems
                 .insert(module_id, solved_module.problems);
-
-            let existing = match state.module_cache.can_problems.entry(module_id) {
-                Vacant(entry) => entry.insert(std::vec::Vec::new()),
-                Occupied(entry) => entry.into_mut(),
-            };
-
-            for (unused, region) in unused_imports.drain() {
-                existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
-            }
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
@@ -3020,7 +3035,7 @@ fn send_header_two<'a>(
 impl<'a> BuildTask<'a> {
     // TODO trim down these arguments - possibly by moving Constraint into Module
     #[allow(clippy::too_many_arguments)]
-    pub fn solve_module(
+    fn solve_module(
         module: Module,
         ident_ids: IdentIds,
         module_timing: ModuleTiming,
@@ -3033,10 +3048,11 @@ impl<'a> BuildTask<'a> {
         declarations: Vec<Declaration>,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
-        let exposed_for_module = ExposedForModule::new(module.references.iter(), exposed_by_module);
+        let exposed_for_module =
+            ExposedForModule::new(module.referenced_values.iter(), exposed_by_module);
 
         let imported_builtins = module
-            .references
+            .referenced_values
             .iter()
             .filter(|s| s.is_builtin())
             .copied()
@@ -3054,7 +3070,6 @@ impl<'a> BuildTask<'a> {
             declarations,
             dep_idents,
             module_timing,
-            imported_modules,
         }
     }
 }
@@ -3071,15 +3086,9 @@ fn run_solve<'a>(
     mut var_store: VarStore,
     decls: Vec<Declaration>,
     dep_idents: MutMap<ModuleId, IdentIds>,
-    imported_modules: MutMap<ModuleId, Region>,
 ) -> Msg<'a> {
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
-
-    // see if there are imported modules from which nothing is actually used
-    // this is an odd time to check this, it should be part of canonicalization.
-    // one thing we miss is if only types are imported, but all are unused
-    let mut unused_imports = imported_modules;
 
     let (mut rigid_vars, mut def_types) =
         constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
@@ -3100,8 +3109,6 @@ fn run_solve<'a>(
     let mut import_variables = Vec::new();
 
     for symbol in exposed_for_module.imported_symbols {
-        unused_imports.remove(&symbol.module_id());
-
         let module_id = symbol.module_id();
         match exposed_for_module.exposed_by_module.get_mut(&module_id) {
             Some(t) => match t {
@@ -3190,7 +3197,6 @@ fn run_solve<'a>(
         dep_idents,
         solved_module,
         module_timing,
-        unused_imports,
     }
 }
 
@@ -3310,7 +3316,8 @@ fn canonicalize_and_constrain<'a>(
                 module_id,
                 exposed_imports: module_output.exposed_imports,
                 exposed_symbols,
-                references: module_output.references,
+                referenced_values: module_output.referenced_values,
+                referenced_types: module_output.referenced_types,
                 aliases: module_output.aliases,
                 rigid_variables: module_output.rigid_variables,
             };
@@ -3810,7 +3817,6 @@ fn run_task<'a>(
             ident_ids,
             declarations,
             dep_idents,
-            imported_modules,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -3822,7 +3828,6 @@ fn run_task<'a>(
             var_store,
             declarations,
             dep_idents,
-            imported_modules,
         )),
         BuildPendingSpecializations {
             module_id,

@@ -12,6 +12,7 @@ use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::Scope;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_error_macros::todo_abilities;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -286,7 +287,7 @@ pub fn canonicalize_defs<'a>(
 
         // Record all the annotation's references in output.references.lookups
         for symbol in can_ann.references {
-            output.references.lookups.insert(symbol);
+            output.references.type_lookups.insert(symbol);
             output.references.referenced_type_defs.insert(symbol);
         }
 
@@ -410,7 +411,7 @@ pub fn sort_can_defs(
 
     // Determine the full set of references by traversing the graph.
     let mut visited_symbols = MutSet::default();
-    let returned_lookups = ImSet::clone(&output.references.lookups);
+    let returned_lookups = ImSet::clone(&output.references.value_lookups);
 
     // Start with the return expression's referenced locals. They're the only ones that count!
     //
@@ -483,10 +484,10 @@ pub fn sort_can_defs(
                 let mut loc_succ = local_successors(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
-                if let Some(References { lookups, .. }) = env.closures.get(symbol) {
+                if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
                     let home = env.home;
 
-                    for lookup in lookups {
+                    for lookup in value_lookups {
                         if lookup != symbol && lookup.module_id() == home {
                             // DO NOT register a self-call behind a lambda!
                             //
@@ -533,8 +534,8 @@ pub fn sort_can_defs(
                 let mut loc_succ = local_successors(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
-                if let Some(References { lookups, .. }) = env.closures.get(symbol) {
-                    for lookup in lookups {
+                if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
+                    for lookup in value_lookups {
                         loc_succ.insert(*lookup);
                     }
                 }
@@ -920,7 +921,7 @@ fn canonicalize_pending_def<'a>(
             // Record all the annotation's references in output.references.lookups
 
             for symbol in type_annotation.references.iter() {
-                output.references.lookups.insert(*symbol);
+                output.references.type_lookups.insert(*symbol);
                 output.references.referenced_type_defs.insert(*symbol);
             }
 
@@ -1042,7 +1043,7 @@ fn canonicalize_pending_def<'a>(
 
             // Record all the annotation's references in output.references.lookups
             for symbol in type_annotation.references.iter() {
-                output.references.lookups.insert(*symbol);
+                output.references.type_lookups.insert(*symbol);
                 output.references.referenced_type_defs.insert(*symbol);
             }
 
@@ -1122,7 +1123,7 @@ fn canonicalize_pending_def<'a>(
                     // Recursion doesn't count as referencing. (If it did, all recursive functions
                     // would result in circular def errors!)
                     refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
-                        refs.lookups = refs.lookups.without(&symbol);
+                        refs.value_lookups = refs.value_lookups.without(&symbol);
                     });
 
                     // renamed_closure_def = Some(&symbol);
@@ -1262,7 +1263,7 @@ fn canonicalize_pending_def<'a>(
                     // Recursion doesn't count as referencing. (If it did, all recursive functions
                     // would result in circular def errors!)
                     refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
-                        refs.lookups = refs.lookups.without(&symbol);
+                        refs.value_lookups = refs.value_lookups.without(&symbol);
                     });
 
                     loc_can_expr.value = Closure(ClosureData {
@@ -1357,7 +1358,8 @@ pub fn can_defs_with_return<'a>(
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
     for (symbol, region) in symbols_introduced {
-        if !output.references.has_lookup(symbol) {
+        if !output.references.has_value_lookup(symbol) && !output.references.has_type_lookup(symbol)
+        {
             env.problem(Problem::UnusedDef(symbol, region));
         }
     }
@@ -1587,6 +1589,8 @@ fn to_pending_def<'a>(
                 }
             }
         }
+
+        Ability { .. } => todo_abilities!(),
 
         Expect(_condition) => todo!(),
 
