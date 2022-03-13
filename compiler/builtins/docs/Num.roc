@@ -1328,3 +1328,9 @@ isInfinite : Float * -> Bool
 ## a [Dict]. The result is entries that can never be removed from those
 ## collections! See the documentation for [Set.add] and [Dict.insert] for details.
 isNaN : Float * -> Bool
+
+## Compares two numbers according to which is higher.
+##
+## [Num] implements [Ordering] using this as its
+## [Order.compare] function.
+increasing : Num a, Num a -> Order

@@ -703,3 +703,25 @@ keepOks : List before, (before -> Result after *) -> List after
 ## Apply a function that returns a Result on a list, only unsuccessful
 ## Results are kept and returned unwrapped.
 keepErrs : List before, (before -> Result * after) -> List after
+
+## Shorthand for [List.sortWith] passing [Order.compare]
+sort : List elem -> List elem | elem supports Ordering
+
+## [sort] with the order reversed.
+sortReverse : List elem -> List elem | elem supports Ordering
+
+## Sort the list using the given ordering function.
+sortWith : List elem, (elem, elem -> Order) -> List elem
+
+## Sort using a value derived from each element, such as a record field.
+##
+##     List.sortBy records .name
+sortBy : List elem, (elem -> field) -> List elem | field supports Ordering
+
+## Sort the list in reverse order, using a value derived from each element - such as a record field.
+##
+##     List.sortReverseBy records .name
+sortReverseBy : List elem, (elem -> field) -> List elem | field supports Ordering
+
+## A combination of [sortBy] and [sortWith].
+sortCustom : List elem, (elem -> field), (field, field -> Order) -> List elem

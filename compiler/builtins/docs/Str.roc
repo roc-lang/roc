@@ -439,6 +439,12 @@ toDec : Str -> Result Dec [ InvalidDec ]*
 ## advanced options, see [parseNum].
 toNum : Str -> Result (Num *) [ InvalidNumStr ]*
 
+## Compares the strings alphabetically.
+##
+## [Str] implements [Ordering] using this as its
+## [Order.compare] function.
+alphabetical : Str, Str -> Order
+
 ## If the string begins with an [Int] or a [finite](Num.isFinite) [Frac], return
 ## that number along with the rest of the string after it.
 ##
