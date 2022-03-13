@@ -257,21 +257,18 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     let mut referenced_values = MutSet::default();
+    let mut referenced_types = MutSet::default();
 
     // Gather up all the symbols that were referenced across all the defs' lookups.
-    for symbol in output.references.value_lookups.iter() {
-        referenced_values.insert(*symbol);
-    }
+    referenced_values.extend(output.references.value_lookups);
+    referenced_types.extend(output.references.type_lookups);
 
     // Gather up all the symbols that were referenced across all the defs' calls.
-    for symbol in output.references.calls.iter() {
-        referenced_values.insert(*symbol);
-    }
+    referenced_values.extend(output.references.calls);
 
     // Gather up all the symbols that were referenced from other modules.
-    for symbol in env.qualified_value_lookups.iter() {
-        referenced_values.insert(*symbol);
-    }
+    referenced_values.extend(env.qualified_value_lookups.iter().copied());
+    referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
     // add any builtins used by other builtins
     let transitive_builtins: Vec<Symbol> = referenced_values
@@ -461,19 +458,15 @@ pub fn canonicalize_module_defs<'a>(
             }
 
             // Incorporate any remaining output.lookups entries into references.
-            for symbol in output.references.value_lookups {
-                referenced_values.insert(symbol);
-            }
+            referenced_values.extend(output.references.value_lookups);
+            referenced_types.extend(output.references.type_lookups);
 
             // Incorporate any remaining output.calls entries into references.
-            for symbol in output.references.calls {
-                referenced_values.insert(symbol);
-            }
+            referenced_values.extend(output.references.calls);
 
             // Gather up all the symbols that were referenced from other modules.
-            for symbol in env.qualified_value_lookups.iter() {
-                referenced_values.insert(*symbol);
-            }
+            referenced_values.extend(env.qualified_value_lookups.iter().copied());
+            referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
             for declaration in declarations.iter_mut() {
                 match declaration {
@@ -502,7 +495,7 @@ pub fn canonicalize_module_defs<'a>(
                 rigid_variables,
                 declarations,
                 referenced_values,
-                referenced_types: Default::default(), // TODO
+                referenced_types,
                 exposed_imports: can_exposed_imports,
                 problems: env.problems,
                 lookups,
