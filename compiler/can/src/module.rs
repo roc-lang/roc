@@ -23,7 +23,8 @@ pub struct Module {
     pub module_id: ModuleId,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub exposed_symbols: MutSet<Symbol>,
-    pub references: MutSet<Symbol>,
+    pub referenced_values: MutSet<Symbol>,
+    pub referenced_types: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Variable, Lowercase>,
 }
@@ -37,7 +38,8 @@ pub struct ModuleOutput {
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub problems: Vec<Problem>,
     pub ident_ids: IdentIds,
-    pub references: MutSet<Symbol>,
+    pub referenced_values: MutSet<Symbol>,
+    pub referenced_types: MutSet<Symbol>,
     pub scope: Scope,
 }
 
@@ -238,7 +240,10 @@ pub fn canonicalize_module_defs<'a>(
     // See if any of the new idents we defined went unused.
     // If any were unused and also not exposed, report it.
     for (symbol, region) in symbols_introduced {
-        if !output.references.has_lookup(symbol) && !exposed_symbols.contains(&symbol) {
+        if !output.references.has_value_lookup(symbol)
+            && !output.references.has_type_lookup(symbol)
+            && !exposed_symbols.contains(&symbol)
+        {
             env.problem(Problem::UnusedDef(symbol, region));
         }
     }
@@ -251,25 +256,22 @@ pub fn canonicalize_module_defs<'a>(
         rigid_variables.insert(var, "*".into());
     }
 
-    let mut references = MutSet::default();
+    let mut referenced_values = MutSet::default();
+    let mut referenced_types = MutSet::default();
 
     // Gather up all the symbols that were referenced across all the defs' lookups.
-    for symbol in output.references.lookups.iter() {
-        references.insert(*symbol);
-    }
+    referenced_values.extend(output.references.value_lookups);
+    referenced_types.extend(output.references.type_lookups);
 
     // Gather up all the symbols that were referenced across all the defs' calls.
-    for symbol in output.references.calls.iter() {
-        references.insert(*symbol);
-    }
+    referenced_values.extend(output.references.calls);
 
     // Gather up all the symbols that were referenced from other modules.
-    for symbol in env.qualified_lookups.iter() {
-        references.insert(*symbol);
-    }
+    referenced_values.extend(env.qualified_value_lookups.iter().copied());
+    referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
     // add any builtins used by other builtins
-    let transitive_builtins: Vec<Symbol> = references
+    let transitive_builtins: Vec<Symbol> = referenced_values
         .iter()
         .filter(|s| s.is_builtin())
         .map(|s| crate::builtins::builtin_dependencies(*s))
@@ -277,7 +279,7 @@ pub fn canonicalize_module_defs<'a>(
         .copied()
         .collect();
 
-    references.extend(transitive_builtins);
+    referenced_values.extend(transitive_builtins);
 
     // NOTE previously we inserted builtin defs into the list of defs here
     // this is now done later, in file.rs.
@@ -456,19 +458,15 @@ pub fn canonicalize_module_defs<'a>(
             }
 
             // Incorporate any remaining output.lookups entries into references.
-            for symbol in output.references.lookups {
-                references.insert(symbol);
-            }
+            referenced_values.extend(output.references.value_lookups);
+            referenced_types.extend(output.references.type_lookups);
 
             // Incorporate any remaining output.calls entries into references.
-            for symbol in output.references.calls {
-                references.insert(symbol);
-            }
+            referenced_values.extend(output.references.calls);
 
             // Gather up all the symbols that were referenced from other modules.
-            for symbol in env.qualified_lookups.iter() {
-                references.insert(*symbol);
-            }
+            referenced_values.extend(env.qualified_value_lookups.iter().copied());
+            referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
             for declaration in declarations.iter_mut() {
                 match declaration {
@@ -482,7 +480,7 @@ pub fn canonicalize_module_defs<'a>(
 
             // TODO this loops over all symbols in the module, we can speed it up by having an
             // iterator over all builtin symbols
-            for symbol in references.iter() {
+            for symbol in referenced_values.iter() {
                 if symbol.is_builtin() {
                     // this can fail when the symbol is for builtin types, or has no implementation yet
                     if let Some(def) = crate::builtins::builtin_defs_map(*symbol, var_store) {
@@ -496,7 +494,8 @@ pub fn canonicalize_module_defs<'a>(
                 aliases,
                 rigid_variables,
                 declarations,
-                references,
+                referenced_values,
+                referenced_types,
                 exposed_imports: can_exposed_imports,
                 problems: env.problems,
                 lookups,

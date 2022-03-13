@@ -27,8 +27,11 @@ pub struct Env<'a> {
     /// current closure name (if any)
     pub closure_name_symbol: Option<Symbol>,
 
-    /// Symbols which were referenced by qualified lookups.
-    pub qualified_lookups: MutSet<Symbol>,
+    /// Symbols of values/functions which were referenced by qualified lookups.
+    pub qualified_value_lookups: MutSet<Symbol>,
+
+    /// Symbols of types which were referenced by qualified lookups.
+    pub qualified_type_lookups: MutSet<Symbol>,
 
     pub top_level_symbols: MutSet<Symbol>,
 
@@ -51,7 +54,8 @@ impl<'a> Env<'a> {
             exposed_ident_ids,
             problems: Vec::new(),
             closures: MutMap::default(),
-            qualified_lookups: MutSet::default(),
+            qualified_value_lookups: MutSet::default(),
+            qualified_type_lookups: MutSet::default(),
             tailcallable_symbol: None,
             closure_name_symbol: None,
             top_level_symbols: MutSet::default(),
@@ -71,6 +75,8 @@ impl<'a> Env<'a> {
             ident
         );
 
+        let is_type_name = ident.starts_with(|c: char| c.is_uppercase());
+
         let module_name = ModuleName::from(module_name_str);
         let ident = Ident::from(ident);
 
@@ -83,7 +89,11 @@ impl<'a> Env<'a> {
                         Some(ident_id) => {
                             let symbol = Symbol::new(module_id, *ident_id);
 
-                            self.qualified_lookups.insert(symbol);
+                            if is_type_name {
+                                self.qualified_type_lookups.insert(symbol);
+                            } else {
+                                self.qualified_value_lookups.insert(symbol);
+                            }
 
                             Ok(symbol)
                         }
@@ -104,7 +114,11 @@ impl<'a> Env<'a> {
                             Some(ident_id) => {
                                 let symbol = Symbol::new(module_id, *ident_id);
 
-                                self.qualified_lookups.insert(symbol);
+                                if is_type_name {
+                                    self.qualified_type_lookups.insert(symbol);
+                                } else {
+                                    self.qualified_value_lookups.insert(symbol);
+                                }
 
                                 Ok(symbol)
                             }
