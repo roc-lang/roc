@@ -39,6 +39,44 @@ whether the feature should be in the language at all. In the case of this featur
 language doesn't have it; that way nobody has to learn (or spend time spreading the word) about the
 performance-boosting advice not to use it.
 
+## Why can't functions be compared for equality using the `==` operator?
+
+Function equality has been proven to be undecidable in the general case because of the [halting problem](https://en.wikipedia.org/wiki/Halting_problem).
+So while we as humans might be able to look at `\x -> x + 1` and `\x -> 1 + x` and know that they're equivalent,
+in the general case it's not possible for a computer to do this reliably.
+
+There are some other potential ways to define function equality, but they all have problems.
+
+One way would be to have two functions be considered equal if their source code is equivalent. (Perhaps disregarding
+comments and spaces.) This sounds good at face value, but it means that now you can revise a function to do
+exactly the same thing as before (say, changing `\x -> x + 1` to `\x -> 1 + x`) and cause a bug in some completely
+distant part of the code base. Defining function equality this way means that revising a function's internals
+is no longer a safe, local operation - even if it gives all the same outputs for all the same inputs.
+
+Another option would be to define it would be using "reference equality." This is what JavaScript does, for example.
+However, Roc does not use reference equality anywhere else in the language, and it would mean that (for example)
+passing `\x -> x + 1` to a function compared to defining `fn = \x -> x + 1` elsewhere and then passing `fn` into
+the function might give different answers.
+
+Both of these would make revising code riskier across the entire language, which is very undesirable.
+
+Another option would be to define that function equality always returns `False`. So both of these would evaluate
+to `False`:
+
+* `(\x -> x + 1) == (\x -> 1 + x)`
+* `(\x -> x + 1) == (\x -> x + 1)`
+
+This makes function equality effectively useless, while still technically allowing it. It has some other downsides:
+* Now if you put a function inside a record, using `==` on that record will still type-check, but it will then return `False`. This could lead to bugs if you didn't realize you had accidentally put a function in there - for example, because you were actually storing a different type (e.g. an opaque type) and didn't realize it had a function inside it.
+* If you put a function (or a value containing a function) into a `Dict` or `Set`, you'll never be able to get it out again. This is a common problem with [NaN](https://en.wikipedia.org/wiki/NaN), which is also defined not to be equal to itself.
+
+The first of these problems could be addressed by having function equality always return `True` instead of `False` (since that way it would not affect other fields' equality checks in a record), but that design has its own problems:
+* Although function equality is still useless, `(\x -> x + 1) == (\x -> x)` returns `True`. Even if it didn't lead to bugs in practice, this would certainly be surprising and confusing to beginners.
+* Now if you put several different functions into a `Dict` or `Set`, only one of them will be kept; the others will be discarded or overwritten. This could cause bugs if a value stored a function internally, and then other functions relied on that internal function for correctness.
+
+Each of these designs makes Roc a language that's some combination of more error-prone, more confusing, and more
+brittle to change. Disallowing function equality at compile time eliminates all of these drawbacks.
+
 ## Why doesn't Roc have a `Maybe` or `Option` or `Optional` type, or `null` or `nil` or `undefined`?
 
 It's common for programming languages to have a [null reference](https://en.wikipedia.org/wiki/Null_pointer)
