@@ -24,6 +24,12 @@ void roc_panic(void* ptr, unsigned int alignment) {
   exit(0);
 }
 
+void* roc_memcpy(void* dest, const void* src, size_t n) {
+  return memcpy(dest, src, n);
+}
+
+void* roc_memset(void* str, int c, size_t n) { return memset(str, c, n); }
+
 struct RocStr {
   const char* bytes;
   size_t len;
@@ -75,7 +81,16 @@ void handle_request(struct http_request_s* request) {
   http_respond(request, response);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+  // Quick and dirty test
+  if (argc > 1 && strcmp(argv[1], "--self-check") == 0) {
+    char url[] = "";
+    struct RocStr roc_url = {url, strlen(url)};
+    struct RocStr str = roc__mainForHost_1_exposed(roc_url);
+    char* str_bytes = (is_small_str(str)) ? (char*)&str : str.bytes;
+    printf("%s", str_bytes);
+    return 0;
+  }
   struct http_server_s* server = http_server_init(8080, handle_request);
   http_server_listen(server);
 }
