@@ -1,7 +1,7 @@
 use crate::solve;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
+use roc_can::module::RigidVariables;
 use roc_collections::all::MutMap;
-use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_types::solved_types::{Solved, SolvedType};
 use roc_types::subs::{StorageSubs, Subs, Variable};
@@ -29,13 +29,17 @@ pub struct SolvedModule {
 pub fn run_solve(
     constraints: &Constraints,
     constraint: ConstraintSoa,
-    rigid_variables: MutMap<Variable, Lowercase>,
+    rigid_variables: RigidVariables,
     mut subs: Subs,
 ) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
     let env = solve::Env::default();
 
-    for (var, name) in rigid_variables {
+    for (var, name) in rigid_variables.named {
         subs.rigid_var(var, name);
+    }
+
+    for var in rigid_variables.wildcards {
+        subs.rigid_var(var, "*".into());
     }
 
     // Now that the module is parsed, canonicalized, and constrained,
