@@ -1462,9 +1462,7 @@ fn parse_expr_end<'a>(
         Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
         Ok((
             _,
-            has
-            @
-            Loc {
+            has @ Loc {
                 value:
                     Expr::Var {
                         module_name: "",
