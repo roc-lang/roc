@@ -850,6 +850,27 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
     });
 }
 
+fn either_type_index_to_var(
+    constraints: &Constraints,
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    _alias_map: &mut MutMap<Symbol, Variable>,
+    either_type_index: roc_collections::soa::EitherIndex<Type, Variable>,
+) -> Variable {
+    match either_type_index.split() {
+        Ok(type_index) => {
+            let typ = &constraints.types[type_index.index()];
+
+            type_to_var(subs, rank, pools, _alias_map, typ)
+        }
+        Err(var_index) => {
+            let var = constraints.variables[var_index.index()];
+            var
+        }
+    }
+}
+
 fn type_to_var(
     subs: &mut Subs,
     rank: Rank,
