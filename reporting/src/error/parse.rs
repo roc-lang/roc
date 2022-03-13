@@ -3659,7 +3659,7 @@ fn to_ability_def_report<'a>(
     use roc_parse::parser::EAbility;
 
     match problem {
-        EAbility::Space(error, pos) => to_space_report(alloc, lines, filename, &error, *pos),
+        EAbility::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
         EAbility::Type(tipe, pos) => to_type_report(alloc, lines, filename, tipe, *pos),
         EAbility::DemandAlignment(over_under_indent, pos) => {
             let over_under_msg = if *over_under_indent > 0 {
