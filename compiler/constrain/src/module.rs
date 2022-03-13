@@ -53,7 +53,7 @@ impl ExposedByModule {
 #[derive(Clone, Debug, Default)]
 pub struct ExposedForModule {
     pub exposed_by_module: ExposedByModule,
-    pub imported_symbols: Vec<Symbol>,
+    pub imported_values: Vec<Symbol>,
 }
 
 impl ExposedForModule {
@@ -61,7 +61,7 @@ impl ExposedForModule {
         it: impl Iterator<Item = &'a Symbol>,
         exposed_by_module: ExposedByModule,
     ) -> Self {
-        let mut imported_symbols = Vec::new();
+        let mut imported_values = Vec::new();
 
         for symbol in it {
             // Today, builtins are not actually imported,
@@ -75,14 +75,14 @@ impl ExposedForModule {
             if let Some(ExposedModuleTypes::Valid { .. }) =
                 exposed_by_module.exposed.get(&symbol.module_id())
             {
-                imported_symbols.push(*symbol);
+                imported_values.push(*symbol);
             } else {
                 continue;
             }
         }
 
         Self {
-            imported_symbols,
+            imported_values,
             exposed_by_module,
         }
     }

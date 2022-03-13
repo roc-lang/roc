@@ -3108,7 +3108,7 @@ fn run_solve<'a>(
 
     let mut import_variables = Vec::new();
 
-    for symbol in exposed_for_module.imported_symbols {
+    for symbol in exposed_for_module.imported_values {
         let module_id = symbol.module_id();
         match exposed_for_module.exposed_by_module.get_mut(&module_id) {
             Some(t) => match t {
