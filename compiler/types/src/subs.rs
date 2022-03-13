@@ -3936,8 +3936,14 @@ pub fn copy_import_to(
     target: &mut Subs,
     var: Variable,
 ) -> CopiedImport {
-    // This is the rank at which imports will be introduced; we start at rank 1 (toplevel)
-    // And the Let constraint will want to introduce its def_types at rank 2
+    // the rank at which we introduce imports.
+    //
+    // Type checking starts at rank 1 aka toplevel. When there are rigid/flex variables introduced by a
+    // constraint, then these must be generalized relative to toplevel, and hence are introduced at
+    // rank 2.
+    //
+    // We always use: even if there are no rigids imported, introducing at rank 2 is correct
+    // (if slightly inefficient) because there are no rigids anyway so generalization is trivial
     let rank = Rank::toplevel().next();
 
     let mut arena = take_scratchpad();
