@@ -479,7 +479,6 @@ pub enum EAbility<'a> {
     Space(BadInputError, Position),
     Type(EType<'a>, Position),
 
-    IndentDemand(Position),
     DemandAlignment(i32, Position),
     DemandName(Position),
     DemandColon(Position),
@@ -1421,7 +1420,12 @@ where
     }
 }
 
-pub fn word3<'a, ToError, E>(word_1: u8, word_2: u8, word_3: u8, to_error: ToError) -> impl Parser<'a, (), E>
+pub fn word3<'a, ToError, E>(
+    word_1: u8,
+    word_2: u8,
+    word_3: u8,
+    to_error: ToError,
+) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,

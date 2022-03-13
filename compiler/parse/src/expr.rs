@@ -1088,7 +1088,7 @@ mod ability {
                 skip_first!(
                     and!(
                         // TODO: do we get anything from picking up spaces here?
-                        space0_e(start_column, EAbility::IndentDemand),
+                        space0_e(start_column, EAbility::DemandName),
                         word1(b':', EAbility::DemandColon)
                     ),
                     specialize(
@@ -1122,7 +1122,7 @@ mod ability {
             let initial = state.clone();
 
             // Put no restrictions on the indent after the spaces; we'll check it manually.
-            match space0_e(0, EAbility::IndentDemand).parse(arena, state) {
+            match space0_e(0, EAbility::DemandName).parse(arena, state) {
                 Err((MadeProgress, fail, _)) => Err((NoProgress, fail, initial)),
                 Err((NoProgress, fail, _)) => Err((NoProgress, fail, initial)),
 
@@ -1131,7 +1131,7 @@ mod ability {
                         IndentLevel::PendingMin(min_indent) if state.column() < min_indent => {
                             let indent_difference = state.column() as i32 - min_indent as i32;
                             Err((
-                                NoProgress,
+                                MadeProgress,
                                 EAbility::DemandAlignment(indent_difference, state.pos()),
                                 initial,
                             ))
@@ -1140,7 +1140,7 @@ mod ability {
                             // This demand is not indented correctly
                             let indent_difference = state.column() as i32 - wanted as i32;
                             Err((
-                                NoProgress,
+                                MadeProgress,
                                 EAbility::DemandAlignment(indent_difference, state.pos()),
                                 initial,
                             ))
@@ -1155,8 +1155,9 @@ mod ability {
                                     Err((MadeProgress, fail, state))
                                 }
                                 Err((NoProgress, fail, _)) => {
-                                    // Roll back space parsing if no progress made
-                                    Err((NoProgress, fail, initial))
+                                    // We made progress relative to the entire ability definition,
+                                    // so this is an error.
+                                    Err((MadeProgress, fail, initial))
                                 }
 
                                 Ok((_, mut demand, state)) => {

@@ -540,6 +540,8 @@ fn to_expr_report<'a>(
             to_malformed_number_literal_report(alloc, lines, filename, pos)
         }
 
+        EExpr::Ability(err, pos) => to_ability_def_report(alloc, lines, filename, err, *pos),
+
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -3644,6 +3646,83 @@ fn to_space_report<'a>(
         }
 
         _ => todo!("unhandled type parse error: {:?}", &parse_problem),
+    }
+}
+
+fn to_ability_def_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    problem: &roc_parse::parser::EAbility<'a>,
+    start: Position,
+) -> Report<'a> {
+    use roc_parse::parser::EAbility;
+
+    match problem {
+        EAbility::Space(error, pos) => to_space_report(alloc, lines, filename, &error, *pos),
+        EAbility::Type(tipe, pos) => to_type_report(alloc, lines, filename, tipe, *pos),
+        EAbility::DemandAlignment(over_under_indent, pos) => {
+            let over_under_msg = if *over_under_indent > 0 {
+                alloc.reflow("indented too much")
+            } else {
+                alloc.reflow("not indented enough")
+            };
+
+            let msg = alloc.concat(vec![
+                alloc.reflow("I suspect this line is "),
+                over_under_msg,
+                alloc.reflow(" (by "),
+                alloc.string(over_under_indent.abs().to_string()),
+                alloc.reflow(" spaces)"),
+            ]);
+
+            to_unfinished_ability_report(alloc, lines, filename, *pos, start, msg)
+        }
+        EAbility::DemandName(pos) => to_unfinished_ability_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.reflow("I was expecting to see a value signature next."),
+        ),
+        EAbility::DemandColon(pos) => to_unfinished_ability_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.concat(vec![
+                alloc.reflow("I was expecting to see a "),
+                alloc.parser_suggestion(":"),
+                alloc.reflow(" annotating the signature of this value next."),
+            ]),
+        ),
+    }
+}
+
+fn to_unfinished_ability_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    pos: Position,
+    start: Position,
+    message: RocDocBuilder<'a>,
+) -> Report<'a> {
+    let surroundings = Region::new(start, pos);
+    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+    let doc = alloc.stack(vec![
+        alloc.reflow(r"I was partway through parsing an ability definition, but I got stuck here:"),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        message,
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "UNFINISHED ABILITY".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 
