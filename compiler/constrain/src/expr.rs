@@ -403,14 +403,12 @@ pub fn constrain_expr(
                     pattern_state_constraints,
                     ret_constraint,
                 ),
-                // "the closure's type is equal to expected type"
-                constraints.equal_types(function_type.clone(), expected, Category::Lambda, region),
-                // "fn_var is equal to the closure's type" - fn_var is used in code gen
-                constraints.equal_types_var(
-                    *fn_var,
-                    NoExpectation(function_type),
-                    Category::Storage(std::file!(), std::line!()),
+                constraints.equal_types_with_storage(
+                    function_type,
+                    expected,
+                    Category::Lambda,
                     region,
+                    *fn_var,
                 ),
                 closure_constraint,
             ];
