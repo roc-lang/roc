@@ -215,6 +215,34 @@ impl Constraints {
         Constraint::Eq(type_index, expected_index, category_index, region)
     }
 
+    #[inline(always)]
+    pub fn equal_types_with_storage(
+        &mut self,
+        typ: Type,
+        expected: Expected<Type>,
+        category: Category,
+        region: Region,
+        storage_var: Variable,
+    ) -> Constraint {
+        let type_index = self.push_type(typ);
+        let expected_index = Index::push_new(&mut self.expectations, expected);
+        let category_index = Self::push_category(self, category);
+
+        let equal = Constraint::Eq(type_index, expected_index, category_index, region);
+
+        let storage_type_index = Self::push_type_variable(storage_var);
+        let storage_category = Category::Storage(std::file!(), std::line!());
+        let storage_category_index = Self::push_category(self, storage_category);
+        let storage = Constraint::Eq(
+            storage_type_index,
+            expected_index,
+            storage_category_index,
+            region,
+        );
+
+        self.and_constraint([equal, storage])
+    }
+
     pub fn equal_pattern_types(
         &mut self,
         typ: Type,
