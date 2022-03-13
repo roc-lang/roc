@@ -902,7 +902,7 @@ pub fn constrain_expr(
                 types.push(Type::Variable(*var));
             }
 
-            let union_con = constraints.equal_types(
+            let union_con = constraints.equal_types_with_storage(
                 Type::TagUnion(
                     vec![(name.clone(), types)],
                     Box::new(Type::Variable(*ext_var)),
@@ -913,18 +913,12 @@ pub fn constrain_expr(
                     args_count: arguments.len(),
                 },
                 region,
-            );
-            let ast_con = constraints.equal_types_var(
                 *variant_var,
-                expected,
-                Category::Storage(std::file!(), std::line!()),
-                region,
             );
 
             vars.push(*variant_var);
             vars.push(*ext_var);
             arg_cons.push(union_con);
-            arg_cons.push(ast_con);
 
             constraints.exists_many(vars, arg_cons)
         }
@@ -953,7 +947,7 @@ pub fn constrain_expr(
                 types.push(Type::Variable(*var));
             }
 
-            let union_con = constraints.equal_types(
+            let union_con = constraints.equal_types_with_storage(
                 Type::FunctionOrTagUnion(
                     name.clone(),
                     *closure_name,
@@ -965,18 +959,12 @@ pub fn constrain_expr(
                     args_count: arguments.len(),
                 },
                 region,
-            );
-            let ast_con = constraints.equal_types_var(
                 *variant_var,
-                expected,
-                Category::Storage(std::file!(), std::line!()),
-                region,
             );
 
             vars.push(*variant_var);
             vars.push(*ext_var);
             arg_cons.push(union_con);
-            arg_cons.push(ast_con);
 
             constraints.exists_many(vars, arg_cons)
         }
