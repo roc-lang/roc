@@ -26,13 +26,19 @@ pub struct Module {
     pub referenced_values: MutSet<Symbol>,
     pub referenced_types: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
-    pub rigid_variables: MutMap<Variable, Lowercase>,
+    pub rigid_variables: RigidVariables,
+}
+
+#[derive(Debug, Default)]
+pub struct RigidVariables {
+    pub named: MutMap<Variable, Lowercase>,
+    pub wildcards: MutSet<Variable>,
 }
 
 #[derive(Debug)]
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
-    pub rigid_variables: MutMap<Variable, Lowercase>,
+    pub rigid_variables: RigidVariables,
     pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
@@ -169,7 +175,7 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     let mut lookups = Vec::with_capacity(num_deps);
-    let mut rigid_variables = MutMap::default();
+    let mut rigid_variables = RigidVariables::default();
 
     // Exposed values are treated like defs that appear before any others, e.g.
     //
@@ -249,11 +255,11 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     for (var, lowercase) in output.introduced_variables.name_by_var {
-        rigid_variables.insert(var, lowercase.clone());
+        rigid_variables.named.insert(var, lowercase.clone());
     }
 
     for var in output.introduced_variables.wildcards {
-        rigid_variables.insert(var, "*".into());
+        rigid_variables.wildcards.insert(var);
     }
 
     let mut referenced_values = MutSet::default();

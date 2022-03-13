@@ -337,7 +337,7 @@ impl Constraints {
         let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_contraint);
 
-        Constraint::Let(let_index)
+        Constraint::Let(let_index, Slice::default())
     }
 
     #[inline(always)]
@@ -363,7 +363,7 @@ impl Constraints {
         let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_contraint);
 
-        Constraint::Let(let_index)
+        Constraint::Let(let_index, Slice::default())
     }
 
     #[inline(always)]
@@ -381,6 +381,7 @@ impl Constraints {
         I3: IntoIterator<Item = (Symbol, Loc<Type>)>,
         I3::IntoIter: ExactSizeIterator,
     {
+        // defs and ret constraint are stored consequtively, so we only need to store one index
         let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
         self.constraints.push(defs_constraint);
@@ -396,7 +397,55 @@ impl Constraints {
         let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_contraint);
 
-        Constraint::Let(let_index)
+        Constraint::Let(let_index, Slice::default())
+    }
+
+    /// A variant of `Let` used specifically for imports. When importing types from another module,
+    /// we use a StorageSubs to store the data, and copy over the relevant
+    /// variables/content/flattype/tagname etc.
+    ///
+    /// The general idea is to let-generalize the imorted types in the target module.
+    /// More concretely, we need to simulate what `type_to_var` (solve.rs) does to a `Type`.
+    /// While the copying puts all the data the right place, it misses that `type_to_var` puts
+    /// the variables that it creates (to store the nodes of a Type in Subs) in the pool of the
+    /// current rank (so they can be generalized).
+    ///
+    /// So, during copying of an import (`copy_import_to`, subs.rs) we track the variables that
+    /// we need to put into the pool (simulating what `type_to_var` would do). Those variables
+    /// then need to find their way to the pool, and a convenient approach turned out to be to
+    /// tag them onto the `Let` that we used to add the imported values.
+    #[inline(always)]
+    pub fn let_import_constraint<I1, I2>(
+        &mut self,
+        rigid_vars: I1,
+        def_types: I2,
+        module_constraint: Constraint,
+        pool_variables: &[Variable],
+    ) -> Constraint
+    where
+        I1: IntoIterator<Item = Variable>,
+        I2: IntoIterator<Item = (Symbol, Loc<Type>)>,
+        I2::IntoIter: ExactSizeIterator,
+    {
+        // defs and ret constraint are stored consequtively, so we only need to store one index
+        let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
+
+        self.constraints.push(Constraint::True);
+        self.constraints.push(module_constraint);
+
+        let let_contraint = LetConstraint {
+            rigid_vars: self.variable_slice(rigid_vars),
+            flex_vars: Slice::default(),
+            def_types: self.def_types_slice(def_types),
+            defs_and_ret_constraint,
+        };
+
+        let let_index = Index::new(self.let_constraints.len() as _);
+        self.let_constraints.push(let_contraint);
+
+        let pool_slice = self.variable_slice(pool_variables.iter().copied());
+
+        Constraint::Let(let_index, pool_slice)
     }
 
     #[inline(always)]
@@ -436,6 +485,7 @@ impl Constraints {
             region,
         )
     }
+
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         match constraint {
             Constraint::Eq(..) => false,
@@ -444,7 +494,7 @@ impl Constraints {
             Constraint::Pattern(..) => false,
             Constraint::True => false,
             Constraint::SaveTheEnvironment => true,
-            Constraint::Let(index) => {
+            Constraint::Let(index, _) => {
                 let let_constraint = &self.let_constraints[index.index()];
 
                 let offset = let_constraint.defs_and_ret_constraint.index();
@@ -481,9 +531,9 @@ impl Constraints {
     }
 }
 
-static_assertions::assert_eq_size!([u8; 3 * 8], Constraint);
+roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Constraint {
     Eq(
         EitherIndex<Type, Variable>,
@@ -504,9 +554,15 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
-    True, // Used for things that always unify, e.g. blanks and runtime errors
+    /// Used for things that always unify, e.g. blanks and runtime errors
+    True,
     SaveTheEnvironment,
-    Let(Index<LetConstraint>),
+    /// A Let constraint introduces symbols and their annotation at a certain level of nesting
+    ///
+    /// The `Slice<Variable>` is used for imports where we manually put the Content into Subs
+    /// by copying from another module, but have to make sure that any variables we use to store
+    /// these contents are added to `Pool` at the correct rank
+    Let(Index<LetConstraint>, Slice<Variable>),
     And(Slice<Constraint>),
     /// Presence constraints
     IsOpenType(EitherIndex<Type, Variable>), // Theory; always applied to a variable? if yes the use that
@@ -540,4 +596,37 @@ pub struct IncludesTag {
     pub types: Slice<Type>,
     pub pattern_category: Index<PatternCategory>,
     pub region: Region,
+}
+
+/// Custom impl to limit vertical space used by the debug output
+impl std::fmt::Debug for Constraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Eq(arg0, arg1, arg2, arg3) => {
+                write!(f, "Eq({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+            }
+            Self::Store(arg0, arg1, arg2, arg3) => {
+                write!(f, "Store({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+            }
+            Self::Lookup(arg0, arg1, arg2) => {
+                write!(f, "Lookup({:?}, {:?}, {:?})", arg0, arg1, arg2)
+            }
+            Self::Pattern(arg0, arg1, arg2, arg3) => {
+                write!(f, "Pattern({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+            }
+            Self::True => write!(f, "True"),
+            Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),
+            Self::Let(arg0, arg1) => f.debug_tuple("Let").field(arg0).field(arg1).finish(),
+            Self::And(arg0) => f.debug_tuple("And").field(arg0).finish(),
+            Self::IsOpenType(arg0) => f.debug_tuple("IsOpenType").field(arg0).finish(),
+            Self::IncludesTag(arg0) => f.debug_tuple("IncludesTag").field(arg0).finish(),
+            Self::PatternPresence(arg0, arg1, arg2, arg3) => {
+                write!(
+                    f,
+                    "PatternPresence({:?}, {:?}, {:?}, {:?})",
+                    arg0, arg1, arg2, arg3
+                )
+            }
+        }
+    }
 }

@@ -13,6 +13,15 @@ use roc_types::subs::VarId;
 use roc_types::types::RecordField;
 use std::collections::HashMap;
 
+lazy_static::lazy_static! {
+    static ref STDLIB: StdLib = standard_stdlib();
+}
+
+/// A global static that stores our initialized standard library definitions
+pub fn borrow_stdlib() -> &'static StdLib {
+    &STDLIB
+}
+
 /// Example:
 ///
 ///     let_tvars! { a, b, c }

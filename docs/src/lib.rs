@@ -426,7 +426,7 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>, std_lib: StdLib) -> Vec<L
             filename,
             &std_lib,
             src_dir.as_path(),
-            MutMap::default(),
+            Default::default(),
             roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
         ) {
             Ok(loaded) => modules.push(loaded),
