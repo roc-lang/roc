@@ -1051,3 +1051,17 @@ fn dec_in_repl() {
         r#"1.23 : Dec"#,
     )
 }
+
+#[test]
+fn print_i8_issue_2710() {
+    expect_success(
+        indoc!(
+            r#"
+            a : I8
+            a = -1
+            a
+            "#
+        ),
+        r#"-1 : I8"#,
+    )
+}
