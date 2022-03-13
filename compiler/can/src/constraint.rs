@@ -1,5 +1,5 @@
 use crate::expected::{Expected, PExpected};
-use roc_collections::soa::{Index, Slice};
+use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -120,12 +120,25 @@ impl Constraints {
     pub const PCATEGORY_CHARACTER: Index<PatternCategory> = Index::new(10);
 
     #[inline(always)]
-    pub fn push_type(&mut self, typ: Type) -> Index<Type> {
+    pub fn push_type(&mut self, typ: Type) -> EitherIndex<Type, Variable> {
         match typ {
-            Type::EmptyRec => Self::EMPTY_RECORD,
-            Type::EmptyTagUnion => Self::EMPTY_TAG_UNION,
-            other => Index::push_new(&mut self.types, other),
+            Type::EmptyRec => EitherIndex::from_left(Self::EMPTY_RECORD),
+            Type::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
+            Type::Variable(var) => Self::push_type_variable(var),
+            other => {
+                let index: Index<Type> = Index::push_new(&mut self.types, other);
+                EitherIndex::from_left(index)
+            }
         }
+    }
+
+    #[inline(always)]
+    const fn push_type_variable(var: Variable) -> EitherIndex<Type, Variable> {
+        // that's right, we use the variable's integer value as the index
+        // that way, we don't need to push anything onto a vector
+        let index: Index<Variable> = Index::new(var.index());
+
+        EitherIndex::from_right(index)
     }
 
     #[inline(always)]
@@ -180,7 +193,22 @@ impl Constraints {
         category: Category,
         region: Region,
     ) -> Constraint {
-        let type_index = Index::push_new(&mut self.types, typ);
+        let type_index = self.push_type(typ);
+        let expected_index = Index::push_new(&mut self.expectations, expected);
+        let category_index = Self::push_category(self, category);
+
+        Constraint::Eq(type_index, expected_index, category_index, region)
+    }
+
+    #[inline(always)]
+    pub fn equal_types_var(
+        &mut self,
+        var: Variable,
+        expected: Expected<Type>,
+        category: Category,
+        region: Region,
+    ) -> Constraint {
+        let type_index = Self::push_type_variable(var);
         let expected_index = Index::push_new(&mut self.expectations, expected);
         let category_index = Self::push_category(self, category);
 
@@ -194,7 +222,7 @@ impl Constraints {
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let type_index = Index::push_new(&mut self.types, typ);
+        let type_index = self.push_type(typ);
         let expected_index = Index::push_new(&mut self.pattern_expectations, expected);
         let category_index = Self::push_pattern_category(self, category);
 
@@ -208,7 +236,7 @@ impl Constraints {
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let type_index = Index::push_new(&mut self.types, typ);
+        let type_index = self.push_type(typ);
         let expected_index = Index::push_new(&mut self.pattern_expectations, expected);
         let category_index = Index::push_new(&mut self.pattern_categories, category);
 
@@ -216,7 +244,7 @@ impl Constraints {
     }
 
     pub fn is_open_type(&mut self, typ: Type) -> Constraint {
-        let type_index = Index::push_new(&mut self.types, typ);
+        let type_index = self.push_type(typ);
 
         Constraint::IsOpenType(type_index)
     }
@@ -446,7 +474,7 @@ impl Constraints {
         filename: &'static str,
         line_number: u32,
     ) -> Constraint {
-        let type_index = Index::push_new(&mut self.types, typ);
+        let type_index = self.push_type(typ);
         let string_index = Index::push_new(&mut self.strings, filename);
 
         Constraint::Store(type_index, variable, string_index, line_number)
@@ -457,11 +485,21 @@ static_assertions::assert_eq_size!([u8; 3 * 8], Constraint);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
-    Eq(Index<Type>, Index<Expected<Type>>, Index<Category>, Region),
-    Store(Index<Type>, Variable, Index<&'static str>, u32),
+    Eq(
+        EitherIndex<Type, Variable>,
+        Index<Expected<Type>>,
+        Index<Category>,
+        Region,
+    ),
+    Store(
+        EitherIndex<Type, Variable>,
+        Variable,
+        Index<&'static str>,
+        u32,
+    ),
     Lookup(Symbol, Index<Expected<Type>>, Region),
     Pattern(
-        Index<Type>,
+        EitherIndex<Type, Variable>,
         Index<PExpected<Type>>,
         Index<PatternCategory>,
         Region,
@@ -471,10 +509,10 @@ pub enum Constraint {
     Let(Index<LetConstraint>),
     And(Slice<Constraint>),
     /// Presence constraints
-    IsOpenType(Index<Type>), // Theory; always applied to a variable? if yes the use that
+    IsOpenType(EitherIndex<Type, Variable>), // Theory; always applied to a variable? if yes the use that
     IncludesTag(Index<IncludesTag>),
     PatternPresence(
-        Index<Type>,
+        EitherIndex<Type, Variable>,
         Index<PExpected<Type>>,
         Index<PatternCategory>,
         Region,
