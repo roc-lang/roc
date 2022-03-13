@@ -353,6 +353,7 @@ impl Constraints {
         I3: IntoIterator<Item = (Symbol, Loc<Type>)>,
         I3::IntoIter: ExactSizeIterator,
     {
+        // defs and ret constraint are stored consequtively, so we only need to store one index
         let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
         self.constraints.push(defs_constraint);
@@ -397,6 +398,7 @@ impl Constraints {
         I2: IntoIterator<Item = (Symbol, Loc<Type>)>,
         I2::IntoIter: ExactSizeIterator,
     {
+        // defs and ret constraint are stored consequtively, so we only need to store one index
         let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
         self.constraints.push(Constraint::True);
@@ -454,6 +456,7 @@ impl Constraints {
             region,
         )
     }
+
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         match constraint {
             Constraint::Eq(..) => false,
@@ -499,7 +502,7 @@ impl Constraints {
     }
 }
 
-static_assertions::assert_eq_size!([u8; 3 * 8], Constraint);
+roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
 
 #[derive(Clone, PartialEq)]
 pub enum Constraint {
@@ -512,8 +515,14 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
-    True, // Used for things that always unify, e.g. blanks and runtime errors
+    /// Used for things that always unify, e.g. blanks and runtime errors
+    True,
     SaveTheEnvironment,
+    /// A Let constraint introduces symbols and their annotation at a certain level of nesting
+    ///
+    /// The `Slice<Variable>` is used for imports where we manually put the Content into Subs
+    /// by copying from another module, but have to make sure that any variables we use to store
+    /// these contents are added to `Pool` at the correct rank
     Let(Index<LetConstraint>, Slice<Variable>),
     And(Slice<Constraint>),
     /// Presence constraints
