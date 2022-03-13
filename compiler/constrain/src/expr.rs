@@ -1248,14 +1248,7 @@ fn constrain_empty_record(
     region: Region,
     expected: Expected<Type>,
 ) -> Constraint {
-    let expected_index = constraints.push_expected_type(expected);
-
-    Constraint::Eq(
-        Constraints::EMPTY_RECORD,
-        expected_index,
-        Constraints::CATEGORY_RECORD,
-        region,
-    )
+    constraints.equal_types(Type::EmptyRec, expected, Category::Record, region)
 }
 
 /// Constrain top-level module declarations
