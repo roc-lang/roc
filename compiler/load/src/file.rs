@@ -1730,6 +1730,28 @@ fn update<'a>(
                 state.module_cache.documentation.insert(module_id, docs);
             }
 
+            {
+                // see if there are imported modules from which nothing is actually used
+                let mut unused_imported_modules = constrained_module.imported_modules.clone();
+
+                for symbol in constrained_module.module.referenced_values.iter() {
+                    unused_imported_modules.remove(&symbol.module_id());
+                }
+
+                for symbol in constrained_module.module.referenced_types.iter() {
+                    unused_imported_modules.remove(&symbol.module_id());
+                }
+
+                let existing = match state.module_cache.can_problems.entry(module_id) {
+                    Vacant(entry) => entry.insert(std::vec::Vec::new()),
+                    Occupied(entry) => entry.into_mut(),
+                };
+
+                for (unused, region) in unused_imported_modules.drain() {
+                    existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+                }
+            }
+
             state
                 .module_cache
                 .aliases
@@ -3027,7 +3049,7 @@ fn send_header_two<'a>(
 impl<'a> BuildTask<'a> {
     // TODO trim down these arguments - possibly by moving Constraint into Module
     #[allow(clippy::too_many_arguments)]
-    pub fn solve_module(
+    fn solve_module(
         module: Module,
         ident_ids: IdentIds,
         module_timing: ModuleTiming,
