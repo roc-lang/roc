@@ -736,7 +736,7 @@ enum BuildTask<'a> {
         var_store: VarStore,
         declarations: Vec<Declaration>,
         dep_idents: MutMap<ModuleId, IdentIds>,
-        unused_imports: MutMap<ModuleId, Region>,
+        unused_imported_modules: MutMap<ModuleId, Region>,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -3048,14 +3048,19 @@ impl<'a> BuildTask<'a> {
         let ConstrainableImports {
             imported_symbols,
             imported_aliases: _,
-            unused_imports,
-        } = pre_constrain_imports(
-            home,
-            &module.references,
-            imported_modules,
-            exposed_types,
-            stdlib,
-        );
+        } = pre_constrain_imports(home, &module.referenced_values, exposed_types, stdlib);
+
+        // see if there are imported modules from which nothing is actually used
+        // this is an odd time to check this, it should be part of canonicalization.
+        let mut unused_imported_modules = imported_modules;
+
+        for symbol in module.referenced_values.iter() {
+            unused_imported_modules.remove(&symbol.module_id());
+        }
+
+        //        for symbol in module.referenced_types {
+        //            unused_imports.remove(symbol.module_id());
+        //        }
 
         // Next, solve this module in the background.
         Self::Solve {
@@ -3068,7 +3073,7 @@ impl<'a> BuildTask<'a> {
             declarations,
             dep_idents,
             module_timing,
-            unused_imports,
+            unused_imported_modules,
         }
     }
 }
@@ -3266,7 +3271,7 @@ fn canonicalize_and_constrain<'a>(
                 module_id,
                 exposed_imports: module_output.exposed_imports,
                 exposed_symbols,
-                references: module_output.references,
+                referenced_values: module_output.referenced_values,
                 aliases: module_output.aliases,
                 rigid_variables: module_output.rigid_variables,
             };
@@ -3765,7 +3770,7 @@ fn run_task<'a>(
             ident_ids,
             declarations,
             dep_idents,
-            unused_imports,
+            unused_imported_modules,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -3776,7 +3781,7 @@ fn run_task<'a>(
             var_store,
             declarations,
             dep_idents,
-            unused_imports,
+            unused_imported_modules,
         )),
         BuildPendingSpecializations {
             module_id,

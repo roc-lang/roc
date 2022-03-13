@@ -107,7 +107,6 @@ pub fn constrain_imports(
 pub struct ConstrainableImports {
     pub imported_symbols: Vec<Import>,
     pub imported_aliases: MutMap<Symbol, Alias>,
-    pub unused_imports: MutMap<ModuleId, Region>,
 }
 
 /// Run this before constraining imports.
@@ -118,13 +117,11 @@ pub struct ConstrainableImports {
 pub fn pre_constrain_imports(
     home: ModuleId,
     references: &MutSet<Symbol>,
-    imported_modules: MutMap<ModuleId, Region>,
     exposed_types: &mut SubsByModule,
     stdlib: &StdLib,
 ) -> ConstrainableImports {
     let mut imported_symbols = Vec::with_capacity(references.len());
     let mut imported_aliases = MutMap::default();
-    let mut unused_imports = imported_modules; // We'll remove these as we encounter them.
 
     // Translate referenced symbols into constraints. We do this on the main
     // thread because we need exclusive access to the exposed_types map, in order
@@ -133,9 +130,6 @@ pub fn pre_constrain_imports(
     // having to either clone it or recreate it from scratch on the other thread.
     for &symbol in references.iter() {
         let module_id = symbol.module_id();
-
-        // We used this module, so clearly it is not unused!
-        unused_imports.remove(&module_id);
 
         if module_id.is_builtin() {
             // For builtin modules, we create imports from the
@@ -211,6 +205,5 @@ pub fn pre_constrain_imports(
     ConstrainableImports {
         imported_symbols,
         imported_aliases,
-        unused_imports,
     }
 }
