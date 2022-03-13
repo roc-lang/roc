@@ -1065,3 +1065,15 @@ fn print_i8_issue_2710() {
         r#"-1 : I8"#,
     )
 }
+
+#[test]
+fn box_box() {
+    expect_success(
+        indoc!(
+            r#"
+            Box.box "container store"
+            "#
+        ),
+        r#"Box.box "container store" : Box Str"#,
+    )
+}

@@ -441,7 +441,16 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             unreachable!("RecursivePointers can only be inside structures")
         }
         Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
-        Layout::Boxed(_inner) => todo!(),
+        Layout::Boxed(_) => {
+            let size = layout.stack_size(env.target_info);
+            Ok(app.call_function_dynamic_size(
+                main_fn_name,
+                size as usize,
+                |mem: &A::Memory, addr| {
+                    addr_to_ast(env, mem, addr, layout, WhenRecursive::Unreachable, content)
+                },
+            ))
+        }
     };
     result.map(|e| apply_newtypes(env, newtype_containers, e))
 }
@@ -733,6 +742,25 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 )
             }
         }
+        (Content::Structure(FlatType::Apply(Symbol::BOX_BOX_TYPE, args)), Layout::Boxed(inner_layout)) => {
+            debug_assert_eq!(args.len(), 1);
+
+            let inner_var_index = args.into_iter().next().unwrap();
+            let inner_var = env.subs[inner_var_index];
+            let inner_content = env.subs.get_content_without_compacting(inner_var);
+
+            let addr_of_inner = mem.deref_usize(addr);
+            let inner_expr = addr_to_ast(env, mem, addr_of_inner, &inner_layout, WhenRecursive::Unreachable, inner_content);
+
+            let box_box = env.arena.alloc(Loc::at_zero(Expr::Var {
+                module_name: "Box", ident: "box"
+            }));
+            let box_box_arg = &*env.arena.alloc(Loc::at_zero(inner_expr));
+            let box_box_args = env.arena.alloc([box_box_arg]);
+
+            Expr::Apply(box_box, box_box_args, CalledVia::Space)
+        }
+        (_, Layout::Boxed(_)) => unreachable!("Box layouts can only be behind a `Box.Box` application"),
         other => {
             todo!(
                 "TODO add support for rendering pointer to {:?} in the REPL",
