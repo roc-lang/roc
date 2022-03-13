@@ -82,6 +82,7 @@ pub enum RocElemTag {
 #[repr(C)]
 pub struct RocButton {
     pub child: ManuallyDrop<RocElem>,
+    pub callback: usize,
     pub styles: ButtonStyles,
 }
 
