@@ -104,6 +104,7 @@ impl_space_problem! {
     ETypeTagUnion<'a>,
     ETypedIdent<'a>,
     EWhen<'a>,
+    EAbility<'a>,
     PInParens<'a>,
     PRecord<'a>
 }
@@ -331,6 +332,7 @@ pub enum EExpr<'a> {
     DefMissingFinalExpr2(&'a EExpr<'a>, Position),
     Type(EType<'a>, Position),
     Pattern(&'a EPattern<'a>, Position),
+    Ability(EAbility<'a>, Position),
     IndentDefBody(Position),
     IndentEquals(Position),
     IndentAnnotation(Position),
@@ -473,6 +475,17 @@ pub enum EWhen<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EAbility<'a> {
+    Space(BadInputError, Position),
+    Type(EType<'a>, Position),
+
+    IndentDemand(Position),
+    DemandAlignment(i32, Position),
+    DemandName(Position),
+    DemandColon(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EIf<'a> {
     Space(BadInputError, Position),
     If(Position),
@@ -564,6 +577,8 @@ pub enum EType<'a> {
     TStart(Position),
     TEnd(Position),
     TFunctionArgument(Position),
+    TWhereBar(Position),
+    THasClause(Position),
     ///
     TIndentStart(Position),
     TIndentEnd(Position),
@@ -1399,6 +1414,27 @@ where
     move |_arena: &'a Bump, state: State<'a>| {
         if state.bytes().starts_with(&needle) {
             let state = state.advance(2);
+            Ok((MadeProgress, (), state))
+        } else {
+            Err((NoProgress, to_error(state.pos()), state))
+        }
+    }
+}
+
+pub fn word3<'a, ToError, E>(word_1: u8, word_2: u8, word_3: u8, to_error: ToError) -> impl Parser<'a, (), E>
+where
+    ToError: Fn(Position) -> E,
+    E: 'a,
+{
+    debug_assert_ne!(word_1, b'\n');
+    debug_assert_ne!(word_2, b'\n');
+    debug_assert_ne!(word_3, b'\n');
+
+    let needle = [word_1, word_2, word_3];
+
+    move |_arena: &'a Bump, state: State<'a>| {
+        if state.bytes().starts_with(&needle) {
+            let state = state.advance(3);
             Ok((MadeProgress, (), state))
         } else {
             Err((NoProgress, to_error(state.pos()), state))

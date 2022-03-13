@@ -1,6 +1,7 @@
 use crate::env::Env;
 use crate::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
+use roc_error_macros::todo_abilities;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
@@ -242,6 +243,7 @@ pub fn find_type_def_symbols(
             SpaceBefore(inner, _) | SpaceAfter(inner, _) => {
                 stack.push(inner);
             }
+            Where(..) => todo_abilities!(),
             Inferred | Wildcard | Malformed(_) => {}
         }
     }
@@ -375,7 +377,8 @@ fn can_annotation_help(
         As(
             loc_inner,
             _spaces,
-            alias_header @ TypeHeader {
+            alias_header
+            @ TypeHeader {
                 name,
                 vars: loc_vars,
             },
@@ -626,6 +629,7 @@ fn can_annotation_help(
 
             Type::Variable(var)
         }
+        Where(..) => todo_abilities!(),
         Malformed(string) => {
             malformed(env, region, string);
 

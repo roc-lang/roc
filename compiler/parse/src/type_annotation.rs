@@ -1,8 +1,12 @@
-use crate::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
+use crate::ast::{
+    AssignedField, CommentOrNewline, HasClause, Pattern, Spaced, Tag, TypeAnnotation, TypeHeader,
+};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
+use crate::ident::lowercase_ident;
 use crate::keyword;
+use crate::parser::then;
 use crate::parser::{
-    allocated, backtrackable, optional, specialize, specialize_ref, word1, word2, EType,
+    allocated, backtrackable, optional, specialize, specialize_ref, word1, word2, word3, EType,
     ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ParseResult, Parser,
     Progress::{self, *},
 };
@@ -240,7 +244,6 @@ where
 fn record_type_field<'a>(
     min_indent: u32,
 ) -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'a>>, ETypeRecord<'a>> {
-    use crate::ident::lowercase_ident;
     use crate::parser::Either::*;
     use AssignedField::*;
 
@@ -368,6 +371,75 @@ fn loc_applied_args_e<'a>(
     zero_or_more!(loc_applied_arg(min_indent))
 }
 
+fn has_clause<'a>(min_indent: u32) -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
+    map!(
+        // Suppose we are trying to has "a has Hash"
+        and!(
+            space0_around_ee(
+                // Parse "a", with appropriate spaces
+                specialize(
+                    |_, pos| EType::TBadTypeVariable(pos),
+                    loc!(map!(lowercase_ident(), Spaced::Item)),
+                ),
+                min_indent,
+                EType::TIndentStart,
+                EType::TIndentEnd
+            ),
+            then(
+                // Parse "has"; we don't care about this keyword
+                word3(b'h', b'a', b's', EType::THasClause),
+                // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
+                |arena, state, _progress, _output| {
+                    space0_before_e(
+                        specialize(EType::TApply, loc!(parse_concrete_type)),
+                        state.column() + 1,
+                        EType::TIndentStart,
+                    )
+                    .parse(arena, state)
+                }
+            )
+        ),
+        |(var, ability): (Loc<Spaced<'a, &'a str>>, Loc<TypeAnnotation<'a>>)| {
+            let region = Region::span_across(&var.region, &ability.region);
+            let has_clause = HasClause { var, ability };
+            Loc::at(region, has_clause)
+        }
+    )
+}
+
+/// Parse a chain of `has` clauses, e.g. " | a has Hash, b has Eq".
+/// Returns the clauses and spaces before the starting "|", if there were any.
+fn has_clause_chain<'a>(
+    min_indent: u32,
+) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [Loc<HasClause<'a>>]), EType<'a>> {
+    move |arena, state: State<'a>| {
+        let (_, (spaces_before, ()), state) = and!(
+            space0_e(min_indent, EType::TIndentStart),
+            word1(b'|', EType::TWhereBar)
+        )
+        .parse(arena, state)?;
+
+        let min_demand_indent = state.column() + 1;
+        // Parse the first clause (there must be one), then the rest
+        let (_, first_clause, state) = has_clause(min_demand_indent).parse(arena, state)?;
+
+        let (_, mut clauses, state) = zero_or_more!(skip_first!(
+            word1(b',', EType::THasClause),
+            has_clause(min_demand_indent)
+        ))
+        .parse(arena, state)?;
+
+        // Usually the number of clauses shouldn't be too large, so this is okay
+        clauses.insert(0, first_clause);
+
+        Ok((
+            MadeProgress,
+            (spaces_before, clauses.into_bump_slice()),
+            state,
+        ))
+    }
+}
+
 fn expression<'a>(
     min_indent: u32,
     is_trailing_comma_valid: bool,
@@ -404,7 +476,7 @@ fn expression<'a>(
         ]
         .parse(arena, state.clone());
 
-        match result {
+        let (progress, annot, state) = match result {
             Ok((p2, (rest, _dropped_spaces), state)) => {
                 let (p3, return_type, state) =
                     space0_before_e(term(min_indent), min_indent, EType::TIndentStart)
@@ -421,7 +493,7 @@ fn expression<'a>(
                     value: TypeAnnotation::Function(output, arena.alloc(return_type)),
                 };
                 let progress = p1.or(p2).or(p3);
-                Ok((progress, result, state))
+                (progress, result, state)
             }
             Err(err) => {
                 if !is_trailing_comma_valid {
@@ -442,7 +514,36 @@ fn expression<'a>(
                 }
 
                 // We ran into trouble parsing the function bits; just return the single term
-                Ok((p1, first, state))
+                (p1, first, state)
+            }
+        };
+
+        // Finally, try to parse a where clause if there is one.
+        // The where clause must be at least as deep as where the type annotation started.
+        let min_where_clause_indent = min_indent;
+        match has_clause_chain(min_where_clause_indent).parse(arena, state.clone()) {
+            Ok((where_progress, (spaces_before, has_chain), state)) => {
+                use crate::ast::Spaceable;
+
+                let region = Region::span_across(&annot.region, &has_chain.last().unwrap().region);
+                let type_annot = if !spaces_before.is_empty() {
+                    let spaced = arena
+                        .alloc(annot.value)
+                        .with_spaces_before(spaces_before, annot.region);
+                    &*arena.alloc(spaced)
+                } else {
+                    &*arena.alloc(annot)
+                };
+                let where_annot = TypeAnnotation::Where(type_annot, has_chain);
+                Ok((
+                    where_progress.or(progress),
+                    Loc::at(region, where_annot),
+                    state,
+                ))
+            }
+            Err(_) => {
+                // Ran into a problem parsing a where clause; don't suppose there is one.
+                Ok((progress, annot, state))
             }
         }
     })
