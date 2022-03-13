@@ -126,25 +126,17 @@ pub fn constrain_expr(
                     // lifetime parameter on `Type`
                     Box::new(Type::EmptyRec),
                 );
-                let record_con = constraints.equal_types(
+
+                let record_con = constraints.equal_types_with_storage(
                     record_type,
                     expected.clone(),
                     Category::Record,
                     region,
+                    *record_var,
                 );
 
                 rec_constraints.push(record_con);
-
-                // variable to store in the AST
-                let stored_con = constraints.equal_types_var(
-                    *record_var,
-                    expected,
-                    Category::Storage(std::file!(), std::line!()),
-                    region,
-                );
-
                 field_vars.push(*record_var);
-                rec_constraints.push(stored_con);
 
                 let and_constraint = constraints.and_constraint(rec_constraints);
                 constraints.exists(field_vars, and_constraint)
