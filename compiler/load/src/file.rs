@@ -3058,9 +3058,9 @@ impl<'a> BuildTask<'a> {
             unused_imported_modules.remove(&symbol.module_id());
         }
 
-        //        for symbol in module.referenced_types {
-        //            unused_imports.remove(symbol.module_id());
-        //        }
+        for symbol in module.referenced_types.iter() {
+            unused_imported_modules.remove(&symbol.module_id());
+        }
 
         // Next, solve this module in the background.
         Self::Solve {
@@ -3272,6 +3272,7 @@ fn canonicalize_and_constrain<'a>(
                 exposed_imports: module_output.exposed_imports,
                 exposed_symbols,
                 referenced_values: module_output.referenced_values,
+                referenced_types: module_output.referenced_types,
                 aliases: module_output.aliases,
                 rigid_variables: module_output.rigid_variables,
             };

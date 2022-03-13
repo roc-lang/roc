@@ -24,6 +24,7 @@ pub struct Module {
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub exposed_symbols: MutSet<Symbol>,
     pub referenced_values: MutSet<Symbol>,
+    pub referenced_types: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Variable, Lowercase>,
 }
@@ -243,7 +244,6 @@ pub fn canonicalize_module_defs<'a>(
             && !output.references.has_type_lookup(symbol)
             && !exposed_symbols.contains(&symbol)
         {
-            dbg!(symbol, region);
             env.problem(Problem::UnusedDef(symbol, region));
         }
     }
