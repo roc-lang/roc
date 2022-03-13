@@ -1,9 +1,38 @@
 interface Bool
-    exposes [ and, isEq, isNotEq, not, or, xor ]
+    exposes [ Equating, and, isEq, isNotEq, not, or, xor ]
     imports []
 
+Equating is
+    # TODO: removed `'` from signature because parser does not support it yet
+    # Original signature: `isEq : 'val, 'val -> Bool`
+    ## Returns `True` if the two values are *structurally equal*, and `False` otherwise.
+    ##
+    ## `a == b` is shorthand for `Bool.isEq a b`
+    ##
+    ## Structural equality works as follows:
+    ##
+    ## 1. Global tags are equal if they are the same tag, and also their contents (if any) are equal.
+    ## 2. Private tags are equal if they are the same tag, in the same module, and also their contents (if any) are equal.
+    ## 3. Records are equal if all their fields are equal.
+    ## 4. Collections ([Str], [List], [Dict], and [Set]) are equal if they are the same length, and also all their corresponding elements are equal.
+    ## 5. [Num] values are equal if their numbers are equal, with one exception: if both arguments to `isEq` are *NaN*, then `isEq` returns `False`. See `Num.isNaN` for more about *NaN*.
+    ##
+    ## Note that `isEq` takes `'val` instead of `val`, which means `isEq` does not
+    ## accept arguments whose types contain functions.
+    isEq : a, a -> Bool | a supports Equating
+
+    # TODO: removed `'` from signature because parser does not support it yet
+    # Original signature: `isNotEq : 'val, 'val -> Bool`
+    ## Calls [isEq] on the given values, then calls [not] on the result.
+    ##
+    ## `a != b` is shorthand for `Bool.isNotEq a b`
+    ##
+    ## Note that `isNotEq` takes `'val` instead of `val`, which means `isNotEq` does not
+    ## accept arguments whose types contain functions.
+    isNotEq : a, a -> Bool | a supports Equating
+
 ## Returns `False` when given `True`, and vice versa.
-not : [True, False] -> [True, False]
+not : Bool -> Bool
 
 ## Returns `True` when given `True` and `True`, and `False` when either argument is `False`.
 ##
@@ -60,31 +89,3 @@ or : Bool, Bool -> Bool
 
 ## Exclusive or
 xor : Bool, Bool -> Bool
-
-# TODO: removed `'` from signature because parser does not support it yet
-# Original signature: `isEq : 'val, 'val -> Bool`
-## Returns `True` if the two values are *structurally equal*, and `False` otherwise.
-##
-## `a == b` is shorthand for `Bool.isEq a b`
-##
-## Structural equality works as follows:
-##
-## 1. Global tags are equal if they are the same tag, and also their contents (if any) are equal.
-## 2. Private tags are equal if they are the same tag, in the same module, and also their contents (if any) are equal.
-## 3. Records are equal if all their fields are equal.
-## 4. Collections ([Str], [List], [Dict], and [Set]) are equal if they are the same length, and also all their corresponding elements are equal.
-## 5. [Num] values are equal if their numbers are equal, with one exception: if both arguments to `isEq` are *NaN*, then `isEq` returns `False`. See `Num.isNaN` for more about *NaN*.
-##
-## Note that `isEq` takes `'val` instead of `val`, which means `isEq` does not
-## accept arguments whose types contain functions.
-isEq : val, val -> Bool
-
-# TODO: removed `'` from signature because parser does not support it yet
-# Original signature: `isNotEq : 'val, 'val -> Bool`
-## Calls [isEq] on the given values, then calls [not] on the result.
-##
-## `a != b` is shorthand for `Bool.isNotEq a b`
-##
-## Note that `isNotEq` takes `'val` instead of `val`, which means `isNotEq` does not
-## accept arguments whose types contain functions.
-isNotEq : val, val -> Bool
