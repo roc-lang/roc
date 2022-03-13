@@ -1551,6 +1551,32 @@ fn debug_print_ir(state: &State, flag: &str) {
     println!("{}", result);
 }
 
+/// Report modules that are imported, but from which nothing is used
+fn report_unused_imported_modules<'a>(
+    state: &mut State<'a>,
+    module_id: ModuleId,
+    constrained_module: &ConstrainedModule,
+) {
+    let mut unused_imported_modules = constrained_module.imported_modules.clone();
+
+    for symbol in constrained_module.module.referenced_values.iter() {
+        unused_imported_modules.remove(&symbol.module_id());
+    }
+
+    for symbol in constrained_module.module.referenced_types.iter() {
+        unused_imported_modules.remove(&symbol.module_id());
+    }
+
+    let existing = match state.module_cache.can_problems.entry(module_id) {
+        Vacant(entry) => entry.insert(std::vec::Vec::new()),
+        Occupied(entry) => entry.into_mut(),
+    };
+
+    for (unused, region) in unused_imported_modules.drain() {
+        existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+    }
+}
+
 fn update<'a>(
     mut state: State<'a>,
     msg: Msg<'a>,
@@ -1728,27 +1754,7 @@ fn update<'a>(
                 state.module_cache.documentation.insert(module_id, docs);
             }
 
-            {
-                // see if there are imported modules from which nothing is actually used
-                let mut unused_imported_modules = constrained_module.imported_modules.clone();
-
-                for symbol in constrained_module.module.referenced_values.iter() {
-                    unused_imported_modules.remove(&symbol.module_id());
-                }
-
-                for symbol in constrained_module.module.referenced_types.iter() {
-                    unused_imported_modules.remove(&symbol.module_id());
-                }
-
-                let existing = match state.module_cache.can_problems.entry(module_id) {
-                    Vacant(entry) => entry.insert(std::vec::Vec::new()),
-                    Occupied(entry) => entry.into_mut(),
-                };
-
-                for (unused, region) in unused_imported_modules.drain() {
-                    existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
-                }
-            }
+            report_unused_imported_modules(&mut state, module_id, &constrained_module);
 
             state
                 .module_cache
