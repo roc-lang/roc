@@ -435,11 +435,18 @@ fn solve(
                 copy
             }
             Eq(type_index, expectation_index, category_index, region) => {
-                let typ = &constraints.types[type_index.index()];
-                let expectation = &constraints.expectations[expectation_index.index()];
                 let category = &constraints.categories[category_index.index()];
 
-                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    cached_aliases,
+                    *type_index,
+                );
+
+                let expectation = &constraints.expectations[expectation_index.index()];
                 let expected = type_to_var(
                     subs,
                     rank,
@@ -478,11 +485,16 @@ fn solve(
                 }
             }
             Store(source_index, target, _filename, _linenr) => {
-                let source = &constraints.types[source_index.index()];
-
                 // a special version of Eq that is used to store types in the AST.
                 // IT DOES NOT REPORT ERRORS!
-                let actual = type_to_var(subs, rank, pools, cached_aliases, source);
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    cached_aliases,
+                    *source_index,
+                );
                 let target = *target;
 
                 match unify(subs, actual, target, Mode::EQ) {
@@ -593,11 +605,18 @@ fn solve(
             }
             Pattern(type_index, expectation_index, category_index, region)
             | PatternPresence(type_index, expectation_index, category_index, region) => {
-                let typ = &constraints.types[type_index.index()];
-                let expectation = &constraints.pattern_expectations[expectation_index.index()];
                 let category = &constraints.pattern_categories[category_index.index()];
 
-                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    cached_aliases,
+                    *type_index,
+                );
+
+                let expectation = &constraints.pattern_expectations[expectation_index.index()];
                 let expected = type_to_var(
                     subs,
                     rank,
@@ -735,9 +754,15 @@ fn solve(
                 }
             }
             IsOpenType(type_index) => {
-                let typ = &constraints.types[type_index.index()];
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    cached_aliases,
+                    *type_index,
+                );
 
-                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
                 let mut new_desc = subs.get(actual);
                 match new_desc.content {
                     Content::Structure(FlatType::TagUnion(tags, _)) => {
@@ -883,6 +908,27 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
     SCRATCHPAD.with(|f| {
         f.replace(Some(scratchpad));
     });
+}
+
+fn either_type_index_to_var(
+    constraints: &Constraints,
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    _alias_map: &mut MutMap<Symbol, Variable>,
+    either_type_index: roc_collections::soa::EitherIndex<Type, Variable>,
+) -> Variable {
+    match either_type_index.split() {
+        Ok(type_index) => {
+            let typ = &constraints.types[type_index.index()];
+
+            type_to_var(subs, rank, pools, _alias_map, typ)
+        }
+        Err(var_index) => {
+            // we cheat, and  store the variable directly in the index
+            unsafe { Variable::from_index(var_index.index() as _) }
+        }
+    }
 }
 
 fn type_to_var(
