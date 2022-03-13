@@ -999,11 +999,12 @@ pub fn constrain_expr(
 
             // Link the entire wrapped opaque type (with the now-constrained argument) to the
             // expected type
-            let opaque_con = constraints.equal_types(
+            let opaque_con = constraints.equal_types_with_storage(
                 opaque_type,
-                expected.clone(),
+                expected,
                 Category::OpaqueWrap(*name),
                 region,
+                *opaque_var,
             );
 
             // Link the entire wrapped opaque type (with the now-constrained argument) to the type
@@ -1016,14 +1017,6 @@ pub fn constrain_expr(
                 arg_loc_expr.region,
             );
 
-            // Store the entire wrapped opaque type in `opaque_var`
-            let storage_con = constraints.equal_types_var(
-                *opaque_var,
-                expected,
-                Category::Storage(std::file!(), std::line!()),
-                region,
-            );
-
             let mut vars = vec![*arg_var, *opaque_var];
             // Also add the fresh variables we created for the type argument and lambda sets
             vars.extend(type_arguments.iter().map(|(_, t)| {
@@ -1033,10 +1026,7 @@ pub fn constrain_expr(
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));
 
-            constraints.exists_many(
-                vars,
-                [arg_con, opaque_con, link_type_variables_con, storage_con],
-            )
+            constraints.exists_many(vars, [arg_con, opaque_con, link_type_variables_con])
         }
 
         RunLowLevel { args, ret_var, op } => {
