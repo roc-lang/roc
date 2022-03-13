@@ -180,10 +180,12 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         //        println!("\n --------------- \n");
         let content_1 = subs.get(ctx.first).content;
         let content_2 = subs.get(ctx.second).content;
+        let mode = if ctx.mode.is_eq() { "~" } else { "+=" };
         println!(
-            "{:?} {:?} ~ {:?} {:?}",
+            "{:?} {:?} {} {:?} {:?}",
             ctx.first,
             roc_types::subs::SubsFmtContent(&content_1, subs),
+            mode,
             ctx.second,
             roc_types::subs::SubsFmtContent(&content_2, subs),
         );
@@ -334,7 +336,13 @@ fn unify_alias(
                         problems.extend(merge(subs, ctx, *other_content));
                     }
 
-                    // if problems.is_empty() { problems.extend(unify_pool(subs, pool, real_var, *other_real_var)); }
+                    // THEORY: if two aliases or opaques have the same name and arguments, their
+                    // real_var is the same and we don't need to check it.
+                    // See https://github.com/rtfeldman/roc/pull/1510
+                    //
+                    // if problems.is_empty() && either_is_opaque {
+                    //     problems.extend(unify_pool(subs, pool, real_var, *other_real_var, ctx.mode));
+                    // }
 
                     problems
                 } else {
