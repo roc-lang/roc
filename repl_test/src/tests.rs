@@ -1077,3 +1077,18 @@ fn box_box() {
         r#"Box.box "container store" : Box Str"#,
     )
 }
+
+#[test]
+fn box_box_type_alias() {
+    expect_success(
+        indoc!(
+            r#"
+            HeapStr : Box Str
+            helloHeap : HeapStr
+            helloHeap = Box.box "bye stacks"
+            helloHeap
+            "#
+        ),
+        r#"Box.box "bye stacks" : HeapStr"#,
+    )
+}
