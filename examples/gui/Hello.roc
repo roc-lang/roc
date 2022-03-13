@@ -12,6 +12,8 @@ render =
 
     onClick = 0
 
+    fn = Box.box \x, y -> x + y
+
     Col
         [
             Row
