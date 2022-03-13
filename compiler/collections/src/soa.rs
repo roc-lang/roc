@@ -144,8 +144,8 @@ impl<T, U> std::fmt::Debug for EitherIndex<T, U> {
 impl<T, U> EitherIndex<T, U> {
     const MASK: u32 = 1 << 31;
 
-    pub fn from_left(input: Index<T>) -> Self {
-        assert_eq!(input.index & Self::MASK, 0);
+    pub const fn from_left(input: Index<T>) -> Self {
+        assert!(input.index & Self::MASK == 0);
 
         Self {
             index: input.index,
@@ -153,8 +153,8 @@ impl<T, U> EitherIndex<T, U> {
         }
     }
 
-    pub fn from_right(input: Index<U>) -> Self {
-        assert_eq!(input.index & Self::MASK, 0);
+    pub const fn from_right(input: Index<U>) -> Self {
+        assert!(input.index & Self::MASK == 0);
 
         Self {
             index: input.index | Self::MASK,

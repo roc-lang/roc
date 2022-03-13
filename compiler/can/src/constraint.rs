@@ -124,18 +124,21 @@ impl Constraints {
         match typ {
             Type::EmptyRec => EitherIndex::from_left(Self::EMPTY_RECORD),
             Type::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
-            Type::Variable(var) => {
-                // that's right, we use the variable's integer value as the index
-                // that way, we don't need to push anything onto a vector
-                let index: Index<Variable> = Index::new(var.index());
-
-                EitherIndex::from_right(index)
-            }
+            Type::Variable(var) => Self::push_type_variable(var),
             other => {
                 let index: Index<Type> = Index::push_new(&mut self.types, other);
                 EitherIndex::from_left(index)
             }
         }
+    }
+
+    #[inline(always)]
+    const fn push_type_variable(var: Variable) -> EitherIndex<Type, Variable> {
+        // that's right, we use the variable's integer value as the index
+        // that way, we don't need to push anything onto a vector
+        let index: Index<Variable> = Index::new(var.index());
+
+        EitherIndex::from_right(index)
     }
 
     #[inline(always)]
@@ -191,6 +194,21 @@ impl Constraints {
         region: Region,
     ) -> Constraint {
         let type_index = self.push_type(typ);
+        let expected_index = Index::push_new(&mut self.expectations, expected);
+        let category_index = Self::push_category(self, category);
+
+        Constraint::Eq(type_index, expected_index, category_index, region)
+    }
+
+    #[inline(always)]
+    pub fn equal_types_var(
+        &mut self,
+        var: Variable,
+        expected: Expected<Type>,
+        category: Category,
+        region: Region,
+    ) -> Constraint {
+        let type_index = Self::push_type_variable(var);
         let expected_index = Index::push_new(&mut self.expectations, expected);
         let category_index = Self::push_category(self, category);
 
