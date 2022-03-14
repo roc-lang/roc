@@ -440,7 +440,7 @@ Nat : Int [ @Natural ]
 ##
 ## As such, it's very important to design your code not to exceed these bounds!
 ## If you need to do math outside these bounds, consider using a larger numeric size.
-Arithmetic is
+Arithmetic supports Equating, Ordering, Hashing, is
     ## Check
 
     ## The same as using `== 0` on the number.
