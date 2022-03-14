@@ -900,6 +900,12 @@ FloatArithmetic supports FractionArithmetic, is
     ## >>> Float.sqrt -4.0dec
     sqrt : Float a -> Float a
 
+    ## Like [Num.div] except it can return [infinity], [negativeInfinity], or [nan].
+    divFloat : Float a, Float a -> Float a
+
+    ## Like [Num.mod] except it can return [infinity], [negativeInfinity], or [nan].
+    modFloat : Float a, Float a -> Float a
+
     ## Trigonometry
 
     cos : Float a -> Float a
