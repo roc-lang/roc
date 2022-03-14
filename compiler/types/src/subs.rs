@@ -3579,21 +3579,33 @@ pub fn deep_copy_var_to(
 
     let mut arena = take_scratchpad();
 
-    let mut visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
+    let copy = {
+        let visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
 
-    let copy = deep_copy_var_to_help(&arena, &mut visited, source, target, rank, var);
+        let mut env = DeepCopyVarToEnv {
+            arena: &arena,
+            visited,
+            source,
+            target,
+            max_rank: rank,
+        };
 
-    // we have tracked all visited variables, and can now traverse them
-    // in one go (without looking at the UnificationTable) and clear the copy field
-    for var in visited {
-        let descriptor = source.get_ref_mut(var);
+        let copy = deep_copy_var_to_help(&mut env, var);
 
-        if descriptor.copy.is_some() {
-            descriptor.rank = Rank::NONE;
-            descriptor.mark = Mark::NONE;
-            descriptor.copy = OptVariable::NONE;
+        // we have tracked all visited variables, and can now traverse them
+        // in one go (without looking at the UnificationTable) and clear the copy field
+        for var in env.visited {
+            let descriptor = env.source.get_ref_mut(var);
+
+            if descriptor.copy.is_some() {
+                descriptor.rank = Rank::NONE;
+                descriptor.mark = Mark::NONE;
+                descriptor.copy = OptVariable::NONE;
+            }
         }
-    }
+
+        copy
+    };
 
     arena.reset();
     put_scratchpad(arena);
@@ -3601,21 +3613,22 @@ pub fn deep_copy_var_to(
     copy
 }
 
-fn deep_copy_var_to_help<'a>(
+struct DeepCopyVarToEnv<'a> {
     arena: &'a bumpalo::Bump,
-    visited: &mut bumpalo::collections::Vec<'a, Variable>,
-    source: &mut Subs,
-    target: &mut Subs,
+    visited: bumpalo::collections::Vec<'a, Variable>,
+    source: &'a mut Subs,
+    target: &'a mut Subs,
     max_rank: Rank,
-    var: Variable,
-) -> Variable {
+}
+
+fn deep_copy_var_to_help<'a>(env: &mut DeepCopyVarToEnv<'a>, var: Variable) -> Variable {
     use Content::*;
     use FlatType::*;
 
-    let desc = source.get_without_compacting(var);
+    let desc = env.source.get_without_compacting(var);
 
     if let Some(copy) = desc.copy.into_variable() {
-        debug_assert!(target.contains(copy));
+        debug_assert!(env.target.contains(copy));
         return copy;
     } else if desc.rank != Rank::NONE {
         // DO NOTHING, Fall through
@@ -3628,22 +3641,22 @@ fn deep_copy_var_to_help<'a>(
         // variable in the target.
     }
 
-    visited.push(var);
+    env.visited.push(var);
 
     let make_descriptor = |content| Descriptor {
         content,
-        rank: max_rank,
+        rank: env.max_rank,
         mark: Mark::NONE,
         copy: OptVariable::NONE,
     };
 
-    let copy = target.fresh_unnamed_flex_var();
+    let copy = env.target.fresh_unnamed_flex_var();
 
     // Link the original variable to the new variable. This lets us
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    source.modify(var, |descriptor| {
+    env.source.modify(var, |descriptor| {
         descriptor.mark = Mark::NONE;
         descriptor.copy = copy.into();
     });
@@ -3655,38 +3668,28 @@ fn deep_copy_var_to_help<'a>(
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, arguments) => {
-                    let new_arguments = SubsSlice::reserve_into_subs(target, arguments.len());
+                    let new_arguments = SubsSlice::reserve_into_subs(env.target, arguments.len());
 
                     for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                        let var = source[var_index];
-                        let copy_var =
-                            deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
-                        target.variables[target_index] = copy_var;
+                        let var = env.source[var_index];
+                        let copy_var = deep_copy_var_to_help(env, var);
+                        env.target.variables[target_index] = copy_var;
                     }
 
                     Apply(symbol, new_arguments)
                 }
 
                 Func(arguments, closure_var, ret_var) => {
-                    let new_ret_var =
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ret_var);
+                    let new_ret_var = deep_copy_var_to_help(env, ret_var);
 
-                    let new_closure_var = deep_copy_var_to_help(
-                        arena,
-                        visited,
-                        source,
-                        target,
-                        max_rank,
-                        closure_var,
-                    );
+                    let new_closure_var = deep_copy_var_to_help(env, closure_var);
 
-                    let new_arguments = SubsSlice::reserve_into_subs(target, arguments.len());
+                    let new_arguments = SubsSlice::reserve_into_subs(env.target, arguments.len());
 
                     for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                        let var = source[var_index];
-                        let copy_var =
-                            deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
-                        target.variables[target_index] = copy_var;
+                        let var = env.source[var_index];
+                        let copy_var = deep_copy_var_to_help(env, var);
+                        env.target.variables[target_index] = copy_var;
                     }
 
                     Func(new_arguments, new_closure_var, new_ret_var)
@@ -3697,25 +3700,26 @@ fn deep_copy_var_to_help<'a>(
                 Record(fields, ext_var) => {
                     let record_fields = {
                         let new_variables =
-                            VariableSubsSlice::reserve_into_subs(target, fields.len());
+                            VariableSubsSlice::reserve_into_subs(env.target, fields.len());
 
                         let it = (new_variables.indices()).zip(fields.iter_variables());
                         for (target_index, var_index) in it {
-                            let var = source[var_index];
-                            let copy_var = deep_copy_var_to_help(
-                                arena, visited, source, target, max_rank, var,
-                            );
-                            target.variables[target_index] = copy_var;
+                            let var = env.source[var_index];
+                            let copy_var = deep_copy_var_to_help(env, var);
+                            env.target.variables[target_index] = copy_var;
                         }
 
-                        let field_names_start = target.field_names.len() as u32;
-                        let field_types_start = target.record_fields.len() as u32;
+                        let field_names_start = env.target.field_names.len() as u32;
+                        let field_types_start = env.target.record_fields.len() as u32;
 
-                        let field_names = &source.field_names[fields.field_names().indices()];
-                        target.field_names.extend(field_names.iter().cloned());
+                        let field_names = &env.source.field_names[fields.field_names().indices()];
+                        env.target.field_names.extend(field_names.iter().cloned());
 
-                        let record_fields = &source.record_fields[fields.record_fields().indices()];
-                        target.record_fields.extend(record_fields.iter().copied());
+                        let record_fields =
+                            &env.source.record_fields[fields.record_fields().indices()];
+                        env.target
+                            .record_fields
+                            .extend(record_fields.iter().copied());
 
                         RecordFields {
                             length: fields.len() as _,
@@ -3725,44 +3729,38 @@ fn deep_copy_var_to_help<'a>(
                         }
                     };
 
-                    Record(
-                        record_fields,
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var),
-                    )
+                    Record(record_fields, deep_copy_var_to_help(env, ext_var))
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let new_ext =
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var);
+                    let new_ext = deep_copy_var_to_help(env, ext_var);
 
                     let new_variable_slices =
-                        SubsSlice::reserve_variable_slices(target, tags.len());
+                        SubsSlice::reserve_variable_slices(env.target, tags.len());
 
                     let it = (new_variable_slices.indices()).zip(tags.variables());
                     for (target_index, index) in it {
-                        let slice = source[index];
+                        let slice = env.source[index];
 
-                        let new_variables = SubsSlice::reserve_into_subs(target, slice.len());
+                        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
                         let it = (new_variables.indices()).zip(slice);
                         for (target_index, var_index) in it {
-                            let var = source[var_index];
-                            let copy_var = deep_copy_var_to_help(
-                                arena, visited, source, target, max_rank, var,
-                            );
-                            target.variables[target_index] = copy_var;
+                            let var = env.source[var_index];
+                            let copy_var = deep_copy_var_to_help(env, var);
+                            env.target.variables[target_index] = copy_var;
                         }
 
-                        target.variable_slices[target_index] = new_variables;
+                        env.target.variable_slices[target_index] = new_variables;
                     }
 
                     let new_tag_names = {
                         let tag_names = tags.tag_names();
-                        let slice = &source.tag_names[tag_names.indices()];
+                        let slice = &env.source.tag_names[tag_names.indices()];
 
-                        let start = target.tag_names.len() as u32;
+                        let start = env.target.tag_names.len() as u32;
                         let length = tag_names.len() as u16;
 
-                        target.tag_names.extend(slice.iter().cloned());
+                        env.target.tag_names.extend(slice.iter().cloned());
 
                         SubsSlice::new(start, length)
                     };
@@ -3773,72 +3771,65 @@ fn deep_copy_var_to_help<'a>(
                 }
 
                 FunctionOrTagUnion(tag_name, symbol, ext_var) => {
-                    let new_tag_name = SubsIndex::new(target.tag_names.len() as u32);
+                    let new_tag_name = SubsIndex::new(env.target.tag_names.len() as u32);
 
-                    target.tag_names.push(source[tag_name].clone());
+                    env.target.tag_names.push(env.source[tag_name].clone());
 
-                    FunctionOrTagUnion(
-                        new_tag_name,
-                        symbol,
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var),
-                    )
+                    FunctionOrTagUnion(new_tag_name, symbol, deep_copy_var_to_help(env, ext_var))
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let new_variable_slices =
-                        SubsSlice::reserve_variable_slices(target, tags.len());
+                        SubsSlice::reserve_variable_slices(env.target, tags.len());
 
                     let it = (new_variable_slices.indices()).zip(tags.variables());
                     for (target_index, index) in it {
-                        let slice = source[index];
+                        let slice = env.source[index];
 
-                        let new_variables = SubsSlice::reserve_into_subs(target, slice.len());
+                        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
                         let it = (new_variables.indices()).zip(slice);
                         for (target_index, var_index) in it {
-                            let var = source[var_index];
-                            let copy_var = deep_copy_var_to_help(
-                                arena, visited, source, target, max_rank, var,
-                            );
-                            target.variables[target_index] = copy_var;
+                            let var = env.source[var_index];
+                            let copy_var = deep_copy_var_to_help(env, var);
+                            env.target.variables[target_index] = copy_var;
                         }
 
-                        target.variable_slices[target_index] = new_variables;
+                        env.target.variable_slices[target_index] = new_variables;
                     }
 
                     let new_tag_names = {
                         let tag_names = tags.tag_names();
-                        let slice = &source.tag_names[tag_names.indices()];
+                        let slice = &env.source.tag_names[tag_names.indices()];
 
-                        let start = target.tag_names.len() as u32;
+                        let start = env.target.tag_names.len() as u32;
                         let length = tag_names.len() as u16;
 
-                        target.tag_names.extend(slice.iter().cloned());
+                        env.target.tag_names.extend(slice.iter().cloned());
 
                         SubsSlice::new(start, length)
                     };
 
                     let union_tags = UnionTags::from_slices(new_tag_names, new_variable_slices);
 
-                    let new_ext =
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var);
-                    let new_rec_var =
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, rec_var);
+                    let new_ext = deep_copy_var_to_help(env, ext_var);
+                    let new_rec_var = deep_copy_var_to_help(env, rec_var);
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
             };
 
-            target.set(copy, make_descriptor(Structure(new_flat_type)));
+            env.target
+                .set(copy, make_descriptor(Structure(new_flat_type)));
 
             copy
         }
 
         FlexVar(Some(name_index)) => {
-            let name = source.field_names[name_index.index as usize].clone();
-            let new_name_index = SubsIndex::push_new(&mut target.field_names, name);
+            let name = env.source.field_names[name_index.index as usize].clone();
+            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
 
             let content = FlexVar(Some(new_name_index));
-            target.set_content(copy, content);
+            env.target.set_content(copy, content);
 
             copy
         }
@@ -3849,12 +3840,11 @@ fn deep_copy_var_to_help<'a>(
             opt_name,
             structure,
         } => {
-            let new_structure =
-                deep_copy_var_to_help(arena, visited, source, target, max_rank, structure);
+            let new_structure = deep_copy_var_to_help(env, structure);
 
-            debug_assert!((new_structure.index() as usize) < target.len());
+            debug_assert!((new_structure.index() as usize) < env.target.len());
 
-            target.set(
+            env.target.set(
                 copy,
                 make_descriptor(RecursionVar {
                     opt_name,
@@ -3866,20 +3856,21 @@ fn deep_copy_var_to_help<'a>(
         }
 
         RigidVar(name_index) => {
-            let name = source.field_names[name_index.index as usize].clone();
-            let new_name_index = SubsIndex::push_new(&mut target.field_names, name);
-            target.set(copy, make_descriptor(FlexVar(Some(new_name_index))));
+            let name = env.source.field_names[name_index.index as usize].clone();
+            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+            env.target
+                .set(copy, make_descriptor(FlexVar(Some(new_name_index))));
 
             copy
         }
 
         Alias(symbol, arguments, real_type_var, kind) => {
             let new_variables =
-                SubsSlice::reserve_into_subs(target, arguments.all_variables_len as _);
+                SubsSlice::reserve_into_subs(env.target, arguments.all_variables_len as _);
             for (target_index, var_index) in (new_variables.indices()).zip(arguments.variables()) {
-                let var = source[var_index];
-                let copy_var = deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
-                target.variables[target_index] = copy_var;
+                let var = env.source[var_index];
+                let copy_var = deep_copy_var_to_help(env, var);
+                env.target.variables[target_index] = copy_var;
             }
 
             let new_arguments = AliasVariables {
@@ -3887,29 +3878,28 @@ fn deep_copy_var_to_help<'a>(
                 ..arguments
             };
 
-            let new_real_type_var =
-                deep_copy_var_to_help(arena, visited, source, target, max_rank, real_type_var);
+            let new_real_type_var = deep_copy_var_to_help(env, real_type_var);
             let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
 
-            target.set(copy, make_descriptor(new_content));
+            env.target.set(copy, make_descriptor(new_content));
 
             copy
         }
 
         RangedNumber(typ, vars) => {
-            let new_typ = deep_copy_var_to_help(arena, visited, source, target, max_rank, typ);
+            let new_typ = deep_copy_var_to_help(env, typ);
 
-            let new_vars = SubsSlice::reserve_into_subs(target, vars.len());
+            let new_vars = SubsSlice::reserve_into_subs(env.target, vars.len());
 
             for (target_index, var_index) in (new_vars.indices()).zip(vars) {
-                let var = source[var_index];
-                let copy_var = deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
-                target.variables[target_index] = copy_var;
+                let var = env.source[var_index];
+                let copy_var = deep_copy_var_to_help(env, var);
+                env.target.variables[target_index] = copy_var;
             }
 
             let new_content = RangedNumber(new_typ, new_vars);
 
-            target.set(copy, make_descriptor(new_content));
+            env.target.set(copy, make_descriptor(new_content));
             copy
         }
     }
