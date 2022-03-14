@@ -1066,6 +1066,7 @@ fn print_i8_issue_2710() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn box_box() {
     expect_success(
@@ -1078,6 +1079,7 @@ fn box_box() {
     )
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn box_box_type_alias() {
     expect_success(
