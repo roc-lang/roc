@@ -2727,6 +2727,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b17cddbe7ec3f8bc800887bab5e717348c95ea2ca0b1bf0837fb964dc67099"
 
 [[package]]
+name = "peg"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af728fe826811af3b38c37e93de6d104485953ea373d656eebae53d6987fcd2c"
+dependencies = [
+ "peg-macros",
+ "peg-runtime",
+]
+
+[[package]]
+name = "peg-macros"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4536be147b770b824895cbad934fccce8e49f14b4c4946eaa46a6e4a12fcdc16"
+dependencies = [
+ "peg-runtime",
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
+name = "peg-runtime"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9b0efd3ba03c3a409d44d60425f279ec442bcf0b9e63ff4e410da31c8b0f69f"
+
+[[package]]
 name = "percent-encoding"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3455,6 +3482,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc",
+ "peg",
  "pretty_assertions",
  "pulldown-cmark",
  "roc_ast",
@@ -3462,6 +3490,7 @@ dependencies = [
  "roc_can",
  "roc_code_markup",
  "roc_collections",
+ "roc_highlight",
  "roc_load",
  "roc_module",
  "roc_parse",
@@ -3605,6 +3634,14 @@ dependencies = [
  "roc_mono",
  "roc_std",
  "roc_target",
+]
+
+[[package]]
+name = "roc_highlight"
+version = "0.1.0"
+dependencies = [
+ "peg",
+ "roc_code_markup",
 ]
 
 [[package]]

@@ -1,27 +1,26 @@
 extern crate pulldown_cmark;
 extern crate roc_load;
-use bumpalo::{collections::String as BumpString, Bump};
-use def::defs_to_html;
-use docs_error::DocsResult;
-use expr::expr_to_html;
+use bumpalo::Bump;
+use docs_error::{DocsError, DocsResult};
+use html::mark_node_to_html;
 use roc_builtins::std::StdLib;
 use roc_can::scope::Scope;
+use roc_code_markup::markup::nodes::MarkupNode;
+use roc_code_markup::slow_pool::SlowPool;
 use roc_collections::all::MutMap;
+use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::DocEntry::DocDef;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::file::{LoadedModule, LoadingProblem};
-use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
+use roc_module::symbol::{IdentIds, Interns, ModuleId};
 use roc_parse::ident::{parse_ident, Ident};
-use roc_parse::parser::SyntaxError;
 use roc_parse::state::State;
-use roc_region::all::{Position, Region};
+use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-mod def;
 mod docs_error;
-mod expr;
 mod html;
 
 pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
@@ -110,46 +109,45 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &
 }
 
 // converts plain-text code to highlighted html
-pub fn syntax_highlight_expr<'a>(
-    arena: &'a Bump,
-    buf: &mut BumpString<'a>,
-    code_str: &'a str,
-    env_module_id: ModuleId,
-    env_module_ids: &'a ModuleIds,
-    interns: &Interns,
-) -> Result<String, SyntaxError<'a>> {
+pub fn syntax_highlight_expr(code_str: &str) -> DocsResult<String> {
     let trimmed_code_str = code_str.trim_end().trim();
-    let state = State::new(trimmed_code_str.as_bytes());
+    let mut mark_node_pool = SlowPool::default();
 
-    match roc_parse::expr::test_parse_expr(0, arena, state) {
-        Ok(loc_expr) => {
-            expr_to_html(buf, loc_expr.value, env_module_id, env_module_ids, interns);
+    let mut highlighted_html_str = String::new();
 
-            Ok(buf.to_string())
+    match highlight_expr(trimmed_code_str, &mut mark_node_pool) {
+        Ok(root_mark_node_id) => {
+            let root_mark_node = mark_node_pool.get(root_mark_node_id);
+            mark_node_to_html(root_mark_node, &mark_node_pool, &mut highlighted_html_str);
+
+            Ok(highlighted_html_str)
         }
-        Err(fail) => Err(SyntaxError::Expr(fail, Position::default())),
+        Err(err) => Err(DocsError::from(err)),
     }
 }
 
 // converts plain-text code to highlighted html
-pub fn syntax_highlight_top_level_defs<'a>(
-    arena: &'a Bump,
-    buf: &mut BumpString<'a>,
-    code_str: &'a str,
-    env_module_id: ModuleId,
-    interns: &mut Interns,
-) -> DocsResult<String> {
+pub fn syntax_highlight_top_level_defs(code_str: &str) -> DocsResult<String> {
     let trimmed_code_str = code_str.trim_end().trim();
 
-    match roc_parse::test_helpers::parse_defs_with(arena, trimmed_code_str) {
-        Ok(vec_loc_def) => {
-            let vec_def = vec_loc_def.iter().map(|loc| loc.value).collect();
+    let mut mark_node_pool = SlowPool::default();
 
-            defs_to_html(buf, vec_def, env_module_id, interns)?;
+    let mut highlighted_html_str = String::new();
 
-            Ok(buf.to_string())
+    match highlight_defs(trimmed_code_str, &mut mark_node_pool) {
+        Ok(mark_node_id_vec) => {
+            let def_mark_nodes: Vec<&MarkupNode> = mark_node_id_vec
+                .iter()
+                .map(|mn_id| mark_node_pool.get(*mn_id))
+                .collect();
+
+            for mn in def_mark_nodes {
+                mark_node_to_html(mn, &mark_node_pool, &mut highlighted_html_str)
+            }
+
+            Ok(highlighted_html_str)
         }
-        Err(err) => Err(err.into()),
+        Err(err) => Err(DocsError::from(err)),
     }
 }
 
@@ -957,17 +955,9 @@ fn markdown_to_html(
                 (0, 0)
             }
             Event::Text(CowStr::Borrowed(code_str)) if expecting_code_block => {
-                let code_block_arena = Bump::new();
-
-                let mut code_block_buf = BumpString::new_in(&code_block_arena);
 
                 match syntax_highlight_expr(
-                    &code_block_arena,
-                    &mut code_block_buf,
-                    code_str,
-                    loaded_module.module_id,
-                    &loaded_module.interns.module_ids,
-                    &loaded_module.interns
+                    code_str
                 )
                 {
                     Ok(highlighted_code_str) => {
