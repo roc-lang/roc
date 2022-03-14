@@ -2,7 +2,7 @@ use crate::pretty_print::Parens;
 use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
-use roc_collections::all::{HumanIndex, ImMap, ImSet, MutSet, SendMap};
+use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
@@ -554,6 +554,104 @@ impl Type {
                     stack.push(ext);
                 }
                 RecursiveTagUnion(_, tags, ext) => {
+                    for (_, args) in tags {
+                        stack.extend(args.iter_mut());
+                    }
+                    stack.push(ext);
+                }
+                Record(fields, ext) => {
+                    for (_, x) in fields.iter_mut() {
+                        stack.push(x.as_inner_mut());
+                    }
+                    stack.push(ext);
+                }
+                Type::DelayedAlias(AliasCommon {
+                    type_arguments,
+                    lambda_set_variables,
+                    ..
+                }) => {
+                    for (_, value) in type_arguments.iter_mut() {
+                        stack.push(value);
+                    }
+
+                    for lambda_set in lambda_set_variables.iter_mut() {
+                        stack.push(lambda_set.as_inner_mut());
+                    }
+                }
+                Alias {
+                    type_arguments,
+                    lambda_set_variables,
+                    actual,
+                    ..
+                } => {
+                    for (_, value) in type_arguments.iter_mut() {
+                        stack.push(value);
+                    }
+                    for lambda_set in lambda_set_variables.iter_mut() {
+                        stack.push(lambda_set.as_inner_mut());
+                    }
+
+                    stack.push(actual);
+                }
+                HostExposedAlias {
+                    type_arguments,
+                    lambda_set_variables,
+                    actual: actual_type,
+                    ..
+                } => {
+                    for (_, value) in type_arguments.iter_mut() {
+                        stack.push(value);
+                    }
+
+                    for lambda_set in lambda_set_variables.iter_mut() {
+                        stack.push(lambda_set.as_inner_mut());
+                    }
+
+                    stack.push(actual_type);
+                }
+                Apply(_, args, _) => {
+                    stack.extend(args);
+                }
+                RangedNumber(typ, _) => {
+                    stack.push(typ);
+                }
+
+                EmptyRec | EmptyTagUnion | Erroneous(_) => {}
+            }
+        }
+    }
+
+    pub fn substitute_variables(&mut self, substitutions: &MutMap<Variable, Variable>) {
+        use Type::*;
+
+        let mut stack = vec![self];
+
+        while let Some(typ) = stack.pop() {
+            match typ {
+                ClosureTag { ext: v, .. } | Variable(v) => {
+                    if let Some(replacement) = substitutions.get(v) {
+                        *v = *replacement;
+                    }
+                }
+                Function(args, closure, ret) => {
+                    stack.extend(args);
+                    stack.push(closure);
+                    stack.push(ret);
+                }
+                TagUnion(tags, ext) => {
+                    for (_, args) in tags {
+                        stack.extend(args.iter_mut());
+                    }
+                    stack.push(ext);
+                }
+                FunctionOrTagUnion(_, _, ext) => {
+                    stack.push(ext);
+                }
+                RecursiveTagUnion(rec_var, tags, ext) => {
+                    if let Some(replacement) = substitutions.get(rec_var) {
+                        *rec_var = *replacement;
+                    }
+
                     for (_, args) in tags {
                         stack.extend(args.iter_mut());
                     }
