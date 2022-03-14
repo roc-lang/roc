@@ -1548,3 +1548,19 @@ fn issue_1162() {
         u8
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn polymorphic_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : [ Y U8 ]*
+            x = Y 3
+            x
+            "#
+        ),
+        3, // Y is a newtype, it gets unwrapped
+        u8
+    )
+}
