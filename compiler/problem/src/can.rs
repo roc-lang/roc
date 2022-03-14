@@ -46,7 +46,7 @@ pub enum Problem {
     UnboundTypeVariable {
         typ: Symbol,
         num_unbound: usize,
-        one_occurence: Region,
+        one_occurrence: Region,
     },
     DuplicateRecordFieldValue {
         field_name: Lowercase,

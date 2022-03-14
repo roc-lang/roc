@@ -325,7 +325,7 @@ pub fn canonicalize_defs<'a>(
         } = can_ann.introduced_variables;
         let num_unbound = var_by_name.len() + wildcards.len() + inferred.len();
         if num_unbound > 0 {
-            let one_occurence = var_by_name
+            let one_occurrence = var_by_name
                 .iter()
                 .map(|(_, v)| v)
                 .chain(wildcards.iter())
@@ -337,7 +337,7 @@ pub fn canonicalize_defs<'a>(
             env.problems.push(Problem::UnboundTypeVariable {
                 typ: symbol,
                 num_unbound,
-                one_occurence,
+                one_occurrence,
             });
 
             // Bail out

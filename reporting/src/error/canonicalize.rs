@@ -256,7 +256,7 @@ pub fn can_problem<'b>(
         Problem::UnboundTypeVariable {
             typ: alias,
             num_unbound,
-            one_occurence,
+            one_occurrence,
         } => {
             let mut stack = Vec::with_capacity(4);
             if num_unbound == 1 {
@@ -273,9 +273,9 @@ pub fn can_problem<'b>(
                     alloc.text(format!("{}", num_unbound)),
                     alloc.reflow(" unbound type variables."),
                 ]));
-                stack.push(alloc.reflow("Here is one occurence:"));
+                stack.push(alloc.reflow("Here is one occurrence:"));
             }
-            stack.push(alloc.region(lines.convert_region(one_occurence)));
+            stack.push(alloc.region(lines.convert_region(one_occurrence)));
             stack.push(alloc.tip().append(
                 alloc.reflow("Perhaps you intended to add a type parameter to this type?"),
             ));

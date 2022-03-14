@@ -33,7 +33,7 @@ pub struct IntroducedVariables {
     pub lambda_sets: Vec<Variable>,
     pub inferred: Vec<Loc<Variable>>,
     // NB: A mapping of a -> Loc<v1> in this map has the region of the first-seen var, but there
-    // may be multiple occurences of it!
+    // may be multiple occurrences of it!
     pub var_by_name: SendMap<Lowercase, Loc<Variable>>,
     pub name_by_var: SendMap<Variable, Lowercase>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,

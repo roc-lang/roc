@@ -8794,7 +8794,7 @@ I need all branches in an `if` to have the same type!
 
                 The definition of `I` has 2 unbound type variables.
 
-                Here is one occurence:
+                Here is one occurrence:
 
                 1│  I : [ A (Int *), B (Int *) ]
                                  ^
