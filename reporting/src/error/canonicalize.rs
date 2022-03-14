@@ -17,6 +17,7 @@ const UNRECOGNIZED_NAME: &str = "UNRECOGNIZED NAME";
 const UNUSED_DEF: &str = "UNUSED DEFINITION";
 const UNUSED_IMPORT: &str = "UNUSED IMPORT";
 const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
+const UNBOUND_TYPE_VARIABLE: &str = "UNBOUND TYPE VARIABLE";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
 const MISSING_DEFINITION: &str = "MISSING DEFINITION";
 const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
@@ -250,6 +251,37 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNUSED_ALIAS_PARAM.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::UnboundTypeVariable {
+            typ: alias,
+            num_unbound,
+            one_occurence,
+        } => {
+            let mut stack = Vec::with_capacity(4);
+            if num_unbound == 1 {
+                stack.push(alloc.concat(vec![
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" has an unbound type variable:"),
+                ]));
+            } else {
+                stack.push(alloc.concat(vec![
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" has "),
+                    alloc.text(format!("{}", num_unbound)),
+                    alloc.reflow(" unbound type variables."),
+                ]));
+                stack.push(alloc.reflow("Here is one occurence:"));
+            }
+            stack.push(alloc.region(lines.convert_region(one_occurence)));
+            stack.push(alloc.tip().append(
+                alloc.reflow("Perhaps you intended to add a type parameter to this type?"),
+            ));
+            doc = alloc.stack(stack);
+
+            title = UNBOUND_TYPE_VARIABLE.to_string();
             severity = Severity::RuntimeError;
         }
         Problem::BadRecursion(entries) => {
