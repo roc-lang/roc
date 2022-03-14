@@ -3583,7 +3583,6 @@ pub fn deep_copy_var_to(
         let visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
 
         let mut env = DeepCopyVarToEnv {
-            arena: &arena,
             visited,
             source,
             target,
@@ -3614,7 +3613,6 @@ pub fn deep_copy_var_to(
 }
 
 struct DeepCopyVarToEnv<'a> {
-    arena: &'a bumpalo::Bump,
     visited: bumpalo::collections::Vec<'a, Variable>,
     source: &'a mut Subs,
     target: &'a mut Subs,
@@ -3643,9 +3641,11 @@ fn deep_copy_var_to_help<'a>(env: &mut DeepCopyVarToEnv<'a>, var: Variable) -> V
 
     env.visited.push(var);
 
+    let max_rank = env.max_rank;
+
     let make_descriptor = |content| Descriptor {
         content,
-        rank: env.max_rank,
+        rank: max_rank,
         mark: Mark::NONE,
         copy: OptVariable::NONE,
     };
@@ -3921,6 +3921,7 @@ pub struct CopiedImport {
     pub variable: Variable,
     pub flex: Vec<Variable>,
     pub rigid: Vec<Variable>,
+    pub translations: Vec<(Variable, Variable)>,
     pub registered: Vec<Variable>,
 }
 
@@ -3930,6 +3931,7 @@ struct CopyImportEnv<'a> {
     target: &'a mut Subs,
     flex: Vec<Variable>,
     rigid: Vec<Variable>,
+    translations: Vec<(Variable, Variable)>,
     registered: Vec<Variable>,
 }
 
@@ -3950,6 +3952,7 @@ pub fn copy_import_to(
             target,
             flex: Vec::new(),
             rigid: Vec::new(),
+            translations: Vec::new(),
             registered: Vec::new(),
         };
 
@@ -3960,6 +3963,7 @@ pub fn copy_import_to(
             source,
             flex,
             rigid,
+            translations,
             registered,
             target: _,
         } = env;
@@ -3981,6 +3985,7 @@ pub fn copy_import_to(
             variable: copy,
             flex,
             rigid,
+            translations,
             registered,
         }
     };
@@ -4251,6 +4256,8 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                 .set(copy, make_descriptor(RigidVar(new_name_index)));
 
             env.rigid.push(copy);
+
+            env.translations.push((var, copy));
 
             copy
         }
