@@ -71,6 +71,16 @@ impl<T> RecordField<T> {
         }
     }
 
+    pub fn as_inner_mut(&mut self) -> &mut T {
+        use RecordField::*;
+
+        match self {
+            Optional(t) => t,
+            Required(t) => t,
+            Demanded(t) => t,
+        }
+    }
+
     pub fn map<F, U>(&self, mut f: F) -> RecordField<U>
     where
         F: FnMut(&T) -> U,
@@ -152,6 +162,10 @@ pub struct LambdaSet(pub Type);
 impl LambdaSet {
     fn substitute(&mut self, substitutions: &ImMap<Variable, Type>) {
         self.0.substitute(substitutions);
+    }
+
+    fn as_inner_mut(&mut self) -> &mut Type {
+        &mut self.0
     }
 
     fn instantiate_aliases(
@@ -516,93 +530,94 @@ impl Type {
     pub fn substitute(&mut self, substitutions: &ImMap<Variable, Type>) {
         use Type::*;
 
-        match self {
-            ClosureTag { ext: v, .. } | Variable(v) => {
-                if let Some(replacement) = substitutions.get(v) {
-                    *self = replacement.clone();
-                }
-            }
-            Function(args, closure, ret) => {
-                for arg in args {
-                    arg.substitute(substitutions);
-                }
-                closure.substitute(substitutions);
-                ret.substitute(substitutions);
-            }
-            TagUnion(tags, ext) => {
-                for (_, args) in tags {
-                    for x in args {
-                        x.substitute(substitutions);
+        let mut stack = vec![self];
+
+        while let Some(typ) = stack.pop() {
+            match typ {
+                ClosureTag { ext: v, .. } | Variable(v) => {
+                    if let Some(replacement) = substitutions.get(v) {
+                        *typ = replacement.clone();
                     }
                 }
-                ext.substitute(substitutions);
-            }
-            FunctionOrTagUnion(_, _, ext) => {
-                ext.substitute(substitutions);
-            }
-            RecursiveTagUnion(_, tags, ext) => {
-                for (_, args) in tags {
-                    for x in args {
-                        x.substitute(substitutions);
+                Function(args, closure, ret) => {
+                    stack.extend(args);
+                    stack.push(closure);
+                    stack.push(ret);
+                }
+                TagUnion(tags, ext) => {
+                    for (_, args) in tags {
+                        stack.extend(args.iter_mut());
+                    }
+                    stack.push(ext);
+                }
+                FunctionOrTagUnion(_, _, ext) => {
+                    stack.push(ext);
+                }
+                RecursiveTagUnion(_, tags, ext) => {
+                    for (_, args) in tags {
+                        stack.extend(args.iter_mut());
+                    }
+                    stack.push(ext);
+                }
+                Record(fields, ext) => {
+                    for (_, x) in fields.iter_mut() {
+                        stack.push(x.as_inner_mut());
+                    }
+                    stack.push(ext);
+                }
+                Type::DelayedAlias(AliasCommon {
+                    type_arguments,
+                    lambda_set_variables,
+                    ..
+                }) => {
+                    for (_, value) in type_arguments.iter_mut() {
+                        stack.push(value);
+                    }
+
+                    for lambda_set in lambda_set_variables.iter_mut() {
+                        stack.push(lambda_set.as_inner_mut());
                     }
                 }
-                ext.substitute(substitutions);
-            }
-            Record(fields, ext) => {
-                for (_, x) in fields.iter_mut() {
-                    x.substitute(substitutions);
+                Alias {
+                    type_arguments,
+                    lambda_set_variables,
+                    actual,
+                    ..
+                } => {
+                    for (_, value) in type_arguments.iter_mut() {
+                        stack.push(value);
+                    }
+                    for lambda_set in lambda_set_variables.iter_mut() {
+                        stack.push(lambda_set.as_inner_mut());
+                    }
+
+                    stack.push(actual);
                 }
-                ext.substitute(substitutions);
-            }
-            Type::DelayedAlias(AliasCommon {
-                type_arguments,
-                lambda_set_variables,
-                ..
-            }) => {
-                for (_, value) in type_arguments.iter_mut() {
-                    value.substitute(substitutions);
+                HostExposedAlias {
+                    type_arguments,
+                    lambda_set_variables,
+                    actual: actual_type,
+                    ..
+                } => {
+                    for (_, value) in type_arguments.iter_mut() {
+                        stack.push(value);
+                    }
+
+                    for lambda_set in lambda_set_variables.iter_mut() {
+                        stack.push(lambda_set.as_inner_mut());
+                    }
+
+                    stack.push(actual_type);
+                }
+                Apply(_, args, _) => {
+                    stack.extend(args);
+                }
+                RangedNumber(typ, _) => {
+                    stack.push(typ);
                 }
 
-                for lambda_set in lambda_set_variables.iter_mut() {
-                    lambda_set.substitute(substitutions);
-                }
+                EmptyRec | EmptyTagUnion | Erroneous(_) => {}
             }
-            Alias {
-                type_arguments,
-                lambda_set_variables,
-                actual,
-                ..
-            } => {
-                for (_, value) in type_arguments.iter_mut() {
-                    value.substitute(substitutions);
-                }
-
-                for lambda_set in lambda_set_variables.iter_mut() {
-                    lambda_set.substitute(substitutions);
-                }
-
-                actual.substitute(substitutions);
-            }
-            HostExposedAlias {
-                type_arguments: arguments,
-                actual: actual_type,
-                ..
-            } => {
-                for (_, value) in arguments.iter_mut() {
-                    value.substitute(substitutions);
-                }
-                actual_type.substitute(substitutions);
-            }
-            Apply(_, args, _) => {
-                for arg in args {
-                    arg.substitute(substitutions);
-                }
-            }
-            RangedNumber(typ, _) => {
-                typ.substitute(substitutions);
-            }
-
-            EmptyRec | EmptyTagUnion | Erroneous(_) => {}
         }
     }
 
