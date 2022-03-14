@@ -6,7 +6,8 @@ interface Num
             Binary32,
             Dec,
             Decimal,
-            Frac,
+            Fraction,
+            Float,
             F32,
             F64,
             I8,
@@ -59,7 +60,6 @@ interface Num
             isPositive,
             isZero,
             log,
-            maxFrac,
             maxI8,
             maxU8,
             maxI16,
@@ -69,7 +69,6 @@ interface Num
             maxI64,
             maxU64,
             maxI128,
-            minFrac,
             minI8,
             minU8,
             minI16,
@@ -79,8 +78,6 @@ interface Num
             minI64,
             minU64,
             minI128,
-            modInt,
-            modFrac,
             mul,
             mulChecked,
             mulWrap,
@@ -120,7 +117,6 @@ interface Num
             toU128Checked,
             toNat,
             toNatChecked,
-            toFrac,
             toStr
         ]
     imports []
@@ -220,7 +216,7 @@ Num a : a | a supports Arithmetic
 ## [Dec] typically takes slightly less time than [F64] to perform addition and
 ## subtraction, but 10-20 times longer to perform multiplication and division.
 ## [sqrt] and trigonometry are massively slower with [Dec] than with [F64].
-Dec : Frac [ @Decimal128 ]
+Dec := {} supports FractionArithmetic
 
 ## A fixed-size number with a fractional component.
 ##
@@ -289,7 +285,10 @@ Dec : Frac [ @Decimal128 ]
 ## loops and conditionals. If you need to do performance-critical trigonometry
 ## or square roots, either [F64] or [F32] is probably a better choice than the
 ## usual default choice of [Dec], despite the precision problems they bring.
-Frac a := a | a supports FracArithmetic
+Float a : a | a supports FloatArithmetic
+
+F32 := {} supports FloatArithmetic
+F64 := {} supports FloatArithmetic
 
 ## A fixed-size integer - that is, a number with no fractional component.
 ##
@@ -340,19 +339,19 @@ Frac a := a | a supports FracArithmetic
 ## * Start by deciding if this integer should allow negative numbers, and choose signed or unsigned accordingly.
 ## * Next, think about the range of numbers you expect this number to hold. Choose the smallest size you will never expect to overflow, no matter the inputs your program receives. (Validating inputs for size, and presenting the user with an error if they are too big, can help guard against overflow.)
 ## * Finally, if a particular numeric calculation is running too slowly, you can try experimenting with other number sizes. This rarely makes a meaningful difference, but some processors can operate on different number sizes at different speeds.
-Int a := a | a supports IntArithmetic
+Int a : a | a supports IntArithmetic
 
 ## A signed 8-bit integer, ranging from -128 to 127
-I8 : Int [ @Signed8 ]
-U8 : Int [ @Unsigned8 ]
-I16 : Int [ @Signed16 ]
-U16 : Int [ @Unsigned16 ]
-I32 : Int [ @Signed32 ]
-U32 : Int [ @Unsigned32 ]
-I64 : Int [ @Signed64 ]
-U64 : Int [ @Unsigned64 ]
-I128 : Int [ @Signed128 ]
-U128 : Int [ @Unsigned128 ]
+I8 := {} supports IntArithmetic
+U8 := {} supports IntArithmetic
+I16 := {} supports IntArithmetic
+U16 := {} supports IntArithmetic
+I32 := {} supports IntArithmetic
+U32 := {} supports IntArithmetic
+I64 := {} supports IntArithmetic
+U64 := {} supports IntArithmetic
+I128 := {} supports IntArithmetic
+U128 := {} supports IntArithmetic
 
 ## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
 ## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
@@ -364,7 +363,7 @@ U128 : Int [ @Unsigned128 ]
 ## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
 ## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
 ## good fit for [List.len] regardless of system.
-Nat : Int [ @Natural ]
+Nat := {} supports IntArithmetic
 
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
 ##
@@ -527,8 +526,8 @@ Arithmetic supports Equating, Ordering, Hashing, is
     ##
     ## If the answer to this operation can't fit in the return value (e.g. an
     ## [I8] answer that's higher than 127 or lower than -128), the result is an
-    ## *overflow*. For [F64] and [F32], overflow results in an answer of either
-    ## ∞ or -∞. For all other number types, overflow results in a panic.
+    ## *overflow*. For [Float] values, overflow results in an answer of either
+    ## [infinity] or [negativeInfinity]. For all other number types, overflow results in a panic.
     add : Num a, Num a -> Num a
 
     ## Add two numbers and check for overflow.
@@ -781,13 +780,15 @@ Arithmetic supports Equating, Ordering, Hashing, is
     # 5, 1 -> (0 - 0) + 1 == 1 # Gt
     # 1, 5 -> (1 - 0) + 1 == 2 # Lt
 
-FracArithmetic supports Arithmetic, is
+Fraction a : a | a supports FractionArithmetic
+
+FractionArithmetic supports Arithmetic, is
     ## Round off the given fraction to the nearest integer.
 
-    round : Frac * -> Int *
-    ceil : Frac * -> Int *
-    floor : Frac * -> Int *
-    trunc : Frac * -> Int *
+    round : Fraction * -> Int *
+    ceil : Fraction * -> Int *
+    floor : Fraction * -> Int *
+    trunc : Fraction * -> Int *
 
     ## Divide one [Frac] by another.
     ##
@@ -819,7 +820,7 @@ FracArithmetic supports Arithmetic, is
     ##
     ## >>> Num.pi
     ## >>>     |> Num.div 2.0
-    div : Frac a, Frac a -> Frac a
+    div : Fraction a, Fraction a -> Fraction a
 
     ## Perform modulo on two [Frac]s.
     ##
@@ -844,13 +845,27 @@ FracArithmetic supports Arithmetic, is
     ##
     ## >>> Num.pi
     ## >>>     |> Num.mod 2.0
-    mod : Frac a, Frac a -> Frac a
+    mod : Fraction a, Fraction a -> Fraction a
 
-    ## Raises a [Frac] to the power of another [Frac].
+    ## Raises a [Fraction] to the power of another [Fraction].
     ##
     ## `
     ## For an #Int alternative to this function, see #Num.raise.
-    pow : Frac a, Frac a -> Frac a
+    pow : Fraction a, Fraction a -> Fraction a
+
+## An [IEEE-754 floating-point number](https://en.wikipedia.org/wiki/IEEE_754), except without
+## considering `NaN` to be unequal to itself.
+##
+## This change prevents problems like `NaN` values causing problems with sorting, or with
+## storing floats in dictionaries and sets.
+##
+## Since this change diverges from the IEEE-754 semantics that CPUs use, it means that `==` on
+## floats requires multiple CPU instructions. The [Num.isFloatEq] function does a single-instruction
+## equality check, meaning it works just like `==` except that it returns `False` if both arguments
+## are `NaN`. (In fact, `==` is implemented as `Num.isFloatEq a b || (Num.isNaN a && Num.isNaN b)`.)
+Float a : a | a supports FloatArithmetic
+
+FloatArithmetic supports FractionArithmetic, is
     ## Returns an approximation of the absolute value of a [Frac]'s square root.
     ##
     ## The square root of a negative number is an irrational number, and [Frac] only
@@ -876,22 +891,98 @@ FracArithmetic supports Arithmetic, is
     ##
     ## >>> Frac.sqrt -4.0f64
     ##
-    ## >>> Frac.sqrt -4.0dec
-    sqrt : Frac a -> Frac a
+    ## >>> Float.sqrt -4.0dec
+    sqrt : Float a -> Float a
 
     ## Trigonometry
 
-    cos : Frac a -> Frac a
+    cos : Float a -> Float a
 
-    acos : Frac a -> Frac a
+    acos : Float a -> Float a
 
-    sin : Frac a -> Frac a
+    sin : Float a -> Float a
 
-    asin : Frac a -> Frac a
+    asin : Float a -> Float a
 
-    tan : Frac a -> Frac a
+    tan : Float a -> Float a
 
-    atan : Frac a -> Frac a
+    atan : Float a -> Float a
+
+    ## Constants
+
+    ## Special Floating-Point Values
+
+    ## When given a [F64] or [F32] value, returns `False` if that value is
+    ## [*NaN*](Num.isNaN), ∞ or -∞, and `True` otherwise.
+    ##
+    ## Always returns `True` when given a [Dec].
+    ##
+    ## This is the opposite of [isInfinite], except when given [*NaN*](Num.isNaN). Both
+    ## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
+    isFinite : Float * -> Bool
+
+    ## When given a [F64] or [F32] value, returns `True` if that value is either
+    ## ∞ or -∞, and `False` otherwise.
+    ##
+    ## Always returns `False` when given a [Dec].
+    ##
+    ## This is the opposite of [isFinite], except when given [*NaN*](Num.isNaN). Both
+    ## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
+    isInfinite : Float * -> Bool
+
+    ## When given a [F64] or [F32] value, returns `True` if that value is
+    ## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `False` otherwise.
+    ##
+    ## Always returns `False` when given a [Dec].
+    ##
+    ## >>> Num.isNaN 12.3
+    ##
+    ## >>> Num.isNaN (Num.sqrt -2)
+    ##
+    ## *NaN* is unusual from other numberic values in that:
+    ## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `False` if either argument is *NaN*.
+    ## * *NaN* has no ordering, so [isLt], [isLte], [isGt], and [isGte] always return `False` if either argument is *NaN*.
+    ##
+    ## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+    ## floating point standard. Because almost all modern processors are built to
+    ## this standard, deviating from these rules has a significant performance
+    ## cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
+    ## access to hardware-accelerated performance, Roc follows these rules exactly.
+    ##
+    ## Note that you should never put a *NaN* into a [Set], or use it as the key in
+    ## a [Dict]. The result is entries that can never be removed from those
+    ## collections! See the documentation for [Set.add] and [Dict.insert] for details.
+    isNaN : Float * -> Bool
+
+    ## This is the same as `==` except it returns `False` if both arguments are `NaN`.
+    ##
+    ## This actually runs faster than `==` because CPUs implement the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+    ## specification for floating-point numbers, which requires that `NaN` be considered unequal to itself.
+    ##
+    ## Roc does not follow this definition for normal `==` because it would break things
+    ## like sorting and trying to store floats in dictionaries and sets. This comes at a performance
+    ## cost (in fact, `==` is implemented as `Num.isFloatEq a b || (Num.isNaN a && Num.isNaN b)`),
+    ## so you can use [isFloatEq] instead to save a couple of instructions - as long as it's acceptable
+    ## to get back `False` if both arguments are `NaN`!
+    isFloatEq : Float a, Float a -> Bool
+
+    ## Returns `False` when [isFloatEq] would return `True`, and vice versa.
+    isFloatNotEq : Float a, Float a -> Bool
+
+    ## An approximation of e, specifically 2.718281828459045.
+    e : Float *
+
+    ## An approximation of pi, specifically 3.141592653589793.
+    pi : Float *
+
+    ## The [IEEE-754 floating-point](https://en.wikipedia.org/wiki/IEEE_754) value of *positive infintiy.*
+    infinity : Float *
+
+    ## The [IEEE-754 floating-point](https://en.wikipedia.org/wiki/IEEE_754) value of *negative infintiy.*
+    negativeInfinity : Float *
+
+    ## The [IEEE-754 floating-point](https://en.wikipedia.org/wiki/IEEE_754) value of *not a number.*
+    nan : Float *
 
 IntArithmetic supports Arithmetic, is
     ## Divide two integers and #Num.round  the resulut.
@@ -1053,14 +1144,13 @@ IntArithmetic supports Arithmetic, is
     toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
     toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
 
+    ## Bitwise
 
-## Bitwise
+    xor : Int a, Int a -> Int a
 
-xor : Int a, Int a -> Int a
+    and : Int a, Int a -> Int a
 
-and : Int a, Int a -> Int a
-
-not : Int a -> Int a
+    not : Int a -> Int a
 
 ## Limits
 
@@ -1266,58 +1356,6 @@ minDec : Dec
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
 maxDec : Dec
-
-## Constants
-
-## An approximation of e, specifically 2.718281828459045.
-e : Frac *
-
-## An approximation of pi, specifically 3.141592653589793.
-pi : Frac *
-
-## Special Floating-Point Values
-
-## When given a [F64] or [F32] value, returns `False` if that value is
-## [*NaN*](Num.isNaN), ∞ or -∞, and `True` otherwise.
-##
-## Always returns `True` when given a [Dec].
-##
-## This is the opposite of [isInfinite], except when given [*NaN*](Num.isNaN). Both
-## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
-isFinite : Frac * -> Bool
-
-## When given a [F64] or [F32] value, returns `True` if that value is either
-## ∞ or -∞, and `False` otherwise.
-##
-## Always returns `False` when given a [Dec].
-##
-## This is the opposite of [isFinite], except when given [*NaN*](Num.isNaN). Both
-## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
-isInfinite : Frac * -> Bool
-
-## When given a [F64] or [F32] value, returns `True` if that value is
-## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `False` otherwise.
-##
-## Always returns `False` when given a [Dec].
-##
-## >>> Num.isNaN 12.3
-##
-## >>> Num.isNaN (Num.sqrt -2)
-##
-## *NaN* is unusual from other numberic values in that:
-## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `False` if either argument is *NaN*.
-## * *NaN* has no ordering, so [isLt], [isLte], [isGt], and [isGte] always return `False` if either argument is *NaN*.
-##
-## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
-## floating point standard. Because almost all modern processors are built to
-## this standard, deviating from these rules has a significant performance
-## cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
-## access to hardware-accelerated performance, Roc follows these rules exactly.
-##
-## Note that you should never put a *NaN* into a [Set], or use it as the key in
-## a [Dict]. The result is entries that can never be removed from those
-## collections! See the documentation for [Set.add] and [Dict.insert] for details.
-isNaN : Frac * -> Bool
 
 ## Compares two numbers according to which is higher.
 ##
