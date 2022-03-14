@@ -13,7 +13,7 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasKind, Category, ErrorType, PatternCategory,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, PatternCategory,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
 
@@ -1199,6 +1199,15 @@ fn type_to_variable<'a>(
                 );
 
                 tag_union_var
+            }
+
+            Type::DelayedAlias(AliasCommon {
+                symbol: _,
+                type_arguments: _,
+                lambda_set_variables: _,
+            }) => {
+                // we have arrived
+                todo!()
             }
 
             Type::Alias {

@@ -167,6 +167,13 @@ impl LambdaSet {
 }
 
 #[derive(PartialEq, Eq, Clone)]
+pub struct AliasCommon {
+    pub symbol: Symbol,
+    pub type_arguments: Vec<(Lowercase, Type)>,
+    pub lambda_set_variables: Vec<LambdaSet>,
+}
+
+#[derive(PartialEq, Eq, Clone)]
 pub enum Type {
     EmptyRec,
     EmptyTagUnion,
@@ -180,6 +187,7 @@ pub enum Type {
         name: Symbol,
         ext: Variable,
     },
+    DelayedAlias(AliasCommon),
     Alias {
         symbol: Symbol,
         type_arguments: Vec<(Lowercase, Type)>,
@@ -244,6 +252,28 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
+            Type::DelayedAlias(AliasCommon {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+            }) => {
+                write!(f, "(DelayedAlias {:?}", symbol)?;
+
+                for (_, arg) in type_arguments {
+                    write!(f, " {:?}", arg)?;
+                }
+
+                for (lambda_set, greek_letter) in
+                    lambda_set_variables.iter().zip(GREEK_LETTERS.iter())
+                {
+                    write!(f, " {}@{:?}", greek_letter, lambda_set.0)?;
+                }
+
+                write!(f, ")")?;
+
+                Ok(())
+            }
+
             Type::Alias {
                 symbol,
                 type_arguments,
@@ -524,6 +554,19 @@ impl Type {
                 }
                 ext.substitute(substitutions);
             }
+            Type::DelayedAlias(AliasCommon {
+                type_arguments,
+                lambda_set_variables,
+                ..
+            }) => {
+                for (_, value) in type_arguments.iter_mut() {
+                    value.substitute(substitutions);
+                }
+
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    lambda_set.substitute(substitutions);
+                }
+            }
             Alias {
                 type_arguments,
                 lambda_set_variables,
@@ -596,6 +639,13 @@ impl Type {
                 }
                 ext.substitute_alias(rep_symbol, rep_args, actual)
             }
+            DelayedAlias(AliasCommon { type_arguments, .. }) => {
+                for (_, ta) in type_arguments {
+                    ta.substitute_alias(rep_symbol, rep_args, actual)?;
+                }
+
+                Ok(())
+            }
             Alias {
                 type_arguments,
                 actual: alias_actual,
@@ -659,6 +709,9 @@ impl Type {
                 ext.contains_symbol(rep_symbol)
                     || fields.values().any(|arg| arg.contains_symbol(rep_symbol))
             }
+            DelayedAlias(AliasCommon { .. }) => {
+                todo!()
+            }
             Alias {
                 symbol: alias_symbol,
                 actual: actual_type,
@@ -699,6 +752,9 @@ impl Type {
                     || fields
                         .values()
                         .any(|arg| arg.contains_variable(rep_variable))
+            }
+            DelayedAlias(AliasCommon { .. }) => {
+                todo!()
             }
             Alias {
                 actual: actual_type,
@@ -759,6 +815,9 @@ impl Type {
                     x.instantiate_aliases(region, aliases, var_store, introduced);
                 }
                 ext.instantiate_aliases(region, aliases, var_store, introduced);
+            }
+            DelayedAlias(AliasCommon { .. }) => {
+                todo!()
             }
             HostExposedAlias {
                 type_arguments: type_args,
@@ -956,6 +1015,9 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 stack.push(ext);
                 stack.extend(fields.values().map(|field| field.as_inner()));
             }
+            DelayedAlias(AliasCommon { .. }) => {
+                todo!()
+            }
             Alias {
                 symbol: alias_symbol,
                 actual: actual_type,
@@ -1041,6 +1103,9 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
 
             // this rec var doesn't need to be in flex_vars or rigid_vars
             accum.remove(rec);
+        }
+        DelayedAlias(AliasCommon { .. }) => {
+            todo!()
         }
         Alias {
             type_arguments,
@@ -1149,6 +1214,9 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             accum.type_variables.remove(rec);
 
             accum.recursion_variables.insert(*rec);
+        }
+        DelayedAlias(AliasCommon { .. }) => {
+            todo!()
         }
         Alias {
             type_arguments,
