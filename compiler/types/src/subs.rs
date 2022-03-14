@@ -1649,8 +1649,20 @@ impl Rank {
         *self == Self::NONE
     }
 
-    pub fn toplevel() -> Self {
+    pub const fn toplevel() -> Self {
         Rank(1)
+    }
+
+    /// the rank at which we introduce imports.
+    ///
+    /// Type checking starts at rank 1 aka toplevel. When there are rigid/flex variables introduced by a
+    /// constraint, then these must be generalized relative to toplevel, and hence are introduced at
+    /// rank 2.
+    ///
+    /// We always use: even if there are no rigids imported, introducing at rank 2 is correct
+    /// (if slightly inefficient) because there are no rigids anyway so generalization is trivial
+    pub const fn import() -> Self {
+        Rank(2)
     }
 
     pub fn next(self) -> Self {
@@ -3326,11 +3338,11 @@ impl StorageSubs {
     }
 
     pub fn import_variable_from(&mut self, source: &mut Subs, variable: Variable) -> CopiedImport {
-        copy_import_to(source, &mut self.subs, variable)
+        copy_import_to(source, &mut self.subs, variable, Rank::import())
     }
 
     pub fn export_variable_to(&mut self, target: &mut Subs, variable: Variable) -> CopiedImport {
-        copy_import_to(&mut self.subs, target, variable)
+        copy_import_to(&mut self.subs, target, variable, Rank::import())
     }
 
     pub fn merge_into(self, target: &mut Subs) -> impl Fn(Variable) -> Variable {
@@ -3935,17 +3947,8 @@ pub fn copy_import_to(
     source: &mut Subs, // mut to set the copy
     target: &mut Subs,
     var: Variable,
+    rank: Rank,
 ) -> CopiedImport {
-    // the rank at which we introduce imports.
-    //
-    // Type checking starts at rank 1 aka toplevel. When there are rigid/flex variables introduced by a
-    // constraint, then these must be generalized relative to toplevel, and hence are introduced at
-    // rank 2.
-    //
-    // We always use: even if there are no rigids imported, introducing at rank 2 is correct
-    // (if slightly inefficient) because there are no rigids anyway so generalization is trivial
-    let rank = Rank::toplevel().next();
-
     let mut arena = take_scratchpad();
 
     let copied_import = {
