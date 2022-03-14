@@ -606,7 +606,7 @@ Arithmetic supports Equating, Ordering, Hashing, is
     ##
     ## This is the same as [Num.mul] except if the operation overflows, instead of
     ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-    mulCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
+    mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 
     ## Convert a number to a [Str].
     ##
@@ -779,6 +779,12 @@ Arithmetic supports Equating, Ordering, Hashing, is
     # 1, 1 -> (0 - 1) + 1 == 0 # Eq
     # 5, 1 -> (0 - 0) + 1 == 1 # Gt
     # 1, 5 -> (1 - 0) + 1 == 2 # Lt
+
+    ## Compares two numbers according to which is higher.
+    ##
+    ## [Num] implements [Ordering] using this as its
+    ## [Order.compare] function.
+    increasing : Num a, Num a -> Order
 
 Fraction a : a | a supports FractionArithmetic
 
@@ -1356,9 +1362,3 @@ minDec : Dec
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
 maxDec : Dec
-
-## Compares two numbers according to which is higher.
-##
-## [Num] implements [Ordering] using this as its
-## [Order.compare] function.
-increasing : Num a, Num a -> Order
