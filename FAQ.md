@@ -48,12 +48,12 @@ in the general case it's not possible for a computer to do this reliably.
 There are some other potential ways to define function equality, but they all have problems.
 
 One way would be to have two functions be considered equal if their source code is equivalent. (Perhaps disregarding
-comments and spaces.) This sounds good at face value, but it means that now you can revise a function to do
-exactly the same thing as before (say, changing `\x -> x + 1` to `\x -> 1 + x`) and cause a bug in some completely
+comments and spaces.) This sounds reasonable, but it means that now revising a function to do
+exactly the same thing as before (say, changing `\x -> x + 1` to `\x -> 1 + x`) can cause a bug in a
 distant part of the code base. Defining function equality this way means that revising a function's internals
 is no longer a safe, local operation - even if it gives all the same outputs for all the same inputs.
 
-Another option would be to define it would be using "reference equality." This is what JavaScript does, for example.
+Another option would be to define it using "reference equality." This is what JavaScript does, for example.
 However, Roc does not use reference equality anywhere else in the language, and it would mean that (for example)
 passing `\x -> x + 1` to a function compared to defining `fn = \x -> x + 1` elsewhere and then passing `fn` into
 the function might give different answers.
