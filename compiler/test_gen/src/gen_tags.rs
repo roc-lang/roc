@@ -1564,3 +1564,19 @@ fn polymorphic_tag() {
         u8
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_2725_alias_polymorphic_lambda() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            wrap = \value -> Tag value
+            wrapIt = wrap
+            wrapIt 42
+            "#
+        ),
+        42, // Tag is a newtype, it gets unwrapped
+        i64
+    )
+}
