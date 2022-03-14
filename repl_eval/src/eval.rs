@@ -750,7 +750,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             let inner_content = env.subs.get_content_without_compacting(inner_var);
 
             let addr_of_inner = mem.deref_usize(addr);
-            let inner_expr = addr_to_ast(env, mem, addr_of_inner, &inner_layout, WhenRecursive::Unreachable, inner_content);
+            let inner_expr = addr_to_ast(env, mem, addr_of_inner, inner_layout, WhenRecursive::Unreachable, inner_content);
 
             let box_box = env.arena.alloc(Loc::at_zero(Expr::Var {
                 module_name: "Box", ident: "box"
