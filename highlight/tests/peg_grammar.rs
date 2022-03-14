@@ -683,7 +683,7 @@ test1 =
       },
   }"#,
         );
-        dbg!(&tokens);
+
         assert_eq!(tokenparser::def(&tokens), Ok(()));
     }
 
@@ -744,7 +744,7 @@ test1 =
     #[test]
     fn test_fibo() {
         let tokens = tokenize(&example_path("algorithms/fibonacci.roc"));
-        dbg!(&tokens);
+
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
 
@@ -820,14 +820,13 @@ test1 =
   "#,
         );
 
-        dbg!(&tokens);
         assert_eq!(tokenparser::module_defs(&tokens), Ok(()));
     }
 
     #[test]
     fn test_base64() {
         let tokens = tokenize(&example_path("benchmarks/Base64.roc"));
-        dbg!(&tokens);
+
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
 
@@ -877,7 +876,7 @@ test1 =
     #[test]
     fn test_cli_echo() {
         let tokens = tokenize(&example_path("interactive/echo.roc"));
-        dbg!(&tokens);
+
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
 
@@ -960,7 +959,7 @@ test1 =
       fun
     "#,
         );
-        dbg!(&tokens);
+
         assert_eq!(tokenparser::op_expr(&tokens), Ok(()));
     }
 
@@ -1122,7 +1121,7 @@ test1 =
     #[test]
     fn test_nqueens() {
         let tokens = tokenize(&example_path("benchmarks/NQueens.roc"));
-        dbg!(&tokens);
+
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
 
@@ -1138,14 +1137,14 @@ test1 =
     else
         list"#,
         );
-        dbg!(&tokens);
+
         assert_eq!(tokenparser::def(&tokens), Ok(()));
     }
 
     #[test]
     fn test_quicksort() {
         let tokens = tokenize(&example_path("benchmarks/Quicksort.roc"));
-        dbg!(&tokens);
+
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
 
@@ -1172,7 +1171,7 @@ test1 =
     #[test]
     fn test_task() {
         let tokens = tokenize(&example_path("benchmarks/platform/Task.roc"));
-        dbg!(&tokens);
+
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
 
@@ -1194,7 +1193,7 @@ test1 =
 
   42"#,
         );
-        dbg!(&tokens);
+
         assert_eq!(tokenparser::defs(&tokens), Ok(()));
     }
 
@@ -1303,7 +1302,6 @@ balance = \color ->
                 5"#,
         );
 
-        dbg!(&tokens);
         assert_eq!(tokenparser::closure(&tokens), Ok(()));
     }
 
@@ -1333,7 +1331,6 @@ balance = \color ->
 
   map : Str"#,
         );
-        dbg!(&tokens);
 
         assert_eq!(tokenparser::module_defs(&tokens), Ok(()));
     }
@@ -1348,7 +1345,6 @@ balance = \color ->
 
   map : Str"#,
         );
-        dbg!(&tokens);
 
         assert_eq!(tokenparser::module_defs(&tokens), Ok(()));
     }
