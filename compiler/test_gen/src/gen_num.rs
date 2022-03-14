@@ -2831,3 +2831,31 @@ fn upcast_of_int_checked_is_zext() {
         u16
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn modulo_of_unsigned() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            0b1111_1111u8 % 64
+            "#
+        ),
+        63,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn div_of_unsigned() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            0b1111_1111u8 // 2
+            "#
+        ),
+        127,
+        u8
+    )
+}

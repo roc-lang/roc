@@ -8369,7 +8369,7 @@ I need all branches in an `if` to have the same type!
 
                 But all the previous branches match:
 
-                    F [ A ]
+                    F [ A ]a
                 "#
             ),
         )

@@ -6558,7 +6558,13 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
         NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
-        NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
+        NumRemUnchecked => {
+            if int_width.is_signed() {
+                bd.build_int_signed_rem(lhs, rhs, "rem_int").into()
+            } else {
+                bd.build_int_unsigned_rem(lhs, rhs, "rem_uint").into()
+            }
+        }
         NumIsMultipleOf => {
             // this builds the following construct
             //
@@ -6632,7 +6638,13 @@ fn build_int_binop<'a, 'ctx, 'env>(
             &[lhs.into(), rhs.into()],
             &bitcode::NUM_POW_INT[int_width],
         ),
-        NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
+        NumDivUnchecked => {
+            if int_width.is_signed() {
+                bd.build_int_signed_div(lhs, rhs, "div_int").into()
+            } else {
+                bd.build_int_unsigned_div(lhs, rhs, "div_uint").into()
+            }
+        }
         NumDivCeilUnchecked => call_bitcode_fn(
             env,
             &[lhs.into(), rhs.into()],
