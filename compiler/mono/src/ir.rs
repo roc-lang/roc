@@ -6734,9 +6734,7 @@ where
         // Attach the alias, then build the rest of the module, so that we reference and specialize
         // the correct proc.
         procs.partial_procs.insert_alias(left, right);
-        let result = build_rest(env, procs, layout_cache);
-
-        result
+        build_rest(env, procs, layout_cache)
     } else {
         // This should be a fully specialized value. Replace the alias with the original symbol.
         let mut result = build_rest(env, procs, layout_cache);
