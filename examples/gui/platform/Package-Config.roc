@@ -1,5 +1,5 @@
 platform "gui"
-    requires {} { render : Elem }
+    requires {} { render : _ }
     exposes []
     packages {}
     imports []
