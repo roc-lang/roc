@@ -126,25 +126,17 @@ pub fn constrain_expr(
                     // lifetime parameter on `Type`
                     Box::new(Type::EmptyRec),
                 );
-                let record_con = constraints.equal_types(
+
+                let record_con = constraints.equal_types_with_storage(
                     record_type,
-                    expected.clone(),
+                    expected,
                     Category::Record,
                     region,
+                    *record_var,
                 );
 
                 rec_constraints.push(record_con);
-
-                // variable to store in the AST
-                let stored_con = constraints.equal_types_var(
-                    *record_var,
-                    expected,
-                    Category::Storage(std::file!(), std::line!()),
-                    region,
-                );
-
                 field_vars.push(*record_var);
-                rec_constraints.push(stored_con);
 
                 let and_constraint = constraints.and_constraint(rec_constraints);
                 constraints.exists(field_vars, and_constraint)
@@ -411,14 +403,12 @@ pub fn constrain_expr(
                     pattern_state_constraints,
                     ret_constraint,
                 ),
-                // "the closure's type is equal to expected type"
-                constraints.equal_types(function_type.clone(), expected, Category::Lambda, region),
-                // "fn_var is equal to the closure's type" - fn_var is used in code gen
-                constraints.equal_types_var(
-                    *fn_var,
-                    NoExpectation(function_type),
-                    Category::Storage(std::file!(), std::line!()),
+                constraints.equal_types_with_storage(
+                    function_type,
+                    expected,
+                    Category::Lambda,
                     region,
+                    *fn_var,
                 ),
                 closure_constraint,
             ];
@@ -912,7 +902,7 @@ pub fn constrain_expr(
                 types.push(Type::Variable(*var));
             }
 
-            let union_con = constraints.equal_types(
+            let union_con = constraints.equal_types_with_storage(
                 Type::TagUnion(
                     vec![(name.clone(), types)],
                     Box::new(Type::Variable(*ext_var)),
@@ -923,18 +913,12 @@ pub fn constrain_expr(
                     args_count: arguments.len(),
                 },
                 region,
-            );
-            let ast_con = constraints.equal_types_var(
                 *variant_var,
-                expected,
-                Category::Storage(std::file!(), std::line!()),
-                region,
             );
 
             vars.push(*variant_var);
             vars.push(*ext_var);
             arg_cons.push(union_con);
-            arg_cons.push(ast_con);
 
             constraints.exists_many(vars, arg_cons)
         }
@@ -963,7 +947,7 @@ pub fn constrain_expr(
                 types.push(Type::Variable(*var));
             }
 
-            let union_con = constraints.equal_types(
+            let union_con = constraints.equal_types_with_storage(
                 Type::FunctionOrTagUnion(
                     name.clone(),
                     *closure_name,
@@ -975,18 +959,12 @@ pub fn constrain_expr(
                     args_count: arguments.len(),
                 },
                 region,
-            );
-            let ast_con = constraints.equal_types_var(
                 *variant_var,
-                expected,
-                Category::Storage(std::file!(), std::line!()),
-                region,
             );
 
             vars.push(*variant_var);
             vars.push(*ext_var);
             arg_cons.push(union_con);
-            arg_cons.push(ast_con);
 
             constraints.exists_many(vars, arg_cons)
         }
@@ -1021,11 +999,12 @@ pub fn constrain_expr(
 
             // Link the entire wrapped opaque type (with the now-constrained argument) to the
             // expected type
-            let opaque_con = constraints.equal_types(
+            let opaque_con = constraints.equal_types_with_storage(
                 opaque_type,
-                expected.clone(),
+                expected,
                 Category::OpaqueWrap(*name),
                 region,
+                *opaque_var,
             );
 
             // Link the entire wrapped opaque type (with the now-constrained argument) to the type
@@ -1038,14 +1017,6 @@ pub fn constrain_expr(
                 arg_loc_expr.region,
             );
 
-            // Store the entire wrapped opaque type in `opaque_var`
-            let storage_con = constraints.equal_types_var(
-                *opaque_var,
-                expected,
-                Category::Storage(std::file!(), std::line!()),
-                region,
-            );
-
             let mut vars = vec![*arg_var, *opaque_var];
             // Also add the fresh variables we created for the type argument and lambda sets
             vars.extend(type_arguments.iter().map(|(_, t)| {
@@ -1055,10 +1026,7 @@ pub fn constrain_expr(
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));
 
-            constraints.exists_many(
-                vars,
-                [arg_con, opaque_con, link_type_variables_con, storage_con],
-            )
+            constraints.exists_many(vars, [arg_con, opaque_con, link_type_variables_con])
         }
 
         RunLowLevel { args, ret_var, op } => {
@@ -1476,6 +1444,8 @@ fn constrain_def(
                     vars.push(*fn_var);
                     let defs_constraint = constraints.and_constraint(state.constraints);
 
+                    let signature_closure_type = *signature_closure_type.clone();
+                    let signature_index = constraints.push_type(signature);
                     let cons = [
                         constraints.let_constraint(
                             [],
@@ -1492,13 +1462,23 @@ fn constrain_def(
                                 AnnotationSource::TypedBody {
                                     region: annotation.region,
                                 },
-                                *signature_closure_type.clone(),
+                                signature_closure_type,
                             ),
                             Category::ClosureSize,
                             region,
                         ),
-                        constraints.store(signature.clone(), *fn_var, std::file!(), std::line!()),
-                        constraints.store(signature, expr_var, std::file!(), std::line!()),
+                        constraints.store_index(
+                            signature_index,
+                            *fn_var,
+                            std::file!(),
+                            std::line!(),
+                        ),
+                        constraints.store_index(
+                            signature_index,
+                            expr_var,
+                            std::file!(),
+                            std::line!(),
+                        ),
                         constraints.store(ret_type, ret_var, std::file!(), std::line!()),
                         closure_constraint,
                     ];
@@ -1925,6 +1905,7 @@ pub fn rec_defs_help(
 
                         vars.push(*fn_var);
 
+                        let signature_index = constraints.push_type(signature);
                         let state_constraints = constraints.and_constraint(state.constraints);
                         let cons = [
                             constraints.let_constraint(
@@ -1942,13 +1923,18 @@ pub fn rec_defs_help(
                             ),
                             // "fn_var is equal to the closure's type" - fn_var is used in code gen
                             // Store type into AST vars. We use Store so errors aren't reported twice
-                            constraints.store(
-                                signature.clone(),
+                            constraints.store_index(
+                                signature_index,
                                 *fn_var,
                                 std::file!(),
                                 std::line!(),
                             ),
-                            constraints.store(signature, expr_var, std::file!(), std::line!()),
+                            constraints.store_index(
+                                signature_index,
+                                expr_var,
+                                std::file!(),
+                                std::line!(),
+                            ),
                             constraints.store(ret_type, ret_var, std::file!(), std::line!()),
                             closure_constraint,
                         ];
