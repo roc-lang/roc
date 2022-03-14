@@ -76,6 +76,32 @@ pub enum TypeError {
     UnexposedLookup(Symbol),
 }
 
+use roc_types::types::Alias;
+
+#[derive(Debug, Default)]
+pub struct Aliases {
+    aliases: MutMap<Symbol, Alias>,
+}
+
+impl Aliases {
+    fn instantiate_alias(
+        &self,
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+        arena: &bumpalo::Bump,
+        symbol: Symbol,
+        alias_variables: AliasVariables,
+    ) -> Result<Variable, ()> {
+        match self.aliases.get(&symbol) {
+            None => Err(()),
+            Some(alias) => {
+                todo!()
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Env {
     symbols: Vec<Symbol>,
@@ -206,7 +232,7 @@ pub fn run_in_place(
         rank,
         &mut pools,
         problems,
-        &mut MutMap::default(),
+        &mut Aliases::default(),
         subs,
         constraint,
     );
@@ -259,7 +285,7 @@ fn solve(
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<TypeError>,
-    cached_aliases: &mut MutMap<Symbol, Variable>,
+    aliases: &mut Aliases,
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
@@ -305,7 +331,7 @@ fn solve(
                     constraints,
                     rank,
                     pools,
-                    cached_aliases,
+                    aliases,
                     subs,
                     let_con.def_types,
                 );
@@ -350,7 +376,7 @@ fn solve(
                     constraints,
                     next_rank,
                     pools,
-                    cached_aliases,
+                    aliases,
                     subs,
                     let_con.def_types,
                 );
@@ -443,23 +469,11 @@ fn solve(
             Eq(type_index, expectation_index, category_index, region) => {
                 let category = &constraints.categories[category_index.index()];
 
-                let actual = either_type_index_to_var(
-                    constraints,
-                    subs,
-                    rank,
-                    pools,
-                    cached_aliases,
-                    *type_index,
-                );
+                let actual =
+                    either_type_index_to_var(constraints, subs, rank, pools, aliases, *type_index);
 
                 let expectation = &constraints.expectations[expectation_index.index()];
-                let expected = type_to_var(
-                    subs,
-                    rank,
-                    pools,
-                    cached_aliases,
-                    expectation.get_type_ref(),
-                );
+                let expected = type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
 
                 match unify(subs, actual, expected, Mode::EQ) {
                     Success(vars) => {
@@ -498,7 +512,7 @@ fn solve(
                     subs,
                     rank,
                     pools,
-                    cached_aliases,
+                    aliases,
                     *source_index,
                 );
                 let target = *target;
@@ -552,13 +566,8 @@ fn solve(
                         let actual = deep_copy_var_in(subs, rank, pools, var, arena);
                         let expectation = &constraints.expectations[expectation_index.index()];
 
-                        let expected = type_to_var(
-                            subs,
-                            rank,
-                            pools,
-                            cached_aliases,
-                            expectation.get_type_ref(),
-                        );
+                        let expected =
+                            type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
 
                         match unify(subs, actual, expected, Mode::EQ) {
                             Success(vars) => {
@@ -613,23 +622,11 @@ fn solve(
             | PatternPresence(type_index, expectation_index, category_index, region) => {
                 let category = &constraints.pattern_categories[category_index.index()];
 
-                let actual = either_type_index_to_var(
-                    constraints,
-                    subs,
-                    rank,
-                    pools,
-                    cached_aliases,
-                    *type_index,
-                );
+                let actual =
+                    either_type_index_to_var(constraints, subs, rank, pools, aliases, *type_index);
 
                 let expectation = &constraints.pattern_expectations[expectation_index.index()];
-                let expected = type_to_var(
-                    subs,
-                    rank,
-                    pools,
-                    cached_aliases,
-                    expectation.get_type_ref(),
-                );
+                let expected = type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
 
                 let mode = match constraint {
                     PatternPresence(..) => Mode::PRESENT,
@@ -760,14 +757,8 @@ fn solve(
                 }
             }
             IsOpenType(type_index) => {
-                let actual = either_type_index_to_var(
-                    constraints,
-                    subs,
-                    rank,
-                    pools,
-                    cached_aliases,
-                    *type_index,
-                );
+                let actual =
+                    either_type_index_to_var(constraints, subs, rank, pools, aliases, *type_index);
 
                 let mut new_desc = subs.get(actual);
                 match new_desc.content {
@@ -804,12 +795,12 @@ fn solve(
                 let tys = &constraints.types[types.indices()];
                 let pattern_category = &constraints.pattern_categories[pattern_category.index()];
 
-                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let actual = type_to_var(subs, rank, pools, aliases, typ);
                 let tag_ty = Type::TagUnion(
                     vec![(tag_name.clone(), tys.to_vec())],
                     Box::new(Type::EmptyTagUnion),
                 );
-                let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
+                let includes = type_to_var(subs, rank, pools, aliases, &tag_ty);
 
                 match unify(subs, actual, includes, Mode::PRESENT) {
                     Success(vars) => {
@@ -881,7 +872,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
         constraints: &Constraints,
         rank: Rank,
         pools: &mut Pools,
-        cached_aliases: &mut MutMap<Symbol, Variable>,
+        aliases: &mut Aliases,
         subs: &mut Subs,
         def_types_slice: roc_can::constraint::DefTypes,
     ) -> Self {
@@ -891,7 +882,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
         let mut local_def_vars = Self::with_length(types_slice.len());
 
         for ((symbol, region), typ) in loc_symbols_slice.iter().copied().zip(types_slice) {
-            let var = type_to_var(subs, rank, pools, cached_aliases, typ);
+            let var = type_to_var(subs, rank, pools, aliases, typ);
 
             local_def_vars.push((symbol, Loc { value: var, region }));
         }
@@ -921,14 +912,14 @@ fn either_type_index_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    _alias_map: &mut MutMap<Symbol, Variable>,
+    aliases: &mut Aliases,
     either_type_index: roc_collections::soa::EitherIndex<Type, Variable>,
 ) -> Variable {
     match either_type_index.split() {
         Ok(type_index) => {
             let typ = &constraints.types[type_index.index()];
 
-            type_to_var(subs, rank, pools, _alias_map, typ)
+            type_to_var(subs, rank, pools, aliases, typ)
         }
         Err(var_index) => {
             // we cheat, and  store the variable directly in the index
@@ -941,7 +932,7 @@ fn type_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    _: &mut MutMap<Symbol, Variable>,
+    aliases: &Aliases,
     typ: &Type,
 ) -> Variable {
     if let Type::Variable(var) = typ {
@@ -950,7 +941,7 @@ fn type_to_var(
         let mut arena = take_scratchpad();
 
         // let var = type_to_variable(subs, rank, pools, &arena, typ);
-        let var = type_to_variable(subs, rank, pools, &arena, typ);
+        let var = type_to_variable(subs, rank, pools, &arena, aliases, typ);
 
         arena.reset();
         put_scratchpad(arena);
@@ -1029,6 +1020,7 @@ fn type_to_variable<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'a bumpalo::Bump,
+    aliases: &Aliases,
     typ: &Type,
 ) -> Variable {
     use bumpalo::collections::Vec;
@@ -1233,8 +1225,13 @@ fn type_to_variable<'a>(
                     }
                 };
 
-                // TODO
-                let alias_variable = subs.fresh_unnamed_flex_var();
+                let instantiated =
+                    aliases.instantiate_alias(subs, rank, pools, arena, *symbol, alias_variables);
+
+                let alias_variable = match instantiated {
+                    Err(_) => panic!("Alias {:?} is not available", symbol),
+                    Ok(alias_variable) => alias_variable,
+                };
 
                 let content = Content::Alias(*symbol, alias_variables, alias_variable, kind);
 
@@ -1311,7 +1308,8 @@ fn type_to_variable<'a>(
                 };
 
                 // cannot use helper! here because this variable may be involved in unification below
-                let alias_variable = type_to_variable(subs, rank, pools, arena, alias_type);
+                let alias_variable =
+                    type_to_variable(subs, rank, pools, arena, aliases, alias_type);
                 // TODO(opaques): I think host-exposed aliases should always be structural
                 // (when does it make sense to give a host an opaque type?)
                 let content = Content::Alias(
