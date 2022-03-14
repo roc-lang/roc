@@ -1202,12 +1202,43 @@ fn type_to_variable<'a>(
             }
 
             Type::DelayedAlias(AliasCommon {
-                symbol: _,
-                type_arguments: _,
-                lambda_set_variables: _,
+                symbol,
+                type_arguments,
+                lambda_set_variables,
             }) => {
-                // we have arrived
-                todo!()
+                let kind = AliasKind::Structural;
+
+                let alias_variables = {
+                    let length = type_arguments.len() + lambda_set_variables.len();
+                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
+
+                    for (target_index, (_, arg_type)) in
+                        (new_variables.indices()).zip(type_arguments)
+                    {
+                        let copy_var = helper!(arg_type);
+                        subs.variables[target_index] = copy_var;
+                    }
+
+                    let it = (new_variables.indices().skip(type_arguments.len()))
+                        .zip(lambda_set_variables);
+                    for (target_index, ls) in it {
+                        let copy_var = helper!(&ls.0);
+                        subs.variables[target_index] = copy_var;
+                    }
+
+                    AliasVariables {
+                        variables_start: new_variables.start,
+                        type_variables_len: type_arguments.len() as _,
+                        all_variables_len: length as _,
+                    }
+                };
+
+                // TODO
+                let alias_variable = subs.fresh_unnamed_flex_var();
+
+                let content = Content::Alias(*symbol, alias_variables, alias_variable, kind);
+
+                register_with_known_var(subs, destination, rank, pools, content)
             }
 
             Type::Alias {
