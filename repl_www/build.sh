@@ -26,11 +26,11 @@ cp -r repl_www/public/* $WWW_ROOT
 if [ -n "${REPL_DEBUG:-}" ]
 then
     # Leave out wasm-opt since it takes too long when debugging, and provide some debug options
-    cargo build --target wasm32-unknown-unknown -p roc_repl_wasm --release
+    cargo build --target wasm32-unknown-unknown -p roc_repl_wasm --release --features console_error_panic_hook
     wasm-bindgen --target web --keep-debug target/wasm32-unknown-unknown/release/roc_repl_wasm.wasm --out-dir repl_wasm/pkg/
 else
     # A `--profiling` build is optimized and has debug info, so we get stack traces for compiler `todo!()`
-    wasm-pack build --profiling --target web repl_wasm
+    wasm-pack build --profiling --target web repl_wasm -- --features console_error_panic_hook
 fi
 
 cp repl_wasm/pkg/*.wasm $WWW_ROOT
