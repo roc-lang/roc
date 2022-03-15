@@ -5,6 +5,7 @@ use roc_problem::can::{
     BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
 };
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
+use roc_types::types::AliasKind;
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
@@ -257,6 +258,7 @@ pub fn can_problem<'b>(
             typ: alias,
             num_unbound,
             one_occurrence,
+            kind,
         } => {
             let mut stack = Vec::with_capacity(4);
             if num_unbound == 1 {
@@ -276,9 +278,14 @@ pub fn can_problem<'b>(
                 stack.push(alloc.reflow("Here is one occurrence:"));
             }
             stack.push(alloc.region(lines.convert_region(one_occurrence)));
-            stack.push(alloc.tip().append(
-                alloc.reflow("Perhaps you intended to add a type parameter to this type?"),
-            ));
+            stack.push(alloc.tip().append(alloc.concat(vec![
+                alloc.reflow("Type variables must be bound before the "),
+                alloc.keyword(match kind {
+                    AliasKind::Structural => ":",
+                    AliasKind::Opaque => ":=",
+                }),
+                alloc.reflow(". Perhaps you intended to add a type parameter to this type?"),
+            ])));
             doc = alloc.stack(stack);
 
             title = UNBOUND_TYPE_VARIABLE.to_string();

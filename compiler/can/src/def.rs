@@ -338,6 +338,7 @@ pub fn canonicalize_defs<'a>(
                 typ: symbol,
                 num_unbound,
                 one_occurrence,
+                kind,
             });
 
             // Bail out

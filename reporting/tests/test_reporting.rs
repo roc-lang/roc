@@ -8747,7 +8747,8 @@ I need all branches in an `if` to have the same type!
                 1│  I : Int *
                             ^
 
-                Tip: Perhaps you intended to add a type parameter to this type?
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
                 "#
             ),
         )
@@ -8772,7 +8773,8 @@ I need all branches in an `if` to have the same type!
                 1│  I := Int *
                              ^
 
-                Tip: Perhaps you intended to add a type parameter to this type?
+                Tip: Type variables must be bound before the `:=`. Perhaps you intended
+                to add a type parameter to this type?
                 "#
             ),
         )
@@ -8799,7 +8801,8 @@ I need all branches in an `if` to have the same type!
                 1│  I : [ A (Int *), B (Int *) ]
                                  ^
 
-                Tip: Perhaps you intended to add a type parameter to this type?
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
                 "#
             ),
         )
@@ -8824,7 +8827,8 @@ I need all branches in an `if` to have the same type!
                 1│  I : Int _
                             ^
 
-                Tip: Perhaps you intended to add a type parameter to this type?
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
                 "#
             ),
         )
@@ -8849,7 +8853,8 @@ I need all branches in an `if` to have the same type!
                 1│  I : Int a
                             ^
 
-                Tip: Perhaps you intended to add a type parameter to this type?
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
                 "#
             ),
         )
