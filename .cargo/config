@@ -4,4 +4,4 @@ test-gen-dev = "test -p roc_gen_dev -p test_gen --no-default-features --features
 test-gen-wasm = "test -p roc_gen_wasm -p test_gen --no-default-features --features gen-wasm"
 
 [target.wasm32-unknown-unknown]
-rustflags = ["-Copt-level=s"]
+rustflags = ["-Copt-level=s", "-Cpanic=abort", "-Clto=fat"]
