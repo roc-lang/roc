@@ -1,0 +1,4 @@
+procedure Test.0 ():
+    let Test.5 : Str = "";
+    let Test.4 : Rec[*self, Str] = Nil Test.5;
+    ret Test.4;

@@ -1265,6 +1265,18 @@ fn issue_2535_polymorphic_fields_referenced_in_list() {
     )
 }
 
+#[mono_test]
+fn host_exposed_recursive_alias() {
+    indoc!(
+        r#"
+        app "test" provides [ main ] to "./platform"
+
+        main : [ Nil Str, Cons L ] as L
+        main = Nil ""
+        "#
+    )
+}
+
 // #[ignore]
 // #[mono_test]
 // fn static_str_closure() {

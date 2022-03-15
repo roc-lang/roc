@@ -309,6 +309,19 @@ impl<'a> UnionLayout<'a> {
                     .append(alloc.intersperse(tags_doc, ", "))
                     .append(alloc.text("]"))
             }
+            Recursive(tags) => {
+                let tags_doc = tags.iter().map(|fields| {
+                    alloc.intersperse(
+                        fields.iter().map(|x| x.to_doc(alloc, Parens::InTypeParam)),
+                        " ",
+                    )
+                });
+
+                alloc
+                    .text("Rec[")
+                    .append(alloc.intersperse(tags_doc, ", "))
+                    .append(alloc.text("]"))
+            }
             _ => alloc.text("TODO"),
         }
     }

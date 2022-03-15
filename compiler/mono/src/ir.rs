@@ -2419,8 +2419,12 @@ fn specialize_external<'a>(
 
                     aliases.insert(*symbol, (name, top_level, layout));
                 }
-                RawFunctionLayout::ZeroArgumentThunk(_) => {
-                    unreachable!("so far");
+                RawFunctionLayout::ZeroArgumentThunk(result) => {
+                    // This is just a zero-argument thunk, nothing more to do
+                    aliases.insert(
+                        *symbol,
+                        (name, ProcLayout::new(env.arena, &[], result), layout),
+                    );
                 }
             }
         }
