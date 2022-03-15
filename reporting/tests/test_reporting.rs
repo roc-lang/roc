@@ -76,7 +76,7 @@ mod test_reporting {
         }
 
         for var in output.introduced_variables.wildcards {
-            subs.rigid_var(var, "*".into());
+            subs.rigid_var(var.value, "*".into());
         }
 
         let mut unify_problems = Vec::new();
@@ -8723,6 +8723,138 @@ I need all branches in an `if` to have the same type!
                         ^
 
                 I was expecting to see a value signature next.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn wildcard_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : Int *
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I : Int *
+                            ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn wildcard_in_opaque() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I := Int *
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I := Int *
+                             ^
+
+                Tip: Type variables must be bound before the `:=`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn multiple_wildcards_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : [ A (Int *), B (Int *) ]
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has 2 unbound type variables.
+
+                Here is one occurrence:
+
+                1│  I : [ A (Int *), B (Int *) ]
+                                 ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn inference_var_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : Int _
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I : Int _
+                            ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unbound_var_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : Int a
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I : Int a
+                            ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
                 "#
             ),
         )

@@ -1265,6 +1265,17 @@ fn issue_2535_polymorphic_fields_referenced_in_list() {
     )
 }
 
+#[mono_test]
+fn issue_2725_alias_polymorphic_lambda() {
+    indoc!(
+        r#"
+        wrap = \value -> Tag value
+        wrapIt = wrap
+        wrapIt 42
+        "#
+    )
+}
+
 // #[ignore]
 // #[mono_test]
 // fn static_str_closure() {
