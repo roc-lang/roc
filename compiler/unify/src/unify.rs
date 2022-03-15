@@ -322,9 +322,9 @@ fn unify_alias(
                 if args.len() == other_args.len() {
                     let mut problems = Vec::new();
                     let it = args
-                        .variables()
+                        .all_variables()
                         .into_iter()
-                        .zip(other_args.variables().into_iter());
+                        .zip(other_args.all_variables().into_iter());
 
                     for (l, r) in it {
                         let l_var = subs[l];

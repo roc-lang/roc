@@ -427,7 +427,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
         } => write!(f, "Recursion({:?}, {:?})", structure, opt_name),
         Content::Structure(flat_type) => subs_fmt_flat_type(flat_type, subs, f),
         Content::Alias(name, arguments, actual, kind) => {
-            let slice = subs.get_subs_slice(arguments.variables());
+            let slice = subs.get_subs_slice(arguments.all_variables());
             let wrap = match kind {
                 AliasKind::Structural => "Alias",
                 AliasKind::Opaque => "Opaque",
@@ -1775,8 +1775,19 @@ pub struct AliasVariables {
 }
 
 impl AliasVariables {
-    pub const fn variables(&self) -> VariableSubsSlice {
+    pub const fn all_variables(&self) -> VariableSubsSlice {
         SubsSlice::new(self.variables_start, self.all_variables_len)
+    }
+
+    pub const fn type_variables(&self) -> VariableSubsSlice {
+        SubsSlice::new(self.variables_start, self.type_variables_len)
+    }
+
+    pub const fn lambda_set_variables(&self) -> VariableSubsSlice {
+        SubsSlice::new(
+            self.variables_start + self.type_variables_len as u32,
+            self.all_variables_len - self.type_variables_len,
+        )
     }
 
     pub const fn len(&self) -> usize {
@@ -1802,13 +1813,13 @@ impl AliasVariables {
     }
 
     pub fn named_type_arguments(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
-        self.variables()
+        self.all_variables()
             .into_iter()
             .take(self.type_variables_len as usize)
     }
 
     pub fn unnamed_type_arguments(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
-        self.variables()
+        self.all_variables()
             .into_iter()
             .skip(self.type_variables_len as usize)
     }
@@ -1850,7 +1861,7 @@ impl IntoIterator for AliasVariables {
     type IntoIter = <VariableSubsSlice as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.variables().into_iter()
+        self.all_variables().into_iter()
     }
 }
 
@@ -3298,7 +3309,7 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
                     Erroneous(_) => (),
                 },
                 Alias(_, args, var, _) => {
-                    stack.extend(var_slice(args.variables()));
+                    stack.extend(var_slice(args.all_variables()));
 
                     stack.push(*var);
                 }
@@ -3331,6 +3342,14 @@ struct StorageSubsOffsets {
 impl StorageSubs {
     pub fn new(subs: Subs) -> Self {
         Self { subs }
+    }
+
+    pub fn fresh_unnamed_flex_var(&mut self) -> Variable {
+        self.subs.fresh_unnamed_flex_var()
+    }
+
+    pub fn as_inner_mut(&mut self) -> &mut Subs {
+        &mut self.subs
     }
 
     pub fn extend_with_variable(&mut self, source: &mut Subs, variable: Variable) -> Variable {
@@ -3867,7 +3886,9 @@ fn deep_copy_var_to_help<'a>(env: &mut DeepCopyVarToEnv<'a>, var: Variable) -> V
         Alias(symbol, arguments, real_type_var, kind) => {
             let new_variables =
                 SubsSlice::reserve_into_subs(env.target, arguments.all_variables_len as _);
-            for (target_index, var_index) in (new_variables.indices()).zip(arguments.variables()) {
+            for (target_index, var_index) in
+                (new_variables.indices()).zip(arguments.all_variables())
+            {
                 let var = env.source[var_index];
                 let copy_var = deep_copy_var_to_help(env, var);
                 env.target.variables[target_index] = copy_var;
@@ -4284,7 +4305,9 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         Alias(symbol, arguments, real_type_var, kind) => {
             let new_variables =
                 SubsSlice::reserve_into_subs(env.target, arguments.all_variables_len as _);
-            for (target_index, var_index) in (new_variables.indices()).zip(arguments.variables()) {
+            for (target_index, var_index) in
+                (new_variables.indices()).zip(arguments.all_variables())
+            {
                 let var = env.source[var_index];
                 let copy_var = copy_import_to_help(env, max_rank, var);
                 env.target.variables[target_index] = copy_var;
@@ -4389,7 +4412,7 @@ where
                 Erroneous(_) | EmptyRecord | EmptyTagUnion => {}
             },
             Alias(_, arguments, real_type_var, _) => {
-                push_var_slice!(arguments.variables());
+                push_var_slice!(arguments.all_variables());
                 stack.push(*real_type_var);
             }
             RangedNumber(typ, vars) => {

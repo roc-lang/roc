@@ -160,8 +160,8 @@ impl RecordField<Type> {
 pub struct LambdaSet(pub Type);
 
 impl LambdaSet {
-    fn substitute(&mut self, substitutions: &ImMap<Variable, Type>) {
-        self.0.substitute(substitutions);
+    pub fn as_inner(&self) -> &Type {
+        &self.0
     }
 
     fn as_inner_mut(&mut self) -> &mut Type {

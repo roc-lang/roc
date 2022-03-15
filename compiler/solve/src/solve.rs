@@ -78,27 +78,142 @@ pub enum TypeError {
 
 use roc_types::types::Alias;
 
+#[derive(Debug, Clone, Copy)]
+struct DelayedAliasVariables {
+    start: u32,
+    type_variables_len: u8,
+    lambda_set_variables_len: u8,
+    recursion_variables_len: u8,
+}
+
+impl DelayedAliasVariables {
+    fn recursion_variables(self, variables: &mut [Variable]) -> &mut [Variable] {
+        let start = self.start as usize
+            + (self.type_variables_len + self.lambda_set_variables_len) as usize;
+        let length = self.recursion_variables_len as usize;
+
+        &mut variables[start..][..length]
+    }
+
+    fn lambda_set_variables(self, variables: &mut [Variable]) -> &mut [Variable] {
+        let start = self.start as usize + self.type_variables_len as usize;
+        let length = self.lambda_set_variables_len as usize;
+
+        &mut variables[start..][..length]
+    }
+
+    fn type_variables(self, variables: &mut [Variable]) -> &mut [Variable] {
+        let start = self.start as usize;
+        let length = self.type_variables_len as usize;
+
+        &mut variables[start..][..length]
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Aliases {
-    aliases: MutMap<Symbol, Alias>,
+    aliases: Vec<(Symbol, Type, DelayedAliasVariables)>,
+    variables: Vec<Variable>,
 }
 
 impl Aliases {
-    fn instantiate_alias(
-        &self,
+    pub fn insert(&mut self, symbol: Symbol, alias: Alias) {
+        // debug_assert!(self.get(&symbol).is_none());
+
+        let alias_variables =
+            {
+                let start = self.variables.len() as _;
+
+                self.variables
+                    .extend(alias.type_variables.iter().map(|x| x.value.1));
+
+                self.variables.extend(alias.lambda_set_variables.iter().map(
+                    |x| match x.as_inner() {
+                        Type::Variable(v) => *v,
+                        _ => unreachable!("lambda set type is not a variable"),
+                    },
+                ));
+
+                let recursion_variables_len = alias.recursion_variables.len() as _;
+                self.variables.extend(alias.recursion_variables);
+
+                DelayedAliasVariables {
+                    start,
+                    type_variables_len: alias.type_variables.len() as _,
+                    lambda_set_variables_len: alias.lambda_set_variables.len() as _,
+                    recursion_variables_len,
+                }
+            };
+
+        self.aliases.push((symbol, alias.typ, alias_variables));
+    }
+
+    fn instantiate(
+        &mut self,
         subs: &mut Subs,
         rank: Rank,
         pools: &mut Pools,
-        arena: &bumpalo::Bump,
+        _arena: &bumpalo::Bump,
         symbol: Symbol,
         alias_variables: AliasVariables,
     ) -> Result<Variable, ()> {
-        match self.aliases.get(&symbol) {
-            None => Err(()),
-            Some(alias) => {
-                todo!()
+        let (typ, delayed_variables) = match self.aliases.iter_mut().find(|(s, _, _)| *s == symbol)
+        {
+            None => return Err(()),
+            Some((_, typ, delayed_variables)) => (typ, delayed_variables),
+        };
+
+        let mut substitutions: MutMap<_, _> = Default::default();
+
+        for rec_var in delayed_variables
+            .recursion_variables(&mut self.variables)
+            .iter_mut()
+        {
+            let new_var = subs.fresh_unnamed_flex_var();
+            substitutions.insert(*rec_var, new_var);
+            *rec_var = new_var;
+        }
+
+        let old_type_variables = delayed_variables.type_variables(&mut self.variables);
+        let new_type_variables = &subs.variables[alias_variables.type_variables().indices()];
+
+        for (old, new) in old_type_variables.iter_mut().zip(new_type_variables) {
+            substitutions.insert(*old, *new);
+            *old = *new;
+        }
+
+        let old_lambda_set_variables = delayed_variables.lambda_set_variables(&mut self.variables);
+        let new_lambda_set_variables =
+            &subs.variables[alias_variables.lambda_set_variables().indices()];
+
+        for (old, new) in old_lambda_set_variables
+            .iter_mut()
+            .zip(new_lambda_set_variables)
+        {
+            substitutions.insert(*old, *new);
+            *old = *new;
+        }
+
+        typ.substitute_variables(&substitutions);
+
+        // assumption: an alias does not (transitively) syntactically contain itself
+        // (if it did it would have to be a recursive tag union)
+        let mut t = Type::EmptyRec;
+
+        std::mem::swap(typ, &mut t);
+
+        let alias_variable = type_to_var(subs, rank, pools, self, &t);
+
+        {
+            match self.aliases.iter_mut().find(|(s, _, _)| *s == symbol) {
+                None => unreachable!(),
+                Some((_, typ, _)) => {
+                    std::mem::swap(typ, &mut t);
+                }
             }
         }
+
+        Ok(alias_variable)
     }
 }
 
@@ -932,7 +1047,7 @@ fn type_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    aliases: &Aliases,
+    aliases: &mut Aliases,
     typ: &Type,
 ) -> Variable {
     if let Type::Variable(var) = typ {
@@ -1020,7 +1135,7 @@ fn type_to_variable<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'a bumpalo::Bump,
-    aliases: &Aliases,
+    aliases: &mut Aliases,
     typ: &Type,
 ) -> Variable {
     use bumpalo::collections::Vec;
@@ -1226,7 +1341,7 @@ fn type_to_variable<'a>(
                 };
 
                 let instantiated =
-                    aliases.instantiate_alias(subs, rank, pools, arena, *symbol, alias_variables);
+                    aliases.instantiate(subs, rank, pools, arena, *symbol, alias_variables);
 
                 let alias_variable = match instantiated {
                     Err(_) => panic!("Alias {:?} is not available", symbol),
@@ -1943,7 +2058,7 @@ fn adjust_rank_content(
         Alias(_, args, real_var, _) => {
             let mut rank = Rank::toplevel();
 
-            for var_index in args.variables() {
+            for var_index in args.all_variables() {
                 let var = subs[var_index];
                 rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }
@@ -2089,7 +2204,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                 let var = *var;
                 let args = *args;
 
-                stack.extend(var_slice!(args.variables()));
+                stack.extend(var_slice!(args.all_variables()));
 
                 stack.push(var);
             }
@@ -2338,7 +2453,9 @@ fn deep_copy_var_help(
         Alias(symbol, arguments, real_type_var, kind) => {
             let new_variables =
                 SubsSlice::reserve_into_subs(subs, arguments.all_variables_len as _);
-            for (target_index, var_index) in (new_variables.indices()).zip(arguments.variables()) {
+            for (target_index, var_index) in
+                (new_variables.indices()).zip(arguments.all_variables())
+            {
                 let var = subs[var_index];
                 let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
                 subs.variables[target_index] = copy_var;
