@@ -1,4 +1,4 @@
-use crate::solve;
+use crate::solve::{self, Aliases};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::module::RigidVariables;
 use roc_collections::all::MutMap;
@@ -31,6 +31,7 @@ pub fn run_solve(
     constraint: ConstraintSoa,
     rigid_variables: RigidVariables,
     mut subs: Subs,
+    mut aliases: Aliases,
 ) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
     let env = solve::Env::default();
 
@@ -47,7 +48,14 @@ pub fn run_solve(
     let mut problems = Vec::new();
 
     // Run the solver to populate Subs.
-    let (solved_subs, solved_env) = solve::run(constraints, &env, &mut problems, subs, &constraint);
+    let (solved_subs, solved_env) = solve::run(
+        constraints,
+        &env,
+        &mut problems,
+        subs,
+        &mut aliases,
+        &constraint,
+    );
 
     (solved_subs, solved_env, problems)
 }

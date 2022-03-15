@@ -3161,8 +3161,20 @@ fn run_solve<'a>(
     let actual_constraint =
         constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
 
-    let (solved_subs, solved_env, problems) =
-        roc_solve::module::run_solve(&constraints, actual_constraint, rigid_variables, subs);
+    let mut solve_aliases = roc_solve::solve::Aliases::default();
+
+    dbg!(&aliases);
+    for (name, alias) in aliases.iter() {
+        solve_aliases.insert(*name, alias.clone());
+    }
+
+    let (solved_subs, solved_env, problems) = roc_solve::module::run_solve(
+        &constraints,
+        actual_constraint,
+        rigid_variables,
+        subs,
+        solve_aliases,
+    );
 
     let exposed_vars_by_symbol: Vec<_> = solved_env
         .vars_by_symbol()

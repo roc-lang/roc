@@ -7,7 +7,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, AliasKind, LambdaSet, Problem, RecordField, Type};
+use roc_types::types::{Alias, AliasCommon, AliasKind, LambdaSet, Problem, RecordField, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {

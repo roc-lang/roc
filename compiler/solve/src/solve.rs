@@ -153,7 +153,7 @@ impl Aliases {
         subs: &mut Subs,
         rank: Rank,
         pools: &mut Pools,
-        _arena: &bumpalo::Bump,
+        arena: &bumpalo::Bump,
         symbol: Symbol,
         alias_variables: AliasVariables,
     ) -> Result<Variable, ()> {
@@ -314,9 +314,10 @@ pub fn run(
     env: &Env,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
+    aliases: &mut Aliases,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
-    let env = run_in_place(constraints, env, problems, &mut subs, constraint);
+    let env = run_in_place(constraints, env, problems, &mut subs, aliases, constraint);
 
     (Solved(subs), env)
 }
@@ -327,6 +328,7 @@ pub fn run_in_place(
     env: &Env,
     problems: &mut Vec<TypeError>,
     subs: &mut Subs,
+    aliases: &mut Aliases,
     constraint: &Constraint,
 ) -> Env {
     let mut pools = Pools::default();
@@ -347,7 +349,7 @@ pub fn run_in_place(
         rank,
         &mut pools,
         problems,
-        &mut Aliases::default(),
+        aliases,
         subs,
         constraint,
     );
