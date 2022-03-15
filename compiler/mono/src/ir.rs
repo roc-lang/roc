@@ -112,8 +112,10 @@ pub struct PartialProcs<'a> {
     /// maps a function name (symbol) to an index
     symbols: Vec<'a, Symbol>,
 
-    /// An entry (a, b) means a aliases b, i.e. a = b.
-    aliases: Vec<'a, (Symbol, Symbol)>,
+    /// An entry (a, b) means `a` directly references the lambda value of `b`,
+    /// i.e. this came from a `let a = b in ...` where `b` was defined as a
+    /// lambda earlier.
+    references: Vec<'a, (Symbol, Symbol)>,
 
     partial_procs: Vec<'a, PartialProc<'a>>,
 }
@@ -122,7 +124,7 @@ impl<'a> PartialProcs<'a> {
     fn new_in(arena: &'a Bump) -> Self {
         Self {
             symbols: Vec::new_in(arena),
-            aliases: Vec::new_in(arena),
+            references: Vec::new_in(arena),
             partial_procs: Vec::new_in(arena),
         }
     }
@@ -132,7 +134,7 @@ impl<'a> PartialProcs<'a> {
 
     fn symbol_to_id(&self, mut symbol: Symbol) -> Option<PartialProcId> {
         while let Some(real_symbol) = self
-            .aliases
+            .references
             .iter()
             .find(|(alias, _)| *alias == symbol)
             .map(|(_, real)| real)
@@ -183,7 +185,7 @@ impl<'a> PartialProcs<'a> {
             real_symbol,
         );
 
-        self.aliases.push((alias, real_symbol));
+        self.references.push((alias, real_symbol));
     }
 }
 
