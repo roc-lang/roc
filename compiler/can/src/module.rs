@@ -295,7 +295,12 @@ pub fn canonicalize_module_defs<'a>(
     // symbols from this set
     let mut exposed_but_not_defined = exposed_symbols.clone();
 
-    match sort_can_defs(&mut env, defs, Output::default()) {
+    let new_output = Output {
+        aliases: output.aliases,
+        ..Default::default()
+    };
+
+    match sort_can_defs(&mut env, defs, new_output) {
         (Ok(mut declarations), output) => {
             use crate::def::Declaration::*;
 
