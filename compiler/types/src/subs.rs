@@ -815,6 +815,11 @@ impl Variable {
 
             Symbol::BOOL_BOOL => Some(Variable::BOOL),
 
+            Symbol::NUM_F64 => Some(Variable::F64),
+            Symbol::NUM_F32 => Some(Variable::F32),
+
+            Symbol::NUM_DEC => Some(Variable::DEC),
+
             _ => None,
         }
     }
