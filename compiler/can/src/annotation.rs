@@ -706,7 +706,7 @@ fn can_extension_type<'a>(
                 local_aliases,
                 references,
             );
-            if valid_extension_type(ext_type.shallow_dealias()) {
+            if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
                 ext_type
             } else {
                 // Report an error but mark the extension variable to be inferred
@@ -728,6 +728,29 @@ fn can_extension_type<'a>(
         }
         None => empty_ext_type,
     }
+}
+
+/// a shallow dealias, continue until the first constructor is not an alias.
+fn shallow_dealias_with_scope<'a>(scope: &'a mut Scope, typ: &'a Type) -> &'a Type {
+    let mut result = typ;
+    loop {
+        match result {
+            Type::Alias { actual, .. } => {
+                // another loop
+                result = actual;
+            }
+            Type::DelayedAlias(AliasCommon { symbol, .. }) => match scope.lookup_alias(*symbol) {
+                None => unreachable!(),
+                Some(alias) => {
+                    result = &alias.typ;
+                }
+            },
+
+            _ => break,
+        }
+    }
+
+    result
 }
 
 pub fn instantiate_and_freshen_alias_type(
