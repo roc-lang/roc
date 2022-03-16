@@ -4,6 +4,7 @@ use crate::docs::TypeAnnotation::{
 };
 use crate::file::LoadedModule;
 use roc_can::scope::Scope;
+use roc_error_macros::todo_abilities;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
 use roc_parse::ast::CommentOrNewline;
@@ -250,6 +251,8 @@ fn generate_entry_doc<'a>(
 
             (acc, None)
         }
+
+        Def::Ability { .. } => todo_abilities!(),
 
         Def::Body(_, _) => (acc, None),
 

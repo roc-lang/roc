@@ -10,7 +10,6 @@ mod helpers;
 #[cfg(test)]
 mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
-    use roc_collections::all::MutMap;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
     // HELPERS
@@ -47,7 +46,7 @@ mod solve_expr {
             module_src = &temp;
         }
 
-        let exposed_types = MutMap::default();
+        let exposed_types = Default::default();
         let loaded = {
             let dir = tempdir()?;
             let filename = PathBuf::from("Test.roc");
@@ -5572,6 +5571,59 @@ mod solve_expr {
                 "#
             ),
             r#"[ A, B, C ]"#,
+        )
+    }
+
+    #[test]
+    // https://github.com/rtfeldman/roc/issues/2702
+    fn tag_inclusion_behind_opaque() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Outer k := [ Empty, Wrapped k ]
+
+                insert : Outer k, k -> Outer k
+                insert = \m, var ->
+                    when m is
+                        $Outer Empty -> $Outer (Wrapped var)
+                        $Outer (Wrapped _) -> $Outer (Wrapped var)
+
+                insert
+                "#
+            ),
+            r#"Outer k, k -> Outer k"#,
+        )
+    }
+
+    #[test]
+    fn tag_inclusion_behind_opaque_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Outer k := [ Empty, Wrapped k ]
+
+                when ($Outer Empty) is
+                    $Outer Empty -> $Outer (Wrapped "")
+                    $Outer (Wrapped k) -> $Outer (Wrapped k)
+                "#
+            ),
+            r#"Outer Str"#,
+        )
+    }
+
+    #[test]
+    fn tag_inclusion_behind_opaque_infer_single_ctor() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Outer := [ A, B ]
+
+                when ($Outer A) is
+                    $Outer A -> $Outer A
+                    $Outer B -> $Outer B
+                "#
+            ),
+            r#"Outer"#,
         )
     }
 }

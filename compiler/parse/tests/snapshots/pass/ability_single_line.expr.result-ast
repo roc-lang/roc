@@ -1,0 +1,37 @@
+Defs(
+    [
+        @0-24 Ability {
+            header: TypeHeader {
+                name: @0-4 "Hash",
+                vars: [],
+            },
+            loc_has: @5-8 Has,
+            demands: [
+                AbilityDemand {
+                    name: @9-13 "hash",
+                    typ: @21-24 Function(
+                        [
+                            @16-17 BoundVariable(
+                                "a",
+                            ),
+                        ],
+                        @21-24 Apply(
+                            "",
+                            "U64",
+                            [],
+                        ),
+                    ),
+                },
+            ],
+        },
+    ],
+    @26-27 SpaceBefore(
+        Num(
+            "1",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

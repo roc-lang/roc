@@ -8369,7 +8369,7 @@ I need all branches in an `if` to have the same type!
 
                 But all the previous branches match:
 
-                    F [ A ]
+                    F [ A ]a
                 "#
             ),
         )
@@ -8610,6 +8610,119 @@ I need all branches in an `if` to have the same type!
                     Unsigned8
                     Unsigned32
                     Unsigned16
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_first_demand_not_indented_enough() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                eq : a, a -> U64 | a has Eq
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                1│  Eq has
+                2│  eq : a, a -> U64 | a has Eq
+                    ^
+
+                I suspect this line is not indented enough (by 1 spaces)
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_demands_not_indented_with_first() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                    eq : a, a -> U64 | a has Eq
+                        neq : a, a -> U64 | a has Eq
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                2│      eq : a, a -> U64 | a has Eq
+                3│          neq : a, a -> U64 | a has Eq
+                            ^
+
+                I suspect this line is indented too much (by 4 spaces)
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_demand_value_has_args() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                    eq b c : a, a -> U64 | a has Eq
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                2│      eq b c : a, a -> U64 | a has Eq
+                           ^
+
+                I was expecting to see a : annotating the signature of this value
+                next.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_non_signature_expression() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                    123
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                1│  Eq has
+                2│      123
+                        ^
+
+                I was expecting to see a value signature next.
                 "#
             ),
         )

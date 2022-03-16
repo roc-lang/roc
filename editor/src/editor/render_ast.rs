@@ -105,7 +105,6 @@ fn markup_to_wgpu_helper<'a>(
 
     match markup_node {
         MarkupNode::Nested {
-            ast_node_id: _,
             children_ids,
             parent_id_opt: _,
             newlines_at_end,
@@ -131,7 +130,6 @@ fn markup_to_wgpu_helper<'a>(
         }
         MarkupNode::Text {
             content,
-            ast_node_id: _,
             syn_high_style,
             attributes,
             parent_id_opt: _,
@@ -183,7 +181,6 @@ fn markup_to_wgpu_helper<'a>(
             wgpu_texts.push(glyph_text);
         }
         MarkupNode::Blank {
-            ast_node_id: _,
             attributes: _,
             parent_id_opt: _,
             newlines_at_end,

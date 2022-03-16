@@ -504,12 +504,22 @@ pub fn constrain_pattern(
             );
 
             // Link the entire wrapped opaque type (with the now-constrained argument) to the type
-            // variables of the opaque type
-            // TODO: better expectation here
-            let link_type_variables_con = constraints.equal_types(
-                (**specialized_def_type).clone(),
-                Expected::NoExpectation(arg_pattern_type),
-                Category::OpaqueWrap(*opaque),
+            // variables of the opaque type.
+            //
+            // For example, suppose we have `O k := [ A k, B k ]`, and the pattern `@O (A s) -> s == ""`.
+            // Previous constraints will have solved `typeof s ~ Str`, and we have the
+            // `specialized_def_type` being `[ A k1, B k1 ]`, specializing `k` as `k1` for this opaque
+            // usage.
+            // We now want to link `typeof s ~ k1`, so to capture this relationship, we link
+            // the type of `A s` (the arg type) to `[ A k1, B k1 ]` (the specialized opaque type).
+            //
+            // This must **always** be a presence constraint, that is enforcing
+            // `[ A k1, B k1 ] += typeof (A s)`, because we are in a destructure position and not
+            // all constructors are covered in this branch!
+            let link_type_variables_con = constraints.pattern_presence(
+                arg_pattern_type,
+                PExpected::NoExpectation((**specialized_def_type).clone()),
+                PatternCategory::Opaque(*opaque),
                 loc_arg_pattern.region,
             );
 

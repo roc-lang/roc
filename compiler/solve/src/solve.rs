@@ -189,6 +189,7 @@ pub fn run_in_place(
     constraint: &Constraint,
 ) -> Env {
     let mut pools = Pools::default();
+
     let state = State {
         env: env.clone(),
         mark: Mark::NONE.next(),
@@ -225,6 +226,12 @@ enum Work<'a> {
         env: &'a Env,
         rank: Rank,
         let_con: &'a LetConstraint,
+
+        /// The variables used to store imported types in the Subs.
+        /// The `Contents` are copied from the source module, but to
+        /// mimic `type_to_var`, we must add these variables to `Pools`
+        /// at the correct rank
+        pool_variables: &'a [Variable],
     },
     /// The ret_con part of a let constraint that introduces rigid and/or flex variables
     ///
@@ -234,6 +241,12 @@ enum Work<'a> {
         env: &'a Env,
         rank: Rank,
         let_con: &'a LetConstraint,
+
+        /// The variables used to store imported types in the Subs.
+        /// The `Contents` are copied from the source module, but to
+        /// mimic `type_to_var`, we must add these variables to `Pools`
+        /// at the correct rank
+        pool_variables: &'a [Variable],
     },
 }
 
@@ -277,7 +290,12 @@ fn solve(
 
                 continue;
             }
-            Work::LetConNoVariables { env, rank, let_con } => {
+            Work::LetConNoVariables {
+                env,
+                rank,
+                let_con,
+                pool_variables,
+            } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
                 let ret_constraint = &constraints.constraints[offset + 1];
@@ -291,6 +309,8 @@ fn solve(
                     subs,
                     let_con.def_types,
                 );
+
+                pools.get_mut(rank).extend(pool_variables);
 
                 let mut new_env = env.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
@@ -306,7 +326,12 @@ fn solve(
 
                 continue;
             }
-            Work::LetConIntroducesVariables { env, rank, let_con } => {
+            Work::LetConIntroducesVariables {
+                env,
+                rank,
+                let_con,
+                pool_variables,
+            } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
                 let ret_constraint = &constraints.constraints[offset + 1];
@@ -329,6 +354,8 @@ fn solve(
                     subs,
                     let_con.def_types,
                 );
+
+                pools.get_mut(next_rank).extend(pool_variables);
 
                 debug_assert_eq!(
                     {
@@ -414,11 +441,18 @@ fn solve(
                 copy
             }
             Eq(type_index, expectation_index, category_index, region) => {
-                let typ = &constraints.types[type_index.index()];
-                let expectation = &constraints.expectations[expectation_index.index()];
                 let category = &constraints.categories[category_index.index()];
 
-                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    cached_aliases,
+                    *type_index,
+                );
+
+                let expectation = &constraints.expectations[expectation_index.index()];
                 let expected = type_to_var(
                     subs,
                     rank,
@@ -457,11 +491,16 @@ fn solve(
                 }
             }
             Store(source_index, target, _filename, _linenr) => {
-                let source = &constraints.types[source_index.index()];
-
                 // a special version of Eq that is used to store types in the AST.
                 // IT DOES NOT REPORT ERRORS!
-                let actual = type_to_var(subs, rank, pools, cached_aliases, source);
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    cached_aliases,
+                    *source_index,
+                );
                 let target = *target;
 
                 match unify(subs, actual, target, Mode::EQ) {
@@ -572,11 +611,18 @@ fn solve(
             }
             Pattern(type_index, expectation_index, category_index, region)
             | PatternPresence(type_index, expectation_index, category_index, region) => {
-                let typ = &constraints.types[type_index.index()];
-                let expectation = &constraints.pattern_expectations[expectation_index.index()];
                 let category = &constraints.pattern_categories[category_index.index()];
 
-                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    cached_aliases,
+                    *type_index,
+                );
+
+                let expectation = &constraints.pattern_expectations[expectation_index.index()];
                 let expected = type_to_var(
                     subs,
                     rank,
@@ -619,7 +665,7 @@ fn solve(
                     }
                 }
             }
-            Let(index) => {
+            Let(index, pool_slice) => {
                 let let_con = &constraints.let_constraints[index.index()];
 
                 let offset = let_con.defs_and_ret_constraint.index();
@@ -629,7 +675,11 @@ fn solve(
                 let flex_vars = &constraints.variables[let_con.flex_vars.indices()];
                 let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
 
+                let pool_variables = &constraints.variables[pool_slice.indices()];
+
                 if matches!(&ret_constraint, True) && let_con.rigid_vars.is_empty() {
+                    debug_assert!(pool_variables.is_empty());
+
                     introduce(subs, rank, pools, flex_vars);
 
                     // If the return expression is guaranteed to solve,
@@ -647,7 +697,12 @@ fn solve(
                     //
                     // Note that the LetConSimple gets the current env and rank,
                     // and not the env/rank from after solving the defs_constraint
-                    stack.push(Work::LetConNoVariables { env, rank, let_con });
+                    stack.push(Work::LetConNoVariables {
+                        env,
+                        rank,
+                        let_con,
+                        pool_variables,
+                    });
                     stack.push(Work::Constraint {
                         env,
                         rank,
@@ -689,7 +744,12 @@ fn solve(
                     //
                     // Note that the LetConSimple gets the current env and rank,
                     // and not the env/rank from after solving the defs_constraint
-                    stack.push(Work::LetConIntroducesVariables { env, rank, let_con });
+                    stack.push(Work::LetConIntroducesVariables {
+                        env,
+                        rank,
+                        let_con,
+                        pool_variables,
+                    });
                     stack.push(Work::Constraint {
                         env,
                         rank: next_rank,
@@ -700,9 +760,15 @@ fn solve(
                 }
             }
             IsOpenType(type_index) => {
-                let typ = &constraints.types[type_index.index()];
+                let actual = either_type_index_to_var(
+                    constraints,
+                    subs,
+                    rank,
+                    pools,
+                    cached_aliases,
+                    *type_index,
+                );
 
-                let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
                 let mut new_desc = subs.get(actual);
                 match new_desc.content {
                     Content::Structure(FlatType::TagUnion(tags, _)) => {
@@ -848,6 +914,27 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
     SCRATCHPAD.with(|f| {
         f.replace(Some(scratchpad));
     });
+}
+
+fn either_type_index_to_var(
+    constraints: &Constraints,
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    _alias_map: &mut MutMap<Symbol, Variable>,
+    either_type_index: roc_collections::soa::EitherIndex<Type, Variable>,
+) -> Variable {
+    match either_type_index.split() {
+        Ok(type_index) => {
+            let typ = &constraints.types[type_index.index()];
+
+            type_to_var(subs, rank, pools, _alias_map, typ)
+        }
+        Err(var_index) => {
+            // we cheat, and  store the variable directly in the index
+            unsafe { Variable::from_index(var_index.index() as _) }
+        }
+    }
 }
 
 fn type_to_var(

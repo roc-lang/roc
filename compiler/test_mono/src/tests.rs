@@ -96,15 +96,13 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         module_src = &temp;
     }
 
-    let exposed_types = MutMap::default();
-
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         &stdlib,
         src_dir,
-        exposed_types,
+        Default::default(),
         TARGET_INFO,
     );
 

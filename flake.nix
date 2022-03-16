@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-21.11";
     nixpkgs-unstable = { url = "github:NixOS/nixpkgs/nixpkgs-unstable"; };
     # zig = { url = "github:roarkanize/zig-overlay"; };
   };
@@ -60,6 +60,7 @@
         buildInputs = sharedInputs ++ linuxInputs;
 
         LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
+        NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
         LD_LIBRARY_PATH = with pkgs;
           lib.makeLibraryPath
           ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);

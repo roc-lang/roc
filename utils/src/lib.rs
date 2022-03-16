@@ -33,7 +33,7 @@ pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt: T, slice: &[T]) -> Uti
     Ok(index)
 }
 
-// replace slice method that return Option with one that return Result and proper Error
+// replaces slice method that return Option with one that return Result and proper Error
 pub fn slice_get<T>(index: usize, slice: &[T]) -> UtilResult<&<usize as SliceIndex<[T]>>::Output> {
     let elt_ref = slice.get(index).context(OutOfBounds {
         index,

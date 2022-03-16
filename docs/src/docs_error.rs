@@ -1,7 +1,8 @@
+use peg::error::ParseError;
 use roc_ast::ast_error::ASTError;
 use roc_module::module_err::ModuleError;
 use roc_parse::parser::SyntaxError;
-use snafu::{NoneError, ResultExt, Snafu};
+use snafu::Snafu;
 
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
@@ -18,17 +19,18 @@ pub enum DocsError {
     WrapSyntaxError {
         msg: String,
     },
+    WrapPegParseError {
+        source: ParseError<usize>,
+    },
 }
 
 pub type DocsResult<T, E = DocsError> = std::result::Result<T, E>;
 
 impl<'a> From<SyntaxError<'a>> for DocsError {
     fn from(syntax_err: SyntaxError) -> Self {
-        let msg = format!("{:?}", syntax_err);
-
-        // hack to handle MarkError derive
-        let dummy_res: Result<(), NoneError> = Err(NoneError {});
-        dummy_res.context(WrapSyntaxError { msg }).unwrap_err()
+        Self::WrapSyntaxError {
+            msg: format!("{:?}", syntax_err),
+        }
     }
 }
 
@@ -41,5 +43,13 @@ impl From<ASTError> for DocsError {
 impl From<ModuleError> for DocsError {
     fn from(module_err: ModuleError) -> Self {
         Self::WrapModuleError { source: module_err }
+    }
+}
+
+impl From<ParseError<usize>> for DocsError {
+    fn from(peg_parse_err: ParseError<usize>) -> Self {
+        Self::WrapPegParseError {
+            source: peg_parse_err,
+        }
     }
 }
