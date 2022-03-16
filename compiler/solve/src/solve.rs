@@ -178,8 +178,13 @@ impl Aliases {
         let new_type_variables = &subs.variables[alias_variables.type_variables().indices()];
 
         for (old, new) in old_type_variables.iter_mut().zip(new_type_variables) {
-            substitutions.insert(*old, *new);
-            *old = *new;
+            // if constraint gen duplicated a type these variables could be the same
+            // (happens very often in practice)
+            if *old != *new {
+                substitutions.insert(*old, *new);
+
+                *old = *new;
+            }
         }
 
         let old_lambda_set_variables = delayed_variables.lambda_set_variables(&mut self.variables);
@@ -190,11 +195,15 @@ impl Aliases {
             .iter_mut()
             .zip(new_lambda_set_variables)
         {
-            substitutions.insert(*old, *new);
-            *old = *new;
+            if *old != *new {
+                substitutions.insert(*old, *new);
+                *old = *new;
+            }
         }
 
-        typ.substitute_variables(&substitutions);
+        if !substitutions.is_empty() {
+            typ.substitute_variables(&substitutions);
+        }
 
         // assumption: an alias does not (transitively) syntactically contain itself
         // (if it did it would have to be a recursive tag union)
@@ -202,12 +211,13 @@ impl Aliases {
 
         std::mem::swap(typ, &mut t);
 
-        let alias_variable = type_to_var(subs, rank, pools, self, &t);
+        let alias_variable = type_to_variable(subs, rank, pools, arena, self, &t);
 
         {
             match self.aliases.iter_mut().find(|(s, _, _)| *s == symbol) {
                 None => unreachable!(),
                 Some((_, typ, _)) => {
+                    // swap typ back
                     std::mem::swap(typ, &mut t);
                 }
             }
@@ -1089,6 +1099,20 @@ impl RegisterVariable {
             Variable(var) => Direct(*var),
             EmptyRec => Direct(Variable::EMPTY_RECORD),
             EmptyTagUnion => Direct(Variable::EMPTY_TAG_UNION),
+            Type::DelayedAlias(AliasCommon { symbol, .. }) => {
+                if let Some(reserved) = Variable::get_reserved(*symbol) {
+                    if rank.is_none() {
+                        // reserved variables are stored with rank NONE
+                        return Direct(reserved);
+                    } else {
+                        // for any other rank, we need to copy; it takes care of adjusting the rank
+                        let copied = deep_copy_var_in(subs, rank, pools, reserved, arena);
+                        return Direct(copied);
+                    }
+                }
+
+                Deferred
+            }
             Type::Alias { symbol, .. } => {
                 if let Some(reserved) = Variable::get_reserved(*symbol) {
                     if rank.is_none() {
