@@ -6,6 +6,5 @@ test-gen-wasm = "test -p roc_gen_wasm -p test_gen --no-default-features --featur
 [target.wasm32-unknown-unknown]
 # Rust compiler flags for minimum-sized .wasm binary in the web REPL
 # opt-level=s   Optimizations should focus more on size than speed
-# panic=abort   Don't emit code to unwind the stack on panic, just exit
 # lto=fat       Spend extra effort on link-time optimization across crates
-rustflags = ["-Copt-level=s", "-Cpanic=abort", "-Clto=fat"]
+rustflags = ["-Copt-level=s", "-Clto=fat"]
