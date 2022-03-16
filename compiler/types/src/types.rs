@@ -244,11 +244,11 @@ impl Clone for Type {
             Self::Record(arg0, arg1) => Self::Record(arg0.clone(), arg1.clone()),
             Self::TagUnion(arg0, arg1) => Self::TagUnion(arg0.clone(), arg1.clone()),
             Self::FunctionOrTagUnion(arg0, arg1, arg2) => {
-                Self::FunctionOrTagUnion(arg0.clone(), arg1.clone(), arg2.clone())
+                Self::FunctionOrTagUnion(arg0.clone(), *arg1, arg2.clone())
             }
             Self::ClosureTag { name, ext } => Self::ClosureTag {
-                name: name.clone(),
-                ext: ext.clone(),
+                name: *name,
+                ext: *ext,
             },
             Self::DelayedAlias(arg0) => Self::DelayedAlias(arg0.clone()),
             Self::Alias {
@@ -258,11 +258,11 @@ impl Clone for Type {
                 actual,
                 kind,
             } => Self::Alias {
-                symbol: symbol.clone(),
+                symbol: *symbol,
                 type_arguments: type_arguments.clone(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: actual.clone(),
-                kind: kind.clone(),
+                kind: *kind,
             },
             Self::HostExposedAlias {
                 name,
@@ -271,17 +271,17 @@ impl Clone for Type {
                 actual_var,
                 actual,
             } => Self::HostExposedAlias {
-                name: name.clone(),
+                name: *name,
                 type_arguments: type_arguments.clone(),
                 lambda_set_variables: lambda_set_variables.clone(),
-                actual_var: actual_var.clone(),
+                actual_var: *actual_var,
                 actual: actual.clone(),
             },
             Self::RecursiveTagUnion(arg0, arg1, arg2) => {
-                Self::RecursiveTagUnion(arg0.clone(), arg1.clone(), arg2.clone())
+                Self::RecursiveTagUnion(*arg0, arg1.clone(), arg2.clone())
             }
-            Self::Apply(arg0, arg1, arg2) => Self::Apply(arg0.clone(), arg1.clone(), arg2.clone()),
-            Self::Variable(arg0) => Self::Variable(arg0.clone()),
+            Self::Apply(arg0, arg1, arg2) => Self::Apply(*arg0, arg1.clone(), *arg2),
+            Self::Variable(arg0) => Self::Variable(*arg0),
             Self::RangedNumber(arg0, arg1) => Self::RangedNumber(arg0.clone(), arg1.clone()),
             Self::Erroneous(arg0) => Self::Erroneous(arg0.clone()),
         }

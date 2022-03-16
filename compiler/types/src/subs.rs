@@ -3666,7 +3666,7 @@ struct DeepCopyVarToEnv<'a> {
     max_rank: Rank,
 }
 
-fn deep_copy_var_to_help<'a>(env: &mut DeepCopyVarToEnv<'a>, var: Variable) -> Variable {
+fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Variable {
     use Content::*;
     use FlatType::*;
 
