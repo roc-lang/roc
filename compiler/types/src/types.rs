@@ -1211,13 +1211,13 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 actual: actual_type,
                 ..
             } => {
-                // because the type paramters are inlined in the actual type, we don't need to look
+                // because the type parameters are inlined in the actual type, we don't need to look
                 // at the type parameters here
                 output.push(*alias_symbol);
                 stack.push(actual_type);
             }
             HostExposedAlias { name, actual, .. } => {
-                // because the type paramters are inlined in the actual type, we don't need to look
+                // because the type parameters are inlined in the actual type, we don't need to look
                 // at the type parameters here
                 output.push(*name);
                 stack.push(actual);
