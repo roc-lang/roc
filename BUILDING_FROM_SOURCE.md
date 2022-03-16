@@ -4,9 +4,9 @@
 
 ### On NixOS
 
-[Only Linux x86_64 is supported for now](https://github.com/rtfeldman/roc/issues/2734).
+[For NixOS only Linux x86_64 is supported for now](https://github.com/rtfeldman/roc/issues/2734).
 
-NixOs users should make use of the nix flake by [installing nix flakes](https://nixos.wiki/wiki/Flakes). Shell creation can be done by executing `nix develop` from the root of the repo. NixOS users that do not make use of this flake will get stuck on issue #1846.
+NixOS users should make use of the nix flake by [enabling nix flakes](https://nixos.wiki/wiki/Flakes). Shell creation can be done by executing `nix develop` from the root of the repo. NixOS users that do not make use of this flake will get stuck on issue #1846.
 
 ### On Linux/MacOS x86_64/aarch64
 
