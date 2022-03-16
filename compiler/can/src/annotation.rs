@@ -339,22 +339,42 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    let (type_arguments, lambda_set_variables, actual) =
-                        instantiate_and_freshen_alias_type(
-                            var_store,
-                            introduced_variables,
-                            &alias.type_variables,
-                            args,
-                            &alias.lambda_set_variables,
-                            alias.typ.clone(),
-                        );
+                    // For now, aliases of function types cannot be delayed.
+                    // This is a limitation of the current implementation,
+                    // and this totally should be possible in the future.
+                    let is_import = !symbol.is_builtin() && (env.home != symbol.module_id());
+                    if !is_import && alias.lambda_set_variables.is_empty() {
+                        let mut type_var_to_arg = Vec::new();
 
-                    Type::Alias {
-                        symbol,
-                        type_arguments,
-                        lambda_set_variables,
-                        actual: Box::new(actual),
-                        kind: alias.kind,
+                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
+                            let name = loc_var.value.0.clone();
+
+                            type_var_to_arg.push((name, arg_ann));
+                        }
+
+                        Type::DelayedAlias(AliasCommon {
+                            symbol,
+                            type_arguments: type_var_to_arg,
+                            lambda_set_variables: alias.lambda_set_variables.clone(),
+                        })
+                    } else {
+                        let (type_arguments, lambda_set_variables, actual) =
+                            instantiate_and_freshen_alias_type(
+                                var_store,
+                                introduced_variables,
+                                &alias.type_variables,
+                                args,
+                                &alias.lambda_set_variables,
+                                alias.typ.clone(),
+                            );
+
+                        Type::Alias {
+                            symbol,
+                            type_arguments,
+                            lambda_set_variables,
+                            actual: Box::new(actual),
+                            kind: alias.kind,
+                        }
                     }
                 }
                 None => Type::Apply(symbol, args, region),
