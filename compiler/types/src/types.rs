@@ -822,8 +822,15 @@ impl Type {
                 ext.contains_symbol(rep_symbol)
                     || fields.values().any(|arg| arg.contains_symbol(rep_symbol))
             }
-            DelayedAlias(AliasCommon { .. }) => {
-                todo!()
+            DelayedAlias(AliasCommon {
+                symbol,
+                type_arguments,
+                ..
+            }) => {
+                symbol == &rep_symbol
+                    || type_arguments
+                        .iter()
+                        .any(|v| v.1.contains_symbol(rep_symbol))
             }
             Alias {
                 symbol: alias_symbol,
@@ -930,7 +937,7 @@ impl Type {
                 ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
             DelayedAlias(AliasCommon { .. }) => {
-                todo!()
+                // do nothing, yay
             }
             HostExposedAlias {
                 type_arguments: type_args,
@@ -1128,18 +1135,27 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 stack.push(ext);
                 stack.extend(fields.values().map(|field| field.as_inner()));
             }
-            DelayedAlias(AliasCommon { .. }) => {
-                todo!()
+            DelayedAlias(AliasCommon {
+                symbol,
+                type_arguments,
+                ..
+            }) => {
+                output.push(*symbol);
+                stack.extend(type_arguments.iter().map(|v| &v.1));
             }
             Alias {
                 symbol: alias_symbol,
                 actual: actual_type,
                 ..
             } => {
+                // because the type paramters are inlined in the actual type, we don't need to look
+                // at the type parameters here
                 output.push(*alias_symbol);
                 stack.push(actual_type);
             }
             HostExposedAlias { name, actual, .. } => {
+                // because the type paramters are inlined in the actual type, we don't need to look
+                // at the type parameters here
                 output.push(*name);
                 stack.push(actual);
             }
@@ -1217,8 +1233,10 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             // this rec var doesn't need to be in flex_vars or rigid_vars
             accum.remove(rec);
         }
-        DelayedAlias(AliasCommon { .. }) => {
-            todo!()
+        DelayedAlias(AliasCommon { type_arguments, .. }) => {
+            for (_, arg) in type_arguments {
+                variables_help(arg, accum);
+            }
         }
         Alias {
             type_arguments,
@@ -1321,15 +1339,17 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             variables_help_detailed(ext, accum);
 
             // just check that this is actually a recursive type
-            debug_assert!(accum.type_variables.contains(rec));
+            // debug_assert!(accum.type_variables.contains(rec));
 
             // this rec var doesn't need to be in flex_vars or rigid_vars
             accum.type_variables.remove(rec);
 
             accum.recursion_variables.insert(*rec);
         }
-        DelayedAlias(AliasCommon { .. }) => {
-            todo!()
+        DelayedAlias(AliasCommon { type_arguments, .. }) => {
+            for (_, arg) in type_arguments {
+                variables_help_detailed(arg, accum);
+            }
         }
         Alias {
             type_arguments,
