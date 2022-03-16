@@ -3161,9 +3161,8 @@ fn run_solve<'a>(
     let actual_constraint =
         constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
 
-    let mut solve_aliases = roc_solve::solve::Aliases::default();
+    let mut solve_aliases = default_aliases();
 
-    dbg!(&aliases);
     for (name, alias) in aliases.iter() {
         solve_aliases.insert(*name, alias.clone());
     }
