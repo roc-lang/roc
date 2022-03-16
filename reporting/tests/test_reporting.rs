@@ -79,9 +79,21 @@ mod test_reporting {
             subs.rigid_var(var, "*".into());
         }
 
+        let mut solve_aliases = roc_solve::solve::Aliases::default();
+
+        for (name, alias) in output.aliases {
+            solve_aliases.insert(name, alias);
+        }
+
         let mut unify_problems = Vec::new();
-        let (_content, mut subs) =
-            infer_expr(subs, &mut unify_problems, &constraints, &constraint, var);
+        let (_content, mut subs) = infer_expr(
+            subs,
+            &mut unify_problems,
+            &constraints,
+            &constraint,
+            &mut solve_aliases,
+            var,
+        );
 
         name_all_type_vars(var, &mut subs);
 
