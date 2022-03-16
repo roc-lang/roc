@@ -234,40 +234,18 @@ Calculation is
 ## [Dec] typically takes slightly less time than [F64] to perform addition and
 ## subtraction, but 10-20 times longer to perform multiplication and division.
 ## [sqrt] and trigonometry are massively slower with [Dec] than with [F64].
-Dec := {} supports FractionArithmetic
+Dec := {} supports FractionArithmetic, Equating, Ordering, Hashing
 
-## A fixed-size number with a fractional component.
+## Either [F32] or [F64], both of which are [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754) binary floating-point numbers.
 ##
-## Roc fractions come in two flavors: fixed-point base-10 and floating-point base-2.
-##
-## * [Dec] is a 128-bit [fixed-point](https://en.wikipedia.org/wiki/Fixed-point_arithmetic) base-10 number. It's a great default choice, especially when precision is important - for example when representing currency. With [Dec], 0.1 + 0.2 returns 0.3.
-## * [F64] and [F32] are [floating-point](https://en.wikipedia.org/wiki/Floating-point_arithmetic) base-2 numbers. They sacrifice precision for lower memory usage and improved performance on some operations. This makes them a good fit for representing graphical coordinates. With [F64], 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125.
-##
-## If you don't specify a type, Roc will default to using [Dec] because it's
-## the least error-prone overall. For example, suppose you write this:
-##
-##     wasItPrecise = 0.1 + 0.2 == 0.3
-##
-## The value of `wasItPrecise` here will be `True`, because Roc uses [Dec]
-## by default when there are no types specified.
-##
-## In contrast, suppose we use `f32` or `f64` for one of these numbers:
-##
-##     wasItPrecise = 0.1f64 + 0.2 == 0.3
-##
-## Here, `wasItPrecise` will be `False` because the entire calculation will have
-## been done in a base-2 floating point calculation, which causes noticeable
-## precision loss in this case.
-##
-## The floating-point numbers ([F32] and [F64]) also have three values which
-## are not ordinary [finite numbers](https://en.wikipedia.org/wiki/Finite_number).
+## These numbers have three values which are not ordinary [finite numbers](https://en.wikipedia.org/wiki/Finite_number).
 ## They are:
 ## * ∞ ([infinity](https://en.wikipedia.org/wiki/Infinity))
 ## * -∞ (negative infinity)
 ## * *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN))
 ##
-## These values are different from ordinary numbers in that they only occur
-## when a floating-point calculation encounters an error. For example:
+## These values differ from finite numbers in that they only occur
+## when an error happens in a floating-point calculation. For example:
 ## * Dividing a positive [F64] by `0.0` returns ∞.
 ## * Dividing a negative [F64] by `0.0` returns -∞.
 ## * Dividing a [F64] of `0.0` by `0.0` returns [*NaN*](Num.isNaN).
@@ -276,12 +254,24 @@ Dec := {} supports FractionArithmetic
 ## floating point standard. Because almost all modern processors are built to
 ## this standard, deviating from these rules has a significant performance
 ## cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
-## access to hardware-accelerated performance, Roc follows these rules exactly.
+## access to hardware-accelerated performance, Roc follows these rules exactly - with one
+## exception:
 ##
-## There's no literal syntax for these error values, but you can check to see if
-## you ended up with one of them by using [isNaN], [isFinite], and [isInfinite].
-## Whenever a function in this module could return one of these values, that
-## possibility is noted in the function's documentation.
+## In Roc, *NaN* is defined to be equal to itself, whereas IEEE-754 defines *NaN* to be unequal
+## to itself. This means that in Roc, `(0 / 0) == (0 / 0)` evaluates to `True`, when the
+## standard says it should be `False`. You can get the IEEE-754 behavior by using [Num.isFloatEq]
+## instead of the usual `==` operator (or [Bool.isEq]), but the default is to treat *NaN* values as
+## equal.
+##
+## The reason for this change is that if *NaN* is unequal to itself, then it can cause serious problems
+## for sorting, for [Dict], for [Set], and for tests which
+##
+## ## Negative Zero
+##
+## Floats have a concept of `-0`, per the IEEE-754 specification. The spec also calls for `-0` to be
+## equal to `0`, but
+##
+## TODO: TALK ABOUT -0 EDGE CASES like atan2
 ##
 ## ## Performance Notes
 ##
@@ -322,8 +312,17 @@ Float a : a | a supports FloatArithmetic, FloatCalculation
 FloatCalculation is
     impossibleFloat : []
 
-F32 := {} supports FloatArithmetic
-F64 := {} supports FloatArithmetic
+# NOTE: F32 and F64 do *not* support Equating because that operation is unreliable on floats,
+# due to NaN as well as general precision problems. Instead, compiler error messages should
+# recommend using [isApproxEq] or [isWithin] instead. And although the compiler wouldn't
+# recommend it, we could note that if you really need maximum performance, either `!(x < y || x > y)`
+# (or, equivalently, `Order.compare x y == Order.same`) compiles to a check that treats `NaN`s as equal,
+# and actually runs even faster than the # ordinary "NaNs are unequal" check, because the CPU operation for
+# "NaNs are equal" (ucomisd vs cmpeqsd) actually runs faster!
+# See https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/supporting.20NaN.2FInfinity.2F-Infinity.3F/near/275459574
+# for discussion.
+F32 := {} supports FloatArithmetic, Ordering
+F64 := {} supports FloatArithmetic, Ordering
 
 ## A fixed-size integer - that is, a number with no fractional component.
 ##
@@ -458,16 +457,16 @@ IntCalculation is
     impossible : []
 
 ## A signed 8-bit integer, ranging from -128 to 127
-I8 := {} supports IntArithmetic
-U8 := {} supports IntArithmetic
-I16 := {} supports IntArithmetic
-U16 := {} supports IntArithmetic
-I32 := {} supports IntArithmetic
-U32 := {} supports IntArithmetic
-I64 := {} supports IntArithmetic
-U64 := {} supports IntArithmetic
-I128 := {} supports IntArithmetic
-U128 := {} supports IntArithmetic
+I8 := {} supports IntArithmetic, Equating, Ordering, Hashing
+U8 := {} supports IntArithmetic, Equating, Ordering, Hashing
+I16 := {} supports IntArithmetic, Equating, Ordering, Hashing
+U16 := {} supports IntArithmetic, Equating, Ordering, Hashing
+I32 := {} supports IntArithmetic, Equating, Ordering, Hashing
+U32 := {} supports IntArithmetic, Equating, Ordering, Hashing
+I64 := {} supports IntArithmetic, Equating, Ordering, Hashing
+U64 := {} supports IntArithmetic, Equating, Ordering, Hashing
+I128 := {} supports IntArithmetic, Equating, Ordering, Hashing
+U128 := {} supports IntArithmetic, Equating, Ordering, Hashing
 
 ## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
 ## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
@@ -479,7 +478,7 @@ U128 := {} supports IntArithmetic
 ## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
 ## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
 ## good fit for [List.len] regardless of system.
-Nat := {} supports IntArithmetic
+Nat := {} supports IntArithmetic, Equating, Ordering, Hashing
 
 ## Check
 
@@ -569,7 +568,7 @@ mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 ##
 ## Note that [Num], [Int], [Fraction], and [Float] all support [Arithmetic], so you can use any of those types
 ## whenever you need a value that `supports` [Arithmetic].
-Arithmetic supports Equating, Ordering, Hashing, is
+Arithmetic is
     ## Return a negative number when given a positive one, and vice versa.
     ##
     ## >>> Num.neg 5
@@ -673,7 +672,7 @@ Arithmetic supports Equating, Ordering, Hashing, is
     ##
     ## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
     ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-    isLte : a, a -> Bool | a supports Arithmetic
+    isLte : a, a -> Bool | a supports Arithmetic, Equating
 
     ## Returns `True` if the first number is greater than the second.
     ##
@@ -692,7 +691,7 @@ Arithmetic supports Equating, Ordering, Hashing, is
     ##
     ## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
     ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-    isGte : a, a -> Bool | a supports Arithmetic
+    isGte : a, a -> Bool | a supports Arithmetic, Equating
 
 # Branchless implementation that works for all numeric types:
 #
@@ -832,6 +831,30 @@ toDec : Num * -> Dec
 ##     Err (ExpectedNum (Frac Binary64)) -> ...
 # fromBytes : List U8, Endi -> Result (Num a) [ ExpectedNum a ]*
 
+## A fixed-size number with a fractional component.
+##
+## Roc fractions come in two flavors: fixed-point base-10 and floating-point base-2.
+##
+## * [Dec] is a 128-bit [fixed-point](https://en.wikipedia.org/wiki/Fixed-point_arithmetic) base-10 number. It's a great default choice, especially when precision is important - for example when representing currency. With [Dec], 0.1 + 0.2 returns 0.3.
+## * [F64] and [F32] are [floating-point](https://en.wikipedia.org/wiki/Floating-point_arithmetic) base-2 numbers. They sacrifice precision for lower memory usage and improved performance on some operations. This makes them a good fit for representing graphical coordinates. With [F64], 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125.
+##
+## If you don't specify a type, Roc will default to using [Dec] because it's
+## the least error-prone overall. For example, suppose you write this:
+##
+##     wasItPrecise = 0.1 + 0.2 == 0.3
+##
+## The value of `wasItPrecise` here will be `True`, because Roc uses [Dec]
+## by default when there are no types specified.
+##
+## In contrast, suppose we use `F32` or `F64` for one of these numbers:
+##
+##     wasItPrecise = 0.1f64 + 0.2 == 0.3
+##
+## Here, `wasItPrecise` will be `False` because the entire calculation will have
+## been done in a base-2 floating point calculation, which causes noticeable
+## precision loss in this case.
+##
+## See the documentation for [Dec] and for [Float] for more information on these types.
 Fraction a : a | a supports FractionArithmetic, FractionCalculation
 
 ## This must never be implemented in userspace. It's for the `Fraction` builtin only; it shouldn't even be exposed!
@@ -944,6 +967,14 @@ divFloat : Float a, Float a -> Float a
 
 ## Like [Num.mod] except it can return [infinity], [negativeInfinity], or [nan].
 modFloat : Float a, Float a -> Float a
+
+## Comparing
+
+# This uses the ULP method described in [this article](https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/).
+isApproxEq : Float a, Float a -> Bool
+
+## Last arg is epsilon
+isWithin : Float a, Float a, Float a -> Bool
 
 ## Trigonometry
 
