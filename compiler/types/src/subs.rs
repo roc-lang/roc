@@ -296,6 +296,16 @@ impl<T> SubsSlice<T> {
             _marker: std::marker::PhantomData,
         }
     }
+
+    pub fn extend_new(vec: &mut Vec<T>, it: impl IntoIterator<Item = T>) -> Self {
+        let start = vec.len();
+
+        vec.extend(it);
+
+        let end = vec.len();
+
+        Self::new(start as u32, (end - start) as u16)
+    }
 }
 
 impl SubsSlice<VariableSubsSlice> {
@@ -1281,6 +1291,9 @@ fn define_float_types(subs: &mut Subs) {
 
 impl Subs {
     pub const RESULT_TAG_NAMES: SubsSlice<TagName> = SubsSlice::new(0, 2);
+    pub const NUM_AT_NUM: SubsSlice<TagName> = SubsSlice::new(2, 1);
+    pub const NUM_AT_INTEGER: SubsSlice<TagName> = SubsSlice::new(3, 1);
+    pub const NUM_AT_FLOATINGPOINT: SubsSlice<TagName> = SubsSlice::new(4, 1);
 
     pub fn new() -> Self {
         Self::with_capacity(0)
@@ -1293,6 +1306,10 @@ impl Subs {
 
         tag_names.push(TagName::Global("Err".into()));
         tag_names.push(TagName::Global("Ok".into()));
+
+        tag_names.push(TagName::Private(Symbol::NUM_AT_NUM));
+        tag_names.push(TagName::Private(Symbol::NUM_AT_INTEGER));
+        tag_names.push(TagName::Private(Symbol::NUM_AT_FLOATINGPOINT));
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
@@ -2006,7 +2023,13 @@ impl UnionTags {
         tag_names: SubsSlice<TagName>,
         variables: SubsSlice<VariableSubsSlice>,
     ) -> Self {
-        debug_assert_eq!(tag_names.len(), variables.len());
+        debug_assert_eq!(
+            tag_names.len(),
+            variables.len(),
+            "tag name len != variables len: {:?} {:?}",
+            tag_names,
+            variables,
+        );
 
         Self {
             length: tag_names.len() as u16,

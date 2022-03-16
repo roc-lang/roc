@@ -148,6 +148,146 @@ impl Aliases {
         self.aliases.push((symbol, alias.typ, alias_variables));
     }
 
+    fn instantiate_result_result(
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+        alias_variables: AliasVariables,
+    ) -> Variable {
+        let tag_names_slice = Subs::RESULT_TAG_NAMES;
+
+        let err_slice = SubsSlice::new(alias_variables.variables_start + 1, 1);
+        let ok_slice = SubsSlice::new(alias_variables.variables_start, 1);
+
+        let variable_slices =
+            SubsSlice::extend_new(&mut subs.variable_slices, [err_slice, ok_slice]);
+
+        let union_tags = UnionTags::from_slices(tag_names_slice, variable_slices);
+        let ext_var = Variable::EMPTY_TAG_UNION;
+        let flat_type = FlatType::TagUnion(union_tags, ext_var);
+        let content = Content::Structure(flat_type);
+
+        register(subs, rank, pools, content)
+    }
+
+    /// Instantiate an alias of the form `Foo a : [ @Foo a ]`
+    fn instantiate_num_at_alias(
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+        tag_name_slice: SubsSlice<TagName>,
+        range_slice: SubsSlice<Variable>,
+    ) -> Variable {
+        let variable_slices = SubsSlice::extend_new(&mut subs.variable_slices, [range_slice]);
+
+        let union_tags = UnionTags::from_slices(tag_name_slice, variable_slices);
+        let ext_var = Variable::EMPTY_TAG_UNION;
+        let flat_type = FlatType::TagUnion(union_tags, ext_var);
+        let content = Content::Structure(flat_type);
+
+        register(subs, rank, pools, content)
+    }
+
+    fn instantiate_num_int(
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+        integer_range_slice: SubsSlice<Variable>,
+    ) -> Variable {
+        let integer_var = Self::instantiate_num_at_alias(
+            subs,
+            rank,
+            pools,
+            Subs::NUM_AT_INTEGER,
+            integer_range_slice,
+        );
+
+        let num_range_slice = SubsSlice::extend_new(&mut subs.variables, [integer_var]);
+
+        Self::instantiate_num_at_alias(subs, rank, pools, Subs::NUM_AT_NUM, num_range_slice)
+    }
+
+    fn instantiate_num_float(
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+        float_range_slice: SubsSlice<Variable>,
+    ) -> Variable {
+        let float_var = Self::instantiate_num_at_alias(
+            subs,
+            rank,
+            pools,
+            Subs::NUM_AT_FLOATINGPOINT,
+            float_range_slice,
+        );
+
+        let num_range_slice = SubsSlice::extend_new(&mut subs.variables, [float_var]);
+
+        Self::instantiate_num_at_alias(subs, rank, pools, Subs::NUM_AT_NUM, num_range_slice)
+    }
+
+    fn instantiate_builtin_aliases(
+        &mut self,
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+        symbol: Symbol,
+        alias_variables: AliasVariables,
+    ) -> Option<Variable> {
+        match symbol {
+            Symbol::RESULT_RESULT => {
+                let var = Self::instantiate_result_result(subs, rank, pools, alias_variables);
+
+                Some(var)
+            }
+            Symbol::NUM_NUM => {
+                let range_slice = SubsSlice::new(alias_variables.variables_start, 1);
+                let var = Self::instantiate_num_at_alias(
+                    subs,
+                    rank,
+                    pools,
+                    Subs::NUM_AT_NUM,
+                    range_slice,
+                );
+
+                Some(var)
+            }
+            Symbol::NUM_FLOATINGPOINT => {
+                let range_slice = SubsSlice::new(alias_variables.variables_start, 1);
+                let var = Self::instantiate_num_at_alias(
+                    subs,
+                    rank,
+                    pools,
+                    Subs::NUM_AT_FLOATINGPOINT,
+                    range_slice,
+                );
+
+                Some(var)
+            }
+            Symbol::NUM_INTEGER => {
+                let range_slice = SubsSlice::new(alias_variables.variables_start, 1);
+                let var = Self::instantiate_num_at_alias(
+                    subs,
+                    rank,
+                    pools,
+                    Subs::NUM_AT_INTEGER,
+                    range_slice,
+                );
+
+                Some(var)
+            }
+            Symbol::NUM_INT => {
+                let range_slice = SubsSlice::new(alias_variables.variables_start, 1);
+                Some(Self::instantiate_num_int(subs, rank, pools, range_slice))
+            }
+            Symbol::NUM_FLOAT => {
+                let range_slice = SubsSlice::new(alias_variables.variables_start, 1);
+                Some(Self::instantiate_num_float(subs, rank, pools, range_slice))
+            }
+            _ => None,
+        }
+    }
+
     fn instantiate(
         &mut self,
         subs: &mut Subs,
@@ -157,6 +297,12 @@ impl Aliases {
         symbol: Symbol,
         alias_variables: AliasVariables,
     ) -> Result<Variable, ()> {
+        if let Some(var) =
+            Self::instantiate_builtin_aliases(self, subs, rank, pools, symbol, alias_variables)
+        {
+            return Ok(var);
+        }
+
         let (typ, delayed_variables) = match self.aliases.iter_mut().find(|(s, _, _)| *s == symbol)
         {
             None => return Err(()),
