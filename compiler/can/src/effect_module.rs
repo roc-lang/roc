@@ -210,7 +210,7 @@ fn build_effect_always(
     let signature = {
         // Effect.always : a -> Effect a
         let var_a = var_store.fresh();
-        introduced_variables.insert_named("a".into(), var_a);
+        introduced_variables.insert_named("a".into(), Loc::at_zero(var_a));
 
         let effect_a = build_effect_alias(
             effect_symbol,
@@ -223,7 +223,7 @@ fn build_effect_always(
         );
 
         let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(closure_var);
+        introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
 
         Type::Function(
             vec![Type::Variable(var_a)],
@@ -402,8 +402,8 @@ fn build_effect_map(
         let var_a = var_store.fresh();
         let var_b = var_store.fresh();
 
-        introduced_variables.insert_named("a".into(), var_a);
-        introduced_variables.insert_named("b".into(), var_b);
+        introduced_variables.insert_named("a".into(), Loc::at_zero(var_a));
+        introduced_variables.insert_named("b".into(), Loc::at_zero(var_b));
 
         let effect_a = build_effect_alias(
             effect_symbol,
@@ -426,7 +426,7 @@ fn build_effect_map(
         );
 
         let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(closure_var);
+        introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
         let a_to_b = {
             Type::Function(
                 vec![Type::Variable(var_a)],
@@ -436,7 +436,7 @@ fn build_effect_map(
         };
 
         let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(closure_var);
+        introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
         Type::Function(
             vec![effect_a, a_to_b],
             Box::new(Type::Variable(closure_var)),
@@ -571,8 +571,8 @@ fn build_effect_after(
         let var_a = var_store.fresh();
         let var_b = var_store.fresh();
 
-        introduced_variables.insert_named("a".into(), var_a);
-        introduced_variables.insert_named("b".into(), var_b);
+        introduced_variables.insert_named("a".into(), Loc::at_zero(var_a));
+        introduced_variables.insert_named("b".into(), Loc::at_zero(var_b));
 
         let effect_a = build_effect_alias(
             effect_symbol,
@@ -595,7 +595,7 @@ fn build_effect_after(
         );
 
         let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(closure_var);
+        introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
         let a_to_effect_b = Type::Function(
             vec![Type::Variable(var_a)],
             Box::new(Type::Variable(closure_var)),
@@ -603,7 +603,7 @@ fn build_effect_after(
         );
 
         let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(closure_var);
+        introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
         Type::Function(
             vec![effect_a, a_to_effect_b],
             Box::new(Type::Variable(closure_var)),
@@ -831,8 +831,8 @@ fn build_effect_forever(
         let var_a = var_store.fresh();
         let var_b = var_store.fresh();
 
-        introduced_variables.insert_named("a".into(), var_a);
-        introduced_variables.insert_named("b".into(), var_b);
+        introduced_variables.insert_named("a".into(), Loc::at_zero(var_a));
+        introduced_variables.insert_named("b".into(), Loc::at_zero(var_b));
 
         let effect_a = build_effect_alias(
             effect_symbol,
@@ -855,7 +855,7 @@ fn build_effect_forever(
         );
 
         let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(closure_var);
+        introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
 
         Type::Function(
             vec![effect_a],
@@ -1089,8 +1089,8 @@ fn build_effect_loop(
         let var_a = var_store.fresh();
         let var_b = var_store.fresh();
 
-        introduced_variables.insert_named("a".into(), var_a);
-        introduced_variables.insert_named("b".into(), var_b);
+        introduced_variables.insert_named("a".into(), Loc::at_zero(var_a));
+        introduced_variables.insert_named("b".into(), Loc::at_zero(var_b));
 
         let effect_b = build_effect_alias(
             effect_symbol,
@@ -1117,7 +1117,7 @@ fn build_effect_loop(
 
         let effect_state_type = {
             let closure_var = var_store.fresh();
-            introduced_variables.insert_wildcard(closure_var);
+            introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
 
             let actual = {
                 Type::TagUnion(
@@ -1145,7 +1145,7 @@ fn build_effect_loop(
         };
 
         let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(closure_var);
+        introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
 
         let step_type = Type::Function(
             vec![Type::Variable(var_a)],
@@ -1154,7 +1154,7 @@ fn build_effect_loop(
         );
 
         let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(closure_var);
+        introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
 
         Type::Function(
             vec![Type::Variable(var_a), step_type],
@@ -1559,7 +1559,7 @@ fn build_effect_alias(
     introduced_variables: &mut IntroducedVariables,
 ) -> Type {
     let closure_var = var_store.fresh();
-    introduced_variables.insert_wildcard(closure_var);
+    introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
 
     let actual = {
         Type::TagUnion(
