@@ -343,7 +343,8 @@ fn can_annotation_help(
                     // This is a limitation of the current implementation,
                     // and this totally should be possible in the future.
                     let is_import = !symbol.is_builtin() && (env.home != symbol.module_id());
-                    if !is_import && alias.lambda_set_variables.is_empty() {
+                    let is_structural = alias.kind == AliasKind::Structural;
+                    if !is_import && is_structural && alias.lambda_set_variables.is_empty() {
                         let mut type_var_to_arg = Vec::new();
 
                         for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
