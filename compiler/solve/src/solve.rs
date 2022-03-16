@@ -188,44 +188,6 @@ impl Aliases {
         register(subs, rank, pools, content)
     }
 
-    fn instantiate_num_int(
-        subs: &mut Subs,
-        rank: Rank,
-        pools: &mut Pools,
-        integer_range_slice: SubsSlice<Variable>,
-    ) -> Variable {
-        let integer_var = Self::instantiate_num_at_alias(
-            subs,
-            rank,
-            pools,
-            Subs::NUM_AT_INTEGER,
-            integer_range_slice,
-        );
-
-        let num_range_slice = SubsSlice::extend_new(&mut subs.variables, [integer_var]);
-
-        Self::instantiate_num_at_alias(subs, rank, pools, Subs::NUM_AT_NUM, num_range_slice)
-    }
-
-    fn instantiate_num_float(
-        subs: &mut Subs,
-        rank: Rank,
-        pools: &mut Pools,
-        float_range_slice: SubsSlice<Variable>,
-    ) -> Variable {
-        let float_var = Self::instantiate_num_at_alias(
-            subs,
-            rank,
-            pools,
-            Subs::NUM_AT_FLOATINGPOINT,
-            float_range_slice,
-        );
-
-        let num_range_slice = SubsSlice::extend_new(&mut subs.variables, [float_var]);
-
-        Self::instantiate_num_at_alias(subs, rank, pools, Subs::NUM_AT_NUM, num_range_slice)
-    }
-
     fn instantiate_builtin_aliases(
         &mut self,
         subs: &mut Subs,
@@ -241,48 +203,125 @@ impl Aliases {
                 Some(var)
             }
             Symbol::NUM_NUM => {
-                let range_slice = SubsSlice::new(alias_variables.variables_start, 1);
                 let var = Self::instantiate_num_at_alias(
                     subs,
                     rank,
                     pools,
                     Subs::NUM_AT_NUM,
-                    range_slice,
+                    SubsSlice::new(alias_variables.variables_start, 1),
                 );
 
                 Some(var)
             }
             Symbol::NUM_FLOATINGPOINT => {
-                let range_slice = SubsSlice::new(alias_variables.variables_start, 1);
                 let var = Self::instantiate_num_at_alias(
                     subs,
                     rank,
                     pools,
                     Subs::NUM_AT_FLOATINGPOINT,
-                    range_slice,
+                    SubsSlice::new(alias_variables.variables_start, 1),
                 );
 
                 Some(var)
             }
             Symbol::NUM_INTEGER => {
-                let range_slice = SubsSlice::new(alias_variables.variables_start, 1);
                 let var = Self::instantiate_num_at_alias(
                     subs,
                     rank,
                     pools,
                     Subs::NUM_AT_INTEGER,
-                    range_slice,
+                    SubsSlice::new(alias_variables.variables_start, 1),
                 );
 
                 Some(var)
             }
             Symbol::NUM_INT => {
-                let range_slice = SubsSlice::new(alias_variables.variables_start, 1);
-                Some(Self::instantiate_num_int(subs, rank, pools, range_slice))
+                // [ @Integer range ]
+                let integer_content_var = Self::instantiate_builtin_aliases(
+                    self,
+                    subs,
+                    rank,
+                    pools,
+                    Symbol::NUM_INTEGER,
+                    alias_variables,
+                )
+                .unwrap();
+
+                // Integer range (alias variable is the same as `Int range`)
+                let integer_alias_variables = alias_variables;
+                let integer_content = Content::Alias(
+                    Symbol::NUM_INTEGER,
+                    integer_alias_variables,
+                    integer_content_var,
+                    AliasKind::Structural,
+                );
+                let integer_alias_var = register(subs, rank, pools, integer_content);
+
+                // [ @Num (Integer range) ]
+                let num_alias_variables =
+                    AliasVariables::insert_into_subs(subs, [integer_alias_var], []);
+                let num_content_var = Self::instantiate_builtin_aliases(
+                    self,
+                    subs,
+                    rank,
+                    pools,
+                    Symbol::NUM_NUM,
+                    num_alias_variables,
+                )
+                .unwrap();
+
+                let num_content = Content::Alias(
+                    Symbol::NUM_NUM,
+                    num_alias_variables,
+                    num_content_var,
+                    AliasKind::Structural,
+                );
+
+                Some(register(subs, rank, pools, num_content))
             }
             Symbol::NUM_FLOAT => {
-                let range_slice = SubsSlice::new(alias_variables.variables_start, 1);
-                Some(Self::instantiate_num_float(subs, rank, pools, range_slice))
+                // [ @FloatingPoint range ]
+                let fpoint_content_var = Self::instantiate_builtin_aliases(
+                    self,
+                    subs,
+                    rank,
+                    pools,
+                    Symbol::NUM_FLOATINGPOINT,
+                    alias_variables,
+                )
+                .unwrap();
+
+                // FloatingPoint range (alias variable is the same as `Float range`)
+                let fpoint_alias_variables = alias_variables;
+                let fpoint_content = Content::Alias(
+                    Symbol::NUM_FLOATINGPOINT,
+                    fpoint_alias_variables,
+                    fpoint_content_var,
+                    AliasKind::Structural,
+                );
+                let fpoint_alias_var = register(subs, rank, pools, fpoint_content);
+
+                // [ @Num (FloatingPoint range) ]
+                let num_alias_variables =
+                    AliasVariables::insert_into_subs(subs, [fpoint_alias_var], []);
+                let num_content_var = Self::instantiate_builtin_aliases(
+                    self,
+                    subs,
+                    rank,
+                    pools,
+                    Symbol::NUM_NUM,
+                    num_alias_variables,
+                )
+                .unwrap();
+
+                let num_content = Content::Alias(
+                    Symbol::NUM_NUM,
+                    num_alias_variables,
+                    num_content_var,
+                    AliasKind::Structural,
+                );
+
+                Some(register(subs, rank, pools, num_content))
             }
             _ => None,
         }
@@ -297,6 +336,7 @@ impl Aliases {
         symbol: Symbol,
         alias_variables: AliasVariables,
     ) -> Result<Variable, ()> {
+        // hardcoded instantiations for builtin aliases
         if let Some(var) =
             Self::instantiate_builtin_aliases(self, subs, rank, pools, symbol, alias_variables)
         {
