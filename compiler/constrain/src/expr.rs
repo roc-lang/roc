@@ -1651,7 +1651,7 @@ fn instantiate_rigids(
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> InstantiateRigids {
     let mut annotation = annotation.clone();
-    let mut new_rigid_variables = Vec::new();
+    let mut new_rigid_variables: Vec<Variable> = Vec::new();
 
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
     for (name, var) in introduced_vars.var_by_name.iter() {
@@ -1660,23 +1660,24 @@ fn instantiate_rigids(
         match ftv.entry(name.clone()) {
             Occupied(occupied) => {
                 let existing_rigid = occupied.get();
-                rigid_substitution.insert(*var, Type::Variable(*existing_rigid));
+                rigid_substitution.insert(var.value, Type::Variable(*existing_rigid));
             }
             Vacant(vacant) => {
                 // It's possible to use this rigid in nested defs
-                vacant.insert(*var);
-                new_rigid_variables.push(*var);
+                vacant.insert(var.value);
+                new_rigid_variables.push(var.value);
             }
         }
     }
 
     // wildcards are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.wildcards.iter().copied());
+    new_rigid_variables.extend(introduced_vars.wildcards.iter().map(|v| v.value));
 
     // lambda set vars are always freshly introduced in this annotation
     new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
 
-    let new_infer_variables = introduced_vars.inferred.clone();
+    let new_infer_variables: Vec<Variable> =
+        introduced_vars.inferred.iter().map(|v| v.value).collect();
 
     // Instantiate rigid variables
     if !rigid_substitution.is_empty() {

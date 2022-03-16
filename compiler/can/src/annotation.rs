@@ -29,25 +29,27 @@ pub struct IntroducedVariables {
     // But then between annotations, the same name can occur multiple times,
     // but a variable can only have one name. Therefore
     // `ftv : SendMap<Variable, Lowercase>`.
-    pub wildcards: Vec<Variable>,
+    pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,
-    pub inferred: Vec<Variable>,
-    pub var_by_name: SendMap<Lowercase, Variable>,
+    pub inferred: Vec<Loc<Variable>>,
+    // NB: A mapping of a -> Loc<v1> in this map has the region of the first-seen var, but there
+    // may be multiple occurrences of it!
+    pub var_by_name: SendMap<Lowercase, Loc<Variable>>,
     pub name_by_var: SendMap<Variable, Lowercase>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {
-    pub fn insert_named(&mut self, name: Lowercase, var: Variable) {
+    pub fn insert_named(&mut self, name: Lowercase, var: Loc<Variable>) {
         self.var_by_name.insert(name.clone(), var);
-        self.name_by_var.insert(var, name);
+        self.name_by_var.insert(var.value, name);
     }
 
-    pub fn insert_wildcard(&mut self, var: Variable) {
+    pub fn insert_wildcard(&mut self, var: Loc<Variable>) {
         self.wildcards.push(var);
     }
 
-    pub fn insert_inferred(&mut self, var: Variable) {
+    pub fn insert_inferred(&mut self, var: Loc<Variable>) {
         self.inferred.push(var);
     }
 
@@ -70,7 +72,7 @@ impl IntroducedVariables {
     }
 
     pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {
-        self.var_by_name.get(name)
+        self.var_by_name.get(name).map(|v| &v.value)
     }
 
     pub fn name_by_var(&self, var: Variable) -> Option<&Lowercase> {
@@ -286,7 +288,7 @@ fn can_annotation_help(
             let ret = can_annotation_help(
                 env,
                 &return_type.value,
-                region,
+                return_type.region,
                 scope,
                 var_store,
                 introduced_variables,
@@ -314,7 +316,7 @@ fn can_annotation_help(
                 let arg_ann = can_annotation_help(
                     env,
                     &arg.value,
-                    region,
+                    arg.region,
                     scope,
                     var_store,
                     introduced_variables,
@@ -368,7 +370,7 @@ fn can_annotation_help(
                 None => {
                     let var = var_store.fresh();
 
-                    introduced_variables.insert_named(name, var);
+                    introduced_variables.insert_named(name, Loc::at(region, var));
 
                     Type::Variable(var)
                 }
@@ -432,7 +434,8 @@ fn can_annotation_help(
                 } else {
                     let var = var_store.fresh();
 
-                    introduced_variables.insert_named(var_name.clone(), var);
+                    introduced_variables
+                        .insert_named(var_name.clone(), Loc::at(loc_var.region, var));
                     vars.push((var_name.clone(), Type::Variable(var)));
 
                     lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
@@ -615,7 +618,7 @@ fn can_annotation_help(
         Wildcard => {
             let var = var_store.fresh();
 
-            introduced_variables.insert_wildcard(var);
+            introduced_variables.insert_wildcard(Loc::at(region, var));
 
             Type::Variable(var)
         }
@@ -624,7 +627,7 @@ fn can_annotation_help(
             // make a fresh unconstrained variable, and let the type solver fill it in for us 🤠
             let var = var_store.fresh();
 
-            introduced_variables.insert_inferred(var);
+            introduced_variables.insert_inferred(Loc::at(region, var));
 
             Type::Variable(var)
         }
@@ -634,7 +637,7 @@ fn can_annotation_help(
 
             let var = var_store.fresh();
 
-            introduced_variables.insert_wildcard(var);
+            introduced_variables.insert_wildcard(Loc::at(region, var));
 
             Type::Variable(var)
         }
@@ -700,7 +703,7 @@ fn can_extension_type<'a>(
 
                 let var = var_store.fresh();
 
-                introduced_variables.insert_inferred(var);
+                introduced_variables.insert_inferred(Loc::at_zero(var));
 
                 Type::Variable(var)
             }
@@ -869,7 +872,10 @@ fn can_assigned_fields<'a>(
                             Type::Variable(*var)
                         } else {
                             let field_var = var_store.fresh();
-                            introduced_variables.insert_named(field_name.clone(), field_var);
+                            introduced_variables.insert_named(
+                                field_name.clone(),
+                                Loc::at(loc_field_name.region, field_var),
+                            );
                             Type::Variable(field_var)
                         }
                     };
