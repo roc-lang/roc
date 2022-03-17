@@ -12,6 +12,7 @@ use roc_repl_eval::{
 };
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
+use roc_reporting::report::DEFAULT_PALETTE_HTML;
 
 use crate::{js_create_app, js_get_result_and_memory, js_run_app};
 
@@ -163,7 +164,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
-    let mono = match compile_to_mono(arena, &src, target_info) {
+    let mono = match compile_to_mono(arena, &src, target_info, DEFAULT_PALETTE_HTML) {
         Ok(m) => m,
         Err(messages) => return Err(messages.join("\n\n")),
     };
