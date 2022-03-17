@@ -1,12 +1,17 @@
-console.error = function monkeyPatchedConsoleErrorPleaseForgiveMe(...args) {
-  const message = args.join("\n");
-  updateHistoryEntry(repl.inputHistoryIndex, false, message);
-};
+// The only way we can provide values to wasm_bindgen's generated code is to set globals
+function setGlobalsForWasmBindgen() {
+  window.js_create_app = js_create_app;
+  window.js_run_app = js_run_app;
+  window.js_get_result_and_memory = js_get_result_and_memory;
 
-// wasm_bindgen treats our `extern` declarations as JS globals, so let's keep it happy
-window.js_create_app = js_create_app;
-window.js_run_app = js_run_app;
-window.js_get_result_and_memory = js_get_result_and_memory;
+  // The only place we use console.error is in wasm_bindgen, where it gets a single string argument.
+  console.error = function displayErrorInHistoryPanel(string) {
+    const html = `<div class="panic">${string}</div>`;
+    updateHistoryEntry(repl.inputHistoryIndex, false, html);
+  };
+}
+setGlobalsForWasmBindgen();
+
 import * as roc_repl_wasm from "/roc_repl_wasm.js";
 import { getMockWasiImports } from "/wasi.js";
 
