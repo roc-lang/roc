@@ -7,7 +7,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, AliasKind, LambdaSet, Problem, RecordField, Type};
+use roc_types::types::{Alias, AliasKind, LambdaSet, Problem, RecordField, Type, TypeExtension};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -542,7 +542,7 @@ fn can_annotation_help(
                         // just `a` does not mean the same as `{}a`, so even
                         // if there are no fields, still make this a `Record`,
                         // not an EmptyRec
-                        Type::Record(Default::default(), Box::new(ext_type))
+                        Type::Record(Default::default(), TypeExtension::from_type(ext_type))
                     }
 
                     None => Type::EmptyRec,
@@ -559,7 +559,7 @@ fn can_annotation_help(
                     references,
                 );
 
-                Type::Record(field_types, Box::new(ext_type))
+                Type::Record(field_types, TypeExtension::from_type(ext_type))
             }
         }
         TagUnion { tags, ext, .. } => {
@@ -580,7 +580,7 @@ fn can_annotation_help(
                         // just `a` does not mean the same as `{}a`, so even
                         // if there are no fields, still make this a `Record`,
                         // not an EmptyRec
-                        Type::TagUnion(Default::default(), Box::new(ext_type))
+                        Type::TagUnion(Default::default(), TypeExtension::from_type(ext_type))
                     }
 
                     None => Type::EmptyTagUnion,
@@ -602,7 +602,7 @@ fn can_annotation_help(
                 // in theory we save a lot of time by sorting once here
                 insertion_sort_by(&mut tag_types, |a, b| a.0.cmp(&b.0));
 
-                Type::TagUnion(tag_types, Box::new(ext_type))
+                Type::TagUnion(tag_types, TypeExtension::from_type(ext_type))
             }
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_annotation_help(

@@ -10,7 +10,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{AliasKind, Type};
+use roc_types::types::{AliasKind, Type, TypeExtension};
 
 #[derive(Default, Clone, Copy)]
 pub(crate) struct HostedGeneratedFunctions {
@@ -1111,7 +1111,7 @@ fn build_effect_loop(
                     (step_tag_name, vec![Type::Variable(var_a)]),
                     (done_tag_name, vec![Type::Variable(var_b)]),
                 ],
-                Box::new(Type::EmptyTagUnion),
+                TypeExtension::Closed,
             )
         };
 
@@ -1129,7 +1129,7 @@ fn build_effect_loop(
                             Box::new(state_type.clone()),
                         )],
                     )],
-                    Box::new(Type::EmptyTagUnion),
+                    TypeExtension::Closed,
                 )
             };
 
@@ -1571,7 +1571,7 @@ fn build_effect_alias(
                     Box::new(a_type),
                 )],
             )],
-            Box::new(Type::EmptyTagUnion),
+            TypeExtension::Closed,
         )
     };
 
@@ -1600,7 +1600,7 @@ pub fn build_effect_actual(
                 Box::new(a_type),
             )],
         )],
-        Box::new(Type::EmptyTagUnion),
+        TypeExtension::Closed,
     )
 }
 
