@@ -2039,12 +2039,6 @@ fn finish_specialization(
     subs: Subs,
     exposed_to_host: ExposedToHost,
 ) -> Result<MonomorphizedModule, LoadingProblem> {
-    if false {
-        println!(
-            "total Type clones: {} ",
-            roc_types::types::get_type_clone_count()
-        );
-    }
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
