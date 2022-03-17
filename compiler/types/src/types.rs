@@ -166,7 +166,7 @@ impl LambdaSet {
     }
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq)]
 pub enum Type {
     EmptyRec,
     EmptyTagUnion,
@@ -201,6 +201,79 @@ pub enum Type {
     RangedNumber(Box<Type>, Vec<Variable>),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
+}
+
+#[derive(PartialEq, Eq, Clone)]
+enum TypeExtension {
+    Open(Box<Type>),
+    Closed,
+}
+
+static mut TYPE_CLONE_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+pub fn get_type_clone_count() -> usize {
+    unsafe { TYPE_CLONE_COUNT.load(std::sync::atomic::Ordering::SeqCst) }
+}
+
+impl Clone for Type {
+    fn clone(&self) -> Self {
+        match self {
+            Self::EmptyRec => {
+                unsafe { TYPE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) };
+                Self::EmptyRec
+            }
+            Self::EmptyTagUnion => {
+                unsafe { TYPE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) };
+                Self::EmptyTagUnion
+            }
+            Self::Function(arg0, arg1, arg2) => {
+                Self::Function(arg0.clone(), arg1.clone(), arg2.clone())
+            }
+            Self::Record(arg0, arg1) => Self::Record(arg0.clone(), arg1.clone()),
+            Self::TagUnion(arg0, arg1) => Self::TagUnion(arg0.clone(), arg1.clone()),
+            Self::FunctionOrTagUnion(arg0, arg1, arg2) => {
+                Self::FunctionOrTagUnion(arg0.clone(), arg1.clone(), arg2.clone())
+            }
+            Self::ClosureTag { name, ext } => Self::ClosureTag {
+                name: name.clone(),
+                ext: ext.clone(),
+            },
+            Self::Alias {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                actual,
+                kind,
+            } => Self::Alias {
+                symbol: symbol.clone(),
+                type_arguments: type_arguments.clone(),
+                lambda_set_variables: lambda_set_variables.clone(),
+                actual: actual.clone(),
+                kind: kind.clone(),
+            },
+            Self::HostExposedAlias {
+                name,
+                type_arguments,
+                lambda_set_variables,
+                actual_var,
+                actual,
+            } => Self::HostExposedAlias {
+                name: name.clone(),
+                type_arguments: type_arguments.clone(),
+                lambda_set_variables: lambda_set_variables.clone(),
+                actual_var: actual_var.clone(),
+                actual: actual.clone(),
+            },
+            Self::RecursiveTagUnion(arg0, arg1, arg2) => {
+                Self::RecursiveTagUnion(arg0.clone(), arg1.clone(), arg2.clone())
+            }
+            Self::Apply(arg0, arg1, arg2) => Self::Apply(arg0.clone(), arg1.clone(), arg2.clone()),
+            Self::Variable(arg0) => Self::Variable(arg0.clone()),
+            Self::RangedNumber(arg0, arg1) => Self::RangedNumber(arg0.clone(), arg1.clone()),
+            Self::Erroneous(arg0) => Self::Erroneous(arg0.clone()),
+        }
+    }
 }
 
 impl fmt::Debug for Type {
