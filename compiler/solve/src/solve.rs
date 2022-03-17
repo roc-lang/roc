@@ -1556,7 +1556,7 @@ fn type_to_variable<'a>(
                     aliases.instantiate(subs, rank, pools, arena, *symbol, alias_variables);
 
                 let alias_variable = match instantiated {
-                    Err(_) => panic!("Alias {:?} is not available", symbol),
+                    Err(_) => unreachable!("Alias {:?} is not available", symbol),
                     Ok(alias_variable) => alias_variable,
                 };
 
