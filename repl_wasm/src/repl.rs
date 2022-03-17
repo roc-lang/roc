@@ -10,9 +10,9 @@ use roc_repl_eval::{
     gen::{compile_to_mono, format_answer, ReplOutput},
     ReplApp, ReplAppMemory,
 };
+use roc_reporting::report::DEFAULT_PALETTE_HTML;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
-use roc_reporting::report::DEFAULT_PALETTE_HTML;
 
 use crate::{js_create_app, js_get_result_and_memory, js_run_app};
 
