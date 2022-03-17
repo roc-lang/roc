@@ -16,7 +16,9 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
-use roc_types::types::{AliasKind, AnnotationSource, Category, PReason, Reason, RecordField};
+use roc_types::types::{
+    AliasKind, AnnotationSource, Category, PReason, Reason, RecordField, TypeExtension,
+};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
@@ -119,13 +121,7 @@ pub fn constrain_expr(
                     rec_constraints.push(field_con);
                 }
 
-                let record_type = Type::Record(
-                    field_types,
-                    // TODO can we avoid doing Box::new on every single one of these?
-                    // We can put `static EMPTY_REC: Type = Type::EmptyRec`, but that requires a
-                    // lifetime parameter on `Type`
-                    Box::new(Type::EmptyRec),
-                );
+                let record_type = Type::Record(field_types, TypeExtension::Closed);
 
                 let record_con = constraints.equal_types_with_storage(
                     record_type,
@@ -165,7 +161,8 @@ pub fn constrain_expr(
                 cons.push(con);
             }
 
-            let fields_type = Type::Record(fields, Box::new(Type::Variable(*ext_var)));
+            let fields_type =
+                Type::Record(fields, TypeExtension::from_type(Type::Variable(*ext_var)));
             let record_type = Type::Variable(*record_var);
 
             // NOTE from elm compiler: fields_type is separate so that Error propagates better
@@ -720,7 +717,7 @@ pub fn constrain_expr(
             let label = field.clone();
             rec_field_types.insert(label, RecordField::Demanded(field_type));
 
-            let record_type = Type::Record(rec_field_types, Box::new(ext_type));
+            let record_type = Type::Record(rec_field_types, TypeExtension::from_type(ext_type));
             let record_expected = Expected::NoExpectation(record_type);
 
             let category = Category::Access(field.clone());
@@ -767,7 +764,7 @@ pub fn constrain_expr(
             let mut field_types = SendMap::default();
             let label = field.clone();
             field_types.insert(label, RecordField::Demanded(field_type.clone()));
-            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
 
             let category = Category::Accessor(field.clone());
 
@@ -905,7 +902,7 @@ pub fn constrain_expr(
             let union_con = constraints.equal_types_with_storage(
                 Type::TagUnion(
                     vec![(name.clone(), types)],
-                    Box::new(Type::Variable(*ext_var)),
+                    TypeExtension::from_type(Type::Variable(*ext_var)),
                 ),
                 expected.clone(),
                 Category::TagApply {
@@ -951,7 +948,7 @@ pub fn constrain_expr(
                 Type::FunctionOrTagUnion(
                     name.clone(),
                     *closure_name,
-                    Box::new(Type::Variable(*ext_var)),
+                    TypeExtension::from_type(Type::Variable(*ext_var)),
                 ),
                 expected.clone(),
                 Category::TagApply {
@@ -1621,7 +1618,7 @@ fn constrain_closure_size(
         let tag_name = TagName::Closure(name);
         Type::TagUnion(
             vec![(tag_name, tag_arguments)],
-            Box::new(Type::Variable(closure_ext_var)),
+            TypeExtension::from_type(Type::Variable(closure_ext_var)),
         )
     };
 

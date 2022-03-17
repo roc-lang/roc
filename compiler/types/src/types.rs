@@ -220,10 +220,19 @@ pub enum TypeExtension {
 }
 
 impl TypeExtension {
+    #[inline(always)]
     pub fn from_type(typ: Type) -> Self {
         match typ {
             Type::EmptyTagUnion | Type::EmptyRec => Self::Closed,
             _ => Self::Open(Box::new(typ)),
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_closed(&self) -> bool {
+        match self {
+            TypeExtension::Open(_) => false,
+            TypeExtension::Closed => true,
         }
     }
 }

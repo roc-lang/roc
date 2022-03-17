@@ -9,7 +9,9 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
-use roc_types::types::{AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type};
+use roc_types::types::{
+    AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type, TypeExtension,
+};
 
 #[derive(Default)]
 pub struct PatternState {
@@ -391,7 +393,7 @@ pub fn constrain_pattern(
                 state.vars.push(*var);
             }
 
-            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
 
             let whole_con = constraints.equal_types(
                 Type::Variable(*whole_var),
