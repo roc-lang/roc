@@ -180,8 +180,16 @@ function createHistoryEntry(inputText) {
   const historyIndex = repl.inputHistory.length;
   repl.inputHistory.push(inputText);
 
+  const firstLinePrefix = '<span class="input-line-prefix">» </span>';
+  const otherLinePrefix = '\n<span class="input-line-prefix">… </span>';
+  const inputLines = inputText.split("\n");
+  if (inputLines[inputLines.length - 1] === "") {
+    inputLines.pop();
+  }
+  const inputWithPrefixes = firstLinePrefix + inputLines.join(otherLinePrefix);
+
   const inputElem = document.createElement("pre");
-  inputElem.textContent = inputText;
+  inputElem.innerHTML = inputWithPrefixes;
   inputElem.classList.add("input");
 
   const historyItem = document.createElement("div");
@@ -196,7 +204,7 @@ function createHistoryEntry(inputText) {
 
 function updateHistoryEntry(index, ok, outputText) {
   const outputElem = document.createElement("pre");
-  outputElem.textContent = outputText;
+  outputElem.innerHTML = outputText;
   outputElem.classList.add("output");
   outputElem.classList.add(ok ? "output-ok" : "output-error");
 
