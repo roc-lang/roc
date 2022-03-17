@@ -1,0 +1,3 @@
+This is not a .roc file, and should be ignored by the formatter.
+
+This file does not have an extension, to ensure the formatter does not simply test with `ends_with(".roc")`

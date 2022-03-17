@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use crate::FormatMode;
 use bumpalo::collections::Vec;
@@ -39,7 +40,7 @@ fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> 
                                 let file_path = file.path();
                                 if file_path.is_dir() {
                                     to_flatten.push(file_path);
-                                } else if file_path.ends_with(".roc") {
+                                } else if is_roc_file(&file_path) {
                                     files.push(file_path);
                                 }
                             }
@@ -57,12 +58,17 @@ fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> 
                     error
                 ),
             }
-        } else {
-            files.push(path)
+        } else if is_roc_file(&path) {
+            files.push(path);
         }
     }
 
     files
+}
+
+fn is_roc_file(path: &Path) -> bool {
+    let ext = path.extension().and_then(OsStr::to_str);
+    return matches!(ext, Some("roc"));
 }
 
 pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
