@@ -219,6 +219,15 @@ pub enum TypeExtension {
     Closed,
 }
 
+impl TypeExtension {
+    pub fn from_type(typ: Type) -> Self {
+        match typ {
+            Type::EmptyTagUnion | Type::EmptyRec => Self::Closed,
+            _ => Self::Open(Box::new(typ)),
+        }
+    }
+}
+
 impl IntoIterator for TypeExtension {
     type Item = Box<Type>;
 
