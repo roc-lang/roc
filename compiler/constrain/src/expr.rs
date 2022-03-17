@@ -16,7 +16,9 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
-use roc_types::types::{AliasKind, AnnotationSource, Category, PReason, Reason, RecordField};
+use roc_types::types::{
+    AliasKind, AnnotationSource, Category, PReason, Reason, RecordField, TypeExtension,
+};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
@@ -119,13 +121,7 @@ pub fn constrain_expr(
                     rec_constraints.push(field_con);
                 }
 
-                let record_type = Type::Record(
-                    field_types,
-                    // TODO can we avoid doing Box::new on every single one of these?
-                    // We can put `static EMPTY_REC: Type = Type::EmptyRec`, but that requires a
-                    // lifetime parameter on `Type`
-                    Box::new(Type::EmptyRec),
-                );
+                let record_type = Type::Record(field_types, TypeExtension::Closed);
 
                 let record_con = constraints.equal_types_with_storage(
                     record_type,
@@ -165,7 +161,8 @@ pub fn constrain_expr(
                 cons.push(con);
             }
 
-            let fields_type = Type::Record(fields, Box::new(Type::Variable(*ext_var)));
+            let fields_type =
+                Type::Record(fields, TypeExtension::from_type(Type::Variable(*ext_var)));
             let record_type = Type::Variable(*record_var);
 
             // NOTE from elm compiler: fields_type is separate so that Error propagates better
@@ -720,7 +717,7 @@ pub fn constrain_expr(
             let label = field.clone();
             rec_field_types.insert(label, RecordField::Demanded(field_type));
 
-            let record_type = Type::Record(rec_field_types, Box::new(ext_type));
+            let record_type = Type::Record(rec_field_types, TypeExtension::from_type(ext_type));
             let record_expected = Expected::NoExpectation(record_type);
 
             let category = Category::Access(field.clone());
@@ -767,7 +764,7 @@ pub fn constrain_expr(
             let mut field_types = SendMap::default();
             let label = field.clone();
             field_types.insert(label, RecordField::Demanded(field_type.clone()));
-            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
 
             let category = Category::Accessor(field.clone());
 
@@ -905,7 +902,7 @@ pub fn constrain_expr(
             let union_con = constraints.equal_types_with_storage(
                 Type::TagUnion(
                     vec![(name.clone(), types)],
-                    Box::new(Type::Variable(*ext_var)),
+                    TypeExtension::from_type(Type::Variable(*ext_var)),
                 ),
                 expected.clone(),
                 Category::TagApply {
@@ -951,7 +948,7 @@ pub fn constrain_expr(
                 Type::FunctionOrTagUnion(
                     name.clone(),
                     *closure_name,
-                    Box::new(Type::Variable(*ext_var)),
+                    TypeExtension::from_type(Type::Variable(*ext_var)),
                 ),
                 expected.clone(),
                 Category::TagApply {
@@ -1621,7 +1618,7 @@ fn constrain_closure_size(
         let tag_name = TagName::Closure(name);
         Type::TagUnion(
             vec![(tag_name, tag_arguments)],
-            Box::new(Type::Variable(closure_ext_var)),
+            TypeExtension::from_type(Type::Variable(closure_ext_var)),
         )
     };
 
@@ -1651,7 +1648,7 @@ fn instantiate_rigids(
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> InstantiateRigids {
     let mut annotation = annotation.clone();
-    let mut new_rigid_variables = Vec::new();
+    let mut new_rigid_variables: Vec<Variable> = Vec::new();
 
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
     for (name, var) in introduced_vars.var_by_name.iter() {
@@ -1660,23 +1657,24 @@ fn instantiate_rigids(
         match ftv.entry(name.clone()) {
             Occupied(occupied) => {
                 let existing_rigid = occupied.get();
-                rigid_substitution.insert(*var, Type::Variable(*existing_rigid));
+                rigid_substitution.insert(var.value, Type::Variable(*existing_rigid));
             }
             Vacant(vacant) => {
                 // It's possible to use this rigid in nested defs
-                vacant.insert(*var);
-                new_rigid_variables.push(*var);
+                vacant.insert(var.value);
+                new_rigid_variables.push(var.value);
             }
         }
     }
 
     // wildcards are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.wildcards.iter().copied());
+    new_rigid_variables.extend(introduced_vars.wildcards.iter().map(|v| v.value));
 
     // lambda set vars are always freshly introduced in this annotation
     new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
 
-    let new_infer_variables = introduced_vars.inferred.clone();
+    let new_infer_variables: Vec<Variable> =
+        introduced_vars.inferred.iter().map(|v| v.value).collect();
 
     // Instantiate rigid variables
     if !rigid_substitution.is_empty() {

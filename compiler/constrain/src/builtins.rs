@@ -6,9 +6,9 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::subs::Variable;
-use roc_types::types::Reason;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{AliasKind, Category};
+use roc_types::types::{Reason, TypeExtension};
 
 #[must_use]
 #[inline(always)]
@@ -190,7 +190,7 @@ pub fn num_floatingpoint(range: Type) -> Type {
             TagName::Private(Symbol::NUM_AT_FLOATINGPOINT),
             vec![range.clone()],
         )],
-        Box::new(Type::EmptyTagUnion),
+        TypeExtension::Closed,
     );
 
     builtin_alias(
@@ -209,7 +209,7 @@ pub fn num_u32() -> Type {
 fn num_unsigned32() -> Type {
     let alias_content = Type::TagUnion(
         vec![(TagName::Private(Symbol::NUM_AT_UNSIGNED32), vec![])],
-        Box::new(Type::EmptyTagUnion),
+        TypeExtension::Closed,
     );
 
     builtin_alias(Symbol::NUM_UNSIGNED32, vec![], Box::new(alias_content))
@@ -219,7 +219,7 @@ fn num_unsigned32() -> Type {
 pub fn num_binary64() -> Type {
     let alias_content = Type::TagUnion(
         vec![(TagName::Private(Symbol::NUM_AT_BINARY64), vec![])],
-        Box::new(Type::EmptyTagUnion),
+        TypeExtension::Closed,
     );
 
     builtin_alias(Symbol::NUM_BINARY64, vec![], Box::new(alias_content))
@@ -238,7 +238,7 @@ pub fn num_int(range: Type) -> Type {
 pub fn num_signed64() -> Type {
     let alias_content = Type::TagUnion(
         vec![(TagName::Private(Symbol::NUM_AT_SIGNED64), vec![])],
-        Box::new(Type::EmptyTagUnion),
+        TypeExtension::Closed,
     );
 
     builtin_alias(Symbol::NUM_SIGNED64, vec![], Box::new(alias_content))
@@ -251,7 +251,7 @@ pub fn num_integer(range: Type) -> Type {
             TagName::Private(Symbol::NUM_AT_INTEGER),
             vec![range.clone()],
         )],
-        Box::new(Type::EmptyTagUnion),
+        TypeExtension::Closed,
     );
 
     builtin_alias(
@@ -265,7 +265,7 @@ pub fn num_integer(range: Type) -> Type {
 pub fn num_num(typ: Type) -> Type {
     let alias_content = Type::TagUnion(
         vec![(TagName::Private(Symbol::NUM_AT_NUM), vec![typ.clone()])],
-        Box::new(Type::EmptyTagUnion),
+        TypeExtension::Closed,
     );
 
     builtin_alias(

@@ -9,4 +9,5 @@ edition = "2018"
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
+roc_types = { path = "../types" }
 roc_parse = { path = "../parse" }

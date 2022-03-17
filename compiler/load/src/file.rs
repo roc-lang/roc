@@ -36,7 +36,7 @@ use roc_solve::solve;
 use roc_target::TargetInfo;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types::{Alias, AliasCommon};
+use roc_types::types::{Alias, AliasCommon, TypeExtension};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -4123,7 +4123,7 @@ fn default_aliases() -> roc_solve::solve::Aliases {
                 TagName::Private(Symbol::NUM_AT_NUM),
                 vec![Type::Variable(tvar)],
             )],
-            Box::new(Type::EmptyTagUnion),
+            TypeExtension::Closed,
         );
 
         let alias = Alias {
@@ -4148,7 +4148,7 @@ fn default_aliases() -> roc_solve::solve::Aliases {
                 TagName::Private(Symbol::NUM_AT_FLOATINGPOINT),
                 vec![Type::Variable(tvar)],
             )],
-            Box::new(Type::EmptyTagUnion),
+            TypeExtension::Closed,
         );
 
         let alias = Alias {
@@ -4231,7 +4231,7 @@ fn default_aliases() -> roc_solve::solve::Aliases {
                 TagName::Private(Symbol::NUM_AT_INTEGER),
                 vec![Type::Variable(tvar)],
             )],
-            Box::new(Type::EmptyTagUnion),
+            TypeExtension::Closed,
         );
 
         let alias = Alias {
@@ -4256,7 +4256,7 @@ fn default_aliases() -> roc_solve::solve::Aliases {
                 (TagName::Global("Ok".into()), vec![Type::Variable(tvar1)]),
                 (TagName::Global("Err".into()), vec![Type::Variable(tvar2)]),
             ],
-            Box::new(Type::EmptyTagUnion),
+            TypeExtension::Closed,
         );
 
         let alias = Alias {
@@ -4277,7 +4277,7 @@ fn default_aliases() -> roc_solve::solve::Aliases {
     let mut unit_function = |alias_name: Symbol, at_tag_name: Symbol| {
         let typ = Type::TagUnion(
             vec![(TagName::Private(at_tag_name), vec![])],
-            Box::new(Type::EmptyTagUnion),
+            TypeExtension::Closed,
         );
 
         let alias = Alias {

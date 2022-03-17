@@ -259,7 +259,7 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     for var in output.introduced_variables.wildcards {
-        rigid_variables.wildcards.insert(var);
+        rigid_variables.wildcards.insert(var.value);
     }
 
     let mut referenced_values = MutSet::default();

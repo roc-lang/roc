@@ -294,14 +294,12 @@ pub fn canonicalize_defs<'a>(
         let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
         let mut is_phantom = false;
 
+        let mut var_by_name = can_ann.introduced_variables.var_by_name.clone();
         for loc_lowercase in vars.iter() {
-            if let Some(var) = can_ann
-                .introduced_variables
-                .var_by_name(&loc_lowercase.value)
-            {
+            if let Some(var) = var_by_name.remove(&loc_lowercase.value) {
                 // This is a valid lowercase rigid var for the type def.
                 can_vars.push(Loc {
-                    value: (loc_lowercase.value.clone(), *var),
+                    value: (loc_lowercase.value.clone(), var.value),
                     region: loc_lowercase.region,
                 });
             } else {
@@ -316,6 +314,33 @@ pub fn canonicalize_defs<'a>(
         }
 
         if is_phantom {
+            // Bail out
+            continue;
+        }
+
+        let IntroducedVariables {
+            wildcards,
+            inferred,
+            ..
+        } = can_ann.introduced_variables;
+        let num_unbound = var_by_name.len() + wildcards.len() + inferred.len();
+        if num_unbound > 0 {
+            let one_occurrence = var_by_name
+                .iter()
+                .map(|(_, v)| v)
+                .chain(wildcards.iter())
+                .chain(inferred.iter())
+                .next()
+                .unwrap()
+                .region;
+
+            env.problems.push(Problem::UnboundTypeVariable {
+                typ: symbol,
+                num_unbound,
+                one_occurrence,
+                kind,
+            });
+
             // Bail out
             continue;
         }
