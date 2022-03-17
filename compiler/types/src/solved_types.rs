@@ -1,5 +1,5 @@
 use crate::subs::{FlatType, GetSubsSlice, Subs, VarId, VarStore, Variable};
-use crate::types::{AliasKind, Problem, RecordField, Type, TypeExtension};
+use crate::types::{AliasCommon, AliasKind, Problem, RecordField, Type, TypeExtension};
 use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -55,6 +55,8 @@ pub enum SolvedType {
 
     /// A type alias
     /// TODO transmit lambda sets!
+    DelayedAlias(Symbol, Vec<(Lowercase, SolvedType)>, Vec<SolvedLambdaSet>),
+
     Alias(
         Symbol,
         Vec<(Lowercase, SolvedType)>,
@@ -193,6 +195,25 @@ impl SolvedType {
                 )
             }
             Erroneous(problem) => SolvedType::Erroneous(problem.clone()),
+            DelayedAlias(AliasCommon {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+            }) => {
+                let mut solved_args = Vec::with_capacity(type_arguments.len());
+
+                for (name, var) in type_arguments {
+                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
+                }
+
+                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
+
+                for var in lambda_set_variables {
+                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_type(solved_subs, &var.0)));
+                }
+
+                SolvedType::DelayedAlias(*symbol, solved_args, solved_lambda_sets)
+            }
             Alias {
                 symbol,
                 type_arguments,
@@ -579,6 +600,28 @@ pub fn to_type(
                 .expect("rec var not in unnamed vars");
 
             Type::RecursiveTagUnion(*rec_var, new_tags, ext)
+        }
+        DelayedAlias(symbol, solved_type_variables, solved_lambda_sets) => {
+            let mut type_variables = Vec::with_capacity(solved_type_variables.len());
+
+            for (lowercase, solved_arg) in solved_type_variables {
+                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
+            }
+
+            let mut lambda_set_variables = Vec::with_capacity(solved_lambda_sets.len());
+            for solved_set in solved_lambda_sets {
+                lambda_set_variables.push(crate::types::LambdaSet(to_type(
+                    &solved_set.0,
+                    free_vars,
+                    var_store,
+                )))
+            }
+
+            Type::DelayedAlias(AliasCommon {
+                symbol: *symbol,
+                type_arguments: type_variables,
+                lambda_set_variables,
+            })
         }
         Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual, kind) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());

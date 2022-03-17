@@ -7,7 +7,9 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, AliasKind, LambdaSet, Problem, RecordField, Type, TypeExtension};
+use roc_types::types::{
+    Alias, AliasCommon, AliasKind, LambdaSet, Problem, RecordField, Type, TypeExtension,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -341,22 +343,43 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    let (type_arguments, lambda_set_variables, actual) =
-                        instantiate_and_freshen_alias_type(
-                            var_store,
-                            introduced_variables,
-                            &alias.type_variables,
-                            args,
-                            &alias.lambda_set_variables,
-                            alias.typ.clone(),
-                        );
+                    // For now, aliases of function types cannot be delayed.
+                    // This is a limitation of the current implementation,
+                    // and this totally should be possible in the future.
+                    let is_import = !symbol.is_builtin() && (env.home != symbol.module_id());
+                    let is_structural = alias.kind == AliasKind::Structural;
+                    if !is_import && is_structural && alias.lambda_set_variables.is_empty() {
+                        let mut type_var_to_arg = Vec::new();
 
-                    Type::Alias {
-                        symbol,
-                        type_arguments,
-                        lambda_set_variables,
-                        actual: Box::new(actual),
-                        kind: alias.kind,
+                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
+                            let name = loc_var.value.0.clone();
+
+                            type_var_to_arg.push((name, arg_ann));
+                        }
+
+                        Type::DelayedAlias(AliasCommon {
+                            symbol,
+                            type_arguments: type_var_to_arg,
+                            lambda_set_variables: alias.lambda_set_variables.clone(),
+                        })
+                    } else {
+                        let (type_arguments, lambda_set_variables, actual) =
+                            instantiate_and_freshen_alias_type(
+                                var_store,
+                                introduced_variables,
+                                &alias.type_variables,
+                                args,
+                                &alias.lambda_set_variables,
+                                alias.typ.clone(),
+                            );
+
+                        Type::Alias {
+                            symbol,
+                            type_arguments,
+                            lambda_set_variables,
+                            actual: Box::new(actual),
+                            kind: alias.kind,
+                        }
                     }
                 }
                 None => Type::Apply(symbol, args, region),
@@ -688,7 +711,7 @@ fn can_extension_type<'a>(
                 local_aliases,
                 references,
             );
-            if valid_extension_type(ext_type.shallow_dealias()) {
+            if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
                 ext_type
             } else {
                 // Report an error but mark the extension variable to be inferred
@@ -710,6 +733,29 @@ fn can_extension_type<'a>(
         }
         None => empty_ext_type,
     }
+}
+
+/// a shallow dealias, continue until the first constructor is not an alias.
+fn shallow_dealias_with_scope<'a>(scope: &'a mut Scope, typ: &'a Type) -> &'a Type {
+    let mut result = typ;
+    loop {
+        match result {
+            Type::Alias { actual, .. } => {
+                // another loop
+                result = actual;
+            }
+            Type::DelayedAlias(AliasCommon { symbol, .. }) => match scope.lookup_alias(*symbol) {
+                None => unreachable!(),
+                Some(alias) => {
+                    result = &alias.typ;
+                }
+            },
+
+            _ => break,
+        }
+    }
+
+    result
 }
 
 pub fn instantiate_and_freshen_alias_type(

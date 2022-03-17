@@ -2678,7 +2678,7 @@ fn unwrap_num_tag<'a>(
         Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
             debug_assert!(args.len() == 1);
 
-            let precision_var = subs[args.variables().into_iter().next().unwrap()];
+            let precision_var = subs[args.all_variables().into_iter().next().unwrap()];
 
             let precision = subs.get_content_without_compacting(precision_var);
 
@@ -2714,7 +2714,7 @@ fn unwrap_num_tag<'a>(
         Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _, _) => {
             debug_assert!(args.len() == 1);
 
-            let precision_var = subs[args.variables().into_iter().next().unwrap()];
+            let precision_var = subs[args.all_variables().into_iter().next().unwrap()];
 
             let precision = subs.get_content_without_compacting(precision_var);
 

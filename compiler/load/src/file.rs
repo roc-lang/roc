@@ -14,7 +14,7 @@ use roc_constrain::module::{
     ExposedModuleTypes,
 };
 use roc_error_macros::internal_error;
-use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
+use roc_module::ident::{Ident, ModuleName, QualifiedModuleName, TagName};
 use roc_module::symbol::{
     IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, PackageQualified,
     Symbol,
@@ -36,7 +36,7 @@ use roc_solve::solve;
 use roc_target::TargetInfo;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types::Alias;
+use roc_types::types::{Alias, AliasCommon, TypeExtension};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -2039,6 +2039,12 @@ fn finish_specialization(
     subs: Subs,
     exposed_to_host: ExposedToHost,
 ) -> Result<MonomorphizedModule, LoadingProblem> {
+    if false {
+        println!(
+            "total Type clones: {} ",
+            roc_types::types::get_type_clone_count()
+        );
+    }
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
@@ -3161,8 +3167,19 @@ fn run_solve<'a>(
     let actual_constraint =
         constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
 
-    let (solved_subs, solved_env, problems) =
-        roc_solve::module::run_solve(&constraints, actual_constraint, rigid_variables, subs);
+    let mut solve_aliases = default_aliases();
+
+    for (name, alias) in aliases.iter() {
+        solve_aliases.insert(*name, alias.clone());
+    }
+
+    let (solved_subs, solved_env, problems) = roc_solve::module::run_solve(
+        &constraints,
+        actual_constraint,
+        rigid_variables,
+        subs,
+        solve_aliases,
+    );
 
     let exposed_vars_by_symbol: Vec<_> = solved_env
         .vars_by_symbol()
@@ -4084,4 +4101,211 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
     report.render_color_terminal(&mut buf, &alloc, &palette);
 
     buf
+}
+
+/// Builtin aliases that are not covered by type checker optimizations
+///
+/// Types like `F64` and `I32` are hardcoded into Subs and therefore we don't define them here.
+/// All that remains are the generic number types (Num, Int, Float) and Result
+fn default_aliases() -> roc_solve::solve::Aliases {
+    use roc_types::types::Type;
+
+    let mut solve_aliases = roc_solve::solve::Aliases::default();
+
+    let mut var_store = VarStore::default();
+
+    {
+        let symbol = Symbol::NUM_NUM;
+        let tvar = var_store.fresh();
+
+        let typ = Type::TagUnion(
+            vec![(
+                TagName::Private(Symbol::NUM_AT_NUM),
+                vec![Type::Variable(tvar)],
+            )],
+            TypeExtension::Closed,
+        );
+
+        let alias = Alias {
+            region: Region::zero(),
+            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
+            lambda_set_variables: Default::default(),
+            recursion_variables: Default::default(),
+            typ,
+            kind: roc_types::types::AliasKind::Structural,
+        };
+
+        solve_aliases.insert(symbol, alias);
+    }
+
+    // FloatingPoint range : [ @FloatingPoint range ]
+    {
+        let symbol = Symbol::NUM_FLOATINGPOINT;
+        let tvar = var_store.fresh();
+
+        let typ = Type::TagUnion(
+            vec![(
+                TagName::Private(Symbol::NUM_AT_FLOATINGPOINT),
+                vec![Type::Variable(tvar)],
+            )],
+            TypeExtension::Closed,
+        );
+
+        let alias = Alias {
+            region: Region::zero(),
+            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
+            lambda_set_variables: Default::default(),
+            recursion_variables: Default::default(),
+            typ,
+            kind: roc_types::types::AliasKind::Structural,
+        };
+
+        solve_aliases.insert(symbol, alias);
+    }
+
+    // Int range : Num (Integer range)
+    {
+        let symbol = Symbol::NUM_INT;
+        let tvar = var_store.fresh();
+
+        let typ = Type::DelayedAlias(AliasCommon {
+            symbol: Symbol::NUM_NUM,
+            type_arguments: vec![(
+                "range".into(),
+                Type::DelayedAlias(AliasCommon {
+                    symbol: Symbol::NUM_INTEGER,
+                    type_arguments: vec![("range".into(), Type::Variable(tvar))],
+                    lambda_set_variables: vec![],
+                }),
+            )],
+            lambda_set_variables: vec![],
+        });
+
+        let alias = Alias {
+            region: Region::zero(),
+            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
+            lambda_set_variables: Default::default(),
+            recursion_variables: Default::default(),
+            typ,
+            kind: roc_types::types::AliasKind::Structural,
+        };
+
+        solve_aliases.insert(symbol, alias);
+    }
+
+    {
+        let symbol = Symbol::NUM_FLOAT;
+        let tvar = var_store.fresh();
+
+        let typ = Type::DelayedAlias(AliasCommon {
+            symbol: Symbol::NUM_NUM,
+            type_arguments: vec![(
+                "range".into(),
+                Type::DelayedAlias(AliasCommon {
+                    symbol: Symbol::NUM_FLOATINGPOINT,
+                    type_arguments: vec![("range".into(), Type::Variable(tvar))],
+                    lambda_set_variables: vec![],
+                }),
+            )],
+            lambda_set_variables: vec![],
+        });
+
+        let alias = Alias {
+            region: Region::zero(),
+            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
+            lambda_set_variables: Default::default(),
+            recursion_variables: Default::default(),
+            typ,
+            kind: roc_types::types::AliasKind::Structural,
+        };
+
+        solve_aliases.insert(symbol, alias);
+    }
+
+    {
+        let symbol = Symbol::NUM_INTEGER;
+        let tvar = var_store.fresh();
+
+        let typ = Type::TagUnion(
+            vec![(
+                TagName::Private(Symbol::NUM_AT_INTEGER),
+                vec![Type::Variable(tvar)],
+            )],
+            TypeExtension::Closed,
+        );
+
+        let alias = Alias {
+            region: Region::zero(),
+            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
+            lambda_set_variables: Default::default(),
+            recursion_variables: Default::default(),
+            typ,
+            kind: roc_types::types::AliasKind::Structural,
+        };
+
+        solve_aliases.insert(symbol, alias);
+    }
+
+    {
+        let symbol = Symbol::RESULT_RESULT;
+        let tvar1 = var_store.fresh();
+        let tvar2 = var_store.fresh();
+
+        let typ = Type::TagUnion(
+            vec![
+                (TagName::Global("Ok".into()), vec![Type::Variable(tvar1)]),
+                (TagName::Global("Err".into()), vec![Type::Variable(tvar2)]),
+            ],
+            TypeExtension::Closed,
+        );
+
+        let alias = Alias {
+            region: Region::zero(),
+            type_variables: vec![
+                Loc::at_zero(("ok".into(), tvar1)),
+                Loc::at_zero(("err".into(), tvar2)),
+            ],
+            lambda_set_variables: Default::default(),
+            recursion_variables: Default::default(),
+            typ,
+            kind: roc_types::types::AliasKind::Structural,
+        };
+
+        solve_aliases.insert(symbol, alias);
+    }
+
+    let mut unit_function = |alias_name: Symbol, at_tag_name: Symbol| {
+        let typ = Type::TagUnion(
+            vec![(TagName::Private(at_tag_name), vec![])],
+            TypeExtension::Closed,
+        );
+
+        let alias = Alias {
+            region: Region::zero(),
+            type_variables: vec![],
+            lambda_set_variables: Default::default(),
+            recursion_variables: Default::default(),
+            typ,
+            kind: roc_types::types::AliasKind::Structural,
+        };
+
+        solve_aliases.insert(alias_name, alias);
+    };
+
+    unit_function(Symbol::NUM_SIGNED8, Symbol::NUM_AT_SIGNED8);
+    unit_function(Symbol::NUM_SIGNED16, Symbol::NUM_AT_SIGNED16);
+    unit_function(Symbol::NUM_SIGNED32, Symbol::NUM_AT_SIGNED32);
+    unit_function(Symbol::NUM_SIGNED64, Symbol::NUM_AT_SIGNED64);
+    unit_function(Symbol::NUM_SIGNED128, Symbol::NUM_AT_SIGNED128);
+
+    unit_function(Symbol::NUM_UNSIGNED8, Symbol::NUM_AT_UNSIGNED8);
+    unit_function(Symbol::NUM_UNSIGNED16, Symbol::NUM_AT_UNSIGNED16);
+    unit_function(Symbol::NUM_UNSIGNED32, Symbol::NUM_AT_UNSIGNED32);
+    unit_function(Symbol::NUM_UNSIGNED64, Symbol::NUM_AT_UNSIGNED64);
+    unit_function(Symbol::NUM_UNSIGNED128, Symbol::NUM_AT_UNSIGNED128);
+
+    unit_function(Symbol::NUM_BINARY32, Symbol::NUM_AT_BINARY32);
+    unit_function(Symbol::NUM_BINARY64, Symbol::NUM_AT_BINARY64);
+
+    solve_aliases
 }

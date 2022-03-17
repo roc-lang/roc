@@ -8476,7 +8476,7 @@ pub fn num_argument_to_int_or_float(
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
-            let var = subs[args.variables().into_iter().next().unwrap()];
+            let var = subs[args.all_variables().into_iter().next().unwrap()];
             num_argument_to_int_or_float(subs, target_info, var, false)
         }
 
@@ -8494,7 +8494,7 @@ pub fn num_argument_to_int_or_float(
                     debug_assert!(args.len() == 1);
 
                     // Recurse on the second argument
-                    let var = subs[args.variables().into_iter().next().unwrap()];
+                    let var = subs[args.all_variables().into_iter().next().unwrap()];
                     num_argument_to_int_or_float(subs, target_info, var, true)
                 }
 

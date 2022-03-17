@@ -1773,7 +1773,7 @@ fn make_tag_union_of_alias_recursive<'a>(
         .map(|l| (l.value.0.clone(), Type::Variable(l.value.1)))
         .collect::<Vec<_>>();
 
-    make_tag_union_recursive_help(
+    let made_recursive = make_tag_union_recursive_help(
         env,
         Loc::at(alias.header_region(), (alias_name, &alias_args)),
         alias.region,
@@ -1781,7 +1781,24 @@ fn make_tag_union_of_alias_recursive<'a>(
         &mut alias.typ,
         var_store,
         can_report_error,
-    )
+    );
+
+    match made_recursive {
+        MakeTagUnionRecursive::Cyclic => Ok(()),
+        MakeTagUnionRecursive::MadeRecursive { recursion_variable } => {
+            alias.recursion_variables.clear();
+            alias.recursion_variables.insert(recursion_variable);
+
+            Ok(())
+        }
+        MakeTagUnionRecursive::InvalidRecursion => Err(()),
+    }
+}
+
+enum MakeTagUnionRecursive {
+    Cyclic,
+    MadeRecursive { recursion_variable: Variable },
+    InvalidRecursion,
 }
 
 /// Attempt to make a tag union recursive at the position of `recursive_alias`; for example,
@@ -1813,7 +1830,9 @@ fn make_tag_union_recursive_help<'a>(
     typ: &mut Type,
     var_store: &mut VarStore,
     can_report_error: &mut bool,
-) -> Result<(), ()> {
+) -> MakeTagUnionRecursive {
+    use MakeTagUnionRecursive::*;
+
     let Loc {
         value: (symbol, args),
         region: alias_region,
@@ -1821,15 +1840,17 @@ fn make_tag_union_recursive_help<'a>(
     let vars = args.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
     match typ {
         Type::TagUnion(tags, ext) => {
-            let rec_var = var_store.fresh();
-            let mut pending_typ = Type::RecursiveTagUnion(rec_var, tags.to_vec(), ext.clone());
+            let recursion_variable = var_store.fresh();
+            let mut pending_typ =
+                Type::RecursiveTagUnion(recursion_variable, tags.to_vec(), ext.clone());
             let substitution_result =
-                pending_typ.substitute_alias(symbol, &vars, &Type::Variable(rec_var));
+                pending_typ.substitute_alias(symbol, &vars, &Type::Variable(recursion_variable));
             match substitution_result {
                 Ok(()) => {
                     // We can substitute the alias presence for the variable exactly.
                     *typ = pending_typ;
-                    Ok(())
+
+                    MadeRecursive { recursion_variable }
                 }
                 Err(differing_recursion_region) => {
                     env.problems.push(Problem::NestedDatatype {
@@ -1837,11 +1858,14 @@ fn make_tag_union_recursive_help<'a>(
                         def_region: alias_region,
                         differing_recursion_region,
                     });
-                    Err(())
+
+                    InvalidRecursion
                 }
             }
         }
-        Type::RecursiveTagUnion(_, _, _) => Ok(()),
+        Type::RecursiveTagUnion(recursion_variable, _, _) => MadeRecursive {
+            recursion_variable: *recursion_variable,
+        },
         Type::Alias {
             actual,
             type_arguments,
@@ -1859,7 +1883,7 @@ fn make_tag_union_recursive_help<'a>(
             mark_cyclic_alias(env, typ, symbol, region, others, *can_report_error);
             *can_report_error = false;
 
-            Ok(())
+            Cyclic
         }
     }
 }
