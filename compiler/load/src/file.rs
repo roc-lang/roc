@@ -2039,7 +2039,7 @@ fn finish_specialization(
     subs: Subs,
     exposed_to_host: ExposedToHost,
 ) -> Result<MonomorphizedModule, LoadingProblem> {
-    if true {
+    if false {
         println!(
             "total Type clones: {} ",
             roc_types::types::get_type_clone_count()
