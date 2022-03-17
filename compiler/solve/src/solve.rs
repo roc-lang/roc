@@ -13,7 +13,7 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasKind, Category, ErrorType, PatternCategory,
+    gather_fields_unsorted_iter, AliasKind, Category, ErrorType, PatternCategory, TypeExtension,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
 
@@ -807,7 +807,7 @@ fn solve(
                 let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
                 let tag_ty = Type::TagUnion(
                     vec![(tag_name.clone(), tys.to_vec())],
-                    Box::new(Type::EmptyTagUnion),
+                    TypeExtension::Closed,
                 );
                 let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
 
@@ -1106,7 +1106,7 @@ fn type_to_variable<'a>(
             Record(fields, ext) => {
                 // An empty fields is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyRecord in canonicalization
-                debug_assert!(!fields.is_empty() || !ext.is_empty_record());
+                debug_assert!(!fields.is_empty() || !ext.is_closed());
 
                 let mut field_vars = Vec::with_capacity_in(fields.len(), arena);
 
@@ -1123,7 +1123,10 @@ fn type_to_variable<'a>(
                     field_vars.push((field.clone(), field_var));
                 }
 
-                let temp_ext_var = helper!(ext);
+                let temp_ext_var = match ext {
+                    TypeExtension::Open(ext) => helper!(ext),
+                    TypeExtension::Closed => Variable::EMPTY_RECORD,
+                };
 
                 let (it, new_ext_var) =
                     gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var)
@@ -1146,7 +1149,7 @@ fn type_to_variable<'a>(
             TagUnion(tags, ext) => {
                 // An empty tags is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyTagUnion in canonicalization
-                debug_assert!(!tags.is_empty() || !ext.is_empty_tag_union());
+                debug_assert!(!tags.is_empty() || !ext.is_closed());
 
                 let (union_tags, ext) =
                     type_to_union_tags(subs, rank, pools, arena, tags, ext, &mut stack);
@@ -1155,7 +1158,10 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
             FunctionOrTagUnion(tag_name, symbol, ext) => {
-                let temp_ext_var = helper!(ext);
+                let temp_ext_var = match ext {
+                    TypeExtension::Open(ext) => helper!(ext),
+                    TypeExtension::Closed => Variable::EMPTY_TAG_UNION,
+                };
 
                 let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
                     subs,
@@ -1177,7 +1183,7 @@ fn type_to_variable<'a>(
             RecursiveTagUnion(rec_var, tags, ext) => {
                 // An empty tags is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyTagUnion in canonicalization
-                debug_assert!(!tags.is_empty() || !ext.is_empty_tag_union());
+                debug_assert!(!tags.is_empty() || !ext.is_closed());
 
                 let (union_tags, ext) =
                     type_to_union_tags(subs, rank, pools, arena, tags, ext, &mut stack);
@@ -1316,7 +1322,7 @@ fn roc_result_to_var<'a>(
 ) -> Variable {
     match result_type {
         Type::TagUnion(tags, ext) => {
-            debug_assert!(ext.is_empty_tag_union());
+            debug_assert!(ext.is_closed());
             debug_assert!(tags.len() == 2);
 
             if let [(err, err_args), (ok, ok_args)] = &tags[..] {
@@ -1560,40 +1566,46 @@ fn type_to_union_tags<'a>(
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
     tags: &'a [(TagName, Vec<Type>)],
-    ext: &'a Type,
+    ext: &'a TypeExtension,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> (UnionTags, Variable) {
     use bumpalo::collections::Vec;
 
     let sorted = tags.len() == 1 || sorted_no_duplicates(tags);
 
-    if ext.is_empty_tag_union() {
-        let ext = Variable::EMPTY_TAG_UNION;
+    match ext {
+        TypeExtension::Closed => {
+            let ext = Variable::EMPTY_TAG_UNION;
 
-        let union_tags = if sorted {
-            insert_tags_fast_path(subs, rank, pools, arena, tags, stack)
-        } else {
-            let tag_vars = Vec::with_capacity_in(tags.len(), arena);
-            insert_tags_slow_path(subs, rank, pools, arena, tags, tag_vars, stack)
-        };
+            let union_tags = if sorted {
+                insert_tags_fast_path(subs, rank, pools, arena, tags, stack)
+            } else {
+                let tag_vars = Vec::with_capacity_in(tags.len(), arena);
+                insert_tags_slow_path(subs, rank, pools, arena, tags, tag_vars, stack)
+            };
 
-        (union_tags, ext)
-    } else {
-        let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
+            (union_tags, ext)
+        }
+        TypeExtension::Open(ext) => {
+            let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
 
-        let temp_ext_var = RegisterVariable::with_stack(subs, rank, pools, arena, ext, stack);
-        let (it, ext) =
-            roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext_var);
+            let temp_ext_var = RegisterVariable::with_stack(subs, rank, pools, arena, ext, stack);
+            let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
+                subs,
+                UnionTags::default(),
+                temp_ext_var,
+            );
 
-        tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
+            tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
 
-        let union_tags = if tag_vars.is_empty() && sorted {
-            insert_tags_fast_path(subs, rank, pools, arena, tags, stack)
-        } else {
-            insert_tags_slow_path(subs, rank, pools, arena, tags, tag_vars, stack)
-        };
+            let union_tags = if tag_vars.is_empty() && sorted {
+                insert_tags_fast_path(subs, rank, pools, arena, tags, stack)
+            } else {
+                insert_tags_slow_path(subs, rank, pools, arena, tags, tag_vars, stack)
+            };
 
-        (union_tags, ext)
+            (union_tags, ext)
+        }
     }
 }
 
