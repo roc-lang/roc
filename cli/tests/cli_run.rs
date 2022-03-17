@@ -73,7 +73,6 @@ mod cli_run {
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
         let flags = &["--check"];
         let out = run_roc(&[&["format", file.to_str().unwrap()], &flags[..]].concat());
-
         if expects_success_exit_code {
             assert!(out.status.success());
         } else {
@@ -940,7 +939,7 @@ mod cli_run {
         // This fails, because "NotFormatted.roc" is present in this folder
         check_format_check_as_expected(&fixtures_dir("format"), false);
 
-        // This doesn't fail, since only "Formatted.roc" is present in this folder
+        // This doesn't fail, since only "Formatted.roc" and non-roc files are present in this folder
         check_format_check_as_expected(&fixtures_dir("format/formatted_directory"), true);
     }
 }
