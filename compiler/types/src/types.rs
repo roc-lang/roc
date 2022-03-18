@@ -1063,41 +1063,41 @@ impl Type {
         region: Region,
         aliases: &ImMap<Symbol, Alias>,
         var_store: &mut VarStore,
-        introduced: &mut ImSet<Variable>,
+        lambda_set_variables: &mut ImSet<Variable>,
     ) {
         use Type::*;
 
         match self {
             Function(args, closure, ret) => {
                 for arg in args {
-                    arg.instantiate_aliases(region, aliases, var_store, introduced);
+                    arg.instantiate_aliases(region, aliases, var_store, lambda_set_variables);
                 }
-                closure.instantiate_aliases(region, aliases, var_store, introduced);
-                ret.instantiate_aliases(region, aliases, var_store, introduced);
+                closure.instantiate_aliases(region, aliases, var_store, lambda_set_variables);
+                ret.instantiate_aliases(region, aliases, var_store, lambda_set_variables);
             }
             FunctionOrTagUnion(_, _, ext) => {
                 if let TypeExtension::Open(ext) = ext {
-                    ext.instantiate_aliases(region, aliases, var_store, introduced);
+                    ext.instantiate_aliases(region, aliases, var_store, lambda_set_variables);
                 }
             }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
-                        x.instantiate_aliases(region, aliases, var_store, introduced);
+                        x.instantiate_aliases(region, aliases, var_store, lambda_set_variables);
                     }
                 }
 
                 if let TypeExtension::Open(ext) = ext {
-                    ext.instantiate_aliases(region, aliases, var_store, introduced);
+                    ext.instantiate_aliases(region, aliases, var_store, lambda_set_variables);
                 }
             }
             Record(fields, ext) => {
                 for (_, x) in fields.iter_mut() {
-                    x.instantiate_aliases(region, aliases, var_store, introduced);
+                    x.instantiate_aliases(region, aliases, var_store, lambda_set_variables);
                 }
 
                 if let TypeExtension::Open(ext) = ext {
-                    ext.instantiate_aliases(region, aliases, var_store, introduced);
+                    ext.instantiate_aliases(region, aliases, var_store, lambda_set_variables);
                 }
             }
             DelayedAlias(AliasCommon { .. }) => {
