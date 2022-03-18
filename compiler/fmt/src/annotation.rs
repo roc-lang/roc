@@ -3,7 +3,9 @@ use crate::{
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
-use roc_parse::ast::{AssignedField, Collection, Expr, Tag, TypeAnnotation, TypeHeader};
+use roc_parse::ast::{
+    AssignedField, Collection, Expr, ExtractSpaces, HasClause, Tag, TypeAnnotation, TypeHeader,
+};
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
@@ -159,6 +161,10 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             Apply(_, _, args) => args.iter().any(|loc_arg| loc_arg.value.is_multiline()),
             As(lhs, _, _) => lhs.value.is_multiline(),
 
+            Where(annot, has_clauses) => {
+                annot.is_multiline() || has_clauses.iter().any(|has| has.is_multiline())
+            }
+
             Record { fields, ext } => {
                 match ext {
                     Some(ann) if ann.value.is_multiline() => return true,
@@ -288,6 +294,15 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     buf.spaces(1);
                     var.value
                         .format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
+                }
+            }
+
+            Where(annot, has_clauses) => {
+                annot.format_with_options(buf, parens, newlines, indent);
+                buf.push_str(" ");
+                for (i, has) in has_clauses.iter().enumerate() {
+                    buf.push_str(if i == 0 { "| " } else { ", " });
+                    has.format_with_options(buf, parens, newlines, indent);
                 }
             }
 
@@ -512,5 +527,24 @@ impl<'a> Formattable for Tag<'a> {
                 buf.push_str(raw);
             }
         }
+    }
+}
+
+impl<'a> Formattable for HasClause<'a> {
+    fn is_multiline(&self) -> bool {
+        self.var.value.is_multiline() || self.ability.is_multiline()
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        parens: Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.push_str(self.var.value.extract_spaces().item);
+        buf.push_str(" has ");
+        self.ability
+            .format_with_options(buf, parens, newlines, indent);
     }
 }

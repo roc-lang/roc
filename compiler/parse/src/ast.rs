@@ -23,6 +23,20 @@ pub enum Spaced<'a, T> {
     SpaceAfter(&'a Spaced<'a, T>, &'a [CommentOrNewline<'a>]),
 }
 
+impl<'a, T> Spaced<'a, T> {
+    /// A `Spaced` is multiline if it has newlines or comments before or after the item, since
+    /// comments induce newlines!
+    pub fn is_multiline(&self) -> bool {
+        match self {
+            Spaced::Item(_) => false,
+            Spaced::SpaceBefore(_, spaces) | Spaced::SpaceAfter(_, spaces) => {
+                debug_assert!(!spaces.is_empty());
+                true
+            }
+        }
+    }
+}
+
 impl<'a, T: Debug> Debug for Spaced<'a, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -248,6 +262,22 @@ impl<'a> TypeHeader<'a> {
     }
 }
 
+/// The `has` keyword associated with ability definitions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Has<'a> {
+    Has,
+    SpaceBefore(&'a Has<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Has<'a>, &'a [CommentOrNewline<'a>]),
+}
+
+/// An ability demand is a value defining the ability; for example `hash : a -> U64 | a has Hash`
+/// for a `Hash` ability.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AbilityDemand<'a> {
+    pub name: Loc<Spaced<'a, &'a str>>,
+    pub typ: Loc<TypeAnnotation<'a>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns
@@ -267,6 +297,15 @@ pub enum Def<'a> {
     Opaque {
         header: TypeHeader<'a>,
         typ: Loc<TypeAnnotation<'a>>,
+    },
+
+    /// An ability definition. E.g.
+    ///   Hash has
+    ///     hash : a -> U64 | a has Hash
+    Ability {
+        header: TypeHeader<'a>,
+        loc_has: Loc<Has<'a>>,
+        demands: &'a [AbilityDemand<'a>],
     },
 
     // TODO in canonicalization, check to see if there are any newlines after the
@@ -302,6 +341,13 @@ impl<'a> Def<'a> {
         debug_assert!(!matches!(def, Def::SpaceBefore(_, _)));
         (spaces, def)
     }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct HasClause<'a> {
+    pub var: Loc<Spaced<'a, &'a str>>,
+    // Should always be a zero-argument `Apply`; we'll check this in canonicalization
+    pub ability: Loc<TypeAnnotation<'a>>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -342,6 +388,9 @@ pub enum TypeAnnotation<'a> {
 
     /// The `*` type variable, e.g. in (List *)
     Wildcard,
+
+    /// A "where" clause demanding abilities designated by a `|`, e.g. `a -> U64 | a has Hash`
+    Where(&'a Loc<TypeAnnotation<'a>>, &'a [Loc<HasClause<'a>>]),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a TypeAnnotation<'a>, &'a [CommentOrNewline<'a>]),
@@ -811,6 +860,15 @@ impl<'a> Spaceable<'a> for Def<'a> {
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Def::SpaceAfter(self, spaces)
+    }
+}
+
+impl<'a> Spaceable<'a> for Has<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Has::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Has::SpaceAfter(self, spaces)
     }
 }
 

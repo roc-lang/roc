@@ -3,15 +3,24 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
-    bool_type, dec_type, dict_type, f32_type, f64_type, float_type, i128_type, i16_type, i32_type,
-    i64_type, i8_type, int_type, list_type, nat_type, num_type, ordering_type, result_type,
-    set_type, str_type, str_utf8_byte_problem_type, u128_type, u16_type, u32_type, u64_type,
-    u8_type,
+    bool_type, box_type, dec_type, dict_type, f32_type, f64_type, float_type, i128_type, i16_type,
+    i32_type, i64_type, i8_type, int_type, list_type, nat_type, num_type, ordering_type,
+    result_type, set_type, str_type, str_utf8_byte_problem_type, u128_type, u16_type, u32_type,
+    u64_type, u8_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
 use roc_types::types::RecordField;
 use std::collections::HashMap;
+
+lazy_static::lazy_static! {
+    static ref STDLIB: StdLib = standard_stdlib();
+}
+
+/// A global static that stores our initialized standard library definitions
+pub fn borrow_stdlib() -> &'static StdLib {
+    &STDLIB
+}
 
 /// Example:
 ///
@@ -592,7 +601,21 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::NUM_TO_U128_CHECKED,
         vec![int_type(flex(TVAR1))],
-        Box::new(result_type(u128_type(), out_of_bounds)),
+        Box::new(result_type(u128_type(), out_of_bounds.clone())),
+    );
+
+    // toNat : Int * -> Nat
+    add_top_level_function_type!(
+        Symbol::NUM_TO_NAT,
+        vec![int_type(flex(TVAR1))],
+        Box::new(nat_type()),
+    );
+
+    // toNatChecked : Int * -> Result Nat [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_NAT_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(nat_type(), out_of_bounds)),
     );
 
     // toStr : Num a -> Str
@@ -1780,6 +1803,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::RESULT_IS_ERR,
         vec![result_type(flex(TVAR1), flex(TVAR3))],
         Box::new(bool_type()),
+    );
+
+    // Box.box : a -> Box a
+    add_top_level_function_type!(
+        Symbol::BOX_BOX_FUNCTION,
+        vec![flex(TVAR1)],
+        Box::new(box_type(flex(TVAR1))),
+    );
+
+    // Box.unbox : Box a -> a
+    add_top_level_function_type!(
+        Symbol::BOX_UNBOX,
+        vec![box_type(flex(TVAR1))],
+        Box::new(flex(TVAR1)),
     );
 
     types

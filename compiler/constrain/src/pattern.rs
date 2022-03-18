@@ -9,7 +9,9 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
-use roc_types::types::{AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type};
+use roc_types::types::{
+    AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type, TypeExtension,
+};
 
 #[derive(Default)]
 pub struct PatternState {
@@ -391,7 +393,7 @@ pub fn constrain_pattern(
                 state.vars.push(*var);
             }
 
-            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
 
             let whole_con = constraints.equal_types(
                 Type::Variable(*whole_var),
@@ -504,12 +506,22 @@ pub fn constrain_pattern(
             );
 
             // Link the entire wrapped opaque type (with the now-constrained argument) to the type
-            // variables of the opaque type
-            // TODO: better expectation here
-            let link_type_variables_con = constraints.equal_types(
-                (**specialized_def_type).clone(),
-                Expected::NoExpectation(arg_pattern_type),
-                Category::OpaqueWrap(*opaque),
+            // variables of the opaque type.
+            //
+            // For example, suppose we have `O k := [ A k, B k ]`, and the pattern `@O (A s) -> s == ""`.
+            // Previous constraints will have solved `typeof s ~ Str`, and we have the
+            // `specialized_def_type` being `[ A k1, B k1 ]`, specializing `k` as `k1` for this opaque
+            // usage.
+            // We now want to link `typeof s ~ k1`, so to capture this relationship, we link
+            // the type of `A s` (the arg type) to `[ A k1, B k1 ]` (the specialized opaque type).
+            //
+            // This must **always** be a presence constraint, that is enforcing
+            // `[ A k1, B k1 ] += typeof (A s)`, because we are in a destructure position and not
+            // all constructors are covered in this branch!
+            let link_type_variables_con = constraints.pattern_presence(
+                arg_pattern_type,
+                PExpected::NoExpectation((**specialized_def_type).clone()),
+                PatternCategory::Opaque(*opaque),
                 loc_arg_pattern.region,
             );
 

@@ -117,6 +117,7 @@ impl<'a> Formattable for Expr<'a> {
     ) {
         use self::Expr::*;
 
+        //dbg!(self);
         let format_newlines = newlines == Newlines::Yes;
         let apply_needs_parens = parens == Parens::InApply;
 
@@ -453,14 +454,17 @@ fn fmt_bin_ops<'a, 'buf>(
         || (&loc_right_side.value).is_multiline()
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
+    let mut curr_indent = indent;
+
     for (loc_left_side, loc_bin_op) in lefts {
         let bin_op = loc_bin_op.value;
 
-        loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, indent);
+        loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, curr_indent);
 
         if is_multiline {
             buf.newline();
-            buf.indent(indent + INDENT);
+            curr_indent = indent + INDENT;
+            buf.indent(curr_indent);
         } else {
             buf.spaces(1);
         }

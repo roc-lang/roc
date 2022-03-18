@@ -1,12 +1,15 @@
 use crate::env::Env;
 use crate::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
+use roc_error_macros::todo_abilities;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, AliasKind, LambdaSet, Problem, RecordField, Type};
+use roc_types::types::{
+    Alias, AliasCommon, AliasKind, LambdaSet, Problem, RecordField, Type, TypeExtension,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -28,25 +31,27 @@ pub struct IntroducedVariables {
     // But then between annotations, the same name can occur multiple times,
     // but a variable can only have one name. Therefore
     // `ftv : SendMap<Variable, Lowercase>`.
-    pub wildcards: Vec<Variable>,
+    pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,
-    pub inferred: Vec<Variable>,
-    pub var_by_name: SendMap<Lowercase, Variable>,
+    pub inferred: Vec<Loc<Variable>>,
+    // NB: A mapping of a -> Loc<v1> in this map has the region of the first-seen var, but there
+    // may be multiple occurrences of it!
+    pub var_by_name: SendMap<Lowercase, Loc<Variable>>,
     pub name_by_var: SendMap<Variable, Lowercase>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {
-    pub fn insert_named(&mut self, name: Lowercase, var: Variable) {
+    pub fn insert_named(&mut self, name: Lowercase, var: Loc<Variable>) {
         self.var_by_name.insert(name.clone(), var);
-        self.name_by_var.insert(var, name);
+        self.name_by_var.insert(var.value, name);
     }
 
-    pub fn insert_wildcard(&mut self, var: Variable) {
+    pub fn insert_wildcard(&mut self, var: Loc<Variable>) {
         self.wildcards.push(var);
     }
 
-    pub fn insert_inferred(&mut self, var: Variable) {
+    pub fn insert_inferred(&mut self, var: Loc<Variable>) {
         self.inferred.push(var);
     }
 
@@ -69,7 +74,7 @@ impl IntroducedVariables {
     }
 
     pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {
-        self.var_by_name.get(name)
+        self.var_by_name.get(name).map(|v| &v.value)
     }
 
     pub fn name_by_var(&self, var: Variable) -> Option<&Lowercase> {
@@ -242,6 +247,7 @@ pub fn find_type_def_symbols(
             SpaceBefore(inner, _) | SpaceAfter(inner, _) => {
                 stack.push(inner);
             }
+            Where(..) => todo_abilities!(),
             Inferred | Wildcard | Malformed(_) => {}
         }
     }
@@ -284,7 +290,7 @@ fn can_annotation_help(
             let ret = can_annotation_help(
                 env,
                 &return_type.value,
-                region,
+                return_type.region,
                 scope,
                 var_store,
                 introduced_variables,
@@ -312,7 +318,7 @@ fn can_annotation_help(
                 let arg_ann = can_annotation_help(
                     env,
                     &arg.value,
-                    region,
+                    arg.region,
                     scope,
                     var_store,
                     introduced_variables,
@@ -337,22 +343,43 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    let (type_arguments, lambda_set_variables, actual) =
-                        instantiate_and_freshen_alias_type(
-                            var_store,
-                            introduced_variables,
-                            &alias.type_variables,
-                            args,
-                            &alias.lambda_set_variables,
-                            alias.typ.clone(),
-                        );
+                    // For now, aliases of function types cannot be delayed.
+                    // This is a limitation of the current implementation,
+                    // and this totally should be possible in the future.
+                    let is_import = !symbol.is_builtin() && (env.home != symbol.module_id());
+                    let is_structural = alias.kind == AliasKind::Structural;
+                    if !is_import && is_structural && alias.lambda_set_variables.is_empty() {
+                        let mut type_var_to_arg = Vec::new();
 
-                    Type::Alias {
-                        symbol,
-                        type_arguments,
-                        lambda_set_variables,
-                        actual: Box::new(actual),
-                        kind: alias.kind,
+                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
+                            let name = loc_var.value.0.clone();
+
+                            type_var_to_arg.push((name, arg_ann));
+                        }
+
+                        Type::DelayedAlias(AliasCommon {
+                            symbol,
+                            type_arguments: type_var_to_arg,
+                            lambda_set_variables: alias.lambda_set_variables.clone(),
+                        })
+                    } else {
+                        let (type_arguments, lambda_set_variables, actual) =
+                            instantiate_and_freshen_alias_type(
+                                var_store,
+                                introduced_variables,
+                                &alias.type_variables,
+                                args,
+                                &alias.lambda_set_variables,
+                                alias.typ.clone(),
+                            );
+
+                        Type::Alias {
+                            symbol,
+                            type_arguments,
+                            lambda_set_variables,
+                            actual: Box::new(actual),
+                            kind: alias.kind,
+                        }
                     }
                 }
                 None => Type::Apply(symbol, args, region),
@@ -366,7 +393,7 @@ fn can_annotation_help(
                 None => {
                     let var = var_store.fresh();
 
-                    introduced_variables.insert_named(name, var);
+                    introduced_variables.insert_named(name, Loc::at(region, var));
 
                     Type::Variable(var)
                 }
@@ -430,7 +457,8 @@ fn can_annotation_help(
                 } else {
                     let var = var_store.fresh();
 
-                    introduced_variables.insert_named(var_name.clone(), var);
+                    introduced_variables
+                        .insert_named(var_name.clone(), Loc::at(loc_var.region, var));
                     vars.push((var_name.clone(), Type::Variable(var)));
 
                     lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
@@ -537,7 +565,7 @@ fn can_annotation_help(
                         // just `a` does not mean the same as `{}a`, so even
                         // if there are no fields, still make this a `Record`,
                         // not an EmptyRec
-                        Type::Record(Default::default(), Box::new(ext_type))
+                        Type::Record(Default::default(), TypeExtension::from_type(ext_type))
                     }
 
                     None => Type::EmptyRec,
@@ -554,7 +582,7 @@ fn can_annotation_help(
                     references,
                 );
 
-                Type::Record(field_types, Box::new(ext_type))
+                Type::Record(field_types, TypeExtension::from_type(ext_type))
             }
         }
         TagUnion { tags, ext, .. } => {
@@ -575,7 +603,7 @@ fn can_annotation_help(
                         // just `a` does not mean the same as `{}a`, so even
                         // if there are no fields, still make this a `Record`,
                         // not an EmptyRec
-                        Type::TagUnion(Default::default(), Box::new(ext_type))
+                        Type::TagUnion(Default::default(), TypeExtension::from_type(ext_type))
                     }
 
                     None => Type::EmptyTagUnion,
@@ -597,7 +625,7 @@ fn can_annotation_help(
                 // in theory we save a lot of time by sorting once here
                 insertion_sort_by(&mut tag_types, |a, b| a.0.cmp(&b.0));
 
-                Type::TagUnion(tag_types, Box::new(ext_type))
+                Type::TagUnion(tag_types, TypeExtension::from_type(ext_type))
             }
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_annotation_help(
@@ -613,7 +641,7 @@ fn can_annotation_help(
         Wildcard => {
             let var = var_store.fresh();
 
-            introduced_variables.insert_wildcard(var);
+            introduced_variables.insert_wildcard(Loc::at(region, var));
 
             Type::Variable(var)
         }
@@ -622,16 +650,17 @@ fn can_annotation_help(
             // make a fresh unconstrained variable, and let the type solver fill it in for us 🤠
             let var = var_store.fresh();
 
-            introduced_variables.insert_inferred(var);
+            introduced_variables.insert_inferred(Loc::at(region, var));
 
             Type::Variable(var)
         }
+        Where(..) => todo_abilities!(),
         Malformed(string) => {
             malformed(env, region, string);
 
             let var = var_store.fresh();
 
-            introduced_variables.insert_wildcard(var);
+            introduced_variables.insert_wildcard(Loc::at(region, var));
 
             Type::Variable(var)
         }
@@ -682,7 +711,7 @@ fn can_extension_type<'a>(
                 local_aliases,
                 references,
             );
-            if valid_extension_type(ext_type.shallow_dealias()) {
+            if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
                 ext_type
             } else {
                 // Report an error but mark the extension variable to be inferred
@@ -697,13 +726,36 @@ fn can_extension_type<'a>(
 
                 let var = var_store.fresh();
 
-                introduced_variables.insert_inferred(var);
+                introduced_variables.insert_inferred(Loc::at_zero(var));
 
                 Type::Variable(var)
             }
         }
         None => empty_ext_type,
     }
+}
+
+/// a shallow dealias, continue until the first constructor is not an alias.
+fn shallow_dealias_with_scope<'a>(scope: &'a mut Scope, typ: &'a Type) -> &'a Type {
+    let mut result = typ;
+    loop {
+        match result {
+            Type::Alias { actual, .. } => {
+                // another loop
+                result = actual;
+            }
+            Type::DelayedAlias(AliasCommon { symbol, .. }) => match scope.lookup_alias(*symbol) {
+                None => unreachable!(),
+                Some(alias) => {
+                    result = &alias.typ;
+                }
+            },
+
+            _ => break,
+        }
+    }
+
+    result
 }
 
 pub fn instantiate_and_freshen_alias_type(
@@ -866,7 +918,10 @@ fn can_assigned_fields<'a>(
                             Type::Variable(*var)
                         } else {
                             let field_var = var_store.fresh();
-                            introduced_variables.insert_named(field_name.clone(), field_var);
+                            introduced_variables.insert_named(
+                                field_name.clone(),
+                                Loc::at(loc_field_name.region, field_var),
+                            );
                             Type::Variable(field_var)
                         }
                     };

@@ -594,6 +594,10 @@ impl<'a> WasmBackend<'a> {
                 index,
             } => self.expr_union_at_index(*structure, *tag_id, union_layout, *index, sym),
 
+            Expr::ExprBox { .. } | Expr::ExprUnbox { .. } => {
+                todo!("Expression `{}`", expr.to_pretty(100))
+            }
+
             Expr::Reuse { .. } | Expr::Reset { .. } | Expr::RuntimeErrorFunction(_) => {
                 todo!("Expression `{}`", expr.to_pretty(100))
             }
@@ -932,11 +936,13 @@ impl<'a> WasmBackend<'a> {
                 }
                 _ => internal_error!("Cannot create struct {:?} with storage {:?}", sym, storage),
             };
-        } else {
+        } else if !fields.is_empty() {
             // Struct expression but not Struct layout => single element. Copy it.
             let field_storage = self.storage.get(&fields[0]).to_owned();
             self.storage
                 .clone_value(&mut self.code_builder, storage, &field_storage, fields[0]);
+        } else {
+            // Empty record. Nothing to do.
         }
     }
 

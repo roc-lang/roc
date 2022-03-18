@@ -124,6 +124,8 @@ pub enum LowLevel {
     PtrCast,
     RefCountInc,
     RefCountDec,
+    BoxExpr,
+    UnboxExpr,
 }
 
 macro_rules! higher_order {

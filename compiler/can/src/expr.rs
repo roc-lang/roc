@@ -493,7 +493,7 @@ pub fn canonicalize_expr<'a>(
                         Ok((name, opaque_def)) => {
                             let argument = Box::new(args.pop().unwrap());
                             output.references.referenced_type_defs.insert(name);
-                            output.references.lookups.insert(name);
+                            output.references.type_lookups.insert(name);
 
                             let (type_arguments, lambda_set_variables, specialized_def_type) =
                                 freshen_opaque_def(var_store, opaque_def);
@@ -587,7 +587,7 @@ pub fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Var { module_name, ident } => {
-            canonicalize_lookup(env, scope, module_name, ident, region)
+            canonicalize_var_lookup(env, scope, module_name, ident, region)
         }
         ast::Expr::Underscore(name) => {
             // we parse underscores, but they are not valid expression syntax
@@ -661,8 +661,12 @@ pub fn canonicalize_expr<'a>(
                 &loc_body_expr.value,
             );
 
-            let mut captured_symbols: MutSet<Symbol> =
-                new_output.references.lookups.iter().copied().collect();
+            let mut captured_symbols: MutSet<Symbol> = new_output
+                .references
+                .value_lookups
+                .iter()
+                .copied()
+                .collect();
 
             // filter out the closure's name itself
             captured_symbols.remove(&symbol);
@@ -684,7 +688,10 @@ pub fn canonicalize_expr<'a>(
             output.union(new_output);
 
             // filter out aliases
-            captured_symbols.retain(|s| !output.references.referenced_type_defs.contains(s));
+            debug_assert!(captured_symbols
+                .iter()
+                .all(|s| !output.references.referenced_type_defs.contains(s)));
+            // captured_symbols.retain(|s| !output.references.referenced_type_defs.contains(s));
 
             // filter out functions that don't close over anything
             captured_symbols.retain(|s| !output.non_closures.contains(s));
@@ -693,7 +700,7 @@ pub fn canonicalize_expr<'a>(
             // went unreferenced. If any did, report them as unused arguments.
             for (sub_symbol, region) in scope.symbols() {
                 if !original_scope.contains_symbol(*sub_symbol) {
-                    if !output.references.has_lookup(*sub_symbol) {
+                    if !output.references.has_value_lookup(*sub_symbol) {
                         // The body never referenced this argument we declared. It's an unused argument!
                         env.problem(Problem::UnusedArgument(symbol, *sub_symbol, *region));
                     }
@@ -701,7 +708,7 @@ pub fn canonicalize_expr<'a>(
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
                     // references the (nonexistent) local variable x!
-                    output.references.lookups.remove(sub_symbol);
+                    output.references.value_lookups.remove(sub_symbol);
                 }
             }
 
@@ -1082,8 +1089,10 @@ fn canonicalize_when_branch<'a>(
     for (symbol, region) in scope.symbols() {
         let symbol = *symbol;
 
-        if !output.references.has_lookup(symbol)
-            && !branch_output.references.has_lookup(symbol)
+        if !output.references.has_value_lookup(symbol)
+            && !output.references.has_type_lookup(symbol)
+            && !branch_output.references.has_value_lookup(symbol)
+            && !branch_output.references.has_type_lookup(symbol)
             && !original_scope.contains_symbol(symbol)
         {
             env.problem(Problem::UnusedDef(symbol, *region));
@@ -1107,7 +1116,7 @@ pub fn local_successors<'a>(
     references: &'a References,
     closures: &'a MutMap<Symbol, References>,
 ) -> ImSet<Symbol> {
-    let mut answer = references.lookups.clone();
+    let mut answer = references.value_lookups.clone();
 
     for call_symbol in references.calls.iter() {
         answer = answer.union(call_successors(*call_symbol, closures));
@@ -1127,7 +1136,7 @@ fn call_successors(call_symbol: Symbol, closures: &MutMap<Symbol, References>) -
         }
 
         if let Some(references) = closures.get(&symbol) {
-            answer.extend(references.lookups.iter().copied());
+            answer.extend(references.value_lookups.iter().copied());
             queue.extend(references.calls.iter().copied());
 
             seen.insert(symbol);
@@ -1152,7 +1161,7 @@ where
         Some((_, refs)) => {
             visited.insert(defined_symbol);
 
-            for local in refs.lookups.iter() {
+            for local in refs.value_lookups.iter() {
                 if !visited.contains(local) {
                     let other_refs: References =
                         references_from_local(*local, visited, refs_by_def, closures);
@@ -1160,7 +1169,7 @@ where
                     answer = answer.union(other_refs);
                 }
 
-                answer.lookups.insert(*local);
+                answer.value_lookups.insert(*local);
             }
 
             for call in refs.calls.iter() {
@@ -1194,7 +1203,7 @@ where
 
             visited.insert(call_symbol);
 
-            for closed_over_local in references.lookups.iter() {
+            for closed_over_local in references.value_lookups.iter() {
                 if !visited.contains(closed_over_local) {
                     let other_refs =
                         references_from_local(*closed_over_local, visited, refs_by_def, closures);
@@ -1202,7 +1211,7 @@ where
                     answer = answer.union(other_refs);
                 }
 
-                answer.lookups.insert(*closed_over_local);
+                answer.value_lookups.insert(*closed_over_local);
             }
 
             for call in references.calls.iter() {
@@ -1335,7 +1344,7 @@ fn canonicalize_field<'a>(
     }
 }
 
-fn canonicalize_lookup(
+fn canonicalize_var_lookup(
     env: &mut Env<'_>,
     scope: &mut Scope,
     module_name: &str,
@@ -1350,7 +1359,7 @@ fn canonicalize_lookup(
         // Look it up in scope!
         match scope.lookup(&(*ident).into(), region) {
             Ok(symbol) => {
-                output.references.lookups.insert(symbol);
+                output.references.value_lookups.insert(symbol);
 
                 Var(symbol)
             }
@@ -1365,7 +1374,7 @@ fn canonicalize_lookup(
         // Look it up in the env!
         match env.qualified_lookup(module_name, ident, region) {
             Ok(symbol) => {
-                output.references.lookups.insert(symbol);
+                output.references.value_lookups.insert(symbol);
 
                 Var(symbol)
             }

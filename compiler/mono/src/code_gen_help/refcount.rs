@@ -122,6 +122,7 @@ pub fn refcount_generic<'a>(
             refcount_generic(root, ident_ids, ctx, runtime_layout, structure)
         }
         Layout::RecursivePointer => rc_todo(),
+        Layout::Boxed(_) => rc_todo(),
     }
 }
 
@@ -155,6 +156,7 @@ pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
             is_rc_implemented_yet(&lambda_set.runtime_representation())
         }
         Layout::RecursivePointer => true,
+        Layout::Boxed(_) => false,
     }
 }
 

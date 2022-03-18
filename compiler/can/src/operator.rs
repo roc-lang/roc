@@ -96,6 +96,7 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         SpaceBefore(def, _) | SpaceAfter(def, _) => desugar_def(arena, def),
         alias @ Alias { .. } => *alias,
         opaque @ Opaque { .. } => *opaque,
+        ability @ Ability { .. } => *ability,
         ann @ Annotation(_, _) => *ann,
         AnnotatedBody {
             ann_pattern,

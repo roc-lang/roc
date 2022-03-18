@@ -2595,13 +2595,26 @@ mod test_fmt {
     }
 
     #[test]
-    fn pipline_apply_lambda() {
+    fn pipline_apply_lambda_1() {
         expr_formats_same(indoc!(
             r#"
             shout
                 |> List.map
                     xs
                     (\i -> i)
+            "#
+        ));
+    }
+
+    #[test]
+    fn pipline_apply_lambda_2() {
+        expr_formats_same(indoc!(
+            r#"
+            shout
+                |> List.map
+                    xs
+                    (\i -> i)
+                |> List.join
             "#
         ));
     }

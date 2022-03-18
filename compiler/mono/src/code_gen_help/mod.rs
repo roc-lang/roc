@@ -378,7 +378,13 @@ impl<'a> CodeGenHelp<'a> {
                 Layout::Union(UnionLayout::NonRecursive(new_tags.into_bump_slice()))
             }
 
-            Layout::Union(_) => layout,
+            Layout::Union(_) => {
+                // we always fully unroll recursive types. That means tha when we find a
+                // recursive tag union we can replace it with the layout
+                layout
+            }
+
+            Layout::Boxed(inner) => self.replace_rec_ptr(ctx, *inner),
 
             Layout::LambdaSet(lambda_set) => {
                 self.replace_rec_ptr(ctx, lambda_set.runtime_representation())
@@ -476,5 +482,7 @@ fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
         Layout::Union(_) => true,
 
         Layout::LambdaSet(_) | Layout::RecursivePointer => false,
+
+        Layout::Boxed(_) => true,
     }
 }

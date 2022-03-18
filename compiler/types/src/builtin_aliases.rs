@@ -972,6 +972,11 @@ pub fn result_type(a: SolvedType, e: SolvedType) -> SolvedType {
 }
 
 #[inline(always)]
+pub fn box_type(a: SolvedType) -> SolvedType {
+    SolvedType::Apply(Symbol::BOX_BOX_TYPE, vec![a])
+}
+
+#[inline(always)]
 fn result_alias_content(a: SolvedType, e: SolvedType) -> SolvedType {
     SolvedType::TagUnion(
         vec![

@@ -1035,6 +1035,8 @@ define_builtins! {
         142 NUM_TO_U64_CHECKED: "toU64Checked"
         143 NUM_TO_U128: "toU128"
         144 NUM_TO_U128_CHECKED: "toU128Checked"
+        145 NUM_TO_NAT: "toNat"
+        146 NUM_TO_NAT_CHECKED: "toNatChecked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
@@ -1199,6 +1201,12 @@ define_builtins! {
         14 SET_CONTAINS: "contains"
         15 SET_TO_DICT: "toDict"
     }
+    8 BOX: "Box" => {
+        0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
+        1 BOX_BOX_FUNCTION: "box" // Box.box
+        2 BOX_UNBOX: "unbox"
 
-    num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    }
+
+    num_modules: 9 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

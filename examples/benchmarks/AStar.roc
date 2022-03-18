@@ -25,14 +25,14 @@ cheapestOpen = \costFn, model ->
     model.openSet
         |> Set.toList
         |> List.keepOks
-        (\position ->
-                when Dict.get model.costs position is
-                    Err _ ->
-                        Err {}
+            (\position ->
+                    when Dict.get model.costs position is
+                        Err _ ->
+                            Err {}
 
-                    Ok cost ->
-                        Ok { cost: cost + costFn position, position }
-        )
+                        Ok cost ->
+                            Ok { cost: cost + costFn position, position }
+            )
         |> Quicksort.sortBy .cost
         |> List.first
         |> Result.map .position

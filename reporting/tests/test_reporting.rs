@@ -12,14 +12,14 @@ mod test_reporting {
     use crate::helpers::test_home;
     use crate::helpers::{can_expr, infer_expr, CanExprOut, ParseErrOut};
     use bumpalo::Bump;
+    use indoc::indoc;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_mono::ir::{Procs, Stmt, UpdateModeIds};
     use roc_mono::layout::LayoutCache;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
-        can_problem, mono_problem, parse_problem, type_problem, Report, Severity, BLUE_CODE,
-        BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE,
-        UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
+        can_problem, mono_problem, parse_problem, type_problem, Report, Severity, ANSI_STYLE_CODES,
+        DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
@@ -76,12 +76,24 @@ mod test_reporting {
         }
 
         for var in output.introduced_variables.wildcards {
-            subs.rigid_var(var, "*".into());
+            subs.rigid_var(var.value, "*".into());
+        }
+
+        let mut solve_aliases = roc_solve::solve::Aliases::default();
+
+        for (name, alias) in output.aliases {
+            solve_aliases.insert(name, alias);
         }
 
         let mut unify_problems = Vec::new();
-        let (_content, mut subs) =
-            infer_expr(subs, &mut unify_problems, &constraints, &constraint, var);
+        let (_content, mut subs) = infer_expr(
+            subs,
+            &mut unify_problems,
+            &constraints,
+            &constraint,
+            &mut solve_aliases,
+            var,
+        );
 
         name_all_type_vars(var, &mut subs);
 
@@ -288,16 +300,16 @@ mod test_reporting {
     }
 
     fn human_readable(str: &str) -> String {
-        str.replace(RED_CODE, "<red>")
-            .replace(WHITE_CODE, "<white>")
-            .replace(BLUE_CODE, "<blue>")
-            .replace(YELLOW_CODE, "<yellow>")
-            .replace(GREEN_CODE, "<green>")
-            .replace(CYAN_CODE, "<cyan>")
-            .replace(MAGENTA_CODE, "<magenta>")
-            .replace(RESET_CODE, "<reset>")
-            .replace(BOLD_CODE, "<bold>")
-            .replace(UNDERLINE_CODE, "<underline>")
+        str.replace(ANSI_STYLE_CODES.red, "<red>")
+            .replace(ANSI_STYLE_CODES.white, "<white>")
+            .replace(ANSI_STYLE_CODES.blue, "<blue>")
+            .replace(ANSI_STYLE_CODES.yellow, "<yellow>")
+            .replace(ANSI_STYLE_CODES.green, "<green>")
+            .replace(ANSI_STYLE_CODES.cyan, "<cyan>")
+            .replace(ANSI_STYLE_CODES.magenta, "<magenta>")
+            .replace(ANSI_STYLE_CODES.reset, "<reset>")
+            .replace(ANSI_STYLE_CODES.bold, "<bold>")
+            .replace(ANSI_STYLE_CODES.underline, "<underline>")
     }
 
     #[test]
@@ -426,8 +438,8 @@ mod test_reporting {
 
                 `Booly` is not used anywhere in your code.
 
-                3│  Booly : [ Yes, No, Maybe ]
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                1│  Booly : [ Yes, No ]
+                    ^^^^^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `Booly` then remove it so future readers
                 of your code don't wonder why it is there.
@@ -436,8 +448,8 @@ mod test_reporting {
 
                 `Booly` is not used anywhere in your code.
 
-                1│  Booly : [ Yes, No ]
-                    ^^^^^^^^^^^^^^^^^^^
+                3│  Booly : [ Yes, No, Maybe ]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `Booly` then remove it so future readers
                 of your code don't wonder why it is there.
@@ -1544,10 +1556,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
+                    Box
                     Bool
                     U8
                     F64
-                    Nat
                 "#
             ),
         )
@@ -2003,8 +2015,8 @@ mod test_reporting {
 
                     Ok
                     U8
+                    Box
                     f
-                    I8
                "#
             ),
         )
@@ -3727,10 +3739,10 @@ mod test_reporting {
                 Is there an import missing? Perhaps there is a typo. Did you mean one
                 of these?
 
+                    Box
                     Bool
                     Num
                     Set
-                    Str
                 "#
             ),
         )
@@ -7983,21 +7995,21 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
-
-                The `Bar` alias is recursive in an invalid way:
-
-                2│  Bar a : [ Stuff (Foo a) ]
-                    ^^^^^
-
-                The `Bar` alias depends on itself through the following chain of
+                
+                The `Foo` alias is recursive in an invalid way:
+                
+                1│  Foo a : [ Thing (Bar a) ]
+                    ^^^
+                
+                The `Foo` alias depends on itself through the following chain of
                 definitions:
-
+                
                     ┌─────┐
-                    │     Bar
-                    │     ↓
                     │     Foo
+                    │     ↓
+                    │     Bar
                     └─────┘
-
+                
                 Recursion in aliases is only allowed if recursion happens behind a
                 tagged union, at least one variant of which is not recursive.
                 "#
@@ -8185,7 +8197,7 @@ I need all branches in an `if` to have the same type!
                     Test
                     List
                     Num
-                    Set
+                    Box
                 "#
             ),
         )
@@ -8369,7 +8381,7 @@ I need all branches in an `if` to have the same type!
 
                 But all the previous branches match:
 
-                    F [ A ]
+                    F [ A ]a
                 "#
             ),
         )
@@ -8561,6 +8573,300 @@ I need all branches in an `if` to have the same type!
 
                 Note: A tag union extension variable can only contain a type variable
                 or another tag union.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unknown_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Type : [ Constructor UnknownType ]
+                
+                insertHelper : UnknownType, Type -> Type
+                insertHelper = \h, m ->
+                    when m is
+                        Constructor _ -> Constructor h 
+
+                insertHelper
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                I cannot find a `UnknownType` value
+
+                1│  Type : [ Constructor UnknownType ]
+                                         ^^^^^^^^^^^
+
+                Did you mean one of these?
+
+                    Type
+                    Unsigned8
+                    Unsigned32
+                    Unsigned16
+
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                I cannot find a `UnknownType` value
+
+                3│  insertHelper : UnknownType, Type -> Type
+                                                        ^^^^
+
+                Did you mean one of these?
+
+                    Type
+                    Unsigned8
+                    Unsigned32
+                    Unsigned16
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_first_demand_not_indented_enough() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                eq : a, a -> U64 | a has Eq
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                1│  Eq has
+                2│  eq : a, a -> U64 | a has Eq
+                    ^
+
+                I suspect this line is not indented enough (by 1 spaces)
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_demands_not_indented_with_first() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                    eq : a, a -> U64 | a has Eq
+                        neq : a, a -> U64 | a has Eq
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                2│      eq : a, a -> U64 | a has Eq
+                3│          neq : a, a -> U64 | a has Eq
+                            ^
+
+                I suspect this line is indented too much (by 4 spaces)
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_demand_value_has_args() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                    eq b c : a, a -> U64 | a has Eq
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                2│      eq b c : a, a -> U64 | a has Eq
+                           ^
+
+                I was expecting to see a : annotating the signature of this value
+                next.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_non_signature_expression() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                    123
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                1│  Eq has
+                2│      123
+                        ^
+
+                I was expecting to see a value signature next.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn wildcard_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : Int *
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I : Int *
+                            ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn wildcard_in_opaque() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I := Int *
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I := Int *
+                             ^
+
+                Tip: Type variables must be bound before the `:=`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn multiple_wildcards_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : [ A (Int *), B (Int *) ]
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has 2 unbound type variables.
+
+                Here is one occurrence:
+
+                1│  I : [ A (Int *), B (Int *) ]
+                                 ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn inference_var_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : Int _
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I : Int _
+                            ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unbound_var_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : Int a
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I : Int a
+                            ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
                 "#
             ),
         )

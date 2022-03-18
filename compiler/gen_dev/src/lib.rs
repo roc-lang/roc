@@ -875,6 +875,12 @@ trait Backend<'a> {
                             self.set_last_seen(*sym, stmt);
                         }
                     }
+                    Expr::ExprBox { symbol } => {
+                        self.set_last_seen(*symbol, stmt);
+                    }
+                    Expr::ExprUnbox { symbol } => {
+                        self.set_last_seen(*symbol, stmt);
+                    }
                     Expr::Struct(syms) => {
                         for sym in *syms {
                             self.set_last_seen(*sym, stmt);

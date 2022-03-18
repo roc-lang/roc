@@ -724,6 +724,23 @@ impl<'a> BorrowInfState<'a> {
                 // the function must take it as an owned parameter
                 self.own_args_if_param(xs);
             }
+
+            ExprBox { symbol: x } => {
+                self.own_var(z);
+
+                // if the used symbol is an argument to the current function,
+                // the function must take it as an owned parameter
+                self.own_args_if_param(&[*x]);
+            }
+
+            ExprUnbox { symbol: x } => {
+                // if the boxed value is owned, the box is
+                self.if_is_owned_then_own(*x, z);
+
+                // if the extracted value is owned, the structure must be too
+                self.if_is_owned_then_own(z, *x);
+            }
+
             Reset { symbol: x, .. } => {
                 self.own_var(z);
                 self.own_var(*x);
@@ -1011,6 +1028,10 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         SetToDict => arena.alloc_slice_copy(&[owned]),
 
         ExpectTrue => arena.alloc_slice_copy(&[irrelevant]),
+
+        BoxExpr | UnboxExpr => {
+            unreachable!("These lowlevel operations are turned into mono Expr's")
+        }
 
         PtrCast | RefCountInc | RefCountDec => {
             unreachable!("Only inserted *after* borrow checking: {:?}", op);
