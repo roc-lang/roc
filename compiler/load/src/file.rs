@@ -3354,9 +3354,21 @@ fn canonicalize_and_constrain<'a>(
                 after
             );
 
-            // module_output.aliases only has aliases defined in this module
-            // during solving, we need all aliases that were in scope
-            let aliases = module_output.scope.aliases.into_iter().collect();
+            // scope has imported aliases, but misses aliases from inner scopes
+            // module_output.aliases does have those aliases, so we combine them
+            let mut aliases = module_output.aliases;
+            for (name, alias) in module_output.scope.aliases {
+                match aliases.entry(name) {
+                    Occupied(_) => {
+                        // do nothing
+                    }
+                    Vacant(vacant) => {
+                        if !name.is_builtin() {
+                            vacant.insert(alias);
+                        }
+                    }
+                }
+            }
 
             let module = Module {
                 module_id,
