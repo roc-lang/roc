@@ -294,22 +294,27 @@ pub fn canonicalize_defs<'a>(
         let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
         let mut is_phantom = false;
 
-        let mut var_by_name = can_ann.introduced_variables.var_by_name.clone();
+        let mut named = can_ann.introduced_variables.named;
         for loc_lowercase in vars.iter() {
-            if let Some(var) = var_by_name.remove(&loc_lowercase.value) {
-                // This is a valid lowercase rigid var for the type def.
-                can_vars.push(Loc {
-                    value: (loc_lowercase.value.clone(), var.value),
-                    region: loc_lowercase.region,
-                });
-            } else {
-                is_phantom = true;
+            match named.iter().position(|nv| nv.name == loc_lowercase.value) {
+                Some(index) => {
+                    // This is a valid lowercase rigid var for the type def.
+                    let named_variable = named.swap_remove(index);
 
-                env.problems.push(Problem::PhantomTypeArgument {
-                    typ: symbol,
-                    variable_region: loc_lowercase.region,
-                    variable_name: loc_lowercase.value.clone(),
-                });
+                    can_vars.push(Loc {
+                        value: (named_variable.name, named_variable.variable),
+                        region: loc_lowercase.region,
+                    });
+                }
+                None => {
+                    is_phantom = true;
+
+                    env.problems.push(Problem::PhantomTypeArgument {
+                        typ: symbol,
+                        variable_region: loc_lowercase.region,
+                        variable_name: loc_lowercase.value.clone(),
+                    });
+                }
             }
         }
 
@@ -323,13 +328,13 @@ pub fn canonicalize_defs<'a>(
             inferred,
             ..
         } = can_ann.introduced_variables;
-        let num_unbound = var_by_name.len() + wildcards.len() + inferred.len();
+        let num_unbound = named.len() + wildcards.len() + inferred.len();
         if num_unbound > 0 {
-            let one_occurrence = var_by_name
+            let one_occurrence = named
                 .iter()
-                .map(|(_, v)| v)
-                .chain(wildcards.iter())
-                .chain(inferred.iter())
+                .map(|nv| Loc::at(nv.first_seen, nv.variable))
+                .chain(wildcards)
+                .chain(inferred)
                 .next()
                 .unwrap()
                 .region;

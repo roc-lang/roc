@@ -254,8 +254,8 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    for (var, lowercase) in output.introduced_variables.name_by_var {
-        rigid_variables.named.insert(var, lowercase.clone());
+    for named in output.introduced_variables.named {
+        rigid_variables.named.insert(named.variable, named.name);
     }
 
     for var in output.introduced_variables.wildcards {
