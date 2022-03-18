@@ -5,7 +5,6 @@ use core::convert::From;
 use core::{fmt, mem, ptr, slice};
 use std::alloc::{alloc, dealloc, Layout};
 use std::os::raw::c_char;
-use std::str::FromStr;
 
 /// A string which can store identifiers using the small string optimization.
 /// It relies on the invariant that it cannot store null characters to store
