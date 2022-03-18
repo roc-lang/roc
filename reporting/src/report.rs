@@ -228,8 +228,8 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     magenta: html_color!("magenta"),
     cyan: html_color!("cyan"),
     white: html_color!("white"),
-    bold: "<span style='font-weight: bold'",
-    underline: "<span style='text-decoration: underline'",
+    bold: "<span style='font-weight: bold'>",
+    underline: "<span style='text-decoration: underline'>",
     reset: "</span>",
 };
 
