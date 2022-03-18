@@ -1144,6 +1144,16 @@ impl<'a> NameSection<'a> {
     const ID: SectionId = SectionId::Custom;
     const NAME: &'static str = "name";
 
+    pub fn size(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub fn append_function(&mut self, index: u32, name: &'a [u8]) {
+        index.serialize(&mut self.bytes);
+        name.serialize(&mut self.bytes);
+        self.functions.insert(name, index);
+    }
+
     pub fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
         // Custom section ID
         let section_id_byte = module_bytes[*cursor];
@@ -1161,17 +1171,13 @@ impl<'a> NameSection<'a> {
         let section_size = parse_u32_or_panic(module_bytes, cursor) as usize;
         let section_end = *cursor + section_size;
 
-        let mut bytes = Vec::with_capacity_in(section_size, arena);
-        bytes.extend_from_slice(&module_bytes[*cursor..section_end]);
-        let functions = MutMap::default();
-        let mut section = NameSection { bytes, functions };
+        let mut section = NameSection {
+            bytes: Vec::with_capacity_in(section_size, arena),
+            functions: MutMap::default(),
+        };
 
         section.parse_body(arena, module_bytes, cursor, section_end);
         section
-    }
-
-    pub fn size(&self) -> usize {
-        self.bytes.len()
     }
 
     fn parse_body(
@@ -1211,6 +1217,7 @@ impl<'a> NameSection<'a> {
 
         // Function names
         let num_entries = parse_u32_or_panic(module_bytes, cursor) as usize;
+        let fn_names_start = *cursor;
         for _ in 0..num_entries {
             let fn_index = parse_u32_or_panic(module_bytes, cursor);
             let name_bytes = parse_string_bytes(arena, module_bytes, cursor);
@@ -1218,14 +1225,31 @@ impl<'a> NameSection<'a> {
             self.functions
                 .insert(arena.alloc_slice_copy(name_bytes), fn_index);
         }
+
+        // Copy only the bytes for the function names segment
+        self.bytes
+            .extend_from_slice(&module_bytes[fn_names_start..*cursor]);
+
+        *cursor = section_end;
     }
 }
 
 impl<'a> Serialize for NameSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         if !self.bytes.is_empty() {
-            let header_indices = write_section_header(buffer, Self::ID);
+            let header_indices = write_custom_section_header(buffer, Self::NAME);
+
+            let subsection_id = NameSubSections::FunctionNames as u8;
+            subsection_id.serialize(buffer);
+
+            let subsection_byte_size = (MAX_SIZE_ENCODED_U32 + self.bytes.len()) as u32;
+            subsection_byte_size.serialize(buffer);
+
+            let num_entries = self.functions.len() as u32;
+            buffer.encode_padded_u32(num_entries);
+
             buffer.append_slice(&self.bytes);
+
             update_section_size(buffer, header_indices);
         }
     }
