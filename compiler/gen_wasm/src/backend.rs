@@ -239,7 +239,11 @@ impl<'a> WasmBackend<'a> {
     }
 
     fn append_proc_debug_name(&mut self, name: Symbol) {
-        let proc_index = self.proc_lookup.iter().position(|(n, _, _)| *n == name).unwrap();
+        let proc_index = self
+            .proc_lookup
+            .iter()
+            .position(|(n, _, _)| *n == name)
+            .unwrap();
         let wasm_fn_index = self.fn_index_offset + proc_index as u32;
 
         let mut debug_name = bumpalo::collections::String::with_capacity_in(64, self.env.arena);
