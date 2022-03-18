@@ -86,14 +86,13 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         module_src = &temp;
     }
 
-    let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         stdlib,
         src_dir,
-        exposed_types,
+        Default::default(),
         roc_target::TargetInfo::default_wasm32(),
     );
 

@@ -1,5 +1,5 @@
 // Adapted from https://github.com/sotrh/learn-wgpu
-// by Benjamin Hansen - license information can be found in the COPYRIGHT
+// by Benjamin Hansen - license information can be found in the LEGAL_DETAILS
 // file in the root directory of this distribution.
 //
 // Thank you, Benjamin!
@@ -159,7 +159,7 @@ impl StagingBuffer {
 }
 
 // Taken from https://github.com/sotrh/learn-wgpu
-// by Benjamin Hansen - license information can be found in the COPYRIGHT
+// by Benjamin Hansen - license information can be found in the LEGAL_DETAILS
 // file in the root directory of this distribution.
 //
 // Thank you, Benjamin!

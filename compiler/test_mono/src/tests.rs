@@ -96,15 +96,13 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         module_src = &temp;
     }
 
-    let exposed_types = MutMap::default();
-
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         &stdlib,
         src_dir,
-        exposed_types,
+        Default::default(),
         TARGET_INFO,
     );
 
@@ -1263,6 +1261,17 @@ fn issue_2535_polymorphic_fields_referenced_in_list() {
                 alpha.a,
                 alpha.b,
             ]
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_2725_alias_polymorphic_lambda() {
+    indoc!(
+        r#"
+        wrap = \value -> Tag value
+        wrapIt = wrap
+        wrapIt 42
         "#
     )
 }

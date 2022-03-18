@@ -2,3 +2,9 @@
 test-gen-llvm = "test -p test_gen"
 test-gen-dev = "test -p roc_gen_dev -p test_gen --no-default-features --features gen-dev"
 test-gen-wasm = "test -p roc_gen_wasm -p test_gen --no-default-features --features gen-wasm"
+
+[target.wasm32-unknown-unknown]
+# Rust compiler flags for minimum-sized .wasm binary in the web REPL
+# opt-level=s   Optimizations should focus more on size than speed
+# lto=fat       Spend extra effort on link-time optimization across crates
+rustflags = ["-Copt-level=s", "-Clto=fat"]

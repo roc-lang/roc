@@ -20,6 +20,7 @@ use roc_parse::parser::{EExpr, ELambda, SyntaxError};
 use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{compile_to_mono, format_answer, ReplOutput};
 use roc_repl_eval::{ReplApp, ReplAppMemory};
+use roc_reporting::report::DEFAULT_PALETTE;
 use roc_std::RocStr;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
@@ -197,7 +198,7 @@ fn gen_and_eval_llvm<'a>(
     let arena = Bump::new();
     let target_info = TargetInfo::from(&target);
 
-    let loaded = match compile_to_mono(&arena, src, target_info) {
+    let loaded = match compile_to_mono(&arena, src, target_info, DEFAULT_PALETTE) {
         Ok(x) => x,
         Err(prob_strings) => {
             return Ok(ReplOutput::Problems(prob_strings));

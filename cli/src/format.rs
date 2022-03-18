@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use crate::FormatMode;
 use bumpalo::collections::Vec;
@@ -9,8 +10,8 @@ use roc_fmt::module::fmt_module;
 use roc_fmt::Buf;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::ast::{
-    AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation,
-    TypeHeader, WhenBranch,
+    AbilityDemand, AssignedField, Collection, Expr, Has, HasClause, Pattern, Spaced, StrLiteral,
+    StrSegment, Tag, TypeAnnotation, TypeHeader, WhenBranch,
 };
 use roc_parse::header::{
     AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
@@ -39,7 +40,7 @@ fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> 
                                 let file_path = file.path();
                                 if file_path.is_dir() {
                                     to_flatten.push(file_path);
-                                } else if file_path.ends_with(".roc") {
+                                } else if is_roc_file(&file_path) {
                                     files.push(file_path);
                                 }
                             }
@@ -57,12 +58,17 @@ fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> 
                     error
                 ),
             }
-        } else {
-            files.push(path)
+        } else if is_roc_file(&path) {
+            files.push(path);
         }
     }
 
     files
+}
+
+fn is_roc_file(path: &Path) -> bool {
+    let ext = path.extension().and_then(OsStr::to_str);
+    return matches!(ext, Some("roc"));
 }
 
 pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
@@ -482,9 +488,36 @@ impl<'a> RemoveSpaces<'a> for Def<'a> {
                 body_pattern: arena.alloc(body_pattern.remove_spaces(arena)),
                 body_expr: arena.alloc(body_expr.remove_spaces(arena)),
             },
+            Def::Ability {
+                header: TypeHeader { name, vars },
+                loc_has,
+                demands,
+            } => Def::Ability {
+                header: TypeHeader {
+                    name: name.remove_spaces(arena),
+                    vars: vars.remove_spaces(arena),
+                },
+                loc_has: loc_has.remove_spaces(arena),
+                demands: demands.remove_spaces(arena),
+            },
             Def::Expect(a) => Def::Expect(arena.alloc(a.remove_spaces(arena))),
             Def::NotYetImplemented(a) => Def::NotYetImplemented(a),
             Def::SpaceBefore(a, _) | Def::SpaceAfter(a, _) => a.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for Has<'a> {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        Has::Has
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for AbilityDemand<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        AbilityDemand {
+            name: self.name.remove_spaces(arena),
+            typ: self.typ.remove_spaces(arena),
         }
     }
 }
@@ -679,12 +712,26 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
             },
             TypeAnnotation::Inferred => TypeAnnotation::Inferred,
             TypeAnnotation::Wildcard => TypeAnnotation::Wildcard,
+            TypeAnnotation::Where(annot, has_clauses) => TypeAnnotation::Where(
+                arena.alloc(annot.remove_spaces(arena)),
+                arena.alloc(has_clauses.remove_spaces(arena)),
+            ),
             TypeAnnotation::SpaceBefore(a, _) => a.remove_spaces(arena),
             TypeAnnotation::SpaceAfter(a, _) => a.remove_spaces(arena),
             TypeAnnotation::Malformed(a) => TypeAnnotation::Malformed(a),
         }
     }
 }
+
+impl<'a> RemoveSpaces<'a> for HasClause<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        HasClause {
+            var: self.var.remove_spaces(arena),
+            ability: self.ability.remove_spaces(arena),
+        }
+    }
+}
+
 impl<'a> RemoveSpaces<'a> for Tag<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {

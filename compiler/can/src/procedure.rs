@@ -45,7 +45,8 @@ impl Procedure {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct References {
     pub bound_symbols: ImSet<Symbol>,
-    pub lookups: ImSet<Symbol>,
+    pub type_lookups: ImSet<Symbol>,
+    pub value_lookups: ImSet<Symbol>,
     /// Aliases or opaque types referenced
     pub referenced_type_defs: ImSet<Symbol>,
     pub calls: ImSet<Symbol>,
@@ -57,7 +58,8 @@ impl References {
     }
 
     pub fn union(mut self, other: References) -> Self {
-        self.lookups = self.lookups.union(other.lookups);
+        self.value_lookups = self.value_lookups.union(other.value_lookups);
+        self.type_lookups = self.type_lookups.union(other.type_lookups);
         self.calls = self.calls.union(other.calls);
         self.bound_symbols = self.bound_symbols.union(other.bound_symbols);
         self.referenced_type_defs = self.referenced_type_defs.union(other.referenced_type_defs);
@@ -66,13 +68,18 @@ impl References {
     }
 
     pub fn union_mut(&mut self, other: References) {
-        self.lookups.extend(other.lookups);
+        self.value_lookups.extend(other.value_lookups);
+        self.type_lookups.extend(other.type_lookups);
         self.calls.extend(other.calls);
         self.bound_symbols.extend(other.bound_symbols);
         self.referenced_type_defs.extend(other.referenced_type_defs);
     }
 
-    pub fn has_lookup(&self, symbol: Symbol) -> bool {
-        self.lookups.contains(&symbol)
+    pub fn has_value_lookup(&self, symbol: Symbol) -> bool {
+        self.value_lookups.contains(&symbol)
+    }
+
+    pub fn has_type_lookup(&self, symbol: Symbol) -> bool {
+        self.type_lookups.contains(&symbol)
     }
 }

@@ -13,7 +13,7 @@
 // use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 // use crate::procedure::References;
 use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
-use roc_error_macros::todo_opaques;
+use roc_error_macros::{todo_abilities, todo_opaques};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, TypeHeader};
@@ -262,6 +262,7 @@ fn to_pending_def<'a>(
         }
 
         Opaque { .. } => todo_opaques!(),
+        Ability { .. } => todo_abilities!(),
 
         Expect(_) => todo!(),
 

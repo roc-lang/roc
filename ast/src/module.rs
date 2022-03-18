@@ -1,12 +1,11 @@
 use std::path::Path;
 
 use bumpalo::Bump;
-use roc_collections::all::MutMap;
 use roc_load::file::LoadedModule;
 use roc_target::TargetInfo;
 
 pub fn load_module(src_file: &Path) -> LoadedModule {
-    let subs_by_module = MutMap::default();
+    let subs_by_module = Default::default();
 
     let arena = Bump::new();
     let loaded = roc_load::file::load_and_typecheck(

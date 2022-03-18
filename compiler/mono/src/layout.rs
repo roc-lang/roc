@@ -1992,7 +1992,15 @@ pub fn union_sorted_tags<'a>(
 
     let mut tags_vec = std::vec::Vec::new();
     let result = match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
-        Ok(()) | Err((_, Content::FlexVar(_))) | Err((_, Content::RecursionVar { .. })) => {
+        Ok(())
+        // Admit type variables in the extension for now. This may come from things that never got
+        // monomorphized, like in
+        //   x : [ A ]*
+        //   x = A
+        //   x
+        // In such cases it's fine to drop the variable. We may be proven wrong in the future...
+        | Err((_, Content::FlexVar(_) | Content::RigidVar(_)))
+        | Err((_, Content::RecursionVar { .. })) => {
             let opt_rec_var = get_recursion_var(subs, var);
             union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, target_info)
         }
@@ -2590,7 +2598,7 @@ pub fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
     match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => ext_fields.is_empty(),
+        Ok(()) | Err((_, Content::FlexVar(_) | Content::RigidVar(_))) => ext_fields.is_empty(),
         Err(content) => panic!("invalid content in ext_var: {:?}", content),
     }
 }
@@ -2668,7 +2676,7 @@ fn unwrap_num_tag<'a>(
         Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
             debug_assert!(args.len() == 1);
 
-            let precision_var = subs[args.variables().into_iter().next().unwrap()];
+            let precision_var = subs[args.all_variables().into_iter().next().unwrap()];
 
             let precision = subs.get_content_without_compacting(precision_var);
 
@@ -2704,7 +2712,7 @@ fn unwrap_num_tag<'a>(
         Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _, _) => {
             debug_assert!(args.len() == 1);
 
-            let precision_var = subs[args.variables().into_iter().next().unwrap()];
+            let precision_var = subs[args.all_variables().into_iter().next().unwrap()];
 
             let precision = subs.get_content_without_compacting(precision_var);
 

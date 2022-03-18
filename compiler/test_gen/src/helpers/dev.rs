@@ -48,14 +48,13 @@ pub fn helper(
         module_src = &temp;
     }
 
-    let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         &stdlib,
         src_dir,
-        exposed_types,
+        Default::default(),
         roc_target::TargetInfo::default_x86_64(),
     );
 

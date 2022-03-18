@@ -112,6 +112,11 @@ pub struct PartialProcs<'a> {
     /// maps a function name (symbol) to an index
     symbols: Vec<'a, Symbol>,
 
+    /// An entry (a, b) means `a` directly references the lambda value of `b`,
+    /// i.e. this came from a `let a = b in ...` where `b` was defined as a
+    /// lambda earlier.
+    references: Vec<'a, (Symbol, Symbol)>,
+
     partial_procs: Vec<'a, PartialProc<'a>>,
 }
 
@@ -119,6 +124,7 @@ impl<'a> PartialProcs<'a> {
     fn new_in(arena: &'a Bump) -> Self {
         Self {
             symbols: Vec::new_in(arena),
+            references: Vec::new_in(arena),
             partial_procs: Vec::new_in(arena),
         }
     }
@@ -126,7 +132,16 @@ impl<'a> PartialProcs<'a> {
         self.symbol_to_id(symbol).is_some()
     }
 
-    fn symbol_to_id(&self, symbol: Symbol) -> Option<PartialProcId> {
+    fn symbol_to_id(&self, mut symbol: Symbol) -> Option<PartialProcId> {
+        while let Some(real_symbol) = self
+            .references
+            .iter()
+            .find(|(alias, _)| *alias == symbol)
+            .map(|(_, real)| real)
+        {
+            symbol = *real_symbol;
+        }
+
         self.symbols
             .iter()
             .position(|s| *s == symbol)
@@ -156,6 +171,21 @@ impl<'a> PartialProcs<'a> {
         self.partial_procs.push(partial_proc);
 
         id
+    }
+
+    pub fn insert_alias(&mut self, alias: Symbol, real_symbol: Symbol) {
+        debug_assert!(
+            !self.contains_key(alias),
+            "{:?} is inserted as a partial proc twice: that's a bug!",
+            alias,
+        );
+        debug_assert!(
+            self.contains_key(real_symbol),
+            "{:?} is not a partial proc or another alias: that's a bug!",
+            real_symbol,
+        );
+
+        self.references.push((alias, real_symbol));
     }
 }
 
@@ -6680,10 +6710,10 @@ where
     }
 
     // Otherwise we're dealing with an alias to something that doesn't need to be specialized, or
-    // whose usages will already be specialized in the rest of the program. Let's just build the
-    // rest of the program now to get our hole.
-    let mut result = build_rest(env, procs, layout_cache);
+    // whose usages will already be specialized in the rest of the program.
     if procs.is_imported_module_thunk(right) {
+        let result = build_rest(env, procs, layout_cache);
+
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
         add_needed_external(procs, env, variable, right);
@@ -6693,25 +6723,25 @@ where
 
         force_thunk(env, right, layout, left, env.arena.alloc(result))
     } else if env.is_imported_symbol(right) {
+        let result = build_rest(env, procs, layout_cache);
+
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
         add_needed_external(procs, env, variable, right);
 
         // then we must construct its closure; since imported symbols have no closure, we use the empty struct
         let_empty_struct(left, env.arena.alloc(result))
+    } else if procs.partial_procs.contains_key(right) {
+        // This is an alias to a function defined in this module.
+        // Attach the alias, then build the rest of the module, so that we reference and specialize
+        // the correct proc.
+        procs.partial_procs.insert_alias(left, right);
+        build_rest(env, procs, layout_cache)
     } else {
+        // This should be a fully specialized value. Replace the alias with the original symbol.
+        let mut result = build_rest(env, procs, layout_cache);
         substitute_in_exprs(env.arena, &mut result, left, right);
-
-        // if the substituted variable is a function, make sure we specialize it
-        reuse_function_symbol(
-            env,
-            procs,
-            layout_cache,
-            Some(variable),
-            right,
-            result,
-            right,
-        )
+        result
     }
 }
 
@@ -8446,7 +8476,7 @@ pub fn num_argument_to_int_or_float(
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
-            let var = subs[args.variables().into_iter().next().unwrap()];
+            let var = subs[args.all_variables().into_iter().next().unwrap()];
             num_argument_to_int_or_float(subs, target_info, var, false)
         }
 
@@ -8464,7 +8494,7 @@ pub fn num_argument_to_int_or_float(
                     debug_assert!(args.len() == 1);
 
                     // Recurse on the second argument
-                    let var = subs[args.variables().into_iter().next().unwrap()];
+                    let var = subs[args.all_variables().into_iter().next().unwrap()];
                     num_argument_to_int_or_float(subs, target_info, var, true)
                 }
 

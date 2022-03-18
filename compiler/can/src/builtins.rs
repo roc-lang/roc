@@ -264,6 +264,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_TO_U64_CHECKED => num_to_u64_checked,
         NUM_TO_U128 => num_to_u128,
         NUM_TO_U128_CHECKED => num_to_u128_checked,
+        NUM_TO_NAT => num_to_nat,
+        NUM_TO_NAT_CHECKED => num_to_nat_checked,
         NUM_TO_STR => num_to_str,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
@@ -474,6 +476,12 @@ fn num_to_u128(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
 }
 
+// Num.toNat : Int * -> Nat
+fn num_to_nat(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to IntCast
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
 fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) -> Def {
     let bool_var = var_store.fresh();
     let num_var_1 = var_store.fresh();
@@ -580,6 +588,7 @@ num_to_checked! {
     num_to_u32_checked
     num_to_u64_checked
     num_to_u128_checked
+    num_to_nat_checked
 }
 
 // Num.toStr : Num a -> Str

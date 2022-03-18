@@ -33,6 +33,7 @@ members = [
     "ast",
     "cli",
     "code_markup",
+    "highlight",
     "error_macros",
     "reporting",
     "repl_cli",

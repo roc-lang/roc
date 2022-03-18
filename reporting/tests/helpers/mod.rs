@@ -9,12 +9,12 @@ use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
-use roc_constrain::module::{constrain_imported_values, Import};
+use roc_constrain::module::introduce_builtin_imports;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::parser::{SourceError, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::Loc;
-use roc_solve::solve;
+use roc_solve::solve::{self, Aliases};
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
@@ -30,10 +30,11 @@ pub fn infer_expr(
     problems: &mut Vec<solve::TypeError>,
     constraints: &Constraints,
     constraint: &Constraint,
+    aliases: &mut Aliases,
     expr_var: Variable,
 ) -> (Content, Subs) {
     let env = solve::Env::default();
-    let (solved, _) = solve::run(constraints, &env, problems, subs, constraint);
+    let (solved, _) = solve::run(constraints, &env, problems, subs, aliases, constraint);
 
     let content = *solved.inner().get_content_without_compacting(expr_var);
 
@@ -163,19 +164,14 @@ pub fn can_expr_with<'a>(
         expected,
     );
 
-    let types = roc_builtins::std::types();
-
-    let imports: Vec<_> = types
-        .into_iter()
-        .map(|(symbol, (solved_type, region))| Import {
-            loc_symbol: Loc::at(region, symbol),
-            solved_type,
-        })
+    let imports = roc_builtins::std::borrow_stdlib()
+        .types
+        .keys()
+        .copied()
         .collect();
 
-    //load builtin values
-    let (_introduced_rigids, constraint) =
-        constrain_imported_values(&mut constraints, imports, constraint, &mut var_store);
+    let constraint =
+        introduce_builtin_imports(&mut constraints, imports, constraint, &mut var_store);
 
     let mut all_ident_ids = MutMap::default();
 

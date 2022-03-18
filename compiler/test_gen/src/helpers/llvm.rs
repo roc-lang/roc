@@ -3,7 +3,7 @@ use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
@@ -51,14 +51,13 @@ fn create_llvm_module<'a>(
         module_src = &temp;
     }
 
-    let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         stdlib,
         src_dir,
-        exposed_types,
+        Default::default(),
         target_info,
     );
 
