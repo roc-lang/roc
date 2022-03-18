@@ -8,7 +8,7 @@ use wasmer::{Memory, WasmPtr};
 
 use super::RefCount;
 use crate::helpers::from_wasmer_memory::FromWasmerMemory;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
 
