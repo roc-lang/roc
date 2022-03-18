@@ -3647,6 +3647,9 @@ dependencies = [
 [[package]]
 name = "roc_ident"
 version = "0.1.0"
+dependencies = [
+ "arrayvec 0.7.2",
+]
 
 [[package]]
 name = "roc_linker"
@@ -3702,6 +3705,7 @@ dependencies = [
 name = "roc_module"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
  "bumpalo",
  "lazy_static",
  "roc_collections",
