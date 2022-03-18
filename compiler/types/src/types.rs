@@ -886,7 +886,11 @@ impl Type {
                     TypeExtension::Closed => Ok(()),
                 }
             }
-            DelayedAlias(AliasCommon { type_arguments, .. }) => {
+            DelayedAlias(AliasCommon {
+                type_arguments,
+                lambda_set_variables,
+                ..
+            }) => {
                 for (_, ta) in type_arguments {
                     ta.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
@@ -966,12 +970,16 @@ impl Type {
             DelayedAlias(AliasCommon {
                 symbol,
                 type_arguments,
+                lambda_set_variables,
                 ..
             }) => {
                 symbol == &rep_symbol
                     || type_arguments
                         .iter()
                         .any(|v| v.1.contains_symbol(rep_symbol))
+                    || lambda_set_variables
+                        .iter()
+                        .any(|v| v.0.contains_symbol(rep_symbol))
             }
             Alias {
                 symbol: alias_symbol,
@@ -1406,9 +1414,17 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             // this rec var doesn't need to be in flex_vars or rigid_vars
             accum.remove(rec);
         }
-        DelayedAlias(AliasCommon { type_arguments, .. }) => {
+        DelayedAlias(AliasCommon {
+            type_arguments,
+            lambda_set_variables,
+            ..
+        }) => {
             for (_, arg) in type_arguments {
                 variables_help(arg, accum);
+            }
+
+            for lambda_set in lambda_set_variables {
+                variables_help(&lambda_set.0, accum);
             }
         }
         Alias {
@@ -1530,9 +1546,21 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
 
             accum.recursion_variables.insert(*rec);
         }
-        DelayedAlias(AliasCommon { type_arguments, .. }) => {
+        DelayedAlias(AliasCommon {
+            type_arguments,
+            lambda_set_variables,
+            ..
+        }) => {
             for (_, arg) in type_arguments {
                 variables_help_detailed(arg, accum);
+            }
+
+            for lambda_set in lambda_set_variables {
+                if let Type::Variable(v) = lambda_set.0 {
+                    accum.lambda_set_variables.push(v);
+                } else {
+                    variables_help_detailed(&lambda_set.0, accum);
+                }
             }
         }
         Alias {
