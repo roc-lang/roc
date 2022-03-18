@@ -16,6 +16,7 @@ mod cli_run {
         known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
         ValgrindErrorXWhat,
     };
+    use indoc::indoc;
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::path::{Path, PathBuf};
@@ -50,17 +51,17 @@ mod cli_run {
     }
 
     fn strip_colors(str: &str) -> String {
-        use roc_reporting::report::*;
-        str.replace(RED_CODE, "")
-            .replace(WHITE_CODE, "")
-            .replace(BLUE_CODE, "")
-            .replace(YELLOW_CODE, "")
-            .replace(GREEN_CODE, "")
-            .replace(CYAN_CODE, "")
-            .replace(MAGENTA_CODE, "")
-            .replace(RESET_CODE, "")
-            .replace(BOLD_CODE, "")
-            .replace(UNDERLINE_CODE, "")
+        use roc_reporting::report::ANSI_STYLE_CODES;
+        str.replace(ANSI_STYLE_CODES.red, "")
+            .replace(ANSI_STYLE_CODES.green, "")
+            .replace(ANSI_STYLE_CODES.yellow, "")
+            .replace(ANSI_STYLE_CODES.blue, "")
+            .replace(ANSI_STYLE_CODES.magenta, "")
+            .replace(ANSI_STYLE_CODES.cyan, "")
+            .replace(ANSI_STYLE_CODES.white, "")
+            .replace(ANSI_STYLE_CODES.bold, "")
+            .replace(ANSI_STYLE_CODES.underline, "")
+            .replace(ANSI_STYLE_CODES.reset, "")
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
@@ -73,7 +74,6 @@ mod cli_run {
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
         let flags = &["--check"];
         let out = run_roc(&[&["format", file.to_str().unwrap()], &flags[..]].concat());
-
         if expects_success_exit_code {
             assert!(out.status.success());
         } else {
@@ -940,7 +940,7 @@ mod cli_run {
         // This fails, because "NotFormatted.roc" is present in this folder
         check_format_check_as_expected(&fixtures_dir("format"), false);
 
-        // This doesn't fail, since only "Formatted.roc" is present in this folder
+        // This doesn't fail, since only "Formatted.roc" and non-roc files are present in this folder
         check_format_check_as_expected(&fixtures_dir("format/formatted_directory"), true);
     }
 }

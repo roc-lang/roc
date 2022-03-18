@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use roc_reporting::report::Palette;
 use std::path::{Path, PathBuf};
 
 use roc_fmt::annotation::Formattable;
@@ -6,6 +7,7 @@ use roc_fmt::annotation::{Newlines, Parens};
 use roc_load::file::{LoadingProblem, MonomorphizedModule};
 use roc_parse::ast::Expr;
 use roc_region::all::LineInfo;
+use roc_reporting::report::{can_problem, mono_problem, type_problem, RocDocAllocator};
 use roc_target::TargetInfo;
 
 use crate::eval::ToAstProblem;
@@ -43,11 +45,8 @@ pub fn compile_to_mono<'a>(
     arena: &'a Bump,
     src: &str,
     target_info: TargetInfo,
+    palette: Palette,
 ) -> Result<MonomorphizedModule<'a>, Vec<String>> {
-    use roc_reporting::report::{
-        can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
-    };
-
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
     let filename = PathBuf::from("REPL.roc");
     let src_dir = Path::new("fake/test/path");
@@ -99,7 +98,6 @@ pub fn compile_to_mono<'a>(
 
         let line_info = LineInfo::new(module_src);
         let src_lines: Vec<&str> = src.split('\n').collect();
-        let palette = DEFAULT_PALETTE;
 
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, *home, interns);
