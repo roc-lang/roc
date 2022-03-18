@@ -40,7 +40,8 @@ impl Output {
             self.tail_call = Some(later);
         }
 
-        self.introduced_variables.union(&other.introduced_variables);
+        self.introduced_variables
+            .union_owned(other.introduced_variables);
         self.aliases.extend(other.aliases);
         self.non_closures.extend(other.non_closures);
     }

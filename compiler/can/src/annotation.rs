@@ -80,6 +80,17 @@ impl IntroducedVariables {
         self.named.dedup_by(|nv1, nv2| nv1.name == nv2.name);
     }
 
+    pub fn union_owned(&mut self, other: Self) {
+        self.wildcards.extend(other.wildcards);
+        self.lambda_sets.extend(other.lambda_sets);
+        self.inferred.extend(other.inferred);
+        self.host_exposed_aliases.extend(other.host_exposed_aliases);
+
+        self.named.extend(other.named);
+        self.named.sort_by(|nv1, nv2| nv1.name.cmp(&nv2.name));
+        self.named.dedup_by(|nv1, nv2| nv1.name == nv2.name);
+    }
+
     pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {
         self.named
             .iter()
