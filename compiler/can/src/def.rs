@@ -11,7 +11,7 @@ use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::Scope;
-use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{default_hasher, ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_error_macros::todo_abilities;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -922,6 +922,22 @@ fn single_can_def(
     }
 }
 
+fn add_annotation_aliases(
+    type_annotation: &crate::annotation::Annotation,
+    aliases: &mut ImMap<Symbol, Alias>,
+) {
+    for (name, alias) in type_annotation.aliases.iter() {
+        match aliases.entry(*name) {
+            ImEntry::Occupied(_) => {
+                // do nothing
+            }
+            ImEntry::Vacant(vacant) => {
+                vacant.insert(alias.clone());
+            }
+        }
+    }
+}
+
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::cognitive_complexity)]
@@ -955,7 +971,7 @@ fn canonicalize_pending_def<'a>(
                 output.references.referenced_type_defs.insert(*symbol);
             }
 
-            aliases.extend(type_annotation.aliases.clone());
+            add_annotation_aliases(&type_annotation, aliases);
 
             output
                 .introduced_variables
@@ -1077,9 +1093,7 @@ fn canonicalize_pending_def<'a>(
                 output.references.referenced_type_defs.insert(*symbol);
             }
 
-            for (symbol, alias) in type_annotation.aliases.clone() {
-                aliases.insert(symbol, alias);
-            }
+            add_annotation_aliases(&type_annotation, aliases);
 
             output
                 .introduced_variables
