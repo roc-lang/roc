@@ -23,7 +23,7 @@ pub struct Annotation {
 pub struct NamedVariable {
     pub name: Lowercase,
     pub variable: Variable,
-    // NB: there may be multiple occurences of a variable
+    // NB: there may be multiple occurrences of a variable
     pub first_seen: Region,
 }
 
