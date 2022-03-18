@@ -500,7 +500,7 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
 
-            Ok(ModuleOutput {
+            let output = ModuleOutput {
                 scope,
                 aliases,
                 rigid_variables,
@@ -511,7 +511,9 @@ pub fn canonicalize_module_defs<'a>(
                 problems: env.problems,
                 lookups,
                 ident_ids: env.ident_ids,
-            })
+            };
+
+            Ok(output)
         }
         (Err(runtime_error), _) => Err(runtime_error),
     }

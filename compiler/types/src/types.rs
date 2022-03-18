@@ -888,7 +888,7 @@ impl Type {
             }
             DelayedAlias(AliasCommon {
                 type_arguments,
-                lambda_set_variables,
+                lambda_set_variables: _no_aliases_in_lambda_sets,
                 ..
             }) => {
                 for (_, ta) in type_arguments {
