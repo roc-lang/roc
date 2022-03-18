@@ -12,14 +12,14 @@ mod test_reporting {
     use crate::helpers::test_home;
     use crate::helpers::{can_expr, infer_expr, CanExprOut, ParseErrOut};
     use bumpalo::Bump;
+    use indoc::indoc;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_mono::ir::{Procs, Stmt, UpdateModeIds};
     use roc_mono::layout::LayoutCache;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
-        can_problem, mono_problem, parse_problem, type_problem, Report, Severity, BLUE_CODE,
-        BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE,
-        UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
+        can_problem, mono_problem, parse_problem, type_problem, Report, Severity, ANSI_STYLE_CODES,
+        DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
@@ -300,16 +300,16 @@ mod test_reporting {
     }
 
     fn human_readable(str: &str) -> String {
-        str.replace(RED_CODE, "<red>")
-            .replace(WHITE_CODE, "<white>")
-            .replace(BLUE_CODE, "<blue>")
-            .replace(YELLOW_CODE, "<yellow>")
-            .replace(GREEN_CODE, "<green>")
-            .replace(CYAN_CODE, "<cyan>")
-            .replace(MAGENTA_CODE, "<magenta>")
-            .replace(RESET_CODE, "<reset>")
-            .replace(BOLD_CODE, "<bold>")
-            .replace(UNDERLINE_CODE, "<underline>")
+        str.replace(ANSI_STYLE_CODES.red, "<red>")
+            .replace(ANSI_STYLE_CODES.white, "<white>")
+            .replace(ANSI_STYLE_CODES.blue, "<blue>")
+            .replace(ANSI_STYLE_CODES.yellow, "<yellow>")
+            .replace(ANSI_STYLE_CODES.green, "<green>")
+            .replace(ANSI_STYLE_CODES.cyan, "<cyan>")
+            .replace(ANSI_STYLE_CODES.magenta, "<magenta>")
+            .replace(ANSI_STYLE_CODES.reset, "<reset>")
+            .replace(ANSI_STYLE_CODES.bold, "<bold>")
+            .replace(ANSI_STYLE_CODES.underline, "<underline>")
     }
 
     #[test]
