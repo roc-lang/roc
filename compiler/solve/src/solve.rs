@@ -1254,7 +1254,6 @@ fn type_to_var(
     } else {
         let mut arena = take_scratchpad();
 
-        // let var = type_to_variable(subs, rank, pools, &arena, typ);
         let var = type_to_variable(subs, rank, pools, &arena, aliases, typ);
 
         arena.reset();
@@ -2122,7 +2121,8 @@ fn adjust_rank(
 
         max_rank
     } else if desc_mark == visit_mark {
-        // nothing changes
+        // we have already visited this variable
+        // (probably two variables had the same root)
         desc_rank
     } else {
         let min_rank = group_rank.min(desc_rank);
