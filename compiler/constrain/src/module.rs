@@ -32,21 +32,13 @@ impl ExposedByModule {
     ///
     /// Useful when we know what modules a particular module imports, and want just
     /// the exposed types for those exposed modules.
-    pub fn retain_modules<'a>(
-        &self,
-        home: ModuleId,
-        it: impl Iterator<Item = &'a ModuleId>,
-    ) -> Self {
+    pub fn retain_modules<'a>(&self, it: impl Iterator<Item = &'a ModuleId>) -> Self {
         let mut output = Self::default();
 
         for module_id in it {
             match self.exposed.get(module_id) {
                 None => {
-                    internal_error!(
-                        "Module {:?} did not register its exposed values for {:?}",
-                        module_id,
-                        home,
-                    )
+                    internal_error!("Module {:?} did not register its exposed values", module_id)
                 }
                 Some(exposed_types) => {
                     output.exposed.insert(*module_id, exposed_types.clone());

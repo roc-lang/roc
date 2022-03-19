@@ -1099,7 +1099,7 @@ fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     // When compiling to wasm, we cannot spawn extra threads
     // so we have a single-threaded implementation
-    if cfg!(target_family = "wasm") {
+    if true || cfg!(target_family = "wasm") {
         load_single_threaded(
             arena,
             load_start,
@@ -1614,18 +1614,14 @@ fn report_unused_imported_modules<'a>(
     state: &mut State<'a>,
     module_id: ModuleId,
     constrained_module: &ConstrainedModule,
-) -> (Vec<ModuleId>, Vec<ModuleId>) {
-    let mut kept = vec![];
-    let mut removed = vec![];
+) {
     let mut unused_imported_modules = constrained_module.imported_modules.clone();
 
     for symbol in constrained_module.module.referenced_values.iter() {
-        kept.push(symbol.module_id());
         unused_imported_modules.remove(&symbol.module_id());
     }
 
     for symbol in constrained_module.module.referenced_types.iter() {
-        kept.push(symbol.module_id());
         unused_imported_modules.remove(&symbol.module_id());
     }
 
@@ -1637,23 +1633,8 @@ fn report_unused_imported_modules<'a>(
     for (unused, region) in unused_imported_modules.drain() {
         if !unused.is_builtin() {
             existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
-
-            // we will still typecheck this module to report errors
-            kept.push(unused)
-        } else {
-            // for builtin modules, we will just skip the rest of the process
-            // in the future, we can also do this for modules from packages
-            removed.push(unused);
         }
     }
-
-    kept.sort();
-    kept.dedup();
-
-    removed.sort();
-    removed.dedup();
-
-    (kept, removed)
 }
 
 fn update<'a>(
@@ -1889,7 +1870,7 @@ fn update<'a>(
             work.extend(state.dependencies.add_module(
                 header.module_id,
                 &header.package_qualified_imported_modules,
-                Phase::CanonicalizeAndConstrain,
+                state.goal_phase,
             ));
 
             state.module_cache.headers.insert(header.module_id, header);
@@ -1938,7 +1919,7 @@ fn update<'a>(
         }
 
         CanonicalizedAndConstrained {
-            mut constrained_module,
+            constrained_module,
             canonicalization_problems,
             module_docs,
         } => {
@@ -1953,51 +1934,7 @@ fn update<'a>(
                 state.module_cache.documentation.insert(module_id, docs);
             }
 
-            let (kept, removed) =
-                report_unused_imported_modules(&mut state, module_id, &constrained_module);
-
-            for rem in removed {
-                constrained_module.imported_modules.remove(&rem);
-            }
-
-            use std::fmt::Write;
-            let mut buf = String::new();
-            writeln!(buf, "{:?} depends on:", module_id);
-            for dep in kept {
-                if !constrained_module.imported_modules.contains_key(&dep) {
-                    continue;
-                }
-                writeln!(buf, "     {:?} ", dep);
-                if module_id != dep {
-                    state
-                        .dependencies
-                        .add_dependency(module_id, dep, Phase::SolveTypes);
-                }
-            }
-            println!("{}", buf);
-
-            state.dependencies.add_dependency_help(
-                module_id,
-                module_id,
-                Phase::SolveTypes,
-                Phase::CanonicalizeAndConstrain,
-            );
-
-            state
-                .dependencies
-                .add_to_status(module_id, Phase::SolveTypes);
-
-            /*
-            for dependency in remove_dependencies {
-                println!("remove dep {:?} <- {:?}", module_id, dependency);
-                state.dependencies.remove_dependencies(
-                    module_id,
-                    dependency,
-                    Phase::SolveTypes,
-                    state.goal_phase,
-                );
-            }
-            */
+            report_unused_imported_modules(&mut state, module_id, &constrained_module);
 
             state
                 .module_cache
@@ -2059,7 +1996,7 @@ fn update<'a>(
 
             if is_host_exposed && state.goal_phase == Phase::SolveTypes {
                 debug_assert!(work.is_empty());
-                // debug_assert!(state.dependencies.solved_all());
+                debug_assert!(state.dependencies.solved_all());
 
                 state.timings.insert(module_id, module_timing);
 
@@ -2850,7 +2787,10 @@ fn load_module<'a>(
                     roc_parse::header::ModuleName::new("Bool"),
                     Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Bool")))]),
                 )),
-                // Note: List is only used for the type, which we ensure is always in scope
+                Loc::at_zero(ImportsEntry::Module(
+                    roc_parse::header::ModuleName::new("List"),
+                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("List")))]),
+                )),
                 Loc::at_zero(ImportsEntry::Module(
                     roc_parse::header::ModuleName::new("Num"),
                     Collection::with_items(&[
@@ -2915,6 +2855,9 @@ fn load_module<'a>(
                 startsWithCodePt : Str, U32 -> Bool
 
                 toUtf8 : Str -> List U8
+
+                # fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
+                # fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem Nat, OutOfBounds ]*
 
                 fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*
                 fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [ BadUtf8 Utf8ByteProblem Nat, OutOfBounds ]*
@@ -4401,8 +4344,7 @@ impl<'a> BuildTask<'a> {
         dep_idents: MutMap<ModuleId, IdentIds>,
         declarations: Vec<Declaration>,
     ) -> Self {
-        let exposed_by_module =
-            exposed_types.retain_modules(module.module_id, imported_modules.keys());
+        let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
         let exposed_for_module =
             ExposedForModule::new(module.referenced_values.iter(), exposed_by_module);
 
@@ -4692,10 +4634,6 @@ fn canonicalize_and_constrain<'a>(
 
             let constraint =
                 constrain_module(&mut constraints, &module_output.declarations, module_id);
-
-            if module_id == ModuleId::STR {
-                dbg!(&constraints);
-            }
 
             let after = roc_types::types::get_type_clone_count();
 

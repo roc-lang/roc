@@ -293,7 +293,7 @@ lazy_static! {
 }
 
 /// A globally unique ID that gets assigned to each module as it is loaded.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleId(u32);
 
 impl ModuleId {
