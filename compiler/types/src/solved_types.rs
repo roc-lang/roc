@@ -1,5 +1,5 @@
 use crate::subs::{FlatType, GetSubsSlice, Subs, VarId, VarStore, Variable};
-use crate::types::{AliasCommon, AliasKind, Problem, RecordField, Type, TypeExtension};
+use crate::types::{AliasKind, Problem, RecordField, Type, TypeExtension};
 use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -53,10 +53,6 @@ pub enum SolvedType {
     /// A type from an Invalid module
     Erroneous(Problem),
 
-    /// A type alias
-    /// TODO transmit lambda sets!
-    DelayedAlias(Symbol, Vec<(Lowercase, SolvedType)>, Vec<SolvedLambdaSet>),
-
     Alias(
         Symbol,
         Vec<(Lowercase, SolvedType)>,
@@ -80,198 +76,6 @@ pub enum SolvedType {
 impl SolvedType {
     pub fn new(solved_subs: &Solved<Subs>, var: Variable) -> Self {
         Self::from_var(solved_subs.inner(), var)
-    }
-
-    pub fn from_type(solved_subs: &Solved<Subs>, typ: &Type) -> Self {
-        use crate::types::Type::*;
-
-        match typ {
-            EmptyRec => SolvedType::EmptyRecord,
-            EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Apply(symbol, types, _) => {
-                let mut solved_types = Vec::with_capacity(types.len());
-
-                for typ in types {
-                    let solved_type = Self::from_type(solved_subs, typ);
-
-                    solved_types.push(solved_type);
-                }
-
-                SolvedType::Apply(*symbol, solved_types)
-            }
-            Function(args, box_closure, box_ret) => {
-                let solved_ret = Self::from_type(solved_subs, box_ret);
-                let solved_closure = Self::from_type(solved_subs, box_closure);
-                let mut solved_args = Vec::with_capacity(args.len());
-
-                for arg in args {
-                    let solved_arg = Self::from_type(solved_subs, arg);
-
-                    solved_args.push(solved_arg);
-                }
-
-                SolvedType::Func(solved_args, Box::new(solved_closure), Box::new(solved_ret))
-            }
-            Record(fields, box_ext) => {
-                let solved_ext = match box_ext {
-                    TypeExtension::Open(ext) => Self::from_type(solved_subs, ext),
-                    TypeExtension::Closed => SolvedType::EmptyRecord,
-                };
-
-                let mut solved_fields = Vec::with_capacity(fields.len());
-
-                for (label, field) in fields {
-                    use crate::types::RecordField::*;
-
-                    let solved_type = match field {
-                        Optional(typ) => RecordField::Optional(Self::from_type(solved_subs, typ)),
-                        Required(typ) => RecordField::Required(Self::from_type(solved_subs, typ)),
-                        Demanded(typ) => RecordField::Demanded(Self::from_type(solved_subs, typ)),
-                    };
-
-                    solved_fields.push((label.clone(), solved_type));
-                }
-
-                SolvedType::Record {
-                    fields: solved_fields,
-                    ext: Box::new(solved_ext),
-                }
-            }
-            ClosureTag { name, ext } => {
-                let solved_ext = Self::from_type(solved_subs, &Type::Variable(*ext));
-                let solved_tags = vec![(TagName::Closure(*name), vec![])];
-                SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
-            }
-            TagUnion(tags, box_ext) => {
-                let solved_ext = match box_ext {
-                    TypeExtension::Open(ext) => Self::from_type(solved_subs, ext),
-                    TypeExtension::Closed => SolvedType::EmptyTagUnion,
-                };
-
-                let mut solved_tags = Vec::with_capacity(tags.len());
-                for (tag_name, types) in tags {
-                    let mut solved_types = Vec::with_capacity(types.len());
-
-                    for typ in types {
-                        let solved_type = Self::from_type(solved_subs, typ);
-                        solved_types.push(solved_type);
-                    }
-
-                    solved_tags.push((tag_name.clone(), solved_types));
-                }
-
-                SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
-            }
-            FunctionOrTagUnion(tag_name, symbol, box_ext) => {
-                let solved_ext = match box_ext {
-                    TypeExtension::Open(ext) => Self::from_type(solved_subs, ext),
-                    TypeExtension::Closed => SolvedType::EmptyTagUnion,
-                };
-
-                SolvedType::FunctionOrTagUnion(tag_name.clone(), *symbol, Box::new(solved_ext))
-            }
-            RecursiveTagUnion(rec_var, tags, box_ext) => {
-                let solved_ext = match box_ext {
-                    TypeExtension::Open(ext) => Self::from_type(solved_subs, ext),
-                    TypeExtension::Closed => SolvedType::EmptyTagUnion,
-                };
-
-                let mut solved_tags = Vec::with_capacity(tags.len());
-                for (tag_name, types) in tags {
-                    let mut solved_types = Vec::with_capacity(types.len());
-
-                    for typ in types {
-                        let solved_type = Self::from_type(solved_subs, typ);
-                        solved_types.push(solved_type);
-                    }
-
-                    solved_tags.push((tag_name.clone(), solved_types));
-                }
-
-                SolvedType::RecursiveTagUnion(
-                    VarId::from_var(*rec_var, solved_subs.inner()),
-                    solved_tags,
-                    Box::new(solved_ext),
-                )
-            }
-            Erroneous(problem) => SolvedType::Erroneous(problem.clone()),
-            DelayedAlias(AliasCommon {
-                symbol,
-                type_arguments,
-                lambda_set_variables,
-            }) => {
-                let mut solved_args = Vec::with_capacity(type_arguments.len());
-
-                for (name, var) in type_arguments {
-                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
-                }
-
-                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
-
-                for var in lambda_set_variables {
-                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_type(solved_subs, &var.0)));
-                }
-
-                SolvedType::DelayedAlias(*symbol, solved_args, solved_lambda_sets)
-            }
-            Alias {
-                symbol,
-                type_arguments,
-                lambda_set_variables,
-                actual: box_type,
-                kind,
-            } => {
-                let solved_type = Self::from_type(solved_subs, box_type);
-                let mut solved_args = Vec::with_capacity(type_arguments.len());
-
-                for (name, var) in type_arguments {
-                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
-                }
-
-                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
-
-                for var in lambda_set_variables {
-                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_type(solved_subs, &var.0)));
-                }
-
-                SolvedType::Alias(
-                    *symbol,
-                    solved_args,
-                    solved_lambda_sets,
-                    Box::new(solved_type),
-                    *kind,
-                )
-            }
-            HostExposedAlias {
-                name,
-                type_arguments: arguments,
-                lambda_set_variables,
-                actual_var,
-                actual,
-            } => {
-                let solved_type = Self::from_type(solved_subs, actual);
-                let mut solved_args = Vec::with_capacity(arguments.len());
-
-                for (name, var) in arguments {
-                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
-                }
-
-                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
-                for var in lambda_set_variables {
-                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_type(solved_subs, &var.0)));
-                }
-
-                SolvedType::HostExposedAlias {
-                    name: *name,
-                    arguments: solved_args,
-                    lambda_set_variables: solved_lambda_sets,
-                    actual_var: VarId::from_var(*actual_var, solved_subs.inner()),
-                    actual: Box::new(solved_type),
-                }
-            }
-            Variable(var) => Self::from_var(solved_subs.inner(), *var),
-            RangedNumber(typ, _) => Self::from_type(solved_subs, typ),
-        }
     }
 
     fn from_var(subs: &Subs, var: Variable) -> Self {
@@ -600,28 +404,6 @@ pub fn to_type(
                 .expect("rec var not in unnamed vars");
 
             Type::RecursiveTagUnion(*rec_var, new_tags, ext)
-        }
-        DelayedAlias(symbol, solved_type_variables, solved_lambda_sets) => {
-            let mut type_variables = Vec::with_capacity(solved_type_variables.len());
-
-            for (lowercase, solved_arg) in solved_type_variables {
-                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
-            }
-
-            let mut lambda_set_variables = Vec::with_capacity(solved_lambda_sets.len());
-            for solved_set in solved_lambda_sets {
-                lambda_set_variables.push(crate::types::LambdaSet(to_type(
-                    &solved_set.0,
-                    free_vars,
-                    var_store,
-                )))
-            }
-
-            Type::DelayedAlias(AliasCommon {
-                symbol: *symbol,
-                type_arguments: type_variables,
-                lambda_set_variables,
-            })
         }
         Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual, kind) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
