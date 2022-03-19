@@ -32,7 +32,7 @@ enum Status {
     Done,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Job<'a> {
     Step(ModuleId, Phase),
     ResolveShorthand(&'a str),
@@ -74,8 +74,10 @@ impl<'a> Dependencies<'a> {
             // to canonicalize a module, all its dependencies must be canonicalized
             self.add_dependency(module_id, dep, Phase::CanonicalizeAndConstrain);
 
-            // to typecheck a module, all its dependencies must be type checked already
-            self.add_dependency(module_id, dep, Phase::SolveTypes);
+            if goal_phase >= Phase::SolveTypes {
+                // to typecheck a module, all its dependencies must be type checked already
+                self.add_dependency(module_id, dep, Phase::SolveTypes);
+            }
 
             if goal_phase >= FindSpecializations {
                 self.add_dependency(module_id, dep, Phase::FindSpecializations);
@@ -101,7 +103,7 @@ impl<'a> Dependencies<'a> {
         output
     }
 
-    fn add_to_status(&mut self, module_id: ModuleId, goal_phase: Phase) {
+    pub fn add_to_status(&mut self, module_id: ModuleId, goal_phase: Phase) {
         for phase in PHASES.iter() {
             if *phase > goal_phase {
                 break;
@@ -193,13 +195,72 @@ impl<'a> Dependencies<'a> {
         }
     }
 
+    pub fn remove_dependencies(
+        &mut self,
+        a: ModuleId,
+        b: ModuleId,
+        start_phase: Phase,
+        goal_phase: Phase,
+    ) {
+        let mut i = 0;
+        while PHASES[i] < goal_phase {
+            let phase = PHASES[i];
+
+            if phase >= start_phase {
+                self.remove_dependency(a, b, phase);
+            }
+
+            i += 1;
+        }
+    }
+
     /// A waits for B, and B will notify A when it completes the phase
-    fn add_dependency(&mut self, a: ModuleId, b: ModuleId, phase: Phase) {
+    /// we will remove both of these connections
+    fn remove_dependency(&mut self, a: ModuleId, b: ModuleId, phase: Phase) {
+        let key = Job::Step(a, phase);
+
+        let mut notifications = vec![];
+
+        match self.waiting_for.get_mut(&key) {
+            None => unreachable!(),
+            Some(x) => {
+                x.retain(|job| match job {
+                    Job::Step(module, _) => {
+                        if *module == b {
+                            notifications.push(*job);
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                    Job::ResolveShorthand(_) => true,
+                });
+            }
+        }
+
+        for notification in notifications {
+            match self.notifies.get_mut(&notification) {
+                None => unreachable!(),
+                Some(x) => {
+                    x.retain(|notify_job| notify_job != &key);
+                }
+            }
+        }
+    }
+
+    /// A waits for B, and B will notify A when it completes the phase
+    pub fn add_dependency(&mut self, a: ModuleId, b: ModuleId, phase: Phase) {
         self.add_dependency_help(a, b, phase, phase);
     }
 
     /// phase_a of module a is waiting for phase_b of module_b
-    fn add_dependency_help(&mut self, a: ModuleId, b: ModuleId, phase_a: Phase, phase_b: Phase) {
+    pub fn add_dependency_help(
+        &mut self,
+        a: ModuleId,
+        b: ModuleId,
+        phase_a: Phase,
+        phase_b: Phase,
+    ) {
         // no need to wait if the dependency is already done!
         if let Some(Status::Done) = self.status.get(&Job::Step(b, phase_b)) {
             return;

@@ -157,6 +157,8 @@ pub fn build_file<'a>(
 
         buf.push('\n');
 
+        dbg!(module_id);
+
         report_timing(buf, "Read .roc file from disk", module_timing.read_roc_file);
         report_timing(buf, "Parse header", module_timing.parse_header);
         report_timing(buf, "Parse body", module_timing.parse_body);
