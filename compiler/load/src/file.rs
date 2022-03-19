@@ -4577,6 +4577,8 @@ fn canonicalize_and_constrain<'a>(
         ..
     } = parsed;
 
+    let before = roc_types::types::get_type_clone_count();
+
     let mut var_store = VarStore::default();
     let canonicalized = canonicalize_module_defs(
         arena,
@@ -4592,6 +4594,16 @@ fn canonicalize_and_constrain<'a>(
         &mut var_store,
     );
 
+    let after = roc_types::types::get_type_clone_count();
+
+    log!(
+        "canonicalize of {:?} cloned Type {} times ({} -> {})",
+        module_id,
+        after - before,
+        before,
+        after
+    );
+
     let canonicalize_end = SystemTime::now();
 
     module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();
@@ -4605,7 +4617,7 @@ fn canonicalize_and_constrain<'a>(
                 ModuleNameEnum::App(_) => None,
                 ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
                     let docs = crate::docs::generate_module_docs(
-                        module_output.scope,
+                        module_output.scope.clone(),
                         name.as_str().into(),
                         &module_output.ident_ids,
                         parsed_defs,
@@ -4615,9 +4627,38 @@ fn canonicalize_and_constrain<'a>(
                 }
             };
 
+            let before = roc_types::types::get_type_clone_count();
+
             let mut constraints = Constraints::new();
+
             let constraint =
                 constrain_module(&mut constraints, &module_output.declarations, module_id);
+
+            let after = roc_types::types::get_type_clone_count();
+
+            log!(
+                "constraint gen of {:?} cloned Type {} times ({} -> {})",
+                module_id,
+                after - before,
+                before,
+                after
+            );
+
+            // scope has imported aliases, but misses aliases from inner scopes
+            // module_output.aliases does have those aliases, so we combine them
+            let mut aliases = module_output.aliases;
+            for (name, alias) in module_output.scope.aliases {
+                match aliases.entry(name) {
+                    Occupied(_) => {
+                        // do nothing
+                    }
+                    Vacant(vacant) => {
+                        if !name.is_builtin() {
+                            vacant.insert(alias);
+                        }
+                    }
+                }
+            }
 
             let module = Module {
                 module_id,
@@ -4625,7 +4666,7 @@ fn canonicalize_and_constrain<'a>(
                 exposed_symbols,
                 referenced_values: module_output.referenced_values,
                 referenced_types: module_output.referenced_types,
-                aliases: module_output.aliases,
+                aliases,
                 rigid_variables: module_output.rigid_variables,
             };
 
