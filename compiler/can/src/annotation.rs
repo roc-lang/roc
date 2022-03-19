@@ -19,10 +19,10 @@ pub struct Annotation {
     pub aliases: SendMap<Symbol, Alias>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NamedVariable {
-    pub name: Lowercase,
     pub variable: Variable,
+    pub name: Lowercase,
     // NB: there may be multiple occurrences of a variable
     pub first_seen: Region,
 }
@@ -76,8 +76,8 @@ impl IntroducedVariables {
             .extend(other.host_exposed_aliases.clone());
 
         self.named.extend(other.named.iter().cloned());
-        self.named.sort_by(|nv1, nv2| nv1.name.cmp(&nv2.name));
-        self.named.dedup_by(|nv1, nv2| nv1.name == nv2.name);
+        self.named.sort();
+        self.named.dedup();
     }
 
     pub fn union_owned(&mut self, other: Self) {
@@ -87,8 +87,8 @@ impl IntroducedVariables {
         self.host_exposed_aliases.extend(other.host_exposed_aliases);
 
         self.named.extend(other.named);
-        self.named.sort_by(|nv1, nv2| nv1.name.cmp(&nv2.name));
-        self.named.dedup_by(|nv1, nv2| nv1.name == nv2.name);
+        self.named.sort();
+        self.named.dedup();
     }
 
     pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {
