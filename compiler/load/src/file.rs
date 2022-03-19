@@ -1863,6 +1863,7 @@ fn update<'a>(
                         .insert(module_id, typechecked);
                 } else {
                     state.constrained_ident_ids.insert(module_id, ident_ids);
+                    state.timings.insert(module_id, module_timing);
                 }
 
                 start_tasks(arena, &mut state, work, injector, worker_listeners)?;
