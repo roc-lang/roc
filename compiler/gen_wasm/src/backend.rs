@@ -598,7 +598,13 @@ impl<'a> WasmBackend<'a> {
                 todo!("Expression `{}`", expr.to_pretty(100))
             }
 
-            Expr::Reuse { .. } | Expr::Reset { .. } | Expr::RuntimeErrorFunction(_) => {
+            Expr::Reuse { .. } => {
+                todo!("Expression `{}`", expr.to_pretty(100))
+            }
+
+            Expr::Reset { symbol, .. } => self.expr_reset(*symbol),
+
+            Expr::RuntimeErrorFunction(_) => {
                 todo!("Expression `{}`", expr.to_pretty(100))
             }
         }
@@ -982,55 +988,6 @@ impl<'a> WasmBackend<'a> {
     }
 
     /*******************************************************************
-     * Heap allocation
-     *******************************************************************/
-
-    /// Allocate heap space and write an initial refcount
-    /// If the data size is known at compile time, pass it in comptime_data_size.
-    /// If size is only known at runtime, push *data* size to the VM stack first.
-    /// Leaves the *data* address on the VM stack
-    fn allocate_with_refcount(
-        &mut self,
-        comptime_data_size: Option<u32>,
-        alignment_bytes: u32,
-        initial_refcount: u32,
-    ) {
-        // Add extra bytes for the refcount
-        let extra_bytes = alignment_bytes.max(PTR_SIZE);
-
-        if let Some(data_size) = comptime_data_size {
-            // Data size known at compile time and passed as an argument
-            self.code_builder
-                .i32_const((data_size + extra_bytes) as i32);
-        } else {
-            // Data size known only at runtime and is on top of VM stack
-            self.code_builder.i32_const(extra_bytes as i32);
-            self.code_builder.i32_add();
-        }
-
-        // Provide a constant for the alignment argument
-        self.code_builder.i32_const(alignment_bytes as i32);
-
-        // Call the foreign function. (Zig and C calling conventions are the same for this signature)
-        self.call_zig_builtin_after_loading_args("roc_alloc", 2, true);
-
-        // Save the allocation address to a temporary local variable
-        let local_id = self.storage.create_anonymous_local(ValueType::I32);
-        self.code_builder.tee_local(local_id);
-
-        // Write the initial refcount
-        let refcount_offset = extra_bytes - PTR_SIZE;
-        let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
-        self.code_builder.i32_const(encoded_refcount);
-        self.code_builder.i32_store(Align::Bytes4, refcount_offset);
-
-        // Put the data address on the VM stack
-        self.code_builder.get_local(local_id);
-        self.code_builder.i32_const(extra_bytes as i32);
-        self.code_builder.i32_add();
-    }
-
-    /*******************************************************************
      * Arrays
      *******************************************************************/
 
@@ -1352,5 +1309,58 @@ impl<'a> WasmBackend<'a> {
         let from_offset = tag_offset + field_offset;
         self.storage
             .copy_value_from_memory(&mut self.code_builder, symbol, from_ptr, from_offset);
+    }
+
+    /*******************************************************************
+     * Refcounting & Heap allocation
+     *******************************************************************/
+
+    /// Allocate heap space and write an initial refcount
+    /// If the data size is known at compile time, pass it in comptime_data_size.
+    /// If size is only known at runtime, push *data* size to the VM stack first.
+    /// Leaves the *data* address on the VM stack
+    fn allocate_with_refcount(
+        &mut self,
+        comptime_data_size: Option<u32>,
+        alignment_bytes: u32,
+        initial_refcount: u32,
+    ) {
+        // Add extra bytes for the refcount
+        let extra_bytes = alignment_bytes.max(PTR_SIZE);
+
+        if let Some(data_size) = comptime_data_size {
+            // Data size known at compile time and passed as an argument
+            self.code_builder
+                .i32_const((data_size + extra_bytes) as i32);
+        } else {
+            // Data size known only at runtime and is on top of VM stack
+            self.code_builder.i32_const(extra_bytes as i32);
+            self.code_builder.i32_add();
+        }
+
+        // Provide a constant for the alignment argument
+        self.code_builder.i32_const(alignment_bytes as i32);
+
+        // Call the foreign function. (Zig and C calling conventions are the same for this signature)
+        self.call_zig_builtin_after_loading_args("roc_alloc", 2, true);
+
+        // Save the allocation address to a temporary local variable
+        let local_id = self.storage.create_anonymous_local(ValueType::I32);
+        self.code_builder.tee_local(local_id);
+
+        // Write the initial refcount
+        let refcount_offset = extra_bytes - PTR_SIZE;
+        let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
+        self.code_builder.i32_const(encoded_refcount);
+        self.code_builder.i32_store(Align::Bytes4, refcount_offset);
+
+        // Put the data address on the VM stack
+        self.code_builder.get_local(local_id);
+        self.code_builder.i32_const(extra_bytes as i32);
+        self.code_builder.i32_add();
+    }
+
+    fn expr_reset(&mut self, symbol: Symbol) {
+        todo!("Reference count Reset expression")
     }
 }
