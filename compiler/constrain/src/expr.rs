@@ -1765,14 +1765,7 @@ pub fn rec_defs_help(
                     NoExpectation(expr_type),
                 );
 
-                // TODO investigate if this let can be safely removed
-                let def_con = constraints.let_constraint(
-                    [],
-                    [],               // empty because Roc function defs have no args
-                    [],               // empty because Roc function defs have no args
-                    Constraint::True, // I think this is correct, once again because there are no args
-                    expr_con,
-                );
+                let def_con = expr_con;
 
                 flex_info.vars = def_pattern_state.vars;
                 flex_info.constraints.push(def_con);
@@ -1983,13 +1976,7 @@ pub fn rec_defs_help(
                         );
 
                         let cons = [
-                            constraints.let_constraint(
-                                [],
-                                [],
-                                [],
-                                Constraint::True,
-                                ret_constraint,
-                            ),
+                            ret_constraint,
                             // Store type into AST vars. We use Store so errors aren't reported twice
                             constraints.store(signature, expr_var, std::file!(), std::line!()),
                         ];
