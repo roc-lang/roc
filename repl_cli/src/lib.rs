@@ -1,12 +1,17 @@
 use bumpalo::Bump;
 use const_format::concatcp;
+use home::home_dir;
 use inkwell::context::Context;
 use libloading::Library;
+use rustyline::error::ReadlineError;
 use rustyline::highlight::{Highlighter, PromptInfo};
+use rustyline::history::History;
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
+use std::fs::File;
 use std::io;
+use std::path::PathBuf;
 use target_lexicon::Triple;
 
 use roc_build::link::module_to_dylib;
@@ -115,6 +120,60 @@ impl Validator for InputValidator {
                 }
                 _ => Ok(ValidationResult::Valid(None)),
             }
+        }
+    }
+}
+
+struct CommandHistories {
+    local_history: History,
+    local_history_path: Option<PathBuf>,
+    session_history: History,
+    global_history: History,
+    global_history_path: Option<PathBuf>,
+}
+
+impl CommandHistories {
+    fn add_history_entry(&mut self, line: &str) {
+        self.local_history.add(line);
+        self.session_history.add(line);
+        self.global_history.add(line);
+    }
+
+    fn save_session_history(&mut self, path: &str) -> Result<(), ReadlineError> {
+        self.session_history.save(path)
+    }
+    fn append_histories(&mut self) -> Result<(), ReadlineError> {
+        Ok(())
+            .and_then(|()| match &self.global_history_path {
+                Some(path) => self.global_history.append(path),
+                None => Ok(()),
+            })
+            .and_then(|()| match &self.local_history_path {
+                Some(path) => self.local_history.append(path),
+                None => Ok(()),
+            })
+    }
+    fn new() -> CommandHistories {
+        CommandHistories {
+            local_history: History::new(),
+            local_history_path: None,
+            session_history: History::new(),
+            global_history: History::new(),
+            global_history_path: None,
+        }
+    }
+    fn load(local_path: Option<PathBuf>, global_path: Option<PathBuf>) -> CommandHistories {
+        let mut histories = Self::new();
+        local_path
+            .clone()
+            .map(|path| Some(histories.local_history.load(&path)));
+        global_path
+            .clone()
+            .map(|path| Some(histories.global_history.load(&path)));
+        CommandHistories {
+            local_history_path: local_path,
+            global_history_path: global_path,
+            ..histories
         }
     }
 }
@@ -337,7 +396,6 @@ fn report_parse_error(fail: SyntaxError) {
 }
 
 pub fn main() -> io::Result<()> {
-    use rustyline::error::ReadlineError;
     use rustyline::Editor;
 
     // To debug rustyline:
@@ -347,6 +405,40 @@ pub fn main() -> io::Result<()> {
 
     let mut prev_line_blank = false;
     let mut editor = Editor::<ReplHelper>::new();
+    let local_history_path = PathBuf::from(".roc_cache/repl_history.dat");
+
+    match File::options()
+        .write(true)
+        .create(true)
+        .open(&local_history_path)
+    {
+        Ok(_) => (),
+        Err(_) => println!("Failed to open or create local history file"),
+    }
+
+    let global_history_path_option = home_dir().map(|path| {
+        let global_history_path = path.join(PathBuf::from(".roc_cache/repl_history.dat"));
+        match File::options()
+            .write(true)
+            .create(true)
+            .open(&global_history_path)
+        {
+            Ok(_) => (),
+            Err(_) => println!("Failed to open or create global history file"),
+        }
+        editor
+            .load_history(&global_history_path)
+            .expect("Failed to load global history");
+        global_history_path
+    });
+
+    editor
+        .load_history(&local_history_path)
+        .expect("Failed to load local history");
+
+    let mut histories =
+        CommandHistories::load(Some(local_history_path), global_history_path_option);
+
     let repl_helper = ReplHelper::new();
     editor.set_helper(Some(repl_helper));
 
@@ -357,6 +449,10 @@ pub fn main() -> io::Result<()> {
             Ok(line) => {
                 let trim_line = line.trim();
                 editor.add_history_entry(trim_line);
+                histories.add_history_entry(trim_line);
+                histories
+                    .append_histories()
+                    .expect("failed to append histories");
 
                 let pending_src = &mut editor
                     .helper_mut()
@@ -388,13 +484,22 @@ pub fn main() -> io::Result<()> {
                         }
                     }
                     ":help" => {
-                        println!("Use :exit or :q to exit.");
+                        println!("Use :exit or :q to exit. Use :save <filename> to save your session to a file.");
                     }
                     ":exit" => {
                         break;
                     }
                     ":q" => {
                         break;
+                    }
+                    save_cmd if save_cmd.starts_with(":save") => {
+                        match save_cmd.split_once(" ") {
+                            Some((_, path)) => match histories.save_session_history(path) {
+                                Ok(_) => println!("History saved"),
+                                Err(err) => println!("Failed to save history: {err}"),
+                            },
+                            None => println!("Please supply a path to save your history to"),
+                        };
                     }
                     _ => {
                         let result = if pending_src.is_empty() {
