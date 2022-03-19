@@ -83,7 +83,7 @@ struct ModuleCache<'a> {
     /// Phases
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
     parsed: MutMap<ModuleId, ParsedModule<'a>>,
-    aliases: MutMap<ModuleId, MutMap<Symbol, Alias>>,
+    aliases: MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
@@ -208,8 +208,13 @@ fn start_phase<'a>(
                             imported, parsed.module_id,
                         ),
                         Some(new) => {
-                            // TODO filter to only add imported aliases
-                            aliases.extend(new.iter().map(|(s, a)| (*s, a.clone())));
+                            aliases.extend(new.iter().filter_map(|(s, (exposed, a))| {
+                                if *exposed {
+                                    Some((*s, a.clone()))
+                                } else {
+                                    None
+                                }
+                            }));
                         }
                     }
                 }
@@ -505,7 +510,7 @@ enum Msg<'a> {
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-        exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
+        exposed_aliases_by_symbol: MutMap<Symbol, (bool, Alias)>,
         dep_idents: MutMap<ModuleId, IdentIds>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
@@ -1150,6 +1155,11 @@ fn state_thread_step<'a>(
                 } => {
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
+
+                    let exposed_aliases_by_symbol = exposed_aliases_by_symbol
+                        .into_iter()
+                        .map(|(k, (_, v))| (k, v))
+                        .collect();
 
                     let typechecked = finish(
                         state,
@@ -3170,7 +3180,7 @@ fn run_solve<'a>(
 
     let mut solve_aliases = default_aliases();
 
-    for (name, alias) in aliases.iter() {
+    for (name, (_, alias)) in aliases.iter() {
         solve_aliases.insert(*name, alias.clone());
     }
 
@@ -3357,7 +3367,11 @@ fn canonicalize_and_constrain<'a>(
 
             // scope has imported aliases, but misses aliases from inner scopes
             // module_output.aliases does have those aliases, so we combine them
-            let mut aliases = module_output.aliases;
+            let mut aliases: MutMap<Symbol, (bool, Alias)> = module_output
+                .aliases
+                .into_iter()
+                .map(|(k, v)| (k, (true, v)))
+                .collect();
             for (name, alias) in module_output.scope.aliases {
                 match aliases.entry(name) {
                     Occupied(_) => {
@@ -3365,7 +3379,7 @@ fn canonicalize_and_constrain<'a>(
                     }
                     Vacant(vacant) => {
                         if !name.is_builtin() {
-                            vacant.insert(alias);
+                            vacant.insert((false, alias));
                         }
                     }
                 }

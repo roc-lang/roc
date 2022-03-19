@@ -25,7 +25,8 @@ pub struct Module {
     pub exposed_symbols: MutSet<Symbol>,
     pub referenced_values: MutSet<Symbol>,
     pub referenced_types: MutSet<Symbol>,
-    pub aliases: MutMap<Symbol, Alias>,
+    /// all aliases. `bool` indicates whether it is exposed
+    pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
 }
 
