@@ -209,7 +209,8 @@ fn start_phase<'a>(
                         ),
                         Some(new) => {
                             aliases.extend(new.iter().filter_map(|(s, (exposed, a))| {
-                                if *exposed {
+                                // only pass this on if it's exposed, or the alias is a transitive import
+                                if *exposed || s.module_id() != *imported {
                                     Some((*s, a.clone()))
                                 } else {
                                     None
