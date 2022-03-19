@@ -29,12 +29,16 @@ enum HelperOp {
     Inc,
     Dec,
     DecRef(JoinPointId),
+    Reset,
     Eq,
 }
 
 impl HelperOp {
     fn is_decref(&self) -> bool {
         matches!(self, Self::DecRef(_))
+    }
+    fn is_reset(&self) -> bool {
+        matches!(self, Self::Reset)
     }
 }
 
@@ -144,6 +148,27 @@ impl<'a> CodeGenHelp<'a> {
         (rc_stmt, ctx.new_linker_data)
     }
 
+    pub fn call_reset_refcount(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        layout: &Layout<'a>,
+        argument: Symbol,
+    ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
+        let mut ctx = Context {
+            new_linker_data: Vec::new_in(self.arena),
+            recursive_union: None,
+            op: HelperOp::Reset,
+        };
+
+        let arguments = self.arena.alloc([argument]);
+
+        let expr = self
+            .call_specialized_op(ident_ids, &mut ctx, *layout, arguments)
+            .unwrap();
+
+        (expr, ctx.new_linker_data)
+    }
+
     /// Replace a generic `Lowlevel::Eq` call with a specialized helper proc.
     /// The helper procs themselves are to be generated later with `generate_procs`
     pub fn call_specialized_equals(
@@ -196,7 +221,7 @@ impl<'a> CodeGenHelp<'a> {
             let (ret_layout, arg_layouts): (&'a Layout<'a>, &'a [Layout<'a>]) = {
                 let arg = self.replace_rec_ptr(ctx, layout);
                 match ctx.op {
-                    Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([arg])),
+                    Dec | DecRef(_) | Reset => (&LAYOUT_UNIT, self.arena.alloc([arg])),
                     Inc => (&LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
                     Eq => (&LAYOUT_BOOL, self.arena.alloc([arg, arg])),
                 }
@@ -258,7 +283,7 @@ impl<'a> CodeGenHelp<'a> {
 
         // Recursively generate the body of the Proc and sub-procs
         let (ret_layout, body) = match ctx.op {
-            Inc | Dec | DecRef(_) => (
+            Inc | Dec | DecRef(_) | Reset => (
                 LAYOUT_UNIT,
                 refcount::refcount_generic(self, ident_ids, ctx, layout, Symbol::ARG_1),
             ),
@@ -275,7 +300,7 @@ impl<'a> CodeGenHelp<'a> {
                     let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([roc_value, inc_amount])
                 }
-                Dec | DecRef(_) => self.arena.alloc([roc_value]),
+                Dec | DecRef(_) | Reset => self.arena.alloc([roc_value]),
                 Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
             }
         };
@@ -314,7 +339,7 @@ impl<'a> CodeGenHelp<'a> {
                 arguments: self.arena.alloc([*layout, self.layout_isize]),
                 result: LAYOUT_UNIT,
             },
-            HelperOp::Dec => ProcLayout {
+            HelperOp::Dec | HelperOp::Reset => ProcLayout {
                 arguments: self.arena.alloc([*layout]),
                 result: LAYOUT_UNIT,
             },

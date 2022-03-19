@@ -121,7 +121,9 @@ pub fn refcount_generic<'a>(
             let runtime_layout = lambda_set.runtime_representation();
             refcount_generic(root, ident_ids, ctx, runtime_layout, structure)
         }
-        Layout::RecursivePointer => rc_todo(),
+        Layout::RecursivePointer => unreachable!(
+            "We should never call a refcounting helper on a RecursivePointer layout directly"
+        ),
         Layout::Boxed(_) => rc_todo(),
     }
 }
@@ -784,7 +786,7 @@ fn refcount_union<'a>(
 
         Recursive(tags) => {
             let (is_tailrec, tail_idx) = root.union_tail_recursion_fields(union);
-            if is_tailrec && !ctx.op.is_decref() {
+            if is_tailrec && !ctx.op.is_decref() && !ctx.op.is_reset() {
                 refcount_union_tailrec(root, ident_ids, ctx, union, tags, None, tail_idx, structure)
             } else {
                 refcount_union_rec(root, ident_ids, ctx, union, tags, None, structure)
@@ -806,7 +808,7 @@ fn refcount_union<'a>(
         } => {
             let null_id = Some(nullable_id);
             let (is_tailrec, tail_idx) = root.union_tail_recursion_fields(union);
-            if is_tailrec && !ctx.op.is_decref() {
+            if is_tailrec && !ctx.op.is_decref() && !ctx.op.is_reset() {
                 refcount_union_tailrec(
                     root, ident_ids, ctx, union, tags, null_id, tail_idx, structure,
                 )
@@ -822,7 +824,7 @@ fn refcount_union<'a>(
             let null_id = Some(nullable_id as TagIdIntType);
             let tags = root.arena.alloc([other_fields]);
             let (is_tailrec, tail_idx) = root.union_tail_recursion_fields(union);
-            if is_tailrec && !ctx.op.is_decref() {
+            if is_tailrec && !ctx.op.is_decref() && !ctx.op.is_reset() {
                 refcount_union_tailrec(
                     root, ident_ids, ctx, union, tags, null_id, tail_idx, structure,
                 )
@@ -978,14 +980,18 @@ fn refcount_union_rec<'a>(
 
         let alignment = Layout::Union(union_layout).alignment_bytes(root.target_info);
         let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
-        let modify_structure_stmt = modify_refcount(
-            root,
-            ident_ids,
-            ctx,
-            rc_ptr,
-            alignment,
-            root.arena.alloc(ret_stmt),
-        );
+        let modify_structure_stmt = if ctx.op.is_reset() {
+            ret_stmt
+        } else {
+            modify_refcount(
+                root,
+                ident_ids,
+                ctx,
+                rc_ptr,
+                alignment,
+                root.arena.alloc(ret_stmt),
+            )
+        };
 
         rc_ptr_from_data_ptr(
             root,
@@ -1014,13 +1020,13 @@ fn refcount_union_rec<'a>(
         )
     };
 
-    if ctx.op.is_decref() && null_id.is_none() {
-        rc_contents_then_structure
-    } else {
-        tag_id_stmt(root.arena.alloc(
+    match ctx.op {
+        HelperOp::DecRef(_) if null_id.is_none() => rc_contents_then_structure,
+        HelperOp::Reset => rc_contents_then_structure,
+        _ => tag_id_stmt(root.arena.alloc(
             //
             rc_contents_then_structure,
-        ))
+        )),
     }
 }
 
