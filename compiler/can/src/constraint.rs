@@ -41,7 +41,11 @@ impl Constraints {
         let includes_tags = Vec::new();
         let strings = Vec::new();
 
-        types.extend([Type::EmptyRec, Type::EmptyTagUnion]);
+        types.extend([
+            Type::EmptyRec,
+            Type::EmptyTagUnion,
+            Type::Apply(Symbol::STR_STR, vec![], Region::zero()),
+        ]);
 
         categories.extend([
             Category::Record,
@@ -91,6 +95,7 @@ impl Constraints {
 
     pub const EMPTY_RECORD: Index<Type> = Index::new(0);
     pub const EMPTY_TAG_UNION: Index<Type> = Index::new(1);
+    pub const STR: Index<Type> = Index::new(2);
 
     pub const CATEGORY_RECORD: Index<Category> = Index::new(0);
     pub const CATEGORY_FOREIGNCALL: Index<Category> = Index::new(1);
@@ -124,6 +129,9 @@ impl Constraints {
         match typ {
             Type::EmptyRec => EitherIndex::from_left(Self::EMPTY_RECORD),
             Type::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
+            Type::Apply(Symbol::STR_STR, args, _) if args.is_empty() => {
+                EitherIndex::from_left(Self::STR)
+            }
             Type::Variable(var) => Self::push_type_variable(var),
             other => {
                 let index: Index<Type> = Index::push_new(&mut self.types, other);
