@@ -2270,7 +2270,11 @@ pub fn gather_fields_unsorted_iter(
             Structure(Record(sub_fields, sub_ext)) => {
                 stack.push(*sub_fields);
 
-                var = *sub_ext;
+                if var == Variable::EMPTY_RECORD {
+                    break;
+                } else {
+                    var = *sub_ext;
+                }
             }
 
             Alias(_, _, actual_var, _) => {
