@@ -51,7 +51,6 @@ where
                 buf.indent(indent);
                 fmt_docs(buf, docs);
                 buf.newline();
-
                 encountered_comment = true;
             }
         }
@@ -119,8 +118,15 @@ fn fmt_comment<'buf>(buf: &mut Buf<'buf>, comment: &str) {
 
 fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
     buf.push_str("##");
-    if !docs.starts_with(' ') {
+    if is_code_block_in_doc_comment(docs) {
         buf.spaces(1);
+        buf.push_str(docs);
+    } else {
+        buf.spaces(1);
+        buf.push_str(docs.trim());
     }
-    buf.push_str(docs);
+}
+
+fn is_code_block_in_doc_comment(docs: &str) -> bool {
+    docs.starts_with("    ")
 }

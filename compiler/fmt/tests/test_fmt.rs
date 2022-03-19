@@ -3034,6 +3034,21 @@ mod test_fmt {
     }
 
     #[test]
+    fn block_of_code_in_doc_comment() {
+        expr_formats_same(indoc!(
+            r#"
+            ## This is a block of code inside a doc comment
+            ##
+            ##     foo =
+            ##         42
+            ##
+            ##     foo
+            foo
+            "#
+        ));
+    }
+
+    #[test]
     /// Test that everything under examples/ is formatted correctly
     /// If this test fails on your diff, it probably means you need to re-format the examples.
     /// Try this:

@@ -65,17 +65,16 @@ none : Elem *
 none = None# I've often wanted this in elm/html. Usually end up resorting to (Html.text "") - this seems nicer.
 ## Change an element's state type.
 ##
-## TODO: indent the following once https://github.com/rtfeldman/roc/issues/2585 is fixed.
-## State : { photo : Photo }
+##     State : { photo : Photo }
 ##
-## render : State -> Elem State
-## render = \state ->
-## child : Elem State
-## child =
-## Photo.render state.photo
-## |> Elem.translate .photo &photo
+##     render : State -> Elem State
+##     render = \state ->
+##         child : Elem State
+##         child =
+##             Photo.render state.photo
+##                 |> Elem.translate .photo &photo
 ##
-## col {} [ child, otherElems ]
+##     col {} [ child, otherElems ]
 ##
 translate = \child, toChild, toParent ->
     when child is
@@ -114,16 +113,16 @@ translate = \child, toChild, toParent ->
 ## Convenient when you have a [List] in your state and want to make
 ## a [List] of child elements out of it.
 ##
-## TODO: indent the following once https://github.com/rtfeldman/roc/issues/2585 is fixed.
-## State : { photos : List Photo }
+## indent the following once https://github.com/rtfeldman/roc/issues/2585 is fixed.
+##     State : { photos : List Photo }
 ##
-## render : State -> Elem State
-## render = \state ->
-## children : List (Elem State)
-## children =
-## Elem.list Photo.render state .photos &photos
+##     render : State -> Elem State
+##     render = \state ->
+##         children : List (Elem State)
+##         children =
+##             Elem.list Photo.render state .photos &photos
 ##
-## col {} children
+##     col {} children
 ## TODO: format as multiline type annotation once https://github.com/rtfeldman/roc/issues/2586 is fixed
 list : (child -> Elem child), parent, (parent -> List child), (parent, List child -> parent) -> List (Elem parent)
 list = \renderChild, parent, toChildren, toParent ->
