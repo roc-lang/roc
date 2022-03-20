@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{name_type_var, AliasKind, ErrorType, Problem, RecordField, TypeExt};
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName, Uppercase};
@@ -58,6 +59,243 @@ struct ErrorTypeState {
     normals: u32,
     problems: Vec<crate::types::Problem>,
     context: ErrorTypeContext,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SubsHeader {
+    utable: usize,
+    variables: usize,
+    tag_names: usize,
+    field_names: usize,
+    record_fields: usize,
+    variable_slices: usize,
+}
+
+impl SubsHeader {
+    fn from_subs(subs: &Subs) -> Self {
+        // TODO what do we do with problems? they should
+        // be reported and then removed from Subs I think
+        debug_assert!(subs.problems.is_empty());
+
+        Self {
+            utable: subs.utable.len(),
+            variables: subs.variables.len(),
+            tag_names: subs.tag_names.len(),
+            field_names: subs.field_names.len(),
+            record_fields: subs.record_fields.len(),
+            variable_slices: subs.variable_slices.len(),
+        }
+    }
+
+    fn to_array(self) -> [u8; std::mem::size_of::<Self>()] {
+        unsafe { std::mem::transmute(self) }
+    }
+
+    fn from_array(array: [u8; std::mem::size_of::<Self>()]) -> Self {
+        unsafe { std::mem::transmute(array) }
+    }
+}
+
+unsafe fn slice_as_bytes<T>(slice: &[T]) -> &[u8] {
+    let ptr = slice.as_ptr();
+    let byte_length = std::mem::size_of::<T>() * slice.len();
+
+    unsafe { std::slice::from_raw_parts(ptr as *const u8, byte_length) }
+}
+
+fn round_to_multiple_of(value: usize, base: usize) -> usize {
+    (value + (base - 1)) / base * base
+}
+
+impl Subs {
+    pub fn serialize(&self, writer: &mut impl std::io::Write) -> std::io::Result<usize> {
+        let mut written = 0;
+
+        let header = SubsHeader::from_subs(self).to_array();
+        written += header.len();
+        writer.write_all(&header)?;
+
+        written = Self::serialize_unification_table(&self.utable, writer, written)?;
+
+        written = Self::serialize_slice(&self.variables, writer, written)?;
+        written = Self::serialize_slice(&self.tag_names, writer, written)?;
+        written = Self::serialize_field_names(&self.field_names, writer, written)?;
+        written = Self::serialize_slice(&self.record_fields, writer, written)?;
+        written = Self::serialize_slice(&self.variable_slices, writer, written)?;
+
+        Ok(written)
+    }
+
+    fn serialize_unification_table(
+        utable: &UnificationTable<InPlace<Variable>>,
+        writer: &mut impl std::io::Write,
+        mut written: usize,
+    ) -> std::io::Result<usize> {
+        for i in 0..utable.len() {
+            let var = unsafe { Variable::from_index(i as u32) };
+
+            let desc = if utable.is_redirect(var) {
+                let root = utable.get_root_key_without_compacting(var);
+
+                // our strategy for a redirect; rank is max, mark is max, copy stores the var
+                Descriptor {
+                    content: Content::Error,
+                    rank: Rank(u32::MAX),
+                    mark: Mark(i32::MAX),
+                    copy: root.into(),
+                }
+            } else {
+                utable.probe_value_without_compacting(var)
+            };
+
+            let bytes: [u8; std::mem::size_of::<Descriptor>()] =
+                unsafe { std::mem::transmute(desc) };
+            written += bytes.len();
+            writer.write_all(&bytes)?;
+        }
+
+        Ok(written)
+    }
+
+    /// Lowercase can be heap-allocated
+    fn serialize_field_names(
+        lowercases: &[Lowercase],
+        writer: &mut impl std::io::Write,
+        written: usize,
+    ) -> std::io::Result<usize> {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut slices: Vec<SubsSlice<u8>> = Vec::new();
+
+        for field_name in lowercases {
+            let slice =
+                SubsSlice::extend_new(&mut buf, field_name.as_str().as_bytes().iter().copied());
+            slices.push(slice);
+        }
+
+        let written = Self::serialize_slice(&slices, writer, written)?;
+
+        Self::serialize_slice(&buf, writer, written)
+    }
+
+    fn serialize_slice<T>(
+        slice: &[T],
+        writer: &mut impl std::io::Write,
+        written: usize,
+    ) -> std::io::Result<usize> {
+        let alignment = std::mem::align_of::<T>();
+        let padding_bytes = round_to_multiple_of(written, alignment) - written;
+
+        for _ in 0..padding_bytes {
+            writer.write_all(&[0])?;
+        }
+
+        let bytes_slice = unsafe { slice_as_bytes(slice) };
+        writer.write_all(bytes_slice)?;
+
+        Ok(written + padding_bytes + bytes_slice.len())
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> Self {
+        use std::convert::TryInto;
+
+        let mut offset = 0;
+        let header_slice = &bytes[..std::mem::size_of::<SubsHeader>()];
+        offset += header_slice.len();
+        let header = SubsHeader::from_array(header_slice.try_into().unwrap());
+
+        let (utable, offset) = Self::deserialize_unification_table(bytes, header.utable, offset);
+
+        let (variables, offset) = Self::deserialize_slice(bytes, header.variables, offset);
+        let (tag_names, offset) = Self::deserialize_slice(bytes, header.tag_names, offset);
+        let (field_names, offset) =
+            Self::deserialize_field_names(bytes, header.field_names, offset);
+        let (record_fields, offset) = Self::deserialize_slice(bytes, header.record_fields, offset);
+        let (variable_slices, _) = Self::deserialize_slice(bytes, header.variable_slices, offset);
+
+        Self {
+            utable,
+            variables: variables.to_vec(),
+            tag_names: tag_names.to_vec(),
+            field_names,
+            record_fields: record_fields.to_vec(),
+            variable_slices: variable_slices.to_vec(),
+            tag_name_cache: Default::default(),
+            problems: Default::default(),
+        }
+    }
+
+    fn deserialize_unification_table(
+        bytes: &[u8],
+        length: usize,
+        offset: usize,
+    ) -> (UnificationTable<InPlace<Variable>>, usize) {
+        let alignment = std::mem::align_of::<Descriptor>();
+        let size = std::mem::size_of::<Descriptor>();
+        debug_assert_eq!(offset, round_to_multiple_of(offset, alignment));
+
+        let mut utable = UnificationTable::default();
+        utable.reserve(length);
+
+        let byte_length = length * size;
+        let byte_slice = &bytes[offset..][..byte_length];
+
+        let slice =
+            unsafe { std::slice::from_raw_parts(byte_slice.as_ptr() as *const Descriptor, length) };
+
+        let mut roots = Vec::new();
+
+        for desc in slice {
+            let var = utable.new_key(*desc);
+
+            if desc.rank == Rank(u32::MAX) && desc.mark == Mark(i32::MAX) {
+                let root = desc.copy.into_variable().unwrap();
+
+                roots.push((var, root));
+            }
+        }
+
+        for (var, root) in roots {
+            let desc = utable.probe_value_without_compacting(root);
+            utable.unify_roots(var, root, desc)
+        }
+
+        (utable, offset + byte_length)
+    }
+
+    fn deserialize_field_names(
+        bytes: &[u8],
+        length: usize,
+        offset: usize,
+    ) -> (Vec<Lowercase>, usize) {
+        let (slices, mut offset) = Self::deserialize_slice::<SubsSlice<u8>>(bytes, length, offset);
+
+        let string_slice = &bytes[offset..];
+
+        let mut lowercases = Vec::with_capacity(length);
+        for subs_slice in slices {
+            let bytes = &string_slice[subs_slice.indices()];
+            offset += bytes.len();
+            let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+
+            lowercases.push(string.into());
+        }
+
+        (lowercases, offset)
+    }
+
+    fn deserialize_slice<T>(bytes: &[u8], length: usize, mut offset: usize) -> (&[T], usize) {
+        let alignment = std::mem::align_of::<T>();
+        let size = std::mem::size_of::<T>();
+
+        offset = round_to_multiple_of(offset, alignment);
+
+        let byte_length = length * size;
+        let byte_slice = &bytes[offset..][..byte_length];
+
+        let slice = unsafe { std::slice::from_raw_parts(byte_slice.as_ptr() as *const T, length) };
+
+        (slice, offset + byte_length)
+    }
 }
 
 #[derive(Clone)]
@@ -1722,7 +1960,7 @@ impl From<usize> for Rank {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Descriptor {
     pub content: Content,
     pub rank: Rank,

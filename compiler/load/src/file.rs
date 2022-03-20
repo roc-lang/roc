@@ -4483,6 +4483,16 @@ fn run_solve<'a>(
         solve_aliases,
     );
 
+    let solved_subs = if true {
+        solved_subs
+    } else {
+        let mut serialized = Vec::new();
+        solved_subs.inner().serialize(&mut serialized).unwrap();
+        let subs = Subs::deserialize(&serialized);
+
+        Solved(subs)
+    };
+
     let exposed_vars_by_symbol: Vec<_> = solved_env
         .vars_by_symbol()
         .filter(|(k, _)| exposed_symbols.contains(k))
