@@ -312,8 +312,12 @@ impl SubsSlice<VariableSubsSlice> {
     pub fn reserve_variable_slices(subs: &mut Subs, length: usize) -> Self {
         let start = subs.variable_slices.len() as u32;
 
-        subs.variable_slices
-            .extend(std::iter::repeat(VariableSubsSlice::default()).take(length));
+        subs.variable_slices.reserve(length);
+
+        let value = VariableSubsSlice::default();
+        for _ in 0..length {
+            subs.variable_slices.push(value);
+        }
 
         Self::new(start, length as u16)
     }
