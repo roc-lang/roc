@@ -1910,6 +1910,35 @@ fn wildcard_rigid() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn alias_of_alias_with_type_arguments() {
+    assert_non_opt_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            Effect a : [ @Effect a ]
+
+            Task a err : Effect (Result a err)
+
+            always : a -> Task a *
+            always = \x ->
+                inner = (Ok x)
+
+                @Effect inner
+
+
+            main : Task {} (Float *)
+            main = always {}
+            "#
+        ),
+        0,
+        i64,
+        |_| 0
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 fn todo_bad_error_message() {
     assert_non_opt_evals_to!(

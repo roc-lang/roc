@@ -17,7 +17,7 @@ pub struct Scope {
     symbols: SendMap<Symbol, Region>,
 
     /// The type aliases currently in scope
-    aliases: SendMap<Symbol, Alias>,
+    pub aliases: SendMap<Symbol, Alias>,
 
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.

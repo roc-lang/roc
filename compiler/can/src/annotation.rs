@@ -367,12 +367,8 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    // For now, aliases of function types cannot be delayed.
-                    // This is a limitation of the current implementation,
-                    // and this totally should be possible in the future.
-                    let is_import = !symbol.is_builtin() && (env.home != symbol.module_id());
                     let is_structural = alias.kind == AliasKind::Structural;
-                    if !is_import && is_structural && alias.lambda_set_variables.is_empty() {
+                    if is_structural {
                         let mut type_var_to_arg = Vec::new();
 
                         for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
@@ -381,10 +377,21 @@ fn can_annotation_help(
                             type_var_to_arg.push((name, arg_ann));
                         }
 
+                        let mut lambda_set_variables =
+                            Vec::with_capacity(alias.lambda_set_variables.len());
+
+                        for _ in 0..alias.lambda_set_variables.len() {
+                            let lvar = var_store.fresh();
+
+                            introduced_variables.insert_lambda_set(lvar);
+
+                            lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
+                        }
+
                         Type::DelayedAlias(AliasCommon {
                             symbol,
                             type_arguments: type_var_to_arg,
-                            lambda_set_variables: alias.lambda_set_variables.clone(),
+                            lambda_set_variables,
                         })
                     } else {
                         let (type_arguments, lambda_set_variables, actual) =

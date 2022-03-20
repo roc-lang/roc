@@ -22,6 +22,7 @@ use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AliasKind;
+use roc_types::types::LambdaSet;
 use roc_types::types::{Alias, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -1722,12 +1723,21 @@ fn correct_mutual_recursive_type_alias<'a>(
             let alias = pending_aliases.get_mut(&rec).unwrap();
             // Don't try to instantiate the alias itself in its definition.
             let original_alias_def = to_instantiate.remove(&rec).unwrap();
+
+            let mut new_lambda_sets = ImSet::default();
             alias.typ.instantiate_aliases(
                 alias.region,
                 &to_instantiate,
                 var_store,
-                &mut ImSet::default(),
+                &mut new_lambda_sets,
             );
+
+            for lambda_set_var in new_lambda_sets {
+                alias
+                    .lambda_set_variables
+                    .push(LambdaSet(Type::Variable(lambda_set_var)));
+            }
+
             to_instantiate.insert(rec, original_alias_def);
 
             // Now mark the alias recursive, if it needs to be.

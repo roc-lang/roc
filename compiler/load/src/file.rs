@@ -83,7 +83,7 @@ struct ModuleCache<'a> {
     /// Phases
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
     parsed: MutMap<ModuleId, ParsedModule<'a>>,
-    aliases: MutMap<ModuleId, MutMap<Symbol, Alias>>,
+    aliases: MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
@@ -208,8 +208,14 @@ fn start_phase<'a>(
                             imported, parsed.module_id,
                         ),
                         Some(new) => {
-                            // TODO filter to only add imported aliases
-                            aliases.extend(new.iter().map(|(s, a)| (*s, a.clone())));
+                            aliases.extend(new.iter().filter_map(|(s, (exposed, a))| {
+                                // only pass this on if it's exposed, or the alias is a transitive import
+                                if *exposed || s.module_id() != *imported {
+                                    Some((*s, a.clone()))
+                                } else {
+                                    None
+                                }
+                            }));
                         }
                     }
                 }
@@ -505,7 +511,7 @@ enum Msg<'a> {
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-        exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
+        exposed_aliases_by_symbol: MutMap<Symbol, (bool, Alias)>,
         dep_idents: MutMap<ModuleId, IdentIds>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
@@ -1150,6 +1156,11 @@ fn state_thread_step<'a>(
                 } => {
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
+
+                    let exposed_aliases_by_symbol = exposed_aliases_by_symbol
+                        .into_iter()
+                        .map(|(k, (_, v))| (k, v))
+                        .collect();
 
                     let typechecked = finish(
                         state,
@@ -1863,6 +1874,7 @@ fn update<'a>(
                         .insert(module_id, typechecked);
                 } else {
                     state.constrained_ident_ids.insert(module_id, ident_ids);
+                    state.timings.insert(module_id, module_timing);
                 }
 
                 start_tasks(arena, &mut state, work, injector, worker_listeners)?;
@@ -3169,7 +3181,7 @@ fn run_solve<'a>(
 
     let mut solve_aliases = default_aliases();
 
-    for (name, alias) in aliases.iter() {
+    for (name, (_, alias)) in aliases.iter() {
         solve_aliases.insert(*name, alias.clone());
     }
 
@@ -3287,6 +3299,8 @@ fn canonicalize_and_constrain<'a>(
         ..
     } = parsed;
 
+    let before = roc_types::types::get_type_clone_count();
+
     let mut var_store = VarStore::default();
     let canonicalized = canonicalize_module_defs(
         arena,
@@ -3302,6 +3316,16 @@ fn canonicalize_and_constrain<'a>(
         &mut var_store,
     );
 
+    let after = roc_types::types::get_type_clone_count();
+
+    log!(
+        "canonicalize of {:?} cloned Type {} times ({} -> {})",
+        module_id,
+        after - before,
+        before,
+        after
+    );
+
     let canonicalize_end = SystemTime::now();
 
     module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();
@@ -3315,7 +3339,7 @@ fn canonicalize_and_constrain<'a>(
                 ModuleNameEnum::App(_) => None,
                 ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
                     let docs = crate::docs::generate_module_docs(
-                        module_output.scope,
+                        module_output.scope.clone(),
                         name.as_str().into(),
                         &module_output.ident_ids,
                         parsed_defs,
@@ -3325,9 +3349,42 @@ fn canonicalize_and_constrain<'a>(
                 }
             };
 
+            let before = roc_types::types::get_type_clone_count();
+
             let mut constraints = Constraints::new();
+
             let constraint =
                 constrain_module(&mut constraints, &module_output.declarations, module_id);
+
+            let after = roc_types::types::get_type_clone_count();
+
+            log!(
+                "constraint gen of {:?} cloned Type {} times ({} -> {})",
+                module_id,
+                after - before,
+                before,
+                after
+            );
+
+            // scope has imported aliases, but misses aliases from inner scopes
+            // module_output.aliases does have those aliases, so we combine them
+            let mut aliases: MutMap<Symbol, (bool, Alias)> = module_output
+                .aliases
+                .into_iter()
+                .map(|(k, v)| (k, (true, v)))
+                .collect();
+            for (name, alias) in module_output.scope.aliases {
+                match aliases.entry(name) {
+                    Occupied(_) => {
+                        // do nothing
+                    }
+                    Vacant(vacant) => {
+                        if !name.is_builtin() {
+                            vacant.insert((false, alias));
+                        }
+                    }
+                }
+            }
 
             let module = Module {
                 module_id,
@@ -3335,7 +3392,7 @@ fn canonicalize_and_constrain<'a>(
                 exposed_symbols,
                 referenced_values: module_output.referenced_values,
                 referenced_types: module_output.referenced_types,
-                aliases: module_output.aliases,
+                aliases,
                 rigid_variables: module_output.rigid_variables,
             };
 

@@ -13,7 +13,7 @@ pub struct SolvedModule {
 
     /// all aliases and their definitions. this has to include non-exposed aliases
     /// because exposed aliases can depend on non-exposed ones)
-    pub aliases: MutMap<Symbol, Alias>,
+    pub aliases: MutMap<Symbol, (bool, Alias)>,
 
     /// Used when the goal phase is TypeChecking, and
     /// to create the types for HostExposed. This
