@@ -27,6 +27,7 @@ pub struct IdentStr {
 }
 
 impl IdentStr {
+    // Reserve 1 byte for the discriminant
     const SMALL_STR_BYTES: usize = std::mem::size_of::<Self>() - 1;
 
     pub fn len(&self) -> usize {
