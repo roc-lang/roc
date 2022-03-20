@@ -6661,12 +6661,12 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumShiftRightBy => {
             // NOTE arguments are flipped;
-            bd.build_right_shift(rhs, lhs, false, "int_shift_right")
+            bd.build_right_shift(rhs, lhs, true, "int_shift_right")
                 .into()
         }
         NumShiftRightZfBy => {
             // NOTE arguments are flipped;
-            bd.build_right_shift(rhs, lhs, true, "int_shift_right_zf")
+            bd.build_right_shift(rhs, lhs, false, "int_shift_right_zf")
                 .into()
         }
 
