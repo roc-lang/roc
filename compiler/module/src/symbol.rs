@@ -634,11 +634,16 @@ impl IdentIds {
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique(&mut self) -> IdentId {
-        // TODO convert this directly from u32 into IdentStr,
-        // without allocating an extra string along the way like this.
-        let ident = self.next_generated_name.to_string().into();
+        use std::fmt::Write;
 
+        let index: u32 = self.next_generated_name;
         self.next_generated_name += 1;
+
+        // "4294967296" is 10 characters
+        let mut buffer: arrayvec::ArrayString<10> = arrayvec::ArrayString::new();
+
+        write!(buffer, "{}", index).unwrap();
+        let ident = Ident(IdentStr::from_str(buffer.as_str()));
 
         self.add(ident)
     }
