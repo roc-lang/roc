@@ -119,7 +119,7 @@ impl Subs {
 
         written = Self::serialize_slice(&self.variables, writer, written)?;
         written = Self::serialize_slice(&self.tag_names, writer, written)?;
-        written = Self::serialize_slice(&self.field_names, writer, written)?;
+        written = Self::serialize_field_names(&self.field_names, writer, written)?;
         written = Self::serialize_slice(&self.record_fields, writer, written)?;
         written = Self::serialize_slice(&self.variable_slices, writer, written)?;
 
@@ -157,6 +157,26 @@ impl Subs {
         Ok(written)
     }
 
+    /// Lowercase can be heap-allocated
+    fn serialize_field_names(
+        lowercases: &[Lowercase],
+        writer: &mut impl std::io::Write,
+        written: usize,
+    ) -> std::io::Result<usize> {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut slices: Vec<SubsSlice<u8>> = Vec::new();
+
+        for field_name in lowercases {
+            let slice =
+                SubsSlice::extend_new(&mut buf, field_name.as_str().as_bytes().iter().copied());
+            slices.push(slice);
+        }
+
+        let written = Self::serialize_slice(&slices, writer, written)?;
+
+        Self::serialize_slice(&buf, writer, written)
+    }
+
     fn serialize_slice<T>(
         slice: &[T],
         writer: &mut impl std::io::Write,
@@ -187,7 +207,8 @@ impl Subs {
 
         let (variables, offset) = Self::deserialize_slice(bytes, header.variables, offset);
         let (tag_names, offset) = Self::deserialize_slice(bytes, header.tag_names, offset);
-        let (field_names, offset) = Self::deserialize_slice(bytes, header.field_names, offset);
+        let (field_names, offset) =
+            Self::deserialize_field_names(bytes, header.field_names, offset);
         let (record_fields, offset) = Self::deserialize_slice(bytes, header.record_fields, offset);
         let (variable_slices, _) = Self::deserialize_slice(bytes, header.variable_slices, offset);
 
@@ -195,7 +216,7 @@ impl Subs {
             utable,
             variables: variables.to_vec(),
             tag_names: tag_names.to_vec(),
-            field_names: field_names.to_vec(),
+            field_names,
             record_fields: record_fields.to_vec(),
             variable_slices: variable_slices.to_vec(),
             tag_name_cache: Default::default(),
@@ -239,6 +260,27 @@ impl Subs {
         }
 
         (utable, offset + byte_length)
+    }
+
+    fn deserialize_field_names(
+        bytes: &[u8],
+        length: usize,
+        offset: usize,
+    ) -> (Vec<Lowercase>, usize) {
+        let (slices, mut offset) = Self::deserialize_slice::<SubsSlice<u8>>(bytes, length, offset);
+
+        let string_slice = &bytes[offset..];
+
+        let mut lowercases = Vec::with_capacity(length);
+        for subs_slice in slices {
+            let bytes = &string_slice[subs_slice.indices()];
+            offset += bytes.len();
+            let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+
+            lowercases.push(string.into());
+        }
+
+        (lowercases, offset)
     }
 
     fn deserialize_slice<T>(bytes: &[u8], length: usize, mut offset: usize) -> (&[T], usize) {
