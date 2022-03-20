@@ -134,7 +134,7 @@ pub fn build_module_without_wrapper<'a>(
         println!("## procs");
         for proc in procs.iter() {
             println!("{}", proc.to_pretty(200));
-            println!("{:#?}", proc);
+            // println!("{:#?}", proc);
         }
     }
 
@@ -240,7 +240,7 @@ pub struct WasmDebugLogSettings {
 
 pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
     proc_start_end: false && cfg!(debug_assertions),
-    user_procs_ir: true && cfg!(debug_assertions),
+    user_procs_ir: false && cfg!(debug_assertions),
     helper_procs_ir: false && cfg!(debug_assertions),
     let_stmt_ir: false && cfg!(debug_assertions),
     instructions: false && cfg!(debug_assertions),

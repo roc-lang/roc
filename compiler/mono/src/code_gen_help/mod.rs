@@ -77,17 +77,24 @@ pub struct CodeGenHelp<'a> {
     home: ModuleId,
     target_info: TargetInfo,
     layout_isize: Layout<'a>,
+    union_refcount: UnionLayout<'a>,
     specializations: Vec<'a, Specialization<'a>>,
     debug_recursion_depth: usize,
 }
 
 impl<'a> CodeGenHelp<'a> {
     pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
+        let layout_isize = Layout::usize(target_info);
+
+        // Refcount is a boxed isize. TODO: use the new Box layout when dev backends support it
+        let union_refcount = UnionLayout::NonNullableUnwrapped(arena.alloc([layout_isize]));
+
         CodeGenHelp {
             arena,
             home,
             target_info,
-            layout_isize: Layout::usize(target_info),
+            layout_isize,
+            union_refcount,
             specializations: Vec::with_capacity_in(16, arena),
             debug_recursion_depth: 0,
         }
@@ -227,7 +234,8 @@ impl<'a> CodeGenHelp<'a> {
             let (ret_layout, arg_layouts): (&'a Layout<'a>, &'a [Layout<'a>]) = {
                 let arg = self.replace_rec_ptr(ctx, layout);
                 match ctx.op {
-                    Dec | DecRef(_) | Reset => (&LAYOUT_UNIT, self.arena.alloc([arg])),
+                    Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([arg])),
+                    Reset => (self.arena.alloc(layout), self.arena.alloc([layout])),
                     Inc => (&LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
                     Eq => (&LAYOUT_BOOL, self.arena.alloc([arg, arg])),
                 }
@@ -349,9 +357,13 @@ impl<'a> CodeGenHelp<'a> {
                 arguments: self.arena.alloc([*layout, self.layout_isize]),
                 result: LAYOUT_UNIT,
             },
-            HelperOp::Dec | HelperOp::Reset => ProcLayout {
+            HelperOp::Dec => ProcLayout {
                 arguments: self.arena.alloc([*layout]),
                 result: LAYOUT_UNIT,
+            },
+            HelperOp::Reset => ProcLayout {
+                arguments: self.arena.alloc([*layout]),
+                result: *layout,
             },
             HelperOp::DecRef(_) => unreachable!("No generated Proc for DecRef"),
             HelperOp::Eq => ProcLayout {

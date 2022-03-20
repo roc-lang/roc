@@ -830,7 +830,7 @@ impl<'a> WasmBackend<'a> {
         }
 
         internal_error!(
-            "Could not find procedure {:?} with proc_layout {:?}\nKnown procedures: {:#?}",
+            "Could not find procedure {:?} with proc_layout:\n{:#?}\nKnown procedures:\n{:#?}",
             func_sym,
             proc_layout,
             self.proc_lookup
