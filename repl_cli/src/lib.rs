@@ -9,7 +9,7 @@ use rustyline::history::History;
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
-use std::fs::File;
+use std::fs;
 use std::io;
 use std::path::PathBuf;
 use target_lexicon::Triple;
@@ -48,6 +48,8 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
 pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
+
+pub const HISTORY_PATH: &str = ".roc_cache/repl_history.dat";
 
 #[derive(Completer, Helper, Hinter)]
 struct ReplHelper {
@@ -175,6 +177,22 @@ impl CommandHistories {
             global_history_path: global_path,
             ..histories
         }
+    }
+}
+fn local_history_path() -> PathBuf {
+    PathBuf::from(HISTORY_PATH)
+}
+fn global_history_path() -> Option<PathBuf> {
+    home_dir().map(|path| path.join(PathBuf::from(HISTORY_PATH)))
+}
+fn touch(path: PathBuf) -> Result<PathBuf, std::io::Error> {
+    match fs::File::options()
+        .write(true)
+        .create(true)
+        .open(&local_history_path())
+    {
+        Ok(_) => Ok(path),
+        Err(e) => Err(e),
     }
 }
 
@@ -405,39 +423,22 @@ pub fn main() -> io::Result<()> {
 
     let mut prev_line_blank = false;
     let mut editor = Editor::<ReplHelper>::new();
-    let local_history_path = PathBuf::from(".roc_cache/repl_history.dat");
 
-    match File::options()
-        .write(true)
-        .create(true)
-        .open(&local_history_path)
-    {
-        Ok(_) => (),
-        Err(_) => println!("Failed to open or create local history file"),
-    }
+    let global_history_path = global_history_path()
+        .map(|path| {
+            match touch(path.clone()).map(|path| editor.load_history(&path)) {
+                Ok(_) => Some(path),
+                Err(_) => None, //println!("Failed to load or initialize global history"),
+            }
+        })
+        .flatten();
 
-    let global_history_path_option = home_dir().map(|path| {
-        let global_history_path = path.join(PathBuf::from(".roc_cache/repl_history.dat"));
-        match File::options()
-            .write(true)
-            .create(true)
-            .open(&global_history_path)
-        {
-            Ok(_) => (),
-            Err(_) => println!("Failed to open or create global history file"),
-        }
-        editor
-            .load_history(&global_history_path)
-            .expect("Failed to load global history");
-        global_history_path
-    });
+    let local_path = match touch(local_history_path()).map(|path| editor.load_history(&path)) {
+        Ok(_) => Some(local_history_path()),
+        Err(_) => None, //println!("Failed to load or initialize local history"),
+    };
 
-    editor
-        .load_history(&local_history_path)
-        .expect("Failed to load local history");
-
-    let mut histories =
-        CommandHistories::load(Some(local_history_path), global_history_path_option);
+    let mut histories = CommandHistories::load(local_path, global_history_path);
 
     let repl_helper = ReplHelper::new();
     editor.set_helper(Some(repl_helper));
