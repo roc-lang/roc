@@ -1843,7 +1843,6 @@ fn shift_left_by() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn shift_right_by() {
     // Sign Extended Right Shift
     assert_evals_to!("Num.shiftRightBy 0 0b0100_0000i8", 0b0001_0000, i8);
@@ -1853,7 +1852,6 @@ fn shift_right_by() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn shift_right_zf_by() {
     // Logical Right Shift
     assert_evals_to!("Num.shiftRightBy 1 0b1100_0000u8", 0b0011_0000, i64);
