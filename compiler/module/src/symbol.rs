@@ -636,11 +636,14 @@ impl IdentIds {
     pub fn gen_unique(&mut self) -> IdentId {
         use std::fmt::Write;
 
-        let mut temp: arrayvec::ArrayString<15> = arrayvec::ArrayString::new();
-        write!(temp, "{}", self.next_generated_name).unwrap();
-        let ident = Ident(IdentStr::from_array_string(temp));
-
+        let index: u32 = self.next_generated_name;
         self.next_generated_name += 1;
+
+        // "4294967296" is 10 characters
+        let mut buffer: arrayvec::ArrayString<10> = arrayvec::ArrayString::new();
+
+        write!(buffer, "{}", index).unwrap();
+        let ident = Ident(IdentStr::from_str(buffer.as_str()));
 
         self.add(ident)
     }

@@ -428,6 +428,7 @@ impl Env {
         it1.zip(it2)
     }
 
+    #[inline(always)]
     fn get_var_by_symbol(&self, symbol: &Symbol) -> Option<Variable> {
         self.symbols
             .iter()
@@ -435,6 +436,7 @@ impl Env {
             .map(|index| self.variables[index])
     }
 
+    #[inline(always)]
     fn insert_symbol_var_if_vacant(&mut self, symbol: Symbol, var: Variable) {
         match self.symbols.iter().position(|s| *s == symbol) {
             None => {
@@ -725,23 +727,27 @@ fn solve(
 
                 // check that things went well
                 debug_assert!({
-                    // NOTE the `subs.redundant` check is added for the uniqueness
-                    // inference, and does not come from elm. It's unclear whether this is
-                    // a bug with uniqueness inference (something is redundant that
-                    // shouldn't be) or that it just never came up in elm.
                     let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
 
-                    let failing: Vec<_> = rigid_vars
+                    // NOTE the `subs.redundant` check does not come from elm.
+                    // It's unclear whether this is a bug with our implementation
+                    // (something is redundant that shouldn't be)
+                    // or that it just never came up in elm.
+                    let mut it = rigid_vars
                         .iter()
                         .filter(|&var| !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE)
-                        .collect();
+                        .peekable();
 
-                    if !failing.is_empty() {
+                    if it.peek().is_some() {
+                        let failing: Vec<_> = it.collect();
                         println!("Rigids {:?}", &rigid_vars);
                         println!("Failing {:?}", failing);
-                    }
 
-                    failing.is_empty()
+                        // nicer error message
+                        failing.is_empty()
+                    } else {
+                        true
+                    }
                 });
 
                 let mut new_env = env.clone();
@@ -1257,7 +1263,6 @@ fn type_to_var(
     } else {
         let mut arena = take_scratchpad();
 
-        // let var = type_to_variable(subs, rank, pools, &arena, typ);
         let var = type_to_variable(subs, rank, pools, &arena, aliases, typ);
 
         arena.reset();
@@ -2125,7 +2130,8 @@ fn adjust_rank(
 
         max_rank
     } else if desc_mark == visit_mark {
-        // nothing changes
+        // we have already visited this variable
+        // (probably two variables had the same root)
         desc_rank
     } else {
         let min_rank = group_rank.min(desc_rank);

@@ -11,7 +11,7 @@ use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::Scope;
-use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{default_hasher, ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_error_macros::todo_abilities;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -295,22 +295,27 @@ pub fn canonicalize_defs<'a>(
         let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
         let mut is_phantom = false;
 
-        let mut var_by_name = can_ann.introduced_variables.var_by_name.clone();
+        let mut named = can_ann.introduced_variables.named;
         for loc_lowercase in vars.iter() {
-            if let Some(var) = var_by_name.remove(&loc_lowercase.value) {
-                // This is a valid lowercase rigid var for the type def.
-                can_vars.push(Loc {
-                    value: (loc_lowercase.value.clone(), var.value),
-                    region: loc_lowercase.region,
-                });
-            } else {
-                is_phantom = true;
+            match named.iter().position(|nv| nv.name == loc_lowercase.value) {
+                Some(index) => {
+                    // This is a valid lowercase rigid var for the type def.
+                    let named_variable = named.swap_remove(index);
 
-                env.problems.push(Problem::PhantomTypeArgument {
-                    typ: symbol,
-                    variable_region: loc_lowercase.region,
-                    variable_name: loc_lowercase.value.clone(),
-                });
+                    can_vars.push(Loc {
+                        value: (named_variable.name, named_variable.variable),
+                        region: loc_lowercase.region,
+                    });
+                }
+                None => {
+                    is_phantom = true;
+
+                    env.problems.push(Problem::PhantomTypeArgument {
+                        typ: symbol,
+                        variable_region: loc_lowercase.region,
+                        variable_name: loc_lowercase.value.clone(),
+                    });
+                }
             }
         }
 
@@ -324,13 +329,13 @@ pub fn canonicalize_defs<'a>(
             inferred,
             ..
         } = can_ann.introduced_variables;
-        let num_unbound = var_by_name.len() + wildcards.len() + inferred.len();
+        let num_unbound = named.len() + wildcards.len() + inferred.len();
         if num_unbound > 0 {
-            let one_occurrence = var_by_name
+            let one_occurrence = named
                 .iter()
-                .map(|(_, v)| v)
-                .chain(wildcards.iter())
-                .chain(inferred.iter())
+                .map(|nv| Loc::at(nv.first_seen, nv.variable))
+                .chain(wildcards)
+                .chain(inferred)
                 .next()
                 .unwrap()
                 .region;
@@ -918,6 +923,22 @@ fn single_can_def(
     }
 }
 
+fn add_annotation_aliases(
+    type_annotation: &crate::annotation::Annotation,
+    aliases: &mut ImMap<Symbol, Alias>,
+) {
+    for (name, alias) in type_annotation.aliases.iter() {
+        match aliases.entry(*name) {
+            ImEntry::Occupied(_) => {
+                // do nothing
+            }
+            ImEntry::Vacant(vacant) => {
+                vacant.insert(alias.clone());
+            }
+        }
+    }
+}
+
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::cognitive_complexity)]
@@ -951,7 +972,7 @@ fn canonicalize_pending_def<'a>(
                 output.references.referenced_type_defs.insert(*symbol);
             }
 
-            aliases.extend(type_annotation.aliases.clone());
+            add_annotation_aliases(&type_annotation, aliases);
 
             output
                 .introduced_variables
@@ -1073,9 +1094,7 @@ fn canonicalize_pending_def<'a>(
                 output.references.referenced_type_defs.insert(*symbol);
             }
 
-            for (symbol, alias) in type_annotation.aliases.clone() {
-                aliases.insert(symbol, alias);
-            }
+            add_annotation_aliases(&type_annotation, aliases);
 
             output
                 .introduced_variables

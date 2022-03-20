@@ -229,12 +229,20 @@ static mut TYPE_CLONE_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 pub fn get_type_clone_count() -> usize {
-    unsafe { TYPE_CLONE_COUNT.load(std::sync::atomic::Ordering::SeqCst) }
+    if cfg!(debug_assertions) {
+        unsafe { TYPE_CLONE_COUNT.load(std::sync::atomic::Ordering::SeqCst) }
+    } else {
+        0
+    }
 }
 
 impl Clone for Type {
     fn clone(&self) -> Self {
-        unsafe { TYPE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) };
+        #[cfg(debug_assertions)]
+        unsafe {
+            TYPE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        };
+
         match self {
             Self::EmptyRec => Self::EmptyRec,
             Self::EmptyTagUnion => Self::EmptyTagUnion,
@@ -2345,7 +2353,11 @@ pub fn gather_fields_unsorted_iter(
             Structure(Record(sub_fields, sub_ext)) => {
                 stack.push(*sub_fields);
 
-                var = *sub_ext;
+                if var == Variable::EMPTY_RECORD {
+                    break;
+                } else {
+                    var = *sub_ext;
+                }
             }
 
             Alias(_, _, actual_var, _) => {

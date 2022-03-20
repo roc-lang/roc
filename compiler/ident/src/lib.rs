@@ -27,6 +27,7 @@ pub struct IdentStr {
 }
 
 impl IdentStr {
+    // Reserve 1 byte for the discriminant
     const SMALL_STR_BYTES: usize = std::mem::size_of::<Self>() - 1;
 
     pub fn len(&self) -> usize {
@@ -102,13 +103,8 @@ impl IdentStr {
         unsafe { mem::transmute::<[u8; mem::size_of::<Self>()], Self>(bytes) }
     }
 
-    pub fn from_array_string(
-        array_string: arrayvec::ArrayString<{ Self::SMALL_STR_BYTES }>,
-    ) -> Self {
-        Self::small_str_from_bytes(array_string.as_bytes())
-    }
-
-    fn from_str(str: &str) -> Self {
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(str: &str) -> Self {
         let slice = str.as_bytes();
         let len = slice.len();
 

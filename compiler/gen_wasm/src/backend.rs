@@ -1,4 +1,5 @@
 use bumpalo::{self, collections::Vec};
+use std::fmt::Write;
 
 use code_builder::Align;
 use roc_builtins::bitcode::IntWidth;
@@ -175,6 +176,8 @@ impl<'a> WasmBackend<'a> {
             println!("\ngenerating procedure {:?}\n", proc.name);
         }
 
+        self.append_proc_debug_name(proc.name);
+
         self.start_proc(proc);
 
         self.stmt(&proc.body);
@@ -233,6 +236,20 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_size,
             self.storage.stack_frame_pointer,
         );
+    }
+
+    fn append_proc_debug_name(&mut self, name: Symbol) {
+        let proc_index = self
+            .proc_lookup
+            .iter()
+            .position(|(n, _, _)| *n == name)
+            .unwrap();
+        let wasm_fn_index = self.fn_index_offset + proc_index as u32;
+
+        let mut debug_name = bumpalo::collections::String::with_capacity_in(64, self.env.arena);
+        write!(debug_name, "{:?}", name).unwrap();
+        let name_bytes = debug_name.into_bytes().into_bump_slice();
+        self.module.names.append_function(wasm_fn_index, name_bytes);
     }
 
     /**********************************************************
