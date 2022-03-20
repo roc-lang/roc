@@ -707,6 +707,26 @@ keepErrs : List before, (before -> Result * after) -> List after
 ## Shorthand for [List.sortWith] passing [Order.compare]
 sort : List elem -> List elem | elem supports Ordering
 
+# Implementation note: List.sort on builtins should monomorphize to a custom implementation
+# which actually doesn't use Order - but rather, it uses faster direct comparisons.
+#
+# In particular, the Float implementation should sort NaNs to the edge by using
+# !(x < y || x > y) to compare them for equality, which generates these instructions:
+#
+#        ucomisd xmm0, xmm1
+#        sete    al
+#
+# This actually benchmarks faster (!) than a regular float == operation, and has the additional
+# benefit of treating NaN equal to itself. That's what we want for sorting.
+#
+# Then, as long as we always use either `<` or `>` for all other comparisons (but not both in the same
+# algorithm, and never `<=` or `>=`) then NaNs will consistently be evaluated as "not less than" or
+# "not greater than" their neighbors, while still evaluating to being equal to themselves. This should
+# mean they get moved around more than necessary, which is fine, but should still end up eventually
+# getting moved to one edge or the other, depending on whether we used `<` or `>`.
+#
+# (Should make sure to verify that this holds consistently, e.g. using a property-based test.)
+
 ## [sort] with the order reversed.
 sortReverse : List elem -> List elem | elem supports Ordering
 

@@ -299,6 +299,15 @@ Dec := {} supports FractionArithmetic, Equating, Ordering, Hashing
 ## An [IEEE-754 floating-point number](https://en.wikipedia.org/wiki/IEEE_754), except without
 ## considering `NaN` to be unequal to itself.
 ##
+## All of the following produce NaN according to the IEEE-754 specification:
+## * ∞ + -∞
+## * -∞ + ∞
+## * ∞ - ∞
+## * -∞ - -∞
+## * ±∞ * ±0
+## * ±0 / ±0
+## * ±0 % ±0
+##
 ## This change prevents problems like `NaN` values causing problems with sorting, or with
 ## storing floats in dictionaries and sets.
 ##
@@ -1063,7 +1072,15 @@ infinity : Float *
 ## The [IEEE-754 floating-point](https://en.wikipedia.org/wiki/IEEE_754) value of *negative infintiy.*
 negativeInfinity : Float *
 
-## The [IEEE-754 floating-point](https://en.wikipedia.org/wiki/IEEE_754) value of *not a number.*
+## The [IEEE-754 floating-point](https://en.wikipedia.org/wiki/IEEE_754) value of *not a number,* also known as *NaN*.
+##
+## This has some surprising results with comparisons. For example, both `x < Num.nan` and `x > Num.nan`
+## always return `False`, no matter what `x` is. That's very unusual! For all other numbers besides [Num.nan],
+## those two comparisons always return different answers.
+##
+## Although *NaN* is defined to be unequal to itself in the IEEE-753 specification, note that in the default
+## [Order.compare] implementation for [Float], *NaN* values are considered to be the same as one another
+## for ordering purposes.
 nan : Float *
 
 ## Operations on integers that the infix operators [//] and [%%] desugar to.

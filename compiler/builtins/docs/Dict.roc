@@ -208,3 +208,17 @@ removeShift : Dict k v, k -> Dict k v
 ## Returns whether both dictionaries have the same keys, and the same values associated with those keys.
 ## This is different from `==` in that it disregards the ordering of the keys and values.
 hasSameContents : Dict k v, Dict k v -> Bool
+
+## If the given index is greater than the length of the [Dict], then this does the same thing as [Dict.insert].
+## If it didn't, there would be a gap in the ordering, and supporting gaps would have an unacceptable
+## performance cost.
+replaceAt : Dict k v, k, v, Nat -> Dict k v
+
+## If the given key is not found, returns the original dictionary.
+## See [updateOrInsert] to insert an entry anyway, even if there was no previous value
+## stored at the given key.
+update : Dict k v, k, (v -> v) -> Dict k v
+
+updateOrInsert : Dict k v, k, ([ Val v, NoVal ] -> v) -> Dict k v
+
+updateAt : Dict k v, Nat, ({ k, v } -> { k, v }) -> Dict k v
