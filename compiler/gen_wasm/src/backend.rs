@@ -580,7 +580,7 @@ impl<'a> WasmBackend<'a> {
                 tag_id,
                 arguments,
                 ..
-            } => self.expr_tag(union_layout, *tag_id, arguments, sym, storage),
+            } => self.expr_tag(union_layout, *tag_id, arguments, sym, storage, None),
 
             Expr::GetTagId {
                 structure,
@@ -598,9 +598,13 @@ impl<'a> WasmBackend<'a> {
                 todo!("Expression `{}`", expr.to_pretty(100))
             }
 
-            Expr::Reuse { .. } => {
-                todo!("Expression `{}`", expr.to_pretty(100))
-            }
+            Expr::Reuse {
+                tag_layout,
+                tag_id,
+                arguments,
+                symbol: reused,
+                ..
+            } => self.expr_tag(tag_layout, *tag_id, arguments, sym, storage, Some(*reused)),
 
             Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
 
@@ -1082,6 +1086,7 @@ impl<'a> WasmBackend<'a> {
         arguments: &'a [Symbol],
         symbol: Symbol,
         stored: &StoredValue,
+        maybe_reused: Option<Symbol>,
     ) {
         if union_layout.tag_is_null(tag_id) {
             self.code_builder.i32_const(0);
@@ -1102,8 +1107,14 @@ impl<'a> WasmBackend<'a> {
                 location.local_and_offset(self.storage.stack_frame_pointer)
             }
             StoredValue::Local { local_id, .. } => {
-                // Tag is stored as a pointer to the heap. Call the allocator to get a memory address.
-                self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                // Tag is stored as a heap pointer.
+                if let Some(reused) = maybe_reused {
+                    // Reuse an existing heap allocation
+                    self.storage.load_symbols(&mut self.code_builder, &[reused]);
+                } else {
+                    // Call the allocator to get a memory address.
+                    self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                }
                 self.code_builder.set_local(local_id);
                 (local_id, 0)
             }
