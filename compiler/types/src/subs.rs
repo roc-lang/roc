@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{name_type_var, AliasKind, ErrorType, Problem, RecordField, TypeExt};
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName, Uppercase};
@@ -58,6 +59,40 @@ struct ErrorTypeState {
     normals: u32,
     problems: Vec<crate::types::Problem>,
     context: ErrorTypeContext,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SubsHeader {
+    utable: usize,
+    variables: usize,
+    tag_names: usize,
+    field_names: usize,
+    record_fields: usize,
+    variable_slices: usize,
+}
+
+impl SubsHeader {
+    fn from_subs(subs: &Subs) -> Self {
+        // TODO what do we do with problems? they should
+        // be reported and then removed from Subs I think
+        debug_assert!(subs.problems.is_empty());
+
+        Self {
+            utable: subs.utable.len(),
+            variables: subs.variables.len(),
+            tag_names: subs.tag_names.len(),
+            field_names: subs.field_names.len(),
+            record_fields: subs.record_fields.len(),
+            variable_slices: subs.variable_slices.len(),
+        }
+    }
+}
+
+unsafe fn slice_as_bytes<T>(slice: &[T]) -> &[u8] {
+    let ptr = slice.as_ptr();
+    let byte_length = std::mem::size_of::<T>() * slice.len();
+
+    unsafe { std::slice::from_raw_parts(ptr as *const u8, byte_length) }
 }
 
 #[derive(Clone)]
