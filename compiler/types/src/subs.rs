@@ -1602,8 +1602,8 @@ impl Subs {
 
     /// Unions two keys without the possibility of failure.
     pub fn union(&mut self, left: Variable, right: Variable, desc: Descriptor) {
-        let l_root = self.utable.inlined_get_root_key(left);
-        let r_root = self.utable.inlined_get_root_key(right);
+        let l_root = self.utable.get_root_key(left);
+        let r_root = self.utable.get_root_key(right);
 
         // NOTE this swapping is intentional! most of our unifying commands are based on the elm
         // source, but unify_roots is from `ena`, not the elm source. Turns out that they have
@@ -1647,25 +1647,23 @@ impl Subs {
         &self.utable.probe_value_ref(key).value.content
     }
 
-    #[inline(always)]
     pub fn get_root_key(&mut self, key: Variable) -> Variable {
-        self.utable.inlined_get_root_key(key)
+        self.utable.get_root_key(key)
     }
 
-    #[inline(always)]
     pub fn get_root_key_without_compacting(&self, key: Variable) -> Variable {
         self.utable.get_root_key_without_compacting(key)
     }
 
     #[inline(always)]
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
-        let l_key = self.utable.inlined_get_root_key(key);
+        let l_key = self.utable.get_root_key(key);
 
         self.utable.update_value(l_key, |node| node.value = r_value);
     }
 
     pub fn set_rank(&mut self, key: Variable, rank: Rank) {
-        let l_key = self.utable.inlined_get_root_key(key);
+        let l_key = self.utable.get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.rank = rank;
@@ -1673,7 +1671,7 @@ impl Subs {
     }
 
     pub fn set_mark(&mut self, key: Variable, mark: Mark) {
-        let l_key = self.utable.inlined_get_root_key(key);
+        let l_key = self.utable.get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.mark = mark;
@@ -1681,7 +1679,7 @@ impl Subs {
     }
 
     pub fn set_rank_mark(&mut self, key: Variable, rank: Rank, mark: Mark) {
-        let l_key = self.utable.inlined_get_root_key(key);
+        let l_key = self.utable.get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.rank = rank;
@@ -1690,7 +1688,7 @@ impl Subs {
     }
 
     pub fn set_content(&mut self, key: Variable, content: Content) {
-        let l_key = self.utable.inlined_get_root_key(key);
+        let l_key = self.utable.get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.content = content;
@@ -1706,7 +1704,7 @@ impl Subs {
 
     #[inline(always)]
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
-        let l_key = self.utable.inlined_get_root_key(key);
+        let l_key = self.utable.get_root_key(key);
 
         let mut rank = Rank::NONE;
 
