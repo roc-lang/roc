@@ -138,7 +138,6 @@ pub fn refcount_reset_proc_body<'a>(
     layout: Layout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
-
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
     let rc = root.create_symbol(ident_ids, "rc");
     let refcount_1 = root.create_symbol(ident_ids, "refcount_1");
