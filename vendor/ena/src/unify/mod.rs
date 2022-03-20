@@ -303,20 +303,18 @@ impl<S: UnificationStore> UnificationTable<S> {
     /// callsites. `uninlined_get_root_key` is the never-inlined version.
     #[inline(always)]
     pub fn inlined_get_root_key(&mut self, vid: S::Key) -> S::Key {
-        let redirect = {
-            match self.value(vid).parent(vid) {
-                None => return vid,
-                Some(redirect) => redirect,
+        match self.value(vid).parent(vid) {
+            None => vid,
+            Some(redirect) => {
+                let root_key: S::Key = self.uninlined_get_root_key(redirect);
+                if root_key != redirect {
+                    // Path compression
+                    self.update_value(vid, |value| value.parent = root_key);
+                }
+
+                root_key
             }
-        };
-
-        let root_key: S::Key = self.uninlined_get_root_key(redirect);
-        if root_key != redirect {
-            // Path compression
-            self.update_value(vid, |value| value.parent = root_key);
         }
-
-        root_key
     }
 
     // This is a never-inlined version of this function for cold callsites.
