@@ -3193,7 +3193,7 @@ fn run_solve<'a>(
         solve_aliases,
     );
 
-    let solved_subs = if false {
+    let solved_subs = if true {
         solved_subs
     } else {
         let mut serialized = Vec::new();
