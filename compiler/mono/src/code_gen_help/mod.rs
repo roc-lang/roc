@@ -37,9 +37,6 @@ impl HelperOp {
     fn is_decref(&self) -> bool {
         matches!(self, Self::DecRef(_))
     }
-    fn is_reset(&self) -> bool {
-        matches!(self, Self::Reset)
-    }
 }
 
 #[derive(Debug)]
@@ -151,7 +148,7 @@ impl<'a> CodeGenHelp<'a> {
     pub fn call_reset_refcount(
         &mut self,
         ident_ids: &mut IdentIds,
-        layout: &Layout<'a>,
+        layout: Layout<'a>,
         argument: Symbol,
     ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
         let mut ctx = Context {
@@ -160,11 +157,20 @@ impl<'a> CodeGenHelp<'a> {
             op: HelperOp::Reset,
         };
 
-        let arguments = self.arena.alloc([argument]);
+        let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout);
 
-        let expr = self
-            .call_specialized_op(ident_ids, &mut ctx, *layout, arguments)
-            .unwrap();
+        let arguments = self.arena.alloc([argument]);
+        let ret_layout = self.arena.alloc(layout);
+        let arg_layouts = self.arena.alloc([layout]);
+        let expr = Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: proc_name,
+                ret_layout,
+                arg_layouts,
+                specialization_id: CallSpecId::BACKEND_DUMMY,
+            },
+            arguments,
+        });
 
         (expr, ctx.new_linker_data)
     }
@@ -283,9 +289,13 @@ impl<'a> CodeGenHelp<'a> {
 
         // Recursively generate the body of the Proc and sub-procs
         let (ret_layout, body) = match ctx.op {
-            Inc | Dec | DecRef(_) | Reset => (
+            Inc | Dec | DecRef(_) => (
                 LAYOUT_UNIT,
                 refcount::refcount_generic(self, ident_ids, ctx, layout, Symbol::ARG_1),
+            ),
+            Reset => (
+                layout,
+                refcount::refcount_reset_proc_body(self, ident_ids, ctx, layout, Symbol::ARG_1),
             ),
             Eq => (
                 LAYOUT_BOOL,

@@ -1371,7 +1371,7 @@ impl<'a> WasmBackend<'a> {
         let layout = self.storage.symbol_layouts[&argument];
         let (specialized_call_expr, new_specializations) = self
             .helper_proc_gen
-            .call_reset_refcount(ident_ids, &layout, argument);
+            .call_reset_refcount(ident_ids, layout, argument);
 
         // If any new specializations were created, register their symbol data
         for spec in new_specializations.into_iter() {
