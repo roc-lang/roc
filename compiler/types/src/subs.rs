@@ -109,6 +109,12 @@ fn round_to_multiple_of(value: usize, base: usize) -> usize {
     (value + (base - 1)) / base * base
 }
 
+enum SerializedTagName {
+    Global(SubsSlice<u8>),
+    Private(Symbol),
+    Closure(Symbol),
+}
+
 impl Subs {
     pub fn serialize(
         &self,
@@ -124,7 +130,7 @@ impl Subs {
         written = Self::serialize_unification_table(&self.utable, writer, written)?;
 
         written = Self::serialize_slice(&self.variables, writer, written)?;
-        written = Self::serialize_slice(&self.tag_names, writer, written)?;
+        written = Self::serialize_tag_names(&self.tag_names, writer, written)?;
         written = Self::serialize_field_names(&self.field_names, writer, written)?;
         written = Self::serialize_slice(&self.record_fields, writer, written)?;
         written = Self::serialize_slice(&self.variable_slices, writer, written)?;
@@ -184,6 +190,36 @@ impl Subs {
         Self::serialize_slice(&buf, writer, written)
     }
 
+    /// Lowercase can be heap-allocated
+    fn serialize_tag_names(
+        tag_names: &[TagName],
+        writer: &mut impl std::io::Write,
+        written: usize,
+    ) -> std::io::Result<usize> {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut slices: Vec<SerializedTagName> = Vec::new();
+
+        for tag_name in tag_names {
+            let serialized = match tag_name {
+                TagName::Global(uppercase) => {
+                    let slice = SubsSlice::extend_new(
+                        &mut buf,
+                        uppercase.as_str().as_bytes().iter().copied(),
+                    );
+                    SerializedTagName::Global(slice)
+                }
+                TagName::Private(symbol) => SerializedTagName::Private(*symbol),
+                TagName::Closure(symbol) => SerializedTagName::Closure(*symbol),
+            };
+
+            slices.push(serialized);
+        }
+
+        let written = Self::serialize_slice(&slices, writer, written)?;
+
+        Self::serialize_slice(&buf, writer, written)
+    }
+
     fn serialize_slice<T>(
         slice: &[T],
         writer: &mut impl std::io::Write,
@@ -215,7 +251,7 @@ impl Subs {
         println!("utable");
 
         let (variables, offset) = Self::deserialize_slice(bytes, header.variables, offset);
-        let (tag_names, offset) = Self::deserialize_slice(bytes, header.tag_names, offset);
+        let (tag_names, offset) = Self::deserialize_tag_names(bytes, header.tag_names, offset);
         let (field_names, offset) =
             Self::deserialize_field_names(bytes, header.field_names, offset);
         println!("field names");
@@ -298,6 +334,32 @@ impl Subs {
         }
 
         (lowercases, offset)
+    }
+
+    fn deserialize_tag_names(bytes: &[u8], length: usize, offset: usize) -> (Vec<TagName>, usize) {
+        let (slices, mut offset) =
+            Self::deserialize_slice::<SerializedTagName>(bytes, length, offset);
+
+        let string_slice = &bytes[offset..];
+
+        let mut tag_names = Vec::with_capacity(length);
+        for serialized_tag_name in slices {
+            let tag_name = match serialized_tag_name {
+                SerializedTagName::Global(subs_slice) => {
+                    let bytes = &string_slice[subs_slice.indices()];
+                    offset += bytes.len();
+                    let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+
+                    TagName::Global(string.into())
+                }
+                SerializedTagName::Private(symbol) => TagName::Private(*symbol),
+                SerializedTagName::Closure(symbol) => TagName::Closure(*symbol),
+            };
+
+            tag_names.push(tag_name);
+        }
+
+        (tag_names, offset)
     }
 
     fn deserialize_slice<T>(bytes: &[u8], length: usize, mut offset: usize) -> (&[T], usize) {
