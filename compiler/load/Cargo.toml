@@ -27,6 +27,7 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 parking_lot = "0.11.2"
 crossbeam = "0.8.1"
 num_cpus = "1.13.0"
+memmap = "0.7.0"
 
 [dev-dependencies]
 tempfile = "3.2.0"

@@ -69,10 +69,11 @@ struct SubsHeader {
     field_names: usize,
     record_fields: usize,
     variable_slices: usize,
+    vars_by_symbol: usize,
 }
 
 impl SubsHeader {
-    fn from_subs(subs: &Subs) -> Self {
+    fn from_subs(subs: &Subs, vars_by_symbol: usize) -> Self {
         // TODO what do we do with problems? they should
         // be reported and then removed from Subs I think
         debug_assert!(subs.problems.is_empty());
@@ -84,6 +85,7 @@ impl SubsHeader {
             field_names: subs.field_names.len(),
             record_fields: subs.record_fields.len(),
             variable_slices: subs.variable_slices.len(),
+            vars_by_symbol,
         }
     }
 
@@ -108,10 +110,14 @@ fn round_to_multiple_of(value: usize, base: usize) -> usize {
 }
 
 impl Subs {
-    pub fn serialize(&self, writer: &mut impl std::io::Write) -> std::io::Result<usize> {
+    pub fn serialize(
+        &self,
+        vars_by_symbol: &[(Symbol, Variable)],
+        writer: &mut impl std::io::Write,
+    ) -> std::io::Result<usize> {
         let mut written = 0;
 
-        let header = SubsHeader::from_subs(self).to_array();
+        let header = SubsHeader::from_subs(self, vars_by_symbol.len()).to_array();
         written += header.len();
         writer.write_all(&header)?;
 
@@ -122,6 +128,7 @@ impl Subs {
         written = Self::serialize_field_names(&self.field_names, writer, written)?;
         written = Self::serialize_slice(&self.record_fields, writer, written)?;
         written = Self::serialize_slice(&self.variable_slices, writer, written)?;
+        written = Self::serialize_slice(vars_by_symbol, writer, written)?;
 
         Ok(written)
     }
@@ -195,7 +202,7 @@ impl Subs {
         Ok(written + padding_bytes + bytes_slice.len())
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Self {
+    pub fn deserialize(bytes: &[u8]) -> (Self, Vec<(Symbol, Variable)>) {
         use std::convert::TryInto;
 
         let mut offset = 0;
@@ -205,14 +212,21 @@ impl Subs {
 
         let (utable, offset) = Self::deserialize_unification_table(bytes, header.utable, offset);
 
+        println!("utable");
+
         let (variables, offset) = Self::deserialize_slice(bytes, header.variables, offset);
         let (tag_names, offset) = Self::deserialize_slice(bytes, header.tag_names, offset);
         let (field_names, offset) =
             Self::deserialize_field_names(bytes, header.field_names, offset);
+        println!("field names");
         let (record_fields, offset) = Self::deserialize_slice(bytes, header.record_fields, offset);
-        let (variable_slices, _) = Self::deserialize_slice(bytes, header.variable_slices, offset);
+        let (variable_slices, offset) =
+            Self::deserialize_slice(bytes, header.variable_slices, offset);
+        let (vars_by_symbol, _) = Self::deserialize_slice(bytes, header.vars_by_symbol, offset);
+        println!("all");
+        let x = vars_by_symbol.to_vec();
 
-        Self {
+        let subs = Self {
             utable,
             variables: variables.to_vec(),
             tag_names: tag_names.to_vec(),
@@ -221,7 +235,10 @@ impl Subs {
             variable_slices: variable_slices.to_vec(),
             tag_name_cache: Default::default(),
             problems: Default::default(),
-        }
+        };
+        println!("to_vec");
+
+        (subs, x)
     }
 
     fn deserialize_unification_table(
