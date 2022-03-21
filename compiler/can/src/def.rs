@@ -8,6 +8,7 @@ use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::Scope;
+use roc_collections::all::ImSet;
 use roc_collections::all::{default_hasher, ImEntry, ImMap, MutMap, MutSet, SendMap};
 use roc_error_macros::todo_abilities;
 use roc_module::ident::Lowercase;
