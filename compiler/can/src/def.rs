@@ -1,7 +1,6 @@
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::IntroducedVariables;
 use crate::env::Env;
-use crate::expr::references_from;
 use crate::expr::ClosureData;
 use crate::expr::Expr::{self, *};
 use crate::expr::{canonicalize_expr, local_successors, Output, Recursive};
@@ -12,7 +11,6 @@ use crate::scope::Scope;
 use roc_collections::all::{default_hasher, ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_error_macros::todo_abilities;
 use roc_module::ident::Lowercase;
-use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_parse::ast::TypeHeader;
@@ -423,33 +421,6 @@ pub fn canonicalize_defs<'a>(
     )
 }
 
-fn find_used_defs(
-    home: ModuleId,
-    value_lookups: &ImSet<Symbol>,
-    calls: &ImSet<Symbol>,
-    refs_by_def: &MutMap<Symbol, (Region, References)>,
-    closures: &MutMap<Symbol, References>,
-) -> References {
-    // Start with the return expression's referenced locals. They're the only ones that count!
-    //
-    // If I have two defs which reference each other, but neither of them is referenced
-    // in the return expression, I don't want either of them (or their references) to end up
-    // in the final output.references. They were unused, and so were their references!
-    //
-    // The reason we need a graph here is so we don't overlook transitive dependencies.
-    // For example, if I have `a = b + 1` and the def returns `a + 1`, then the
-    // def as a whole references both `a` *and* `b`, even though it doesn't
-    // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
-    // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
-    let locals = value_lookups
-        .iter()
-        .copied()
-        .filter(|symbol| symbol.module_id() == home);
-    let calls = calls.iter().copied();
-
-    references_from(locals, calls, refs_by_def, closures)
-}
-
 #[inline(always)]
 pub fn sort_can_defs(
     env: &mut Env<'_>,
@@ -465,18 +436,6 @@ pub fn sort_can_defs(
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
     }
-
-    let initial = output.references.clone();
-
-    let b = initial.union(find_used_defs(
-        env.home,
-        &output.references.value_lookups,
-        &output.references.calls,
-        &refs_by_symbol,
-        &env.closures,
-    ));
-
-    output.references = b;
 
     let mut defined_symbols: Vec<Symbol> = Vec::new();
     let mut defined_symbols_set: ImSet<Symbol> = ImSet::default();
