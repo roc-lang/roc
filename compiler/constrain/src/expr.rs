@@ -10,7 +10,7 @@ use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{AccessorData, ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
-use roc_collections::all::{HumanIndex, ImMap, MutMap, SendMap};
+use roc_collections::all::{HumanIndex, MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -1670,14 +1670,14 @@ fn instantiate_rigids(
     let mut annotation = annotation.clone();
     let mut new_rigid_variables: Vec<Variable> = Vec::new();
 
-    let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
+    let mut rigid_substitution: MutMap<Variable, Variable> = MutMap::default();
     for named in introduced_vars.named.iter() {
         use std::collections::hash_map::Entry::*;
 
         match ftv.entry(named.name.clone()) {
             Occupied(occupied) => {
                 let existing_rigid = occupied.get();
-                rigid_substitution.insert(named.variable, Type::Variable(*existing_rigid));
+                rigid_substitution.insert(named.variable, *existing_rigid);
             }
             Vacant(vacant) => {
                 // It's possible to use this rigid in nested defs
@@ -1698,7 +1698,7 @@ fn instantiate_rigids(
 
     // Instantiate rigid variables
     if !rigid_substitution.is_empty() {
-        annotation.substitute(&rigid_substitution);
+        annotation.substitute_variables(&rigid_substitution);
     }
 
     // TODO investigate when we can skip this. It seems to only be required for correctness
