@@ -413,7 +413,7 @@ fn report_parse_error(fail: SyntaxError) {
     println!("TODO Gracefully report parse error in repl: {:?}", fail);
 }
 
-pub fn main() -> io::Result<()> {
+pub fn main(with_history: bool) -> io::Result<()> {
     use rustyline::Editor;
 
     // To debug rustyline:
@@ -424,20 +424,33 @@ pub fn main() -> io::Result<()> {
     let mut prev_line_blank = false;
     let mut editor = Editor::<ReplHelper>::new();
 
-    let global_history_path = global_history_path()
-        .map(|path| {
-            match touch(path.clone()).map(|path| editor.load_history(&path)) {
-                Ok(_) => Some(path),
-                Err(_) => None, //println!("Failed to load or initialize global history"),
-            }
-        })
-        .flatten();
-
-    let local_path = match touch(local_history_path()).map(|path| editor.load_history(&path)) {
-        Ok(_) => Some(local_history_path()),
-        Err(_) => None, //println!("Failed to load or initialize local history"),
+    let global_history_path = if with_history {
+        global_history_path()
+            .map(
+                |path| match touch(path.clone()).map(|path| editor.load_history(&path)) {
+                    Ok(_) => Some(path),
+                    Err(_) => {
+                        println!("Failed to load or initialize global history");
+                        None
+                    }
+                },
+            )
+            .flatten()
+    } else {
+        None
     };
 
+    let local_path = if with_history {
+        match touch(local_history_path()).map(|path| editor.load_history(&path)) {
+            Ok(_) => Some(local_history_path()),
+            Err(_) => {
+                println!("Failed to load or initialize local history");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let mut histories = CommandHistories::load(local_path, global_history_path);
 
     let repl_helper = ReplHelper::new();
@@ -450,10 +463,12 @@ pub fn main() -> io::Result<()> {
             Ok(line) => {
                 let trim_line = line.trim();
                 editor.add_history_entry(trim_line);
-                histories.add_history_entry(trim_line);
-                histories
-                    .append_histories()
-                    .expect("failed to append histories");
+                if with_history {
+                    histories.add_history_entry(trim_line);
+                    histories
+                        .append_histories()
+                        .expect("failed to append histories");
+                }
 
                 let pending_src = &mut editor
                     .helper_mut()

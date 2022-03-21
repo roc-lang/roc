@@ -1,7 +1,8 @@
 use roc_cli::build::check_file;
 use roc_cli::{
     build_app, docs, format, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
-    CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_TIME, ROC_FILE,
+    CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_NO_HISTORY, FLAG_TIME,
+    ROC_FILE,
 };
 use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
@@ -62,10 +63,12 @@ fn main() -> io::Result<()> {
                 }
             }
         }
-        Some((CMD_REPL, _)) => {
+        Some((CMD_REPL, matches)) => {
             #[cfg(feature = "llvm")]
             {
-                roc_repl_cli::main()?;
+                let persist_history = !matches.is_present(FLAG_NO_HISTORY);
+
+                roc_repl_cli::main(persist_history)?;
 
                 // Exit 0 if the repl exited normally
                 Ok(0)

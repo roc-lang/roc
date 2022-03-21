@@ -40,6 +40,7 @@ pub const FLAG_LINK: &str = "roc-linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const FLAG_VALGRIND: &str = "valgrind";
 pub const FLAG_CHECK: &str = "check";
+pub const FLAG_NO_HISTORY: &str = "no-history";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
@@ -121,6 +122,12 @@ pub fn build_app<'a>() -> App<'a> {
         )
         .subcommand(App::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
+            .arg(
+                Arg::new(FLAG_NO_HISTORY)
+                    .long(FLAG_NO_HISTORY)
+                    .about("Start the repl without loading or saving to persistent history files")
+                    .required(false)
+            )
         )
         .subcommand(App::new(CMD_FORMAT)
             .about("Format Roc code")
