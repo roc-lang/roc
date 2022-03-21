@@ -248,18 +248,14 @@ impl Subs {
 
         let (utable, offset) = Self::deserialize_unification_table(bytes, header.utable, offset);
 
-        println!("utable");
-
         let (variables, offset) = Self::deserialize_slice(bytes, header.variables, offset);
         let (tag_names, offset) = Self::deserialize_tag_names(bytes, header.tag_names, offset);
         let (field_names, offset) =
             Self::deserialize_field_names(bytes, header.field_names, offset);
-        println!("field names");
         let (record_fields, offset) = Self::deserialize_slice(bytes, header.record_fields, offset);
         let (variable_slices, offset) =
             Self::deserialize_slice(bytes, header.variable_slices, offset);
         let (vars_by_symbol, _) = Self::deserialize_slice(bytes, header.vars_by_symbol, offset);
-        println!("all");
         let x = vars_by_symbol.to_vec();
 
         let subs = Self {
@@ -272,7 +268,6 @@ impl Subs {
             tag_name_cache: Default::default(),
             problems: Default::default(),
         };
-        println!("to_vec");
 
         (subs, x)
     }
