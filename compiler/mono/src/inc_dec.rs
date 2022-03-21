@@ -114,6 +114,10 @@ pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.insert(*x);
         }
 
+        ExprBox { symbol } | ExprUnbox { symbol } => {
+            result.insert(*symbol);
+        }
+
         EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
 
         GetTagId {
@@ -745,6 +749,28 @@ impl<'a> Context<'a> {
             }
 
             UnionAtIndex { structure: x, .. } => {
+                let b = self.add_dec_if_needed(x, b, b_live_vars);
+                let info_x = self.get_var_info(x);
+                let b = if info_x.consume {
+                    self.add_inc(z, 1, b)
+                } else {
+                    b
+                };
+
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            ExprBox { symbol: x } => {
+                // mimics Tag
+                self.add_inc_before_consume_all(
+                    &[x],
+                    self.arena.alloc(Stmt::Let(z, v, l, b)),
+                    b_live_vars,
+                )
+            }
+
+            ExprUnbox { symbol: x } => {
+                // mimics UnionAtIndex
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
                 let info_x = self.get_var_info(x);
                 let b = if info_x.consume {

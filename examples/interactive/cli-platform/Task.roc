@@ -9,13 +9,13 @@ forever = \task ->
     looper = \{  } ->
         task
             |> Effect.map
-            \res ->
-                when res is
-                    Ok _ ->
-                        Step {}
+                \res ->
+                    when res is
+                        Ok _ ->
+                            Step {}
 
-                    Err e ->
-                        Done (Err e)
+                        Err e ->
+                            Done (Err e)
 
     Effect.loop {} looper
 
@@ -24,16 +24,16 @@ loop = \state, step ->
     looper = \current ->
         step current
             |> Effect.map
-            \res ->
-                when res is
-                    Ok (Step newState) ->
-                        Step newState
+                \res ->
+                    when res is
+                        Ok (Step newState) ->
+                            Step newState
 
-                    Ok (Done result) ->
-                        Done (Ok result)
+                        Ok (Done result) ->
+                            Done (Ok result)
 
-                    Err e ->
-                        Done (Err e)
+                        Err e ->
+                            Done (Err e)
 
     Effect.loop state looper
 

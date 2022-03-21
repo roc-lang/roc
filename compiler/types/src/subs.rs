@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{name_type_var, AliasKind, ErrorType, Problem, RecordField, TypeExt};
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName, Uppercase};
@@ -58,6 +59,243 @@ struct ErrorTypeState {
     normals: u32,
     problems: Vec<crate::types::Problem>,
     context: ErrorTypeContext,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SubsHeader {
+    utable: usize,
+    variables: usize,
+    tag_names: usize,
+    field_names: usize,
+    record_fields: usize,
+    variable_slices: usize,
+}
+
+impl SubsHeader {
+    fn from_subs(subs: &Subs) -> Self {
+        // TODO what do we do with problems? they should
+        // be reported and then removed from Subs I think
+        debug_assert!(subs.problems.is_empty());
+
+        Self {
+            utable: subs.utable.len(),
+            variables: subs.variables.len(),
+            tag_names: subs.tag_names.len(),
+            field_names: subs.field_names.len(),
+            record_fields: subs.record_fields.len(),
+            variable_slices: subs.variable_slices.len(),
+        }
+    }
+
+    fn to_array(self) -> [u8; std::mem::size_of::<Self>()] {
+        unsafe { std::mem::transmute(self) }
+    }
+
+    fn from_array(array: [u8; std::mem::size_of::<Self>()]) -> Self {
+        unsafe { std::mem::transmute(array) }
+    }
+}
+
+unsafe fn slice_as_bytes<T>(slice: &[T]) -> &[u8] {
+    let ptr = slice.as_ptr();
+    let byte_length = std::mem::size_of::<T>() * slice.len();
+
+    unsafe { std::slice::from_raw_parts(ptr as *const u8, byte_length) }
+}
+
+fn round_to_multiple_of(value: usize, base: usize) -> usize {
+    (value + (base - 1)) / base * base
+}
+
+impl Subs {
+    pub fn serialize(&self, writer: &mut impl std::io::Write) -> std::io::Result<usize> {
+        let mut written = 0;
+
+        let header = SubsHeader::from_subs(self).to_array();
+        written += header.len();
+        writer.write_all(&header)?;
+
+        written = Self::serialize_unification_table(&self.utable, writer, written)?;
+
+        written = Self::serialize_slice(&self.variables, writer, written)?;
+        written = Self::serialize_slice(&self.tag_names, writer, written)?;
+        written = Self::serialize_field_names(&self.field_names, writer, written)?;
+        written = Self::serialize_slice(&self.record_fields, writer, written)?;
+        written = Self::serialize_slice(&self.variable_slices, writer, written)?;
+
+        Ok(written)
+    }
+
+    fn serialize_unification_table(
+        utable: &UnificationTable<InPlace<Variable>>,
+        writer: &mut impl std::io::Write,
+        mut written: usize,
+    ) -> std::io::Result<usize> {
+        for i in 0..utable.len() {
+            let var = unsafe { Variable::from_index(i as u32) };
+
+            let desc = if utable.is_redirect(var) {
+                let root = utable.get_root_key_without_compacting(var);
+
+                // our strategy for a redirect; rank is max, mark is max, copy stores the var
+                Descriptor {
+                    content: Content::Error,
+                    rank: Rank(u32::MAX),
+                    mark: Mark(i32::MAX),
+                    copy: root.into(),
+                }
+            } else {
+                utable.probe_value_without_compacting(var)
+            };
+
+            let bytes: [u8; std::mem::size_of::<Descriptor>()] =
+                unsafe { std::mem::transmute(desc) };
+            written += bytes.len();
+            writer.write_all(&bytes)?;
+        }
+
+        Ok(written)
+    }
+
+    /// Lowercase can be heap-allocated
+    fn serialize_field_names(
+        lowercases: &[Lowercase],
+        writer: &mut impl std::io::Write,
+        written: usize,
+    ) -> std::io::Result<usize> {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut slices: Vec<SubsSlice<u8>> = Vec::new();
+
+        for field_name in lowercases {
+            let slice =
+                SubsSlice::extend_new(&mut buf, field_name.as_str().as_bytes().iter().copied());
+            slices.push(slice);
+        }
+
+        let written = Self::serialize_slice(&slices, writer, written)?;
+
+        Self::serialize_slice(&buf, writer, written)
+    }
+
+    fn serialize_slice<T>(
+        slice: &[T],
+        writer: &mut impl std::io::Write,
+        written: usize,
+    ) -> std::io::Result<usize> {
+        let alignment = std::mem::align_of::<T>();
+        let padding_bytes = round_to_multiple_of(written, alignment) - written;
+
+        for _ in 0..padding_bytes {
+            writer.write_all(&[0])?;
+        }
+
+        let bytes_slice = unsafe { slice_as_bytes(slice) };
+        writer.write_all(bytes_slice)?;
+
+        Ok(written + padding_bytes + bytes_slice.len())
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> Self {
+        use std::convert::TryInto;
+
+        let mut offset = 0;
+        let header_slice = &bytes[..std::mem::size_of::<SubsHeader>()];
+        offset += header_slice.len();
+        let header = SubsHeader::from_array(header_slice.try_into().unwrap());
+
+        let (utable, offset) = Self::deserialize_unification_table(bytes, header.utable, offset);
+
+        let (variables, offset) = Self::deserialize_slice(bytes, header.variables, offset);
+        let (tag_names, offset) = Self::deserialize_slice(bytes, header.tag_names, offset);
+        let (field_names, offset) =
+            Self::deserialize_field_names(bytes, header.field_names, offset);
+        let (record_fields, offset) = Self::deserialize_slice(bytes, header.record_fields, offset);
+        let (variable_slices, _) = Self::deserialize_slice(bytes, header.variable_slices, offset);
+
+        Self {
+            utable,
+            variables: variables.to_vec(),
+            tag_names: tag_names.to_vec(),
+            field_names,
+            record_fields: record_fields.to_vec(),
+            variable_slices: variable_slices.to_vec(),
+            tag_name_cache: Default::default(),
+            problems: Default::default(),
+        }
+    }
+
+    fn deserialize_unification_table(
+        bytes: &[u8],
+        length: usize,
+        offset: usize,
+    ) -> (UnificationTable<InPlace<Variable>>, usize) {
+        let alignment = std::mem::align_of::<Descriptor>();
+        let size = std::mem::size_of::<Descriptor>();
+        debug_assert_eq!(offset, round_to_multiple_of(offset, alignment));
+
+        let mut utable = UnificationTable::default();
+        utable.reserve(length);
+
+        let byte_length = length * size;
+        let byte_slice = &bytes[offset..][..byte_length];
+
+        let slice =
+            unsafe { std::slice::from_raw_parts(byte_slice.as_ptr() as *const Descriptor, length) };
+
+        let mut roots = Vec::new();
+
+        for desc in slice {
+            let var = utable.new_key(*desc);
+
+            if desc.rank == Rank(u32::MAX) && desc.mark == Mark(i32::MAX) {
+                let root = desc.copy.into_variable().unwrap();
+
+                roots.push((var, root));
+            }
+        }
+
+        for (var, root) in roots {
+            let desc = utable.probe_value_without_compacting(root);
+            utable.unify_roots(var, root, desc)
+        }
+
+        (utable, offset + byte_length)
+    }
+
+    fn deserialize_field_names(
+        bytes: &[u8],
+        length: usize,
+        offset: usize,
+    ) -> (Vec<Lowercase>, usize) {
+        let (slices, mut offset) = Self::deserialize_slice::<SubsSlice<u8>>(bytes, length, offset);
+
+        let string_slice = &bytes[offset..];
+
+        let mut lowercases = Vec::with_capacity(length);
+        for subs_slice in slices {
+            let bytes = &string_slice[subs_slice.indices()];
+            offset += bytes.len();
+            let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+
+            lowercases.push(string.into());
+        }
+
+        (lowercases, offset)
+    }
+
+    fn deserialize_slice<T>(bytes: &[u8], length: usize, mut offset: usize) -> (&[T], usize) {
+        let alignment = std::mem::align_of::<T>();
+        let size = std::mem::size_of::<T>();
+
+        offset = round_to_multiple_of(offset, alignment);
+
+        let byte_length = length * size;
+        let byte_slice = &bytes[offset..][..byte_length];
+
+        let slice = unsafe { std::slice::from_raw_parts(byte_slice.as_ptr() as *const T, length) };
+
+        (slice, offset + byte_length)
+    }
 }
 
 #[derive(Clone)]
@@ -296,14 +534,28 @@ impl<T> SubsSlice<T> {
             _marker: std::marker::PhantomData,
         }
     }
+
+    pub fn extend_new(vec: &mut Vec<T>, it: impl IntoIterator<Item = T>) -> Self {
+        let start = vec.len();
+
+        vec.extend(it);
+
+        let end = vec.len();
+
+        Self::new(start as u32, (end - start) as u16)
+    }
 }
 
 impl SubsSlice<VariableSubsSlice> {
     pub fn reserve_variable_slices(subs: &mut Subs, length: usize) -> Self {
         let start = subs.variable_slices.len() as u32;
 
-        subs.variable_slices
-            .extend(std::iter::repeat(VariableSubsSlice::default()).take(length));
+        subs.variable_slices.reserve(length);
+
+        let value = VariableSubsSlice::default();
+        for _ in 0..length {
+            subs.variable_slices.push(value);
+        }
 
         Self::new(start, length as u16)
     }
@@ -321,7 +573,7 @@ impl SubsSlice<TagName> {
 }
 
 impl<T> SubsIndex<T> {
-    pub fn new(start: u32) -> Self {
+    pub const fn new(start: u32) -> Self {
         Self {
             index: start,
             _marker: std::marker::PhantomData,
@@ -334,6 +586,10 @@ impl<T> SubsIndex<T> {
         vector.push(value);
 
         index
+    }
+
+    pub const fn as_slice(self) -> SubsSlice<T> {
+        SubsSlice::new(self.index, 1)
     }
 }
 
@@ -427,7 +683,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
         } => write!(f, "Recursion({:?}, {:?})", structure, opt_name),
         Content::Structure(flat_type) => subs_fmt_flat_type(flat_type, subs, f),
         Content::Alias(name, arguments, actual, kind) => {
-            let slice = subs.get_subs_slice(arguments.variables());
+            let slice = subs.get_subs_slice(arguments.all_variables());
             let wrap = match kind {
                 AliasKind::Structural => "Alias",
                 AliasKind::Opaque => "Opaque",
@@ -789,7 +1045,6 @@ impl Variable {
     ///
     /// It is not guaranteed that the variable is in bounds.
     pub unsafe fn from_index(v: u32) -> Self {
-        debug_assert!(v >= Self::NUM_RESERVED_VARS as u32);
         Variable(v)
     }
 
@@ -815,6 +1070,11 @@ impl Variable {
             Symbol::NUM_NAT => Some(Variable::NAT),
 
             Symbol::BOOL_BOOL => Some(Variable::BOOL),
+
+            Symbol::NUM_F64 => Some(Variable::F64),
+            Symbol::NUM_F32 => Some(Variable::F32),
+
+            Symbol::NUM_DEC => Some(Variable::DEC),
 
             _ => None,
         }
@@ -1277,6 +1537,14 @@ fn define_float_types(subs: &mut Subs) {
 
 impl Subs {
     pub const RESULT_TAG_NAMES: SubsSlice<TagName> = SubsSlice::new(0, 2);
+    pub const TAG_NAME_ERR: SubsIndex<TagName> = SubsIndex::new(0);
+    pub const TAG_NAME_OK: SubsIndex<TagName> = SubsIndex::new(1);
+    pub const NUM_AT_NUM: SubsSlice<TagName> = SubsSlice::new(2, 1);
+    pub const NUM_AT_INTEGER: SubsSlice<TagName> = SubsSlice::new(3, 1);
+    pub const NUM_AT_FLOATINGPOINT: SubsSlice<TagName> = SubsSlice::new(4, 1);
+    pub const TAG_NAME_INVALID_NUM_STR: SubsIndex<TagName> = SubsIndex::new(5);
+    pub const TAG_NAME_BAD_UTF_8: SubsIndex<TagName> = SubsIndex::new(6);
+    pub const TAG_NAME_OUT_OF_BOUNDS: SubsIndex<TagName> = SubsIndex::new(7);
 
     pub fn new() -> Self {
         Self::with_capacity(0)
@@ -1289,6 +1557,14 @@ impl Subs {
 
         tag_names.push(TagName::Global("Err".into()));
         tag_names.push(TagName::Global("Ok".into()));
+
+        tag_names.push(TagName::Private(Symbol::NUM_AT_NUM));
+        tag_names.push(TagName::Private(Symbol::NUM_AT_INTEGER));
+        tag_names.push(TagName::Private(Symbol::NUM_AT_FLOATINGPOINT));
+
+        tag_names.push(TagName::Global("InvalidNumStr".into()));
+        tag_names.push(TagName::Global("BadUtf8".into()));
+        tag_names.push(TagName::Global("OutOfBounds".into()));
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
@@ -1385,8 +1661,8 @@ impl Subs {
 
     /// Unions two keys without the possibility of failure.
     pub fn union(&mut self, left: Variable, right: Variable, desc: Descriptor) {
-        let l_root = self.utable.get_root_key(left);
-        let r_root = self.utable.get_root_key(right);
+        let l_root = self.utable.inlined_get_root_key(left);
+        let r_root = self.utable.inlined_get_root_key(right);
 
         // NOTE this swapping is intentional! most of our unifying commands are based on the elm
         // source, but unify_roots is from `ena`, not the elm source. Turns out that they have
@@ -1430,23 +1706,25 @@ impl Subs {
         &self.utable.probe_value_ref(key).value.content
     }
 
+    #[inline(always)]
     pub fn get_root_key(&mut self, key: Variable) -> Variable {
-        self.utable.get_root_key(key)
+        self.utable.inlined_get_root_key(key)
     }
 
+    #[inline(always)]
     pub fn get_root_key_without_compacting(&self, key: Variable) -> Variable {
         self.utable.get_root_key_without_compacting(key)
     }
 
     #[inline(always)]
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         self.utable.update_value(l_key, |node| node.value = r_value);
     }
 
     pub fn set_rank(&mut self, key: Variable, rank: Rank) {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.rank = rank;
@@ -1454,7 +1732,7 @@ impl Subs {
     }
 
     pub fn set_mark(&mut self, key: Variable, mark: Mark) {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.mark = mark;
@@ -1462,7 +1740,7 @@ impl Subs {
     }
 
     pub fn set_rank_mark(&mut self, key: Variable, rank: Rank, mark: Mark) {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.rank = rank;
@@ -1471,7 +1749,7 @@ impl Subs {
     }
 
     pub fn set_content(&mut self, key: Variable, content: Content) {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.content = content;
@@ -1487,7 +1765,7 @@ impl Subs {
 
     #[inline(always)]
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         let mut rank = Rank::NONE;
 
@@ -1650,8 +1928,20 @@ impl Rank {
         *self == Self::NONE
     }
 
-    pub fn toplevel() -> Self {
+    pub const fn toplevel() -> Self {
         Rank(1)
+    }
+
+    /// the rank at which we introduce imports.
+    ///
+    /// Type checking starts at rank 1 aka toplevel. When there are rigid/flex variables introduced by a
+    /// constraint, then these must be generalized relative to toplevel, and hence are introduced at
+    /// rank 2.
+    ///
+    /// We always use: even if there are no rigids imported, introducing at rank 2 is correct
+    /// (if slightly inefficient) because there are no rigids anyway so generalization is trivial
+    pub const fn import() -> Self {
+        Rank(2)
     }
 
     pub fn next(self) -> Self {
@@ -1687,7 +1977,7 @@ impl From<usize> for Rank {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Descriptor {
     pub content: Content,
     pub rank: Rank,
@@ -1764,8 +2054,19 @@ pub struct AliasVariables {
 }
 
 impl AliasVariables {
-    pub const fn variables(&self) -> VariableSubsSlice {
+    pub const fn all_variables(&self) -> VariableSubsSlice {
         SubsSlice::new(self.variables_start, self.all_variables_len)
+    }
+
+    pub const fn type_variables(&self) -> VariableSubsSlice {
+        SubsSlice::new(self.variables_start, self.type_variables_len)
+    }
+
+    pub const fn lambda_set_variables(&self) -> VariableSubsSlice {
+        SubsSlice::new(
+            self.variables_start + self.type_variables_len as u32,
+            self.all_variables_len - self.type_variables_len,
+        )
     }
 
     pub const fn len(&self) -> usize {
@@ -1791,13 +2092,13 @@ impl AliasVariables {
     }
 
     pub fn named_type_arguments(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
-        self.variables()
+        self.all_variables()
             .into_iter()
             .take(self.type_variables_len as usize)
     }
 
     pub fn unnamed_type_arguments(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
-        self.variables()
+        self.all_variables()
             .into_iter()
             .skip(self.type_variables_len as usize)
     }
@@ -1839,7 +2140,7 @@ impl IntoIterator for AliasVariables {
     type IntoIter = <VariableSubsSlice as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.variables().into_iter()
+        self.all_variables().into_iter()
     }
 }
 
@@ -1979,7 +2280,13 @@ impl UnionTags {
         tag_names: SubsSlice<TagName>,
         variables: SubsSlice<VariableSubsSlice>,
     ) -> Self {
-        debug_assert_eq!(tag_names.len(), variables.len());
+        debug_assert_eq!(
+            tag_names.len(),
+            variables.len(),
+            "tag name len != variables len: {:?} {:?}",
+            tag_names,
+            variables,
+        );
 
         Self {
             length: tag_names.len() as u16,
@@ -3287,7 +3594,7 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
                     Erroneous(_) => (),
                 },
                 Alias(_, args, var, _) => {
-                    stack.extend(var_slice(args.variables()));
+                    stack.extend(var_slice(args.all_variables()));
 
                     stack.push(*var);
                 }
@@ -3322,8 +3629,24 @@ impl StorageSubs {
         Self { subs }
     }
 
+    pub fn fresh_unnamed_flex_var(&mut self) -> Variable {
+        self.subs.fresh_unnamed_flex_var()
+    }
+
+    pub fn as_inner_mut(&mut self) -> &mut Subs {
+        &mut self.subs
+    }
+
     pub fn extend_with_variable(&mut self, source: &mut Subs, variable: Variable) -> Variable {
         deep_copy_var_to(source, &mut self.subs, variable)
+    }
+
+    pub fn import_variable_from(&mut self, source: &mut Subs, variable: Variable) -> CopiedImport {
+        copy_import_to(source, &mut self.subs, variable, Rank::import())
+    }
+
+    pub fn export_variable_to(&mut self, target: &mut Subs, variable: Variable) -> CopiedImport {
+        copy_import_to(&mut self.subs, target, variable, Rank::import())
     }
 
     pub fn merge_into(self, target: &mut Subs) -> impl Fn(Variable) -> Variable {
@@ -3538,21 +3861,16 @@ impl StorageSubs {
 use std::cell::RefCell;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
-    static SCRATCHPAD: RefCell<bumpalo::Bump> = RefCell::new(bumpalo::Bump::with_capacity(4 * 1024));
+    static SCRATCHPAD: RefCell<Option<bumpalo::Bump>> = RefCell::new(Some(bumpalo::Bump::with_capacity(4 * 1024)));
 }
 
 fn take_scratchpad() -> bumpalo::Bump {
-    let mut result = bumpalo::Bump::new();
-    SCRATCHPAD.with(|f| {
-        result = f.replace(bumpalo::Bump::new());
-    });
-
-    result
+    SCRATCHPAD.with(|f| f.take().unwrap())
 }
 
 fn put_scratchpad(scratchpad: bumpalo::Bump) {
     SCRATCHPAD.with(|f| {
-        f.replace(scratchpad);
+        f.replace(Some(scratchpad));
     });
 }
 
@@ -3565,21 +3883,32 @@ pub fn deep_copy_var_to(
 
     let mut arena = take_scratchpad();
 
-    let mut visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
+    let copy = {
+        let visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
 
-    let copy = deep_copy_var_to_help(&arena, &mut visited, source, target, rank, var);
+        let mut env = DeepCopyVarToEnv {
+            visited,
+            source,
+            target,
+            max_rank: rank,
+        };
 
-    // we have tracked all visited variables, and can now traverse them
-    // in one go (without looking at the UnificationTable) and clear the copy field
-    for var in visited {
-        let descriptor = source.get_ref_mut(var);
+        let copy = deep_copy_var_to_help(&mut env, var);
 
-        if descriptor.copy.is_some() {
-            descriptor.rank = Rank::NONE;
-            descriptor.mark = Mark::NONE;
-            descriptor.copy = OptVariable::NONE;
+        // we have tracked all visited variables, and can now traverse them
+        // in one go (without looking at the UnificationTable) and clear the copy field
+        for var in env.visited {
+            let descriptor = env.source.get_ref_mut(var);
+
+            if descriptor.copy.is_some() {
+                descriptor.rank = Rank::NONE;
+                descriptor.mark = Mark::NONE;
+                descriptor.copy = OptVariable::NONE;
+            }
         }
-    }
+
+        copy
+    };
 
     arena.reset();
     put_scratchpad(arena);
@@ -3587,21 +3916,21 @@ pub fn deep_copy_var_to(
     copy
 }
 
-fn deep_copy_var_to_help<'a>(
-    arena: &'a bumpalo::Bump,
-    visited: &mut bumpalo::collections::Vec<'a, Variable>,
-    source: &mut Subs,
-    target: &mut Subs,
+struct DeepCopyVarToEnv<'a> {
+    visited: bumpalo::collections::Vec<'a, Variable>,
+    source: &'a mut Subs,
+    target: &'a mut Subs,
     max_rank: Rank,
-    var: Variable,
-) -> Variable {
+}
+
+fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Variable {
     use Content::*;
     use FlatType::*;
 
-    let desc = source.get_without_compacting(var);
+    let desc = env.source.get_without_compacting(var);
 
     if let Some(copy) = desc.copy.into_variable() {
-        debug_assert!(target.contains(copy));
+        debug_assert!(env.target.contains(copy));
         return copy;
     } else if desc.rank != Rank::NONE {
         // DO NOTHING, Fall through
@@ -3610,10 +3939,13 @@ fn deep_copy_var_to_help<'a>(
         // return var;
         //
         // but we cannot, because this `var` is in the source, not the target, and we
-        // should only return variables in the target
+        // should only return variables in the target. so, we have to create a new
+        // variable in the target.
     }
 
-    visited.push(var);
+    env.visited.push(var);
+
+    let max_rank = env.max_rank;
 
     let make_descriptor = |content| Descriptor {
         content,
@@ -3622,13 +3954,13 @@ fn deep_copy_var_to_help<'a>(
         copy: OptVariable::NONE,
     };
 
-    let copy = target.fresh_unnamed_flex_var();
+    let copy = env.target.fresh_unnamed_flex_var();
 
     // Link the original variable to the new variable. This lets us
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    source.modify(var, |descriptor| {
+    env.source.modify(var, |descriptor| {
         descriptor.mark = Mark::NONE;
         descriptor.copy = copy.into();
     });
@@ -3640,38 +3972,28 @@ fn deep_copy_var_to_help<'a>(
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, arguments) => {
-                    let new_arguments = SubsSlice::reserve_into_subs(target, arguments.len());
+                    let new_arguments = SubsSlice::reserve_into_subs(env.target, arguments.len());
 
                     for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                        let var = source[var_index];
-                        let copy_var =
-                            deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
-                        target.variables[target_index] = copy_var;
+                        let var = env.source[var_index];
+                        let copy_var = deep_copy_var_to_help(env, var);
+                        env.target.variables[target_index] = copy_var;
                     }
 
                     Apply(symbol, new_arguments)
                 }
 
                 Func(arguments, closure_var, ret_var) => {
-                    let new_ret_var =
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ret_var);
+                    let new_ret_var = deep_copy_var_to_help(env, ret_var);
 
-                    let new_closure_var = deep_copy_var_to_help(
-                        arena,
-                        visited,
-                        source,
-                        target,
-                        max_rank,
-                        closure_var,
-                    );
+                    let new_closure_var = deep_copy_var_to_help(env, closure_var);
 
-                    let new_arguments = SubsSlice::reserve_into_subs(target, arguments.len());
+                    let new_arguments = SubsSlice::reserve_into_subs(env.target, arguments.len());
 
                     for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                        let var = source[var_index];
-                        let copy_var =
-                            deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
-                        target.variables[target_index] = copy_var;
+                        let var = env.source[var_index];
+                        let copy_var = deep_copy_var_to_help(env, var);
+                        env.target.variables[target_index] = copy_var;
                     }
 
                     Func(new_arguments, new_closure_var, new_ret_var)
@@ -3682,25 +4004,26 @@ fn deep_copy_var_to_help<'a>(
                 Record(fields, ext_var) => {
                     let record_fields = {
                         let new_variables =
-                            VariableSubsSlice::reserve_into_subs(target, fields.len());
+                            VariableSubsSlice::reserve_into_subs(env.target, fields.len());
 
                         let it = (new_variables.indices()).zip(fields.iter_variables());
                         for (target_index, var_index) in it {
-                            let var = source[var_index];
-                            let copy_var = deep_copy_var_to_help(
-                                arena, visited, source, target, max_rank, var,
-                            );
-                            target.variables[target_index] = copy_var;
+                            let var = env.source[var_index];
+                            let copy_var = deep_copy_var_to_help(env, var);
+                            env.target.variables[target_index] = copy_var;
                         }
 
-                        let field_names_start = target.field_names.len() as u32;
-                        let field_types_start = target.record_fields.len() as u32;
+                        let field_names_start = env.target.field_names.len() as u32;
+                        let field_types_start = env.target.record_fields.len() as u32;
 
-                        let field_names = &source.field_names[fields.field_names().indices()];
-                        target.field_names.extend(field_names.iter().cloned());
+                        let field_names = &env.source.field_names[fields.field_names().indices()];
+                        env.target.field_names.extend(field_names.iter().cloned());
 
-                        let record_fields = &source.record_fields[fields.record_fields().indices()];
-                        target.record_fields.extend(record_fields.iter().copied());
+                        let record_fields =
+                            &env.source.record_fields[fields.record_fields().indices()];
+                        env.target
+                            .record_fields
+                            .extend(record_fields.iter().copied());
 
                         RecordFields {
                             length: fields.len() as _,
@@ -3710,44 +4033,38 @@ fn deep_copy_var_to_help<'a>(
                         }
                     };
 
-                    Record(
-                        record_fields,
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var),
-                    )
+                    Record(record_fields, deep_copy_var_to_help(env, ext_var))
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let new_ext =
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var);
+                    let new_ext = deep_copy_var_to_help(env, ext_var);
 
                     let new_variable_slices =
-                        SubsSlice::reserve_variable_slices(target, tags.len());
+                        SubsSlice::reserve_variable_slices(env.target, tags.len());
 
                     let it = (new_variable_slices.indices()).zip(tags.variables());
                     for (target_index, index) in it {
-                        let slice = source[index];
+                        let slice = env.source[index];
 
-                        let new_variables = SubsSlice::reserve_into_subs(target, slice.len());
+                        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
                         let it = (new_variables.indices()).zip(slice);
                         for (target_index, var_index) in it {
-                            let var = source[var_index];
-                            let copy_var = deep_copy_var_to_help(
-                                arena, visited, source, target, max_rank, var,
-                            );
-                            target.variables[target_index] = copy_var;
+                            let var = env.source[var_index];
+                            let copy_var = deep_copy_var_to_help(env, var);
+                            env.target.variables[target_index] = copy_var;
                         }
 
-                        target.variable_slices[target_index] = new_variables;
+                        env.target.variable_slices[target_index] = new_variables;
                     }
 
                     let new_tag_names = {
                         let tag_names = tags.tag_names();
-                        let slice = &source.tag_names[tag_names.indices()];
+                        let slice = &env.source.tag_names[tag_names.indices()];
 
-                        let start = target.tag_names.len() as u32;
+                        let start = env.target.tag_names.len() as u32;
                         let length = tag_names.len() as u16;
 
-                        target.tag_names.extend(slice.iter().cloned());
+                        env.target.tag_names.extend(slice.iter().cloned());
 
                         SubsSlice::new(start, length)
                     };
@@ -3758,78 +4075,80 @@ fn deep_copy_var_to_help<'a>(
                 }
 
                 FunctionOrTagUnion(tag_name, symbol, ext_var) => {
-                    let new_tag_name = SubsIndex::new(target.tag_names.len() as u32);
+                    let new_tag_name = SubsIndex::new(env.target.tag_names.len() as u32);
 
-                    target.tag_names.push(source[tag_name].clone());
+                    env.target.tag_names.push(env.source[tag_name].clone());
 
-                    FunctionOrTagUnion(
-                        new_tag_name,
-                        symbol,
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var),
-                    )
+                    FunctionOrTagUnion(new_tag_name, symbol, deep_copy_var_to_help(env, ext_var))
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let new_variable_slices =
-                        SubsSlice::reserve_variable_slices(target, tags.len());
+                        SubsSlice::reserve_variable_slices(env.target, tags.len());
 
                     let it = (new_variable_slices.indices()).zip(tags.variables());
                     for (target_index, index) in it {
-                        let slice = source[index];
+                        let slice = env.source[index];
 
-                        let new_variables = SubsSlice::reserve_into_subs(target, slice.len());
+                        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
                         let it = (new_variables.indices()).zip(slice);
                         for (target_index, var_index) in it {
-                            let var = source[var_index];
-                            let copy_var = deep_copy_var_to_help(
-                                arena, visited, source, target, max_rank, var,
-                            );
-                            target.variables[target_index] = copy_var;
+                            let var = env.source[var_index];
+                            let copy_var = deep_copy_var_to_help(env, var);
+                            env.target.variables[target_index] = copy_var;
                         }
 
-                        target.variable_slices[target_index] = new_variables;
+                        env.target.variable_slices[target_index] = new_variables;
                     }
 
                     let new_tag_names = {
                         let tag_names = tags.tag_names();
-                        let slice = &source.tag_names[tag_names.indices()];
+                        let slice = &env.source.tag_names[tag_names.indices()];
 
-                        let start = target.tag_names.len() as u32;
+                        let start = env.target.tag_names.len() as u32;
                         let length = tag_names.len() as u16;
 
-                        target.tag_names.extend(slice.iter().cloned());
+                        env.target.tag_names.extend(slice.iter().cloned());
 
                         SubsSlice::new(start, length)
                     };
 
                     let union_tags = UnionTags::from_slices(new_tag_names, new_variable_slices);
 
-                    let new_ext =
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var);
-                    let new_rec_var =
-                        deep_copy_var_to_help(arena, visited, source, target, max_rank, rec_var);
+                    let new_ext = deep_copy_var_to_help(env, ext_var);
+                    let new_rec_var = deep_copy_var_to_help(env, rec_var);
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
             };
 
-            target.set(copy, make_descriptor(Structure(new_flat_type)));
+            env.target
+                .set(copy, make_descriptor(Structure(new_flat_type)));
 
             copy
         }
 
-        FlexVar(_) | Error => copy,
+        FlexVar(Some(name_index)) => {
+            let name = env.source.field_names[name_index.index as usize].clone();
+            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+
+            let content = FlexVar(Some(new_name_index));
+            env.target.set_content(copy, content);
+
+            copy
+        }
+
+        FlexVar(None) | Error => copy,
 
         RecursionVar {
             opt_name,
             structure,
         } => {
-            let new_structure =
-                deep_copy_var_to_help(arena, visited, source, target, max_rank, structure);
+            let new_structure = deep_copy_var_to_help(env, structure);
 
-            debug_assert!((new_structure.index() as usize) < target.len());
+            debug_assert!((new_structure.index() as usize) < env.target.len());
 
-            target.set(
+            env.target.set(
                 copy,
                 make_descriptor(RecursionVar {
                     opt_name,
@@ -3840,19 +4159,24 @@ fn deep_copy_var_to_help<'a>(
             copy
         }
 
-        RigidVar(name) => {
-            target.set(copy, make_descriptor(FlexVar(Some(name))));
+        RigidVar(name_index) => {
+            let name = env.source.field_names[name_index.index as usize].clone();
+            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+            env.target
+                .set(copy, make_descriptor(FlexVar(Some(new_name_index))));
 
             copy
         }
 
         Alias(symbol, arguments, real_type_var, kind) => {
             let new_variables =
-                SubsSlice::reserve_into_subs(target, arguments.all_variables_len as _);
-            for (target_index, var_index) in (new_variables.indices()).zip(arguments.variables()) {
-                let var = source[var_index];
-                let copy_var = deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
-                target.variables[target_index] = copy_var;
+                SubsSlice::reserve_into_subs(env.target, arguments.all_variables_len as _);
+            for (target_index, var_index) in
+                (new_variables.indices()).zip(arguments.all_variables())
+            {
+                let var = env.source[var_index];
+                let copy_var = deep_copy_var_to_help(env, var);
+                env.target.variables[target_index] = copy_var;
             }
 
             let new_arguments = AliasVariables {
@@ -3860,29 +4184,447 @@ fn deep_copy_var_to_help<'a>(
                 ..arguments
             };
 
-            let new_real_type_var =
-                deep_copy_var_to_help(arena, visited, source, target, max_rank, real_type_var);
+            let new_real_type_var = deep_copy_var_to_help(env, real_type_var);
             let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
 
-            target.set(copy, make_descriptor(new_content));
+            env.target.set(copy, make_descriptor(new_content));
 
             copy
         }
 
         RangedNumber(typ, vars) => {
-            let new_typ = deep_copy_var_to_help(arena, visited, source, target, max_rank, typ);
+            let new_typ = deep_copy_var_to_help(env, typ);
 
-            let new_vars = SubsSlice::reserve_into_subs(target, vars.len());
+            let new_vars = SubsSlice::reserve_into_subs(env.target, vars.len());
 
             for (target_index, var_index) in (new_vars.indices()).zip(vars) {
-                let var = source[var_index];
-                let copy_var = deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
-                target.variables[target_index] = copy_var;
+                let var = env.source[var_index];
+                let copy_var = deep_copy_var_to_help(env, var);
+                env.target.variables[target_index] = copy_var;
             }
 
             let new_content = RangedNumber(new_typ, new_vars);
 
-            target.set(copy, make_descriptor(new_content));
+            env.target.set(copy, make_descriptor(new_content));
+            copy
+        }
+    }
+}
+
+/// Bookkeeping to correctly move these types into the target subs
+///
+/// We track the rigid/flex variables because they need to be part of a `Let`
+/// constraint, introducing these variables at the right rank
+///
+/// We also track `registered` variables. An import should be equivalent to
+/// a call to `type_to_var` (solve.rs). The `copy_import_to` function puts
+/// the right `Contents` into the target `Subs` at the right locations,
+/// but `type_to_var` furthermore adds the variables used to store those `Content`s
+/// to `Pools` at the right rank. Here we remember the variables used to store `Content`s
+/// so that we can later add them to `Pools`
+#[derive(Debug)]
+pub struct CopiedImport {
+    pub variable: Variable,
+    pub flex: Vec<Variable>,
+    pub rigid: Vec<Variable>,
+    pub translations: Vec<(Variable, Variable)>,
+    pub registered: Vec<Variable>,
+}
+
+struct CopyImportEnv<'a> {
+    visited: bumpalo::collections::Vec<'a, Variable>,
+    source: &'a mut Subs,
+    target: &'a mut Subs,
+    flex: Vec<Variable>,
+    rigid: Vec<Variable>,
+    translations: Vec<(Variable, Variable)>,
+    registered: Vec<Variable>,
+}
+
+pub fn copy_import_to(
+    source: &mut Subs, // mut to set the copy
+    target: &mut Subs,
+    var: Variable,
+    rank: Rank,
+) -> CopiedImport {
+    let mut arena = take_scratchpad();
+
+    let copied_import = {
+        let visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
+
+        let mut env = CopyImportEnv {
+            visited,
+            source,
+            target,
+            flex: Vec::new(),
+            rigid: Vec::new(),
+            translations: Vec::new(),
+            registered: Vec::new(),
+        };
+
+        let copy = copy_import_to_help(&mut env, rank, var);
+
+        let CopyImportEnv {
+            visited,
+            source,
+            flex,
+            rigid,
+            translations,
+            registered,
+            target: _,
+        } = env;
+
+        // we have tracked all visited variables, and can now traverse them
+        // in one go (without looking at the UnificationTable) and clear the copy field
+
+        for var in visited {
+            let descriptor = source.get_ref_mut(var);
+
+            if descriptor.copy.is_some() {
+                descriptor.rank = Rank::NONE;
+                descriptor.mark = Mark::NONE;
+                descriptor.copy = OptVariable::NONE;
+            }
+        }
+
+        CopiedImport {
+            variable: copy,
+            flex,
+            rigid,
+            translations,
+            registered,
+        }
+    };
+
+    arena.reset();
+    put_scratchpad(arena);
+
+    copied_import
+}
+
+/// is this content registered (in the current pool) by type_to_variable?
+/// TypeToVar skips registering for flex and rigid variables, and
+/// also for the empty records and tag unions (they used the Variable::EMPTY_RECORD/...)
+/// standard variables
+fn is_registered(content: &Content) -> bool {
+    match content {
+        Content::FlexVar(_) | Content::RigidVar(_) => false,
+        Content::Structure(FlatType::EmptyRecord | FlatType::EmptyTagUnion) => false,
+
+        Content::Structure(_)
+        | Content::RecursionVar { .. }
+        | Content::Alias(_, _, _, _)
+        | Content::RangedNumber(_, _)
+        | Content::Error => true,
+    }
+}
+
+fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variable) -> Variable {
+    use Content::*;
+    use FlatType::*;
+
+    let desc = env.source.get_without_compacting(var);
+
+    if let Some(copy) = desc.copy.into_variable() {
+        debug_assert!(env.target.contains(copy));
+        return copy;
+    } else if desc.rank != Rank::NONE {
+        // DO NOTHING, Fall through
+        //
+        // The original copy_import can do
+        // return var;
+        //
+        // but we cannot, because this `var` is in the source, not the target, and we
+        // should only return variables in the target. so, we have to create a new
+        // variable in the target.
+    }
+
+    env.visited.push(var);
+
+    let make_descriptor = |content| Descriptor {
+        content,
+        rank: max_rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
+
+    // let copy = env.target.fresh_unnamed_flex_var();
+    let copy = env.target.fresh(make_descriptor(unnamed_flex_var()));
+
+    // is this content registered (in the current pool) by type_to_variable?
+    if is_registered(&desc.content) {
+        env.registered.push(copy);
+    }
+
+    // Link the original variable to the new variable. This lets us
+    // avoid making multiple copies of the variable we are instantiating.
+    //
+    // Need to do this before recursively copying to avoid looping.
+    env.source.modify(var, |descriptor| {
+        descriptor.mark = Mark::NONE;
+        descriptor.copy = copy.into();
+    });
+
+    // Now we recursively copy the content of the variable.
+    // We have already marked the variable as copied, so we
+    // will not repeat this work or crawl this variable again.
+    match desc.content {
+        Structure(flat_type) => {
+            let new_flat_type = match flat_type {
+                Apply(symbol, arguments) => {
+                    let new_arguments = SubsSlice::reserve_into_subs(env.target, arguments.len());
+
+                    for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
+                        let var = env.source[var_index];
+                        let copy_var = copy_import_to_help(env, max_rank, var);
+                        env.target.variables[target_index] = copy_var;
+                    }
+
+                    Apply(symbol, new_arguments)
+                }
+
+                Func(arguments, closure_var, ret_var) => {
+                    let new_ret_var = copy_import_to_help(env, max_rank, ret_var);
+
+                    let new_closure_var = copy_import_to_help(env, max_rank, closure_var);
+
+                    let new_arguments = SubsSlice::reserve_into_subs(env.target, arguments.len());
+
+                    for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
+                        let var = env.source[var_index];
+                        let copy_var = copy_import_to_help(env, max_rank, var);
+                        env.target.variables[target_index] = copy_var;
+                    }
+
+                    Func(new_arguments, new_closure_var, new_ret_var)
+                }
+
+                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+
+                Record(fields, ext_var) => {
+                    let record_fields = {
+                        let new_variables =
+                            VariableSubsSlice::reserve_into_subs(env.target, fields.len());
+
+                        let it = (new_variables.indices()).zip(fields.iter_variables());
+                        for (target_index, var_index) in it {
+                            let var = env.source[var_index];
+                            let copy_var = copy_import_to_help(env, max_rank, var);
+                            env.target.variables[target_index] = copy_var;
+                        }
+
+                        let field_names_start = env.target.field_names.len() as u32;
+                        let field_types_start = env.target.record_fields.len() as u32;
+
+                        let field_names = &env.source.field_names[fields.field_names().indices()];
+                        env.target.field_names.extend(field_names.iter().cloned());
+
+                        let record_fields =
+                            &env.source.record_fields[fields.record_fields().indices()];
+                        env.target
+                            .record_fields
+                            .extend(record_fields.iter().copied());
+
+                        RecordFields {
+                            length: fields.len() as _,
+                            field_names_start,
+                            variables_start: new_variables.start,
+                            field_types_start,
+                        }
+                    };
+
+                    Record(record_fields, copy_import_to_help(env, max_rank, ext_var))
+                }
+
+                TagUnion(tags, ext_var) => {
+                    let new_ext = copy_import_to_help(env, max_rank, ext_var);
+
+                    let new_variable_slices =
+                        SubsSlice::reserve_variable_slices(env.target, tags.len());
+
+                    let it = (new_variable_slices.indices()).zip(tags.variables());
+                    for (target_index, index) in it {
+                        let slice = env.source[index];
+
+                        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
+                        let it = (new_variables.indices()).zip(slice);
+                        for (target_index, var_index) in it {
+                            let var = env.source[var_index];
+                            let copy_var = copy_import_to_help(env, max_rank, var);
+                            env.target.variables[target_index] = copy_var;
+                        }
+
+                        env.target.variable_slices[target_index] = new_variables;
+                    }
+
+                    let new_tag_names = {
+                        let tag_names = tags.tag_names();
+                        let slice = &env.source.tag_names[tag_names.indices()];
+
+                        let start = env.target.tag_names.len() as u32;
+                        let length = tag_names.len() as u16;
+
+                        env.target.tag_names.extend(slice.iter().cloned());
+
+                        SubsSlice::new(start, length)
+                    };
+
+                    let union_tags = UnionTags::from_slices(new_tag_names, new_variable_slices);
+
+                    TagUnion(union_tags, new_ext)
+                }
+
+                FunctionOrTagUnion(tag_name, symbol, ext_var) => {
+                    let new_tag_name = SubsIndex::new(env.target.tag_names.len() as u32);
+
+                    env.target.tag_names.push(env.source[tag_name].clone());
+
+                    FunctionOrTagUnion(
+                        new_tag_name,
+                        symbol,
+                        copy_import_to_help(env, max_rank, ext_var),
+                    )
+                }
+
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let new_variable_slices =
+                        SubsSlice::reserve_variable_slices(env.target, tags.len());
+
+                    let it = (new_variable_slices.indices()).zip(tags.variables());
+                    for (target_index, index) in it {
+                        let slice = env.source[index];
+
+                        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
+                        let it = (new_variables.indices()).zip(slice);
+                        for (target_index, var_index) in it {
+                            let var = env.source[var_index];
+                            let copy_var = copy_import_to_help(env, max_rank, var);
+                            env.target.variables[target_index] = copy_var;
+                        }
+
+                        env.target.variable_slices[target_index] = new_variables;
+                    }
+
+                    let new_tag_names = {
+                        let tag_names = tags.tag_names();
+                        let slice = &env.source.tag_names[tag_names.indices()];
+
+                        let start = env.target.tag_names.len() as u32;
+                        let length = tag_names.len() as u16;
+
+                        env.target.tag_names.extend(slice.iter().cloned());
+
+                        SubsSlice::new(start, length)
+                    };
+
+                    let union_tags = UnionTags::from_slices(new_tag_names, new_variable_slices);
+
+                    let new_ext = copy_import_to_help(env, max_rank, ext_var);
+                    let new_rec_var = copy_import_to_help(env, max_rank, rec_var);
+
+                    RecursiveTagUnion(new_rec_var, union_tags, new_ext)
+                }
+            };
+
+            env.target
+                .set(copy, make_descriptor(Structure(new_flat_type)));
+
+            copy
+        }
+
+        FlexVar(opt_name_index) => {
+            if let Some(name_index) = opt_name_index {
+                let name = env.source.field_names[name_index.index as usize].clone();
+                let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+
+                let content = FlexVar(Some(new_name_index));
+                env.target.set_content(copy, content);
+            }
+
+            env.flex.push(copy);
+
+            copy
+        }
+
+        Error => {
+            // Open question: should this return Error, or a Flex var?
+
+            env.target.set(copy, make_descriptor(Error));
+
+            copy
+        }
+
+        RigidVar(name_index) => {
+            let name = env.source.field_names[name_index.index as usize].clone();
+            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+
+            env.target
+                .set(copy, make_descriptor(RigidVar(new_name_index)));
+
+            env.rigid.push(copy);
+
+            env.translations.push((var, copy));
+
+            copy
+        }
+
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
+            let new_structure = copy_import_to_help(env, max_rank, structure);
+
+            debug_assert!((new_structure.index() as usize) < env.target.len());
+
+            env.target.set(
+                copy,
+                make_descriptor(RecursionVar {
+                    opt_name,
+                    structure: new_structure,
+                }),
+            );
+
+            copy
+        }
+
+        Alias(symbol, arguments, real_type_var, kind) => {
+            let new_variables =
+                SubsSlice::reserve_into_subs(env.target, arguments.all_variables_len as _);
+            for (target_index, var_index) in
+                (new_variables.indices()).zip(arguments.all_variables())
+            {
+                let var = env.source[var_index];
+                let copy_var = copy_import_to_help(env, max_rank, var);
+                env.target.variables[target_index] = copy_var;
+            }
+
+            let new_arguments = AliasVariables {
+                variables_start: new_variables.start,
+                ..arguments
+            };
+
+            let new_real_type_var = copy_import_to_help(env, max_rank, real_type_var);
+            let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
+
+            env.target.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+
+        RangedNumber(typ, vars) => {
+            let new_typ = copy_import_to_help(env, max_rank, typ);
+
+            let new_vars = SubsSlice::reserve_into_subs(env.target, vars.len());
+
+            for (target_index, var_index) in (new_vars.indices()).zip(vars) {
+                let var = env.source[var_index];
+                let copy_var = copy_import_to_help(env, max_rank, var);
+                env.target.variables[target_index] = copy_var;
+            }
+
+            let new_content = RangedNumber(new_typ, new_vars);
+
+            env.target.set(copy, make_descriptor(new_content));
             copy
         }
     }
@@ -3955,7 +4697,7 @@ where
                 Erroneous(_) | EmptyRecord | EmptyTagUnion => {}
             },
             Alias(_, arguments, real_type_var, _) => {
-                push_var_slice!(arguments.variables());
+                push_var_slice!(arguments.all_variables());
                 stack.push(*real_type_var);
             }
             RangedNumber(typ, vars) => {

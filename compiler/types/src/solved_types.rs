@@ -1,6 +1,6 @@
-use crate::subs::{FlatType, GetSubsSlice, Subs, VarId, VarStore, Variable};
-use crate::types::{AliasKind, Problem, RecordField, Type};
-use roc_collections::all::{ImMap, MutSet, SendMap};
+use crate::subs::{VarId, VarStore, Variable};
+use crate::types::{AliasKind, Problem, RecordField, Type, TypeExtension};
+use roc_collections::all::{ImMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -53,8 +53,6 @@ pub enum SolvedType {
     /// A type from an Invalid module
     Erroneous(Problem),
 
-    /// A type alias
-    /// TODO transmit lambda sets!
     Alias(
         Symbol,
         Vec<(Lowercase, SolvedType)>,
@@ -75,365 +73,11 @@ pub enum SolvedType {
     Error,
 }
 
-impl SolvedType {
-    pub fn new(solved_subs: &Solved<Subs>, var: Variable) -> Self {
-        Self::from_var(solved_subs.inner(), var)
-    }
-
-    pub fn from_type(solved_subs: &Solved<Subs>, typ: &Type) -> Self {
-        use crate::types::Type::*;
-
-        match typ {
-            EmptyRec => SolvedType::EmptyRecord,
-            EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Apply(symbol, types, _) => {
-                let mut solved_types = Vec::with_capacity(types.len());
-
-                for typ in types {
-                    let solved_type = Self::from_type(solved_subs, typ);
-
-                    solved_types.push(solved_type);
-                }
-
-                SolvedType::Apply(*symbol, solved_types)
-            }
-            Function(args, box_closure, box_ret) => {
-                let solved_ret = Self::from_type(solved_subs, box_ret);
-                let solved_closure = Self::from_type(solved_subs, box_closure);
-                let mut solved_args = Vec::with_capacity(args.len());
-
-                for arg in args {
-                    let solved_arg = Self::from_type(solved_subs, arg);
-
-                    solved_args.push(solved_arg);
-                }
-
-                SolvedType::Func(solved_args, Box::new(solved_closure), Box::new(solved_ret))
-            }
-            Record(fields, box_ext) => {
-                let solved_ext = Self::from_type(solved_subs, box_ext);
-                let mut solved_fields = Vec::with_capacity(fields.len());
-
-                for (label, field) in fields {
-                    use crate::types::RecordField::*;
-
-                    let solved_type = match field {
-                        Optional(typ) => RecordField::Optional(Self::from_type(solved_subs, typ)),
-                        Required(typ) => RecordField::Required(Self::from_type(solved_subs, typ)),
-                        Demanded(typ) => RecordField::Demanded(Self::from_type(solved_subs, typ)),
-                    };
-
-                    solved_fields.push((label.clone(), solved_type));
-                }
-
-                SolvedType::Record {
-                    fields: solved_fields,
-                    ext: Box::new(solved_ext),
-                }
-            }
-            ClosureTag { name, ext } => {
-                let solved_ext = Self::from_type(solved_subs, &Type::Variable(*ext));
-                let solved_tags = vec![(TagName::Closure(*name), vec![])];
-                SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
-            }
-            TagUnion(tags, box_ext) => {
-                let solved_ext = Self::from_type(solved_subs, box_ext);
-                let mut solved_tags = Vec::with_capacity(tags.len());
-                for (tag_name, types) in tags {
-                    let mut solved_types = Vec::with_capacity(types.len());
-
-                    for typ in types {
-                        let solved_type = Self::from_type(solved_subs, typ);
-                        solved_types.push(solved_type);
-                    }
-
-                    solved_tags.push((tag_name.clone(), solved_types));
-                }
-
-                SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
-            }
-            FunctionOrTagUnion(tag_name, symbol, box_ext) => {
-                let solved_ext = Self::from_type(solved_subs, box_ext);
-                SolvedType::FunctionOrTagUnion(tag_name.clone(), *symbol, Box::new(solved_ext))
-            }
-            RecursiveTagUnion(rec_var, tags, box_ext) => {
-                let solved_ext = Self::from_type(solved_subs, box_ext);
-                let mut solved_tags = Vec::with_capacity(tags.len());
-                for (tag_name, types) in tags {
-                    let mut solved_types = Vec::with_capacity(types.len());
-
-                    for typ in types {
-                        let solved_type = Self::from_type(solved_subs, typ);
-                        solved_types.push(solved_type);
-                    }
-
-                    solved_tags.push((tag_name.clone(), solved_types));
-                }
-
-                SolvedType::RecursiveTagUnion(
-                    VarId::from_var(*rec_var, solved_subs.inner()),
-                    solved_tags,
-                    Box::new(solved_ext),
-                )
-            }
-            Erroneous(problem) => SolvedType::Erroneous(problem.clone()),
-            Alias {
-                symbol,
-                type_arguments,
-                lambda_set_variables,
-                actual: box_type,
-                kind,
-            } => {
-                let solved_type = Self::from_type(solved_subs, box_type);
-                let mut solved_args = Vec::with_capacity(type_arguments.len());
-
-                for (name, var) in type_arguments {
-                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
-                }
-
-                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
-
-                for var in lambda_set_variables {
-                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_type(solved_subs, &var.0)));
-                }
-
-                SolvedType::Alias(
-                    *symbol,
-                    solved_args,
-                    solved_lambda_sets,
-                    Box::new(solved_type),
-                    *kind,
-                )
-            }
-            HostExposedAlias {
-                name,
-                type_arguments: arguments,
-                lambda_set_variables,
-                actual_var,
-                actual,
-            } => {
-                let solved_type = Self::from_type(solved_subs, actual);
-                let mut solved_args = Vec::with_capacity(arguments.len());
-
-                for (name, var) in arguments {
-                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
-                }
-
-                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
-                for var in lambda_set_variables {
-                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_type(solved_subs, &var.0)));
-                }
-
-                SolvedType::HostExposedAlias {
-                    name: *name,
-                    arguments: solved_args,
-                    lambda_set_variables: solved_lambda_sets,
-                    actual_var: VarId::from_var(*actual_var, solved_subs.inner()),
-                    actual: Box::new(solved_type),
-                }
-            }
-            Variable(var) => Self::from_var(solved_subs.inner(), *var),
-            RangedNumber(typ, _) => Self::from_type(solved_subs, typ),
-        }
-    }
-
-    fn from_var(subs: &Subs, var: Variable) -> Self {
-        let mut seen = RecursionVars::default();
-        Self::from_var_help(subs, &mut seen, var)
-    }
-
-    fn from_var_help(subs: &Subs, recursion_vars: &mut RecursionVars, var: Variable) -> Self {
-        use crate::subs::Content::*;
-
-        // if this is a recursion var we've seen before, just generate a Flex
-        // (not doing so would have this function loop forever)
-        if recursion_vars.contains(subs, var) {
-            return SolvedType::Flex(VarId::from_var(var, subs));
-        }
-
-        match subs.get_content_without_compacting(var) {
-            FlexVar(_) => SolvedType::Flex(VarId::from_var(var, subs)),
-            RecursionVar { structure, .. } => {
-                // TODO should there be a SolvedType RecursionVar variant?
-                Self::from_var_help(subs, recursion_vars, *structure)
-            }
-            RigidVar(name_index) => {
-                let name = &subs.field_names[name_index.index as usize];
-                SolvedType::Rigid(name.clone())
-            }
-            Structure(flat_type) => Self::from_flat_type(subs, recursion_vars, flat_type),
-            Alias(symbol, args, actual_var, kind) => {
-                let mut new_args = Vec::with_capacity(args.len());
-
-                for var_index in args.named_type_arguments() {
-                    let arg_var = subs[var_index];
-
-                    let node = Self::from_var_help(subs, recursion_vars, arg_var);
-
-                    // NOTE we fake the lowercase here: the user will never get to see it anyway
-                    new_args.push((Lowercase::default(), node));
-                }
-
-                let mut solved_lambda_sets = Vec::with_capacity(0);
-
-                for var_index in args.unnamed_type_arguments() {
-                    let var = subs[var_index];
-
-                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_var_help(
-                        subs,
-                        recursion_vars,
-                        var,
-                    )));
-                }
-
-                let aliased_to = Self::from_var_help(subs, recursion_vars, *actual_var);
-
-                SolvedType::Alias(
-                    *symbol,
-                    new_args,
-                    solved_lambda_sets,
-                    Box::new(aliased_to),
-                    *kind,
-                )
-            }
-            RangedNumber(typ, _range_vars) => Self::from_var_help(subs, recursion_vars, *typ),
-            Error => SolvedType::Error,
-        }
-    }
-
-    fn from_flat_type(
-        subs: &Subs,
-        recursion_vars: &mut RecursionVars,
-        flat_type: &FlatType,
-    ) -> Self {
-        use crate::subs::FlatType::*;
-
-        match flat_type {
-            Apply(symbol, args) => {
-                let mut new_args = Vec::with_capacity(args.len());
-
-                for var in subs.get_subs_slice(*args) {
-                    new_args.push(Self::from_var_help(subs, recursion_vars, *var));
-                }
-
-                SolvedType::Apply(*symbol, new_args)
-            }
-            Func(args, closure, ret) => {
-                let mut new_args = Vec::with_capacity(args.len());
-
-                for var in subs.get_subs_slice(*args) {
-                    new_args.push(Self::from_var_help(subs, recursion_vars, *var));
-                }
-
-                let ret = Self::from_var_help(subs, recursion_vars, *ret);
-                let closure = Self::from_var_help(subs, recursion_vars, *closure);
-
-                SolvedType::Func(new_args, Box::new(closure), Box::new(ret))
-            }
-            Record(fields, ext_var) => {
-                let mut new_fields = Vec::with_capacity(fields.len());
-
-                for (i1, i2, i3) in fields.iter_all() {
-                    let field_name: Lowercase = subs[i1].clone();
-                    let variable: Variable = subs[i2];
-                    let record_field: RecordField<()> = subs[i3];
-
-                    let solved_type =
-                        record_field.map(|_| Self::from_var_help(subs, recursion_vars, variable));
-
-                    new_fields.push((field_name, solved_type));
-                }
-
-                let ext = Self::from_var_help(subs, recursion_vars, *ext_var);
-
-                SolvedType::Record {
-                    fields: new_fields,
-                    ext: Box::new(ext),
-                }
-            }
-            TagUnion(tags, ext_var) => {
-                let mut new_tags = Vec::with_capacity(tags.len());
-
-                for (name_index, slice_index) in tags.iter_all() {
-                    let slice = subs[slice_index];
-
-                    let mut new_args = Vec::with_capacity(slice.len());
-
-                    for var_index in slice {
-                        let var = subs[var_index];
-                        new_args.push(Self::from_var_help(subs, recursion_vars, var));
-                    }
-                    let tag_name = subs[name_index].clone();
-                    new_tags.push((tag_name.clone(), new_args));
-                }
-
-                let ext = Self::from_var_help(subs, recursion_vars, *ext_var);
-
-                SolvedType::TagUnion(new_tags, Box::new(ext))
-            }
-            FunctionOrTagUnion(tag_name, symbol, ext_var) => {
-                let ext = Self::from_var_help(subs, recursion_vars, *ext_var);
-
-                SolvedType::FunctionOrTagUnion(subs[*tag_name].clone(), *symbol, Box::new(ext))
-            }
-            RecursiveTagUnion(rec_var, tags, ext_var) => {
-                recursion_vars.insert(subs, *rec_var);
-
-                let mut new_tags = Vec::with_capacity(tags.len());
-
-                for (name_index, slice_index) in tags.iter_all() {
-                    let slice = subs[slice_index];
-
-                    let mut new_args = Vec::with_capacity(slice.len());
-
-                    for var_index in slice {
-                        let var = subs[var_index];
-                        new_args.push(Self::from_var_help(subs, recursion_vars, var));
-                    }
-                    let tag_name = subs[name_index].clone();
-                    new_tags.push((tag_name.clone(), new_args));
-                }
-
-                let ext = Self::from_var_help(subs, recursion_vars, *ext_var);
-
-                SolvedType::RecursiveTagUnion(
-                    VarId::from_var(*rec_var, subs),
-                    new_tags,
-                    Box::new(ext),
-                )
-            }
-            EmptyRecord => SolvedType::EmptyRecord,
-            EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Erroneous(problem_index) => {
-                let problem = subs.problems[problem_index.index as usize].clone();
-                SolvedType::Erroneous(problem)
-            }
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct BuiltinAlias {
     pub region: Region,
     pub vars: Vec<Loc<Lowercase>>,
     pub typ: SolvedType,
-}
-
-#[derive(Default)]
-struct RecursionVars(MutSet<Variable>);
-
-impl RecursionVars {
-    fn contains(&self, subs: &Subs, var: Variable) -> bool {
-        let var = subs.get_root_key_without_compacting(var);
-
-        self.0.contains(&var)
-    }
-
-    fn insert(&mut self, subs: &Subs, var: Variable) {
-        let var = subs.get_root_key_without_compacting(var);
-
-        self.0.insert(var);
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -502,7 +146,12 @@ pub fn to_type(
                 new_fields.insert(label.clone(), field_val);
             }
 
-            Type::Record(new_fields, Box::new(to_type(ext, free_vars, var_store)))
+            let ext = match ext.as_ref() {
+                SolvedType::EmptyRecord => TypeExtension::Closed,
+                other => TypeExtension::Open(Box::new(to_type(other, free_vars, var_store))),
+            };
+
+            Type::Record(new_fields, ext)
         }
         EmptyRecord => Type::EmptyRec,
         EmptyTagUnion => Type::EmptyTagUnion,
@@ -519,13 +168,21 @@ pub fn to_type(
                 new_tags.push((tag_name.clone(), new_args));
             }
 
-            Type::TagUnion(new_tags, Box::new(to_type(ext, free_vars, var_store)))
+            let ext = match ext.as_ref() {
+                SolvedType::EmptyTagUnion => TypeExtension::Closed,
+                other => TypeExtension::Open(Box::new(to_type(other, free_vars, var_store))),
+            };
+
+            Type::TagUnion(new_tags, ext)
         }
-        FunctionOrTagUnion(tag_name, symbol, ext) => Type::FunctionOrTagUnion(
-            tag_name.clone(),
-            *symbol,
-            Box::new(to_type(ext, free_vars, var_store)),
-        ),
+        FunctionOrTagUnion(tag_name, symbol, ext) => {
+            let ext = match ext.as_ref() {
+                SolvedType::EmptyTagUnion => TypeExtension::Closed,
+                other => TypeExtension::Open(Box::new(to_type(other, free_vars, var_store))),
+            };
+
+            Type::FunctionOrTagUnion(tag_name.clone(), *symbol, ext)
+        }
         RecursiveTagUnion(rec_var_id, tags, ext) => {
             let mut new_tags = Vec::with_capacity(tags.len());
 
@@ -539,16 +196,17 @@ pub fn to_type(
                 new_tags.push((tag_name.clone(), new_args));
             }
 
+            let ext = match ext.as_ref() {
+                SolvedType::EmptyTagUnion => TypeExtension::Closed,
+                other => TypeExtension::Open(Box::new(to_type(other, free_vars, var_store))),
+            };
+
             let rec_var = free_vars
                 .unnamed_vars
                 .get(rec_var_id)
                 .expect("rec var not in unnamed vars");
 
-            Type::RecursiveTagUnion(
-                *rec_var,
-                new_tags,
-                Box::new(to_type(ext, free_vars, var_store)),
-            )
+            Type::RecursiveTagUnion(*rec_var, new_tags, ext)
         }
         Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual, kind) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());

@@ -91,7 +91,6 @@ pub fn update_empty_record(
 
             let record_field_node = MarkupNode::Text {
                 content: new_input.to_owned(),
-                ast_node_id,
                 syn_high_style: HighlightStyle::RecordField,
                 attributes: Attributes::default(),
                 parent_id_opt,
@@ -149,9 +148,9 @@ pub fn update_record_colon(
 
     let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
     if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
-        let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
+        let prev_mn_ast_node_id = ed_model.mark_id_ast_id_map.get(prev_mark_node_id)?;
 
-        match prev_mark_node.get_ast_node_id() {
+        match prev_mn_ast_node_id {
             ASTNodeId::ADefId(_) => Ok(InputOutcome::Ignored),
             ASTNodeId::AExprId(prev_expr_id) => {
                 let prev_expr = ed_model.module.env.pool.get(prev_expr_id);

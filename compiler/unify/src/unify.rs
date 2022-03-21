@@ -180,10 +180,12 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         //        println!("\n --------------- \n");
         let content_1 = subs.get(ctx.first).content;
         let content_2 = subs.get(ctx.second).content;
+        let mode = if ctx.mode.is_eq() { "~" } else { "+=" };
         println!(
-            "{:?} {:?} ~ {:?} {:?}",
+            "{:?} {:?} {} {:?} {:?}",
             ctx.first,
             roc_types::subs::SubsFmtContent(&content_1, subs),
+            mode,
             ctx.second,
             roc_types::subs::SubsFmtContent(&content_2, subs),
         );
@@ -320,9 +322,9 @@ fn unify_alias(
                 if args.len() == other_args.len() {
                     let mut problems = Vec::new();
                     let it = args
-                        .variables()
+                        .all_variables()
                         .into_iter()
-                        .zip(other_args.variables().into_iter());
+                        .zip(other_args.all_variables().into_iter());
 
                     for (l, r) in it {
                         let l_var = subs[l];
@@ -334,7 +336,13 @@ fn unify_alias(
                         problems.extend(merge(subs, ctx, *other_content));
                     }
 
-                    // if problems.is_empty() { problems.extend(unify_pool(subs, pool, real_var, *other_real_var)); }
+                    // THEORY: if two aliases or opaques have the same name and arguments, their
+                    // real_var is the same and we don't need to check it.
+                    // See https://github.com/rtfeldman/roc/pull/1510
+                    //
+                    // if problems.is_empty() && either_is_opaque {
+                    //     problems.extend(unify_pool(subs, pool, real_var, *other_real_var, ctx.mode));
+                    // }
 
                     problems
                 } else {
@@ -381,13 +389,13 @@ fn unify_structure(
             match (ctx.mode.is_present(), flat_type) {
                 (true, FlatType::TagUnion(tags, _ext)) => {
                     let new_ext = subs.fresh_unnamed_flex_var();
-                    let mut new_desc = ctx.first_desc.clone();
+                    let mut new_desc = ctx.first_desc;
                     new_desc.content = Structure(FlatType::TagUnion(*tags, new_ext));
                     subs.set(ctx.first, new_desc);
                 }
                 (true, FlatType::FunctionOrTagUnion(tn, sym, _ext)) => {
                     let new_ext = subs.fresh_unnamed_flex_var();
-                    let mut new_desc = ctx.first_desc.clone();
+                    let mut new_desc = ctx.first_desc;
                     new_desc.content = Structure(FlatType::FunctionOrTagUnion(*tn, *sym, new_ext));
                     subs.set(ctx.first, new_desc);
                 }
@@ -839,7 +847,7 @@ fn unify_tag_union_new(
             // the top level extension variable for that!
             let new_ext = fresh(subs, pool, ctx, Content::FlexVar(None));
             let new_union = Structure(FlatType::TagUnion(tags1, new_ext));
-            let mut new_desc = ctx.first_desc.clone();
+            let mut new_desc = ctx.first_desc;
             new_desc.content = new_union;
             subs.set(ctx.first, new_desc);
 

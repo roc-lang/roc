@@ -634,11 +634,16 @@ impl IdentIds {
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique(&mut self) -> IdentId {
-        // TODO convert this directly from u32 into IdentStr,
-        // without allocating an extra string along the way like this.
-        let ident = self.next_generated_name.to_string().into();
+        use std::fmt::Write;
 
+        let index: u32 = self.next_generated_name;
         self.next_generated_name += 1;
+
+        // "4294967296" is 10 characters
+        let mut buffer: arrayvec::ArrayString<10> = arrayvec::ArrayString::new();
+
+        write!(buffer, "{}", index).unwrap();
+        let ident = Ident(IdentStr::from_str(buffer.as_str()));
 
         self.add(ident)
     }
@@ -1035,6 +1040,8 @@ define_builtins! {
         142 NUM_TO_U64_CHECKED: "toU64Checked"
         143 NUM_TO_U128: "toU128"
         144 NUM_TO_U128_CHECKED: "toU128Checked"
+        145 NUM_TO_NAT: "toNat"
+        146 NUM_TO_NAT_CHECKED: "toNatChecked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -1198,6 +1205,12 @@ define_builtins! {
         13 SET_WALK_USER_FUNCTION: "#walk_user_function"
         14 SET_CONTAINS: "contains"
     }
+    8 BOX: "Box" => {
+        0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
+        1 BOX_BOX_FUNCTION: "box" // Box.box
+        2 BOX_UNBOX: "unbox"
 
-    num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    }
+
+    num_modules: 9 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

@@ -2179,6 +2179,12 @@ to_int_tests! {
         to_u128_same_width, "15i128", 15
         to_u128_extend, "15i8", 15
     )
+    "Num.toNat", usize, (
+        to_nat_same_width, "15i64", 15, ["gen-wasm"]
+        to_nat_extend, "15i8", 15, ["gen-wasm"]
+        to_nat_truncate, "115i128", 115
+        to_nat_truncate_wraps, "10_000_000_000_000_000_000_000i128", 1864712049423024128
+    )
 }
 
 macro_rules! to_int_checked_tests {
@@ -2311,6 +2317,18 @@ to_int_checked_tests! {
         to_u128_checked_same,                          "15u128",   15
         to_u128_checked_same_width_signed_fits,        "15i128",   15
         to_u128_checked_same_width_signed_oob,         "-1i128",   None
+    )
+    "Num.toNatChecked", usize, (
+        to_nat_checked_smaller_width_pos,              "15i8",     15
+        to_nat_checked_smaller_width_neg_oob,          "-15i8",    None
+        to_nat_checked_same,                           "15u64",    15
+        to_nat_checked_same_width_signed_fits,         "15i64",    15
+        to_nat_checked_same_width_signed_oob,          "-1i64",    None
+        to_nat_checked_larger_width_signed_fits_pos,   "15i128",   15
+        to_nat_checked_larger_width_signed_oob_pos,    "18446744073709551616i128", None
+        to_nat_checked_larger_width_signed_oob_neg,    "-1i128",   None
+        to_nat_checked_larger_width_unsigned_fits_pos, "15u128",   15
+        to_nat_checked_larger_width_unsigned_oob_pos,  "18446744073709551616u128", None
     )
 }
 
@@ -2779,5 +2797,65 @@ fn to_float_f64() {
         ),
         100.,
         f64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// https://github.com/rtfeldman/roc/issues/2696
+fn upcast_of_int_is_zext() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Num.toU16 0b1000_0000u8
+            "#
+        ),
+        128,
+        u16
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+// https://github.com/rtfeldman/roc/issues/2696
+fn upcast_of_int_checked_is_zext() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Num.toU16Checked 0b1000_0000u8 is
+                Ok 128u16 -> 1u8
+                _ -> 0u8
+            "#
+        ),
+        1,
+        u16
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn modulo_of_unsigned() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            0b1111_1111u8 % 64
+            "#
+        ),
+        63,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn div_of_unsigned() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            0b1111_1111u8 // 2
+            "#
+        ),
+        127,
+        u8
     )
 }

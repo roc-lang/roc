@@ -10,6 +10,7 @@ use roc_repl_eval::{
     gen::{compile_to_mono, format_answer, ReplOutput},
     ReplApp, ReplAppMemory,
 };
+use roc_reporting::report::DEFAULT_PALETTE_HTML;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
@@ -155,12 +156,15 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
 }
 
 pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
+    #[cfg(feature = "console_error_panic_hook")]
+    console_error_panic_hook::set_once();
+
     let arena = &Bump::new();
     let pre_linked_binary: &'static [u8] = include_bytes!("../data/pre_linked_binary.o");
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
-    let mono = match compile_to_mono(arena, &src, target_info) {
+    let mono = match compile_to_mono(arena, &src, target_info, DEFAULT_PALETTE_HTML) {
         Ok(m) => m,
         Err(messages) => return Err(messages.join("\n\n")),
     };

@@ -8,7 +8,7 @@ use wasmer::{Memory, WasmPtr};
 
 use super::RefCount;
 use crate::helpers::from_wasmer_memory::FromWasmerMemory;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
 
@@ -86,14 +86,13 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         module_src = &temp;
     }
 
-    let exposed_types = MutMap::default();
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         stdlib,
         src_dir,
-        exposed_types,
+        Default::default(),
         roc_target::TargetInfo::default_wasm32(),
     );
 

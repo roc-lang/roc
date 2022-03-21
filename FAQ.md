@@ -39,6 +39,90 @@ whether the feature should be in the language at all. In the case of this featur
 language doesn't have it; that way nobody has to learn (or spend time spreading the word) about the
 performance-boosting advice not to use it.
 
+## Why can't functions be compared for equality using the `==` operator?
+
+Function equality has been proven to be undecidable in the general case because of the [halting problem](https://en.wikipedia.org/wiki/Halting_problem).
+So while we as humans might be able to look at `\x -> x + 1` and `\x -> 1 + x` and know that they're equivalent,
+in the general case it's not possible for a computer to do this reliably.
+
+There are some other potential ways to define function equality, but they all have problems.
+
+One way would be to have two functions be considered equal if their source code is equivalent. (Perhaps disregarding
+comments and spaces.) This sounds reasonable, but it means that now revising a function to do
+exactly the same thing as before (say, changing `\x -> x + 1` to `\x -> 1 + x`) can cause a bug in a
+distant part of the code base. Defining function equality this way means that revising a function's internals
+is no longer a safe, local operation - even if it gives all the same outputs for all the same inputs.
+
+Another option would be to define it using "reference equality." This is what JavaScript does, for example.
+However, Roc does not use reference equality anywhere else in the language, and it would mean that (for example)
+passing `\x -> x + 1` to a function compared to defining `fn = \x -> x + 1` elsewhere and then passing `fn` into
+the function might give different answers.
+
+Both of these would make revising code riskier across the entire language, which is very undesirable.
+
+Another option would be to define that function equality always returns `False`. So both of these would evaluate
+to `False`:
+
+* `(\x -> x + 1) == (\x -> 1 + x)`
+* `(\x -> x + 1) == (\x -> x + 1)`
+
+This makes function equality effectively useless, while still technically allowing it. It has some other downsides:
+* Now if you put a function inside a record, using `==` on that record will still type-check, but it will then return `False`. This could lead to bugs if you didn't realize you had accidentally put a function in there - for example, because you were actually storing a different type (e.g. an opaque type) and didn't realize it had a function inside it.
+* If you put a function (or a value containing a function) into a `Dict` or `Set`, you'll never be able to get it out again. This is a common problem with [NaN](https://en.wikipedia.org/wiki/NaN), which is also defined not to be equal to itself.
+
+The first of these problems could be addressed by having function equality always return `True` instead of `False` (since that way it would not affect other fields' equality checks in a record), but that design has its own problems:
+* Although function equality is still useless, `(\x -> x + 1) == (\x -> x)` returns `True`. Even if it didn't lead to bugs in practice, this would certainly be surprising and confusing to beginners.
+* Now if you put several different functions into a `Dict` or `Set`, only one of them will be kept; the others will be discarded or overwritten. This could cause bugs if a value stored a function internally, and then other functions relied on that internal function for correctness.
+
+Each of these designs makes Roc a language that's some combination of more error-prone, more confusing, and more
+brittle to change. Disallowing function equality at compile time eliminates all of these drawbacks.
+
+## Why doesn't Roc have a `Maybe` or `Option` or `Optional` type, or `null` or `nil` or `undefined`?
+
+It's common for programming languages to have a [null reference](https://en.wikipedia.org/wiki/Null_pointer)
+(e.g. `null` in C, `nil` in Ruby, `None` in Python, or `undefined` in JavaScript).
+The inventor of the null reference refers to it as his "[billion dollar mistake](https://en.wikipedia.org/wiki/Null_pointer#History)" because it "has led to innumerable errors, vulnerabilities, and system crashes, which have probably caused a billion dollars of pain and damage in the last forty years."
+
+For this and other reasons, many languages do not include a null reference, but instead have a standard library
+data type which can be used in situations where a null reference would otherwise be used. Common names for this
+null reference alternative type include `Maybe` (like in Haskell or Elm), `Option` (like in OCaml or Rust),
+and `Optional` (like in Java).
+
+By design, Roc does not have one of these. There are several reasons for this.
+
+First, if a function returns a potential error, Roc has the convention to use `Result` with an error type that
+has a single tag describing what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*`
+instead of `List.first : List a -> Maybe a`.) This is not only more self-descriptive, it also composes better with
+other operations that can fail; there's no need to have functions like `Result.toMaybe` or `Maybe.toResult`,
+because in Roc, the convention is that operations that can fail always use `Result`.
+
+Second, optional record fields can be handled using Roc's Optional Record Field language feature, so using a type like `Maybe` there would be less ergonomic.
+
+To describe something that's neither an optional field nor an operation that can fail, an explicit tag union can be
+more descriptive than something like `Maybe`. For example, if a record type has an `artist` field, but the artist
+information may not be available, compare these three alternative ways to represent that:
+
+* `artist : Maybe Artist`
+* `artist : [ Loading, Loaded Artist ]`
+* `artist : [ Unspecified, Specified Artist ]`
+
+All three versions tell us that we might not have access to an `Artist`. However, the `Maybe` version doesn't
+tell us why that might be. The `Loading`/`Loaded` version tells us we don't have one *yet*, because we're
+still loading it, whereas the `Unspecified`/`Specified` version tells us we don't have one and shouldn't expect
+to have one later if we wait, because it wasn't specified.
+
+Naming aside, using explicit tag unions also makes it easier to transition to richer data models. For example,
+after using `[ Loading, Loaded Artist ]` for awhile, we might realize that there's another possible state: loading
+failed due to an error. If we modify this to be `[ Loading, Loaded Artist, Errored LoadingErr ]`, all
+of our code for the `Loading` and `Loaded` states will still work.
+
+In contrast, if we'd had `Maybe Artist` and were using helper functions like `Maybe.isNone` (a common argument
+for using `Maybe` even when it's less self-descriptive), we'd have to rewrite all the code which used those
+helper functions. As such, a subtle downside of these helper functions is that they discourage any change to
+the data model that would break their call sites, even if that change would improve the data model overall.
+
+On a historical note, `Maybe` may have been thought of as a substitute for null references—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed. That said, in languages that do not have an equivalent of Roc's tag unions, it's much less ergonomic to write something like `Result a [ ListWasEmpty ]*`, so that design would not fit those languages as well as it fits Roc.
+
 ## Why doesn't Roc have higher-kinded polymorphism or arbitrary-rank types?
 
 _Since this is a FAQ answer, I'm going to assume familiarity with higher-kinded types and higher-rank types instead of including a primer on them._
@@ -159,12 +243,7 @@ Roc also has a different standard library from Elm. Some of the differences come
 * No `Char`. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).
 * No `Debug.log` - the editor can do a better job at this, or you can write `expect x != x` to see what `x` is when the expectation fails. Using the editor means your code doesn't change, and using `expect` gives a natural reminder to remove the debugging code before shipping: the build will fail.
 * No `Debug.todo` - instead you can write a type annotation with no implementation below it; the type checker will treat it normally, but attempting to use the value will cause a runtime exception. This is a feature I've often wanted in Elm, because I like prototyping APIs by writing out the types only, but then when I want the compiler to type-check them for me, I end up having to add `Debug.todo` in various places.
-* No `Maybe`. There are several reasons for this:
-    * If a function returns a potential error, I prefer `Result` with an error type that uses a no-payload tag to describe what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*` instead of `List.first : List a -> Maybe a`.) This is not only more self-descriptive, it also composes better with operations that have multiple ways to fail.
-    * Optional record fields can be handled using the explicit Optional Record Field language feature.
-    * To describe something that's neither an operation that can fail nor an optional field, I prefer using a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, making a self-documenting API like `nullable : Decoder a -> Decoder [ Null, NonNull a ]`.
-    * It's surprisingly easy to misuse - especially by overusing it when a different language feature (especially a custom tag union) would lead to nicer code. Joël's legendary [talk about Maybe](https://youtu.be/43eM4kNbb6c) is great, but the fact that a whole talk about such a simple type can be so useful speaks to how easy the type is to misuse. Imagine a 20-minute talk about `Result` - could it be anywhere near as hepful?
-    * On a historical note, it's conceivable that the creation of `Maybe` predated `Result`, and `Maybe` might have been thought of as a substitute for null pointers—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed.
+* No `Maybe`. See the "Why doesn't Roc have a `Maybe`/`Option`/`Optional` type" FAQ question
 
 ## Why aren't Roc functions curried by default?
 

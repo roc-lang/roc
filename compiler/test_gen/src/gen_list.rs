@@ -800,6 +800,34 @@ fn list_walk_until_sum() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_walk_imlements_position() {
+    assert_evals_to!(
+        r#"
+        Option a : [ Some a, None ]
+
+        find : List a, a -> Option Nat
+        find = \list, needle ->
+            findHelp list needle
+                |> .v
+
+        findHelp = \list, needle ->
+            List.walkUntil list { n: 0, v: None } \{ n, v }, element ->
+                if element == needle then
+                    Stop { n, v: Some n }
+                else
+                    Continue { n: n + 1, v }
+
+        when find [ 1, 2, 3 ] 3 is
+            None -> 0
+            Some v -> v
+        "#,
+        2,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_walk_until_even_prefix_sum() {
     assert_evals_to!(
         r#"

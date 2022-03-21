@@ -377,8 +377,7 @@ impl<'a> EdModel<'a> {
             let expr2_level_mark_node = self.mark_node_pool.get(selected_block.mark_node_id);
 
             if let Some(parent_id) = expr2_level_mark_node.get_parent_id_opt() {
-                let parent_mark_node = self.mark_node_pool.get(parent_id);
-                let ast_node_id = parent_mark_node.get_ast_node_id();
+                let ast_node_id = self.mark_id_ast_id_map.get(parent_id)?;
 
                 let (expr_start_pos, expr_end_pos) = self
                     .grid_node_map
@@ -568,7 +567,6 @@ impl<'a> EdModel<'a> {
             let newlines_at_end = expr2_level_mark_node.get_newlines_at_end();
 
             let blank_replacement = MarkupNode::Blank {
-                ast_node_id: sel_block.ast_node_id,
                 attributes: Attributes::default(),
                 parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
                 newlines_at_end,
@@ -658,12 +656,15 @@ impl<'a> EdModel<'a> {
     fn post_process_ast_update(&mut self) -> EdResult<()> {
         //dbg!("{}",self.module.ast.ast_to_string(self.module.env.pool));
 
-        self.markup_ids = ast_to_mark_nodes(
+        let markup_ids_tup = ast_to_mark_nodes(
             &mut self.module.env,
             &self.module.ast,
             &mut self.mark_node_pool,
             &self.loaded_module.interns,
         )?;
+
+        self.markup_ids = markup_ids_tup.0;
+        self.mark_id_ast_id_map = markup_ids_tup.1;
 
         self.code_lines = CodeLines::from_str(&nodes::mark_nodes_to_string(
             &self.markup_ids,
@@ -839,7 +840,7 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
         .get_id_at_row_col(ed_model.get_caret())?;
     let curr_mark_node = ed_model.mark_node_pool.get(curr_mark_node_id);
     let parent_id_opt = curr_mark_node.get_parent_id_opt();
-    let ast_node_id = curr_mark_node.get_ast_node_id();
+    let ast_node_id = ed_model.mark_id_ast_id_map.get(curr_mark_node_id)?;
 
     Ok(NodeContext {
         old_caret_pos,
@@ -1002,10 +1003,7 @@ pub fn handle_new_char_expr(
             match expr_ref {
                 Expr2::SmallInt { .. } => update_int(ed_model, curr_mark_node_id, ch)?,
                 _ => {
-                    let prev_ast_node_id = ed_model
-                        .mark_node_pool
-                        .get(prev_mark_node_id)
-                        .get_ast_node_id();
+                    let prev_ast_node_id = ed_model.mark_id_ast_id_map.get(prev_mark_node_id)?;
 
                     match prev_ast_node_id {
                         ASTNodeId::ADefId(_) => InputOutcome::Ignored,
@@ -1026,10 +1024,7 @@ pub fn handle_new_char_expr(
             let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
 
             if let Some(mark_parent_id) = mark_parent_id_opt {
-                let parent_ast_id = ed_model
-                    .mark_node_pool
-                    .get(mark_parent_id)
-                    .get_ast_node_id();
+                let parent_ast_id = ed_model.mark_id_ast_id_map.get(mark_parent_id)?;
 
                 match parent_ast_id {
                     ASTNodeId::ADefId(_) => InputOutcome::Ignored,
@@ -1047,10 +1042,7 @@ pub fn handle_new_char_expr(
                 let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
 
                 if let Some(mark_parent_id) = mark_parent_id_opt {
-                    let parent_ast_id = ed_model
-                        .mark_node_pool
-                        .get(mark_parent_id)
-                        .get_ast_node_id();
+                    let parent_ast_id = ed_model.mark_id_ast_id_map.get(mark_parent_id)?;
 
                     match parent_ast_id {
                         ASTNodeId::ADefId(_) => InputOutcome::Ignored,
@@ -1215,8 +1207,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 let outcome =
                     if ed_model.node_exists_at_caret() {
                         let curr_mark_node_id = ed_model.get_curr_mark_node_id()?;
-                        let curr_mark_node = ed_model.mark_node_pool.get(curr_mark_node_id);
-                        let ast_node_id = curr_mark_node.get_ast_node_id();
+                        let ast_node_id = ed_model.mark_id_ast_id_map.get(curr_mark_node_id)?;
 
                         match ast_node_id {
                             ASTNodeId::ADefId(def_id) => {
@@ -1233,9 +1224,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                             } else {
                                 let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
                                 if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
-                                    let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
 
-                                    let prev_ast_node = ed_model.module.env.pool.get(prev_mark_node.get_ast_node_id().to_expr_id()?);
+                                    let prev_ast_node_id = ed_model.mark_id_ast_id_map.get(prev_mark_node_id)?.to_expr_id()?;
+                                    let prev_ast_node = ed_model.module.env.pool.get(prev_ast_node_id);
 
                                     match prev_ast_node {
                                         Expr2::SmallInt{ .. } => {
@@ -1284,6 +1275,8 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
 #[cfg(test)]
 pub mod test_ed_update {
+    use std::iter;
+
     use crate::editor::ed_error::print_err;
     use crate::editor::mvc::ed_model::test_ed_model::ed_model_from_dsl;
     use crate::editor::mvc::ed_model::test_ed_model::ed_model_to_dsl;
@@ -1291,13 +1284,14 @@ pub mod test_ed_update {
     use crate::editor::mvc::ed_update::handle_new_char;
     use crate::editor::mvc::ed_update::EdModel;
     use crate::editor::mvc::ed_update::EdResult;
-    use crate::editor::resources::strings::HELLO_WORLD;
+    use crate::editor::resources::strings::nr_hello_world_lines;
     use crate::ui::text::lines::SelectableLines;
     use crate::ui::ui_error::UIResult;
     use crate::window::keyboard_input::no_mods;
     use crate::window::keyboard_input::test_modifiers::ctrl_cmd_shift;
     use crate::window::keyboard_input::Modifiers;
     use bumpalo::Bump;
+    use roc_code_markup::markup::common_nodes::NEW_LINES_AFTER_DEF;
     use roc_module::symbol::ModuleIds;
     use threadpool::ThreadPool;
     use winit::event::VirtualKeyCode::*;
@@ -1432,8 +1426,7 @@ pub mod test_ed_update {
     }
 
     fn strip_header(lines: &mut Vec<String>) {
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
-        lines.drain(0..nr_hello_world_lines);
+        lines.drain(0..nr_hello_world_lines());
     }
 
     pub fn assert_insert_seq_nls(
@@ -1492,8 +1485,11 @@ pub mod test_ed_update {
     // add newlines like the editor's formatting would add them
     fn add_nls(lines: Vec<String>) -> Vec<String> {
         let mut new_lines = lines;
-        //Two lines between TLD's, extra newline so the user can go to third line add new def there
-        new_lines.append(&mut vec!["".to_owned(), "".to_owned(), "".to_owned()]);
+        //line(s) between TLD's, extra newline so the user can go to last line add new def there
+        let mut extra_empty_lines = iter::repeat("".to_owned())
+            .take(NEW_LINES_AFTER_DEF)
+            .collect();
+        new_lines.append(&mut extra_empty_lines);
 
         new_lines
     }
@@ -2585,7 +2581,7 @@ pub mod test_ed_update {
     fn test_enter() -> Result<(), String> {
         assert_insert_seq(
             ovec!["┃"],
-            ovec!["ab = 5", "", "", "cd = \"good┃\"", "", "", ""],
+            add_nls(ovec!["ab = 5", "", "cd = \"good┃\""]),
             "ab🡲🡲🡲5\rcd🡲🡲🡲\"good",
         )?;
 

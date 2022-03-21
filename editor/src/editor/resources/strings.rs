@@ -23,8 +23,11 @@ app "test-app"
 
 main = "Hello, world!"
 
-
 "#;
+
+pub fn nr_hello_world_lines() -> usize {
+    HELLO_WORLD.matches('\n').count() - 1
+}
 
 pub const PLATFORM_NAME: &str = "c-platform";
 

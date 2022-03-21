@@ -23,7 +23,7 @@ echo = \shout ->
     shout
         |> Str.toUtf8
         |> List.mapWithIndex
-        (\_, i ->
+            (\_, i ->
                 length = (List.len (Str.toUtf8 shout) - i)
                 phrase = (List.split (Str.toUtf8 shout) length).before
 

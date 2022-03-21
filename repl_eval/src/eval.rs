@@ -281,7 +281,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     let (newtype_containers, content) = unroll_newtypes(env, content);
     let content = unroll_aliases(env, content);
 
-    macro_rules! helper {
+    macro_rules! num_helper {
         ($ty:ty) => {
             app.call_function(main_fn_name, |_, num: $ty| {
                 num_to_ast(env, number_literal_to_ast(env.arena, num), content)
@@ -297,21 +297,24 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         Layout::Builtin(Builtin::Int(int_width)) => {
             use IntWidth::*;
 
-            let result = match int_width {
-                U8 | I8 => {
-                    // NOTE: `helper!` does not handle 8-bit numbers yet
+            let result = match (content, int_width) {
+                (Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _)), U8) => num_helper!(u8),
+                (_, U8) => {
+                    // This is not a number, it's a tag union or something else
                     app.call_function(main_fn_name, |mem: &A::Memory, num: u8| {
                         byte_to_ast(env, mem, num, content)
                     })
                 }
-                U16 => helper!(u16),
-                U32 => helper!(u32),
-                U64 => helper!(u64),
-                U128 => helper!(u128),
-                I16 => helper!(i16),
-                I32 => helper!(i32),
-                I64 => helper!(i64),
-                I128 => helper!(i128),
+                // The rest are numbers... for now
+                (_, U16) => num_helper!(u16),
+                (_, U32) => num_helper!(u32),
+                (_, U64) => num_helper!(u64),
+                (_, U128) => num_helper!(u128),
+                (_, I8) => num_helper!(i8),
+                (_, I16) => num_helper!(i16),
+                (_, I32) => num_helper!(i32),
+                (_, I64) => num_helper!(i64),
+                (_, I128) => num_helper!(i128),
             };
 
             Ok(result)
@@ -320,14 +323,14 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             use FloatWidth::*;
 
             let result = match float_width {
-                F32 => helper!(f32),
-                F64 => helper!(f64),
+                F32 => num_helper!(f32),
+                F64 => num_helper!(f64),
                 F128 => todo!("F128 not implemented"),
             };
 
             Ok(result)
         }
-        Layout::Builtin(Builtin::Decimal) => Ok(helper!(RocDec)),
+        Layout::Builtin(Builtin::Decimal) => Ok(num_helper!(RocDec)),
         Layout::Builtin(Builtin::Str) => {
             let size = layout.stack_size(env.target_info) as usize;
             Ok(
@@ -438,6 +441,16 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             unreachable!("RecursivePointers can only be inside structures")
         }
         Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
+        Layout::Boxed(_) => {
+            let size = layout.stack_size(env.target_info);
+            Ok(app.call_function_dynamic_size(
+                main_fn_name,
+                size as usize,
+                |mem: &A::Memory, addr| {
+                    addr_to_ast(env, mem, addr, layout, WhenRecursive::Unreachable, content)
+                },
+            ))
+        }
     };
     result.map(|e| apply_newtypes(env, newtype_containers, e))
 }
@@ -729,6 +742,25 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 )
             }
         }
+        (Content::Structure(FlatType::Apply(Symbol::BOX_BOX_TYPE, args)), Layout::Boxed(inner_layout)) => {
+            debug_assert_eq!(args.len(), 1);
+
+            let inner_var_index = args.into_iter().next().unwrap();
+            let inner_var = env.subs[inner_var_index];
+            let inner_content = env.subs.get_content_without_compacting(inner_var);
+
+            let addr_of_inner = mem.deref_usize(addr);
+            let inner_expr = addr_to_ast(env, mem, addr_of_inner, inner_layout, WhenRecursive::Unreachable, inner_content);
+
+            let box_box = env.arena.alloc(Loc::at_zero(Expr::Var {
+                module_name: "Box", ident: "box"
+            }));
+            let box_box_arg = &*env.arena.alloc(Loc::at_zero(inner_expr));
+            let box_box_args = env.arena.alloc([box_box_arg]);
+
+            Expr::Apply(box_box, box_box_args, CalledVia::Space)
+        }
+        (_, Layout::Boxed(_)) => unreachable!("Box layouts can only be behind a `Box.Box` application"),
         other => {
             todo!(
                 "TODO add support for rendering pointer to {:?} in the REPL",
