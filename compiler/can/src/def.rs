@@ -438,11 +438,9 @@ pub fn sort_can_defs(
     }
 
     let mut defined_symbols: Vec<Symbol> = Vec::new();
-    let mut defined_symbols_set: ImSet<Symbol> = ImSet::default();
 
     for symbol in can_defs_by_symbol.keys() {
         defined_symbols.push(*symbol);
-        defined_symbols_set.insert(*symbol);
     }
 
     // Use topological sort to reorder the defs based on their dependencies to one another.
@@ -490,7 +488,7 @@ pub fn sort_can_defs(
                 }
 
                 // remove anything that is not defined in the current block
-                loc_succ.retain(|key| defined_symbols_set.contains(key));
+                loc_succ.retain(|key| defined_symbols.contains(key));
 
                 loc_succ
             }
@@ -533,7 +531,7 @@ pub fn sort_can_defs(
                 }
 
                 // remove anything that is not defined in the current block
-                loc_succ.retain(|key| defined_symbols_set.contains(key));
+                loc_succ.retain(|key| defined_symbols.contains(key));
 
                 loc_succ
             }
@@ -552,7 +550,7 @@ pub fn sort_can_defs(
                 // NOTE: if the symbol is a closure we DONT look into its body
 
                 // remove anything that is not defined in the current block
-                loc_succ.retain(|key| defined_symbols_set.contains(key));
+                loc_succ.retain(|key| defined_symbols.contains(key));
 
                 // NOTE: direct recursion does matter here: `x = x` is invalid recursion!
 

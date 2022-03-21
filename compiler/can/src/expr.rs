@@ -1117,34 +1117,25 @@ pub fn local_successors<'a>(
     references: &'a References,
     closures: &'a MutMap<Symbol, References>,
 ) -> ImSet<Symbol> {
-    let mut answer = references.value_lookups.clone();
+    let mut answer: Vec<_> = references.value_lookups.iter().copied().collect();
 
-    for call_symbol in references.calls.iter() {
-        answer = answer.union(call_successors(*call_symbol, closures));
-    }
+    let mut stack: Vec<_> = references.calls.iter().copied().collect();
+    let mut seen = Vec::new();
 
-    answer
-}
-
-fn call_successors(call_symbol: Symbol, closures: &MutMap<Symbol, References>) -> ImSet<Symbol> {
-    let mut answer = ImSet::default();
-    let mut seen = MutSet::default();
-    let mut queue = vec![call_symbol];
-
-    while let Some(symbol) = queue.pop() {
+    while let Some(symbol) = stack.pop() {
         if seen.contains(&symbol) {
             continue;
         }
 
         if let Some(references) = closures.get(&symbol) {
             answer.extend(references.value_lookups.iter().copied());
-            queue.extend(references.calls.iter().copied());
+            stack.extend(references.calls.iter().copied());
 
-            seen.insert(symbol);
+            seen.push(symbol);
         }
     }
 
-    answer
+    answer.into_iter().collect()
 }
 
 enum CanonicalizeRecordProblem {
