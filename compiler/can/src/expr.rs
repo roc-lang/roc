@@ -1153,50 +1153,32 @@ enum ReferencesFrom {
     Call(Symbol),
 }
 
-pub(crate) fn references_from_local_better<'a, T>(
-    initial: Symbol,
-    visited: &'a mut MutSet<Symbol>,
+pub(crate) fn references_from<'a, T>(
+    locals: impl IntoIterator<Item = Symbol>,
+    calls: impl IntoIterator<Item = Symbol>,
     refs_by_def: &'a MutMap<Symbol, (T, References)>,
     closures: &'a MutMap<Symbol, References>,
 ) -> References
 where
     T: Debug,
 {
-    references_from_help(
-        ReferencesFrom::Local(initial),
-        visited,
-        refs_by_def,
-        closures,
-    )
-}
+    let mut stack = Vec::new();
 
-pub(crate) fn references_from_call_better<'a, T>(
-    initial: Symbol,
-    visited: &'a mut MutSet<Symbol>,
-    refs_by_def: &'a MutMap<Symbol, (T, References)>,
-    closures: &'a MutMap<Symbol, References>,
-) -> References
-where
-    T: Debug,
-{
-    references_from_help(
-        ReferencesFrom::Call(initial),
-        visited,
-        refs_by_def,
-        closures,
-    )
+    stack.extend(locals.into_iter().map(ReferencesFrom::Local));
+    stack.extend(calls.into_iter().map(ReferencesFrom::Call));
+
+    references_from_help(stack, refs_by_def, closures)
 }
 
 fn references_from_help<'a, T>(
-    initial: ReferencesFrom,
-    visited: &'a mut MutSet<Symbol>,
+    mut stack: Vec<ReferencesFrom>,
     refs_by_def: &'a MutMap<Symbol, (T, References)>,
     closures: &'a MutMap<Symbol, References>,
 ) -> References
 where
     T: Debug,
 {
-    let mut stack: Vec<ReferencesFrom> = vec![initial];
+    let mut visited = Vec::new();
     let mut result = References::default();
 
     while let Some(job) = stack.pop() {
@@ -1207,7 +1189,7 @@ where
                         continue;
                     }
 
-                    visited.insert(defined_symbol);
+                    visited.push(defined_symbol);
 
                     for local in refs.value_lookups.iter() {
                         stack.push(ReferencesFrom::Local(*local));
@@ -1228,7 +1210,7 @@ where
                         continue;
                     }
 
-                    visited.insert(call_symbol);
+                    visited.push(call_symbol);
 
                     result = result.union(references.clone());
 

@@ -1,14 +1,10 @@
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::IntroducedVariables;
 use crate::env::Env;
-use crate::expr::references_from_call_better;
-use crate::expr::references_from_local_better;
+use crate::expr::references_from;
 use crate::expr::ClosureData;
 use crate::expr::Expr::{self, *};
-use crate::expr::{
-    canonicalize_expr, local_successors, references_from_call, references_from_local, Output,
-    Recursive,
-};
+use crate::expr::{canonicalize_expr, local_successors, Output, Recursive};
 use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::create_alias;
@@ -434,11 +430,6 @@ fn find_used_defs(
     refs_by_def: &MutMap<Symbol, (Region, References)>,
     closures: &MutMap<Symbol, References>,
 ) -> References {
-    // Determine the full set of references by traversing the graph.
-    let mut visited_symbols = MutSet::default();
-
-    let mut output_references = References::default();
-
     // Start with the return expression's referenced locals. They're the only ones that count!
     //
     // If I have two defs which reference each other, but neither of them is referenced
@@ -450,27 +441,13 @@ fn find_used_defs(
     // def as a whole references both `a` *and* `b`, even though it doesn't
     // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
     // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
-    for symbol in value_lookups.iter().copied() {
-        // We only care about local symbols in this analysis.
-        if symbol.module_id() == home {
-            // Traverse the graph and look up *all* the references for this local symbol.
-            let refs =
-                references_from_local_better(symbol, &mut visited_symbols, refs_by_def, closures);
+    let locals = value_lookups
+        .iter()
+        .copied()
+        .filter(|symbol| symbol.module_id() == home);
+    let calls = calls.iter().copied();
 
-            output_references = output_references.union(refs);
-        }
-    }
-
-    for symbol in calls.iter().copied() {
-        // Traverse the graph and look up *all* the references for this call.
-        // Reuse the same visited_symbols as before; if we already visited it,
-        // we won't learn anything new from visiting it again!
-        let refs = references_from_call_better(symbol, &mut visited_symbols, refs_by_def, closures);
-
-        output_references = output_references.union(refs);
-    }
-
-    output_references
+    references_from(locals, calls, refs_by_def, closures)
 }
 
 #[inline(always)]
