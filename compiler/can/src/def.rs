@@ -1,6 +1,8 @@
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::IntroducedVariables;
 use crate::env::Env;
+use crate::expr::references_from_call_better;
+use crate::expr::references_from_local_better;
 use crate::expr::ClosureData;
 use crate::expr::Expr::{self, *};
 use crate::expr::{
@@ -14,6 +16,7 @@ use crate::scope::Scope;
 use roc_collections::all::{default_hasher, ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_error_macros::todo_abilities;
 use roc_module::ident::Lowercase;
+use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_parse::ast::TypeHeader;
@@ -424,6 +427,97 @@ pub fn canonicalize_defs<'a>(
     )
 }
 
+fn crawl_for_references(
+    home: ModuleId,
+    input_references: References,
+    refs_by_def: &MutMap<Symbol, (Region, References)>,
+    closures: &MutMap<Symbol, References>,
+) -> References {
+    // Determine the full set of references by traversing the graph.
+    let mut visited_symbols = MutSet::default();
+    let returned_lookups = ImSet::clone(&input_references.value_lookups);
+
+    let mut output_references = input_references;
+
+    // Start with the return expression's referenced locals. They're the only ones that count!
+    //
+    // If I have two defs which reference each other, but neither of them is referenced
+    // in the return expression, I don't want either of them (or their references) to end up
+    // in the final output.references. They were unused, and so were their references!
+    //
+    // The reason we need a graph here is so we don't overlook transitive dependencies.
+    // For example, if I have `a = b + 1` and the def returns `a + 1`, then the
+    // def as a whole references both `a` *and* `b`, even though it doesn't
+    // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
+    // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
+    for symbol in returned_lookups.into_iter() {
+        // We only care about local symbols in this analysis.
+        if symbol.module_id() == home {
+            // Traverse the graph and look up *all* the references for this local symbol.
+            let refs = references_from_local(symbol, &mut visited_symbols, refs_by_def, closures);
+
+            output_references = output_references.union(refs);
+        }
+    }
+
+    for symbol in ImSet::clone(&output_references.calls).into_iter() {
+        // Traverse the graph and look up *all* the references for this call.
+        // Reuse the same visited_symbols as before; if we already visited it,
+        // we won't learn anything new from visiting it again!
+        let refs = references_from_call(symbol, &mut visited_symbols, refs_by_def, closures);
+
+        output_references = output_references.union(refs);
+    }
+
+    output_references
+}
+
+fn find_used_defs(
+    home: ModuleId,
+    value_lookups: &ImSet<Symbol>,
+    calls: &ImSet<Symbol>,
+    refs_by_def: &MutMap<Symbol, (Region, References)>,
+    closures: &MutMap<Symbol, References>,
+) -> References {
+    // Determine the full set of references by traversing the graph.
+    let mut visited_symbols = MutSet::default();
+
+    let mut output_references = References::default();
+
+    // Start with the return expression's referenced locals. They're the only ones that count!
+    //
+    // If I have two defs which reference each other, but neither of them is referenced
+    // in the return expression, I don't want either of them (or their references) to end up
+    // in the final output.references. They were unused, and so were their references!
+    //
+    // The reason we need a graph here is so we don't overlook transitive dependencies.
+    // For example, if I have `a = b + 1` and the def returns `a + 1`, then the
+    // def as a whole references both `a` *and* `b`, even though it doesn't
+    // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
+    // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
+    for symbol in value_lookups.iter().copied() {
+        // We only care about local symbols in this analysis.
+        if symbol.module_id() == home {
+            // Traverse the graph and look up *all* the references for this local symbol.
+            let refs =
+                references_from_local_better(symbol, &mut visited_symbols, refs_by_def, closures);
+
+            output_references = output_references.union(refs);
+        }
+    }
+
+    for symbol in calls.iter().copied() {
+        // Traverse the graph and look up *all* the references for this call.
+        // Reuse the same visited_symbols as before; if we already visited it,
+        // we won't learn anything new from visiting it again!
+        let refs = references_from_call_better(symbol, &mut visited_symbols, refs_by_def, closures);
+
+        output_references = output_references.union(refs);
+    }
+
+    output_references
+}
+
 #[inline(always)]
 pub fn sort_can_defs(
     env: &mut Env<'_>,
@@ -440,41 +534,28 @@ pub fn sort_can_defs(
         output.aliases.insert(symbol, alias);
     }
 
-    // Determine the full set of references by traversing the graph.
-    let mut visited_symbols = MutSet::default();
-    let returned_lookups = ImSet::clone(&output.references.value_lookups);
+    let initial = output.references.clone();
+    let initial1 = output.references.clone();
+    let initial2 = output.references.clone();
 
-    // Start with the return expression's referenced locals. They're the only ones that count!
-    //
-    // If I have two defs which reference each other, but neither of them is referenced
-    // in the return expression, I don't want either of them (or their references) to end up
-    // in the final output.references. They were unused, and so were their references!
-    //
-    // The reason we need a graph here is so we don't overlook transitive dependencies.
-    // For example, if I have `a = b + 1` and the def returns `a + 1`, then the
-    // def as a whole references both `a` *and* `b`, even though it doesn't
-    // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
-    // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
-    for symbol in returned_lookups.into_iter() {
-        // We only care about local symbols in this analysis.
-        if symbol.module_id() == env.home {
-            // Traverse the graph and look up *all* the references for this local symbol.
-            let refs =
-                references_from_local(symbol, &mut visited_symbols, &refs_by_symbol, &env.closures);
+    let b = initial2.union(find_used_defs(
+        env.home,
+        &output.references.value_lookups,
+        &output.references.calls,
+        &refs_by_symbol,
+        &env.closures,
+    ));
 
-            output.references = output.references.union(refs);
-        }
-    }
+    let a = output.references.union(crawl_for_references(
+        env.home,
+        initial,
+        &refs_by_symbol,
+        &env.closures,
+    ));
 
-    for symbol in ImSet::clone(&output.references.calls).into_iter() {
-        // Traverse the graph and look up *all* the references for this call.
-        // Reuse the same visited_symbols as before; if we already visited it,
-        // we won't learn anything new from visiting it again!
-        let refs =
-            references_from_call(symbol, &mut visited_symbols, &refs_by_symbol, &env.closures);
+    assert!(a == b);
 
-        output.references = output.references.union(refs);
-    }
+    output.references = a;
 
     let mut defined_symbols: Vec<Symbol> = Vec::new();
     let mut defined_symbols_set: ImSet<Symbol> = ImSet::default();

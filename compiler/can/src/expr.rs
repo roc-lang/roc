@@ -1147,7 +1147,111 @@ fn call_successors(call_symbol: Symbol, closures: &MutMap<Symbol, References>) -
     answer
 }
 
-pub fn references_from_local<'a, T>(
+#[derive(Debug)]
+enum ReferencesFrom {
+    Local(Symbol),
+    Call(Symbol),
+}
+
+pub(crate) fn references_from_local_better<'a, T>(
+    initial: Symbol,
+    visited: &'a mut MutSet<Symbol>,
+    refs_by_def: &'a MutMap<Symbol, (T, References)>,
+    closures: &'a MutMap<Symbol, References>,
+) -> References
+where
+    T: Debug,
+{
+    references_from_help(
+        ReferencesFrom::Local(initial),
+        visited,
+        refs_by_def,
+        closures,
+    )
+}
+
+pub(crate) fn references_from_call_better<'a, T>(
+    initial: Symbol,
+    visited: &'a mut MutSet<Symbol>,
+    refs_by_def: &'a MutMap<Symbol, (T, References)>,
+    closures: &'a MutMap<Symbol, References>,
+) -> References
+where
+    T: Debug,
+{
+    references_from_help(
+        ReferencesFrom::Call(initial),
+        visited,
+        refs_by_def,
+        closures,
+    )
+}
+
+fn references_from_help<'a, T>(
+    initial: ReferencesFrom,
+    visited: &'a mut MutSet<Symbol>,
+    refs_by_def: &'a MutMap<Symbol, (T, References)>,
+    closures: &'a MutMap<Symbol, References>,
+) -> References
+where
+    T: Debug,
+{
+    let mut stack: Vec<ReferencesFrom> = vec![initial];
+    let mut result = References::default();
+
+    while let Some(job) = stack.pop() {
+        match job {
+            ReferencesFrom::Local(defined_symbol) => {
+                if let Some((_, refs)) = refs_by_def.get(&defined_symbol) {
+                    if visited.contains(&defined_symbol) {
+                        continue;
+                    }
+
+                    visited.insert(defined_symbol);
+
+                    for local in refs.value_lookups.iter() {
+                        stack.push(ReferencesFrom::Local(*local));
+
+                        result.value_lookups.insert(*local);
+                    }
+
+                    for call in refs.calls.iter() {
+                        stack.push(ReferencesFrom::Call(*call));
+
+                        result.calls.insert(*call);
+                    }
+                }
+            }
+            ReferencesFrom::Call(call_symbol) => {
+                if let Some(references) = closures.get(&call_symbol) {
+                    if visited.contains(&call_symbol) {
+                        continue;
+                    }
+
+                    visited.insert(call_symbol);
+
+                    result = result.union(references.clone());
+
+                    for closed_over_local in references.value_lookups.iter() {
+                        stack.push(ReferencesFrom::Local(*closed_over_local));
+
+                        result.value_lookups.insert(*closed_over_local);
+                    }
+
+                    for call in references.calls.iter() {
+                        stack.push(ReferencesFrom::Call(*call));
+
+                        result.calls.insert(*call);
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
+pub(crate) fn references_from_local<'a, T>(
     defined_symbol: Symbol,
     visited: &'a mut MutSet<Symbol>,
     refs_by_def: &'a MutMap<Symbol, (T, References)>,
@@ -1189,7 +1293,7 @@ where
     }
 }
 
-pub fn references_from_call<'a, T>(
+pub(crate) fn references_from_call<'a, T>(
     call_symbol: Symbol,
     visited: &'a mut MutSet<Symbol>,
     refs_by_def: &'a MutMap<Symbol, (T, References)>,
