@@ -1113,10 +1113,10 @@ fn canonicalize_when_branch<'a>(
     )
 }
 
-pub fn local_successors<'a>(
+pub fn local_successors_with_duplicates<'a>(
     references: &'a References,
     closures: &'a MutMap<Symbol, References>,
-) -> ImSet<Symbol> {
+) -> Vec<Symbol> {
     let mut answer: Vec<_> = references.value_lookups.iter().copied().collect();
 
     let mut stack: Vec<_> = references.calls.iter().copied().collect();
@@ -1135,7 +1135,10 @@ pub fn local_successors<'a>(
         }
     }
 
-    answer.into_iter().collect()
+    answer.sort();
+    answer.dedup();
+
+    answer
 }
 
 enum CanonicalizeRecordProblem {
