@@ -4479,13 +4479,9 @@ fn run_solve<'a>(
         use memmap::MmapOptions;
         use std::fs::File;
 
-        // let file = File::open(&format!("cached_subs/{:?}.dat", module_id)).unwrap();
-        // let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
-
-        let mmap = std::fs::read(&format!("cached_subs/{:?}.dat", module_id)).unwrap();
-        println!("started {:?}", module_id);
+        let file = File::open(&format!("cached_subs/{:?}.dat", module_id)).unwrap();
+        let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
         let (subs, vars_by_symbol) = Subs::deserialize(&mmap);
-        println!("deserialized");
         let solved_subs = Solved(subs);
 
         let exposed_vars_by_symbol: Vec<_> = vars_by_symbol
