@@ -220,7 +220,9 @@ impl<'a> EdModule<'a> {
 pub mod test_ed_model {
     use crate::editor::ed_error::EdResult;
     use crate::editor::mvc::ed_model;
-    use crate::editor::resources::strings::{nr_hello_world_lines, HELLO_WORLD, PLATFORM_NAME, PLATFORM_STR};
+    use crate::editor::resources::strings::{
+        nr_hello_world_lines, HELLO_WORLD, PLATFORM_NAME, PLATFORM_STR,
+    };
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::caret_w_select::CaretPos;
