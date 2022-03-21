@@ -1853,6 +1853,29 @@ fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsS
     result
 }
 
+#[inline(always)]
+fn register_tag_arguments<'a>(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    arena: &'_ bumpalo::Bump,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+    arguments: &'a [Type],
+) -> VariableSubsSlice {
+    if arguments.is_empty() {
+        VariableSubsSlice::default()
+    } else {
+        let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+        let it = (new_variables.indices()).zip(arguments);
+        for (target_index, argument) in it {
+            let var = RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
+            subs.variables[target_index] = var;
+        }
+
+        new_variables
+    }
+}
+
 /// Assumes that the tags are sorted and there are no duplicates!
 fn insert_tags_fast_path<'a>(
     subs: &mut Subs,
@@ -1862,23 +1885,35 @@ fn insert_tags_fast_path<'a>(
     tags: &'a [(TagName, Vec<Type>)],
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
-    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
+    if let [(TagName::Global(tag_name), arguments)] = tags {
+        let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, arguments);
+        let new_variable_slices =
+            SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
 
+        macro_rules! subs_tag_name {
+            ($tag_name_slice:expr) => {
+                return UnionTags::from_slices($tag_name_slice, new_variable_slices)
+            };
+        }
+
+        match tag_name.as_str() {
+            "Ok" => subs_tag_name!(Subs::TAG_NAME_OK.as_slice()),
+            "Err" => subs_tag_name!(Subs::TAG_NAME_ERR.as_slice()),
+            "InvalidNumStr" => subs_tag_name!(Subs::TAG_NAME_INVALID_NUM_STR.as_slice()),
+            "BadUtf8" => subs_tag_name!(Subs::TAG_NAME_BAD_UTF_8.as_slice()),
+            "OutOfBounds" => subs_tag_name!(Subs::TAG_NAME_OUT_OF_BOUNDS.as_slice()),
+            _other => {}
+        }
+    }
+
+    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
     match find_tag_name_run(tags, subs) {
         Some(new_tag_names) => {
             let it = (new_variable_slices.indices()).zip(tags);
 
             for (variable_slice_index, (_, arguments)) in it {
-                // turn the arguments into variables
-                let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-                let it = (new_variables.indices()).zip(arguments);
-                for (target_index, argument) in it {
-                    let var =
-                        RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
-                    subs.variables[target_index] = var;
-                }
-
-                subs.variable_slices[variable_slice_index] = new_variables;
+                subs.variable_slices[variable_slice_index] =
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments);
             }
 
             UnionTags::from_slices(new_tag_names, new_variable_slices)
@@ -1891,16 +1926,9 @@ fn insert_tags_fast_path<'a>(
                 .zip(tags);
 
             for ((variable_slice_index, tag_name_index), (tag_name, arguments)) in it {
-                // turn the arguments into variables
-                let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-                let it = (new_variables.indices()).zip(arguments);
-                for (target_index, argument) in it {
-                    let var =
-                        RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
-                    subs.variables[target_index] = var;
-                }
+                subs.variable_slices[variable_slice_index] =
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments);
 
-                subs.variable_slices[variable_slice_index] = new_variables;
                 subs.tag_names[tag_name_index] = tag_name.clone();
             }
 
