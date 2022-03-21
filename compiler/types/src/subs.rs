@@ -550,8 +550,12 @@ impl SubsSlice<VariableSubsSlice> {
     pub fn reserve_variable_slices(subs: &mut Subs, length: usize) -> Self {
         let start = subs.variable_slices.len() as u32;
 
-        subs.variable_slices
-            .extend(std::iter::repeat(VariableSubsSlice::default()).take(length));
+        subs.variable_slices.reserve(length);
+
+        let value = VariableSubsSlice::default();
+        for _ in 0..length {
+            subs.variable_slices.push(value);
+        }
 
         Self::new(start, length as u16)
     }
@@ -569,7 +573,7 @@ impl SubsSlice<TagName> {
 }
 
 impl<T> SubsIndex<T> {
-    pub fn new(start: u32) -> Self {
+    pub const fn new(start: u32) -> Self {
         Self {
             index: start,
             _marker: std::marker::PhantomData,
@@ -582,6 +586,10 @@ impl<T> SubsIndex<T> {
         vector.push(value);
 
         index
+    }
+
+    pub const fn as_slice(self) -> SubsSlice<T> {
+        SubsSlice::new(self.index, 1)
     }
 }
 
@@ -1529,9 +1537,14 @@ fn define_float_types(subs: &mut Subs) {
 
 impl Subs {
     pub const RESULT_TAG_NAMES: SubsSlice<TagName> = SubsSlice::new(0, 2);
+    pub const TAG_NAME_ERR: SubsIndex<TagName> = SubsIndex::new(0);
+    pub const TAG_NAME_OK: SubsIndex<TagName> = SubsIndex::new(1);
     pub const NUM_AT_NUM: SubsSlice<TagName> = SubsSlice::new(2, 1);
     pub const NUM_AT_INTEGER: SubsSlice<TagName> = SubsSlice::new(3, 1);
     pub const NUM_AT_FLOATINGPOINT: SubsSlice<TagName> = SubsSlice::new(4, 1);
+    pub const TAG_NAME_INVALID_NUM_STR: SubsIndex<TagName> = SubsIndex::new(5);
+    pub const TAG_NAME_BAD_UTF_8: SubsIndex<TagName> = SubsIndex::new(6);
+    pub const TAG_NAME_OUT_OF_BOUNDS: SubsIndex<TagName> = SubsIndex::new(7);
 
     pub fn new() -> Self {
         Self::with_capacity(0)
@@ -1548,6 +1561,10 @@ impl Subs {
         tag_names.push(TagName::Private(Symbol::NUM_AT_NUM));
         tag_names.push(TagName::Private(Symbol::NUM_AT_INTEGER));
         tag_names.push(TagName::Private(Symbol::NUM_AT_FLOATINGPOINT));
+
+        tag_names.push(TagName::Global("InvalidNumStr".into()));
+        tag_names.push(TagName::Global("BadUtf8".into()));
+        tag_names.push(TagName::Global("OutOfBounds".into()));
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
@@ -1644,8 +1661,8 @@ impl Subs {
 
     /// Unions two keys without the possibility of failure.
     pub fn union(&mut self, left: Variable, right: Variable, desc: Descriptor) {
-        let l_root = self.utable.get_root_key(left);
-        let r_root = self.utable.get_root_key(right);
+        let l_root = self.utable.inlined_get_root_key(left);
+        let r_root = self.utable.inlined_get_root_key(right);
 
         // NOTE this swapping is intentional! most of our unifying commands are based on the elm
         // source, but unify_roots is from `ena`, not the elm source. Turns out that they have
@@ -1689,23 +1706,25 @@ impl Subs {
         &self.utable.probe_value_ref(key).value.content
     }
 
+    #[inline(always)]
     pub fn get_root_key(&mut self, key: Variable) -> Variable {
-        self.utable.get_root_key(key)
+        self.utable.inlined_get_root_key(key)
     }
 
+    #[inline(always)]
     pub fn get_root_key_without_compacting(&self, key: Variable) -> Variable {
         self.utable.get_root_key_without_compacting(key)
     }
 
     #[inline(always)]
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         self.utable.update_value(l_key, |node| node.value = r_value);
     }
 
     pub fn set_rank(&mut self, key: Variable, rank: Rank) {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.rank = rank;
@@ -1713,7 +1732,7 @@ impl Subs {
     }
 
     pub fn set_mark(&mut self, key: Variable, mark: Mark) {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.mark = mark;
@@ -1721,7 +1740,7 @@ impl Subs {
     }
 
     pub fn set_rank_mark(&mut self, key: Variable, rank: Rank, mark: Mark) {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.rank = rank;
@@ -1730,7 +1749,7 @@ impl Subs {
     }
 
     pub fn set_content(&mut self, key: Variable, content: Content) {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
             node.value.content = content;
@@ -1746,7 +1765,7 @@ impl Subs {
 
     #[inline(always)]
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
-        let l_key = self.utable.get_root_key(key);
+        let l_key = self.utable.inlined_get_root_key(key);
 
         let mut rank = Rank::NONE;
 
