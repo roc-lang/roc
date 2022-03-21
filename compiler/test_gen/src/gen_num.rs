@@ -1853,6 +1853,8 @@ fn shift_right_by() {
     assert_evals_to!("Num.shiftRightBy 2 0b0100_0000i8", 0b0001_0000i8, i8);
     assert_evals_to!("Num.shiftRightBy 1 0b1110_0000u8", 0b1111_0000u8, u8);
     assert_evals_to!("Num.shiftRightBy 2 0b1100_0000u8", 0b1111_0000u8, u8);
+    assert_evals_to!("Num.shiftRightBy 12 0b1000_0000u8", 0b1111_1111u8, u8);
+    assert_evals_to!("Num.shiftRightBy 12 0b0100_0000u8", 0b0000_0000u8, u8);
 }
 
 #[test]
@@ -1867,6 +1869,7 @@ fn shift_right_zf_by() {
     assert_evals_to!("Num.shiftRightZfBy 2 0b1100_0000u8", 0b0011_0000u8, u8);
     assert_evals_to!("Num.shiftRightZfBy 1 0b0000_0010u8", 0b0000_0001u8, u8);
     assert_evals_to!("Num.shiftRightZfBy 2 0b0000_1100u8", 0b0000_0011u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 12 0b1000_0000u8", 0b0000_0000u8, u8);
 }
 
 #[test]
