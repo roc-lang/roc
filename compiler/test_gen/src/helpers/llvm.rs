@@ -26,7 +26,6 @@ fn promote_expr_to_module(src: &str) -> String {
 fn create_llvm_module<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: &'a roc_builtins::std::StdLib,
     is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
@@ -55,7 +54,6 @@ fn create_llvm_module<'a>(
         arena,
         filename,
         module_src,
-        stdlib,
         src_dir,
         Default::default(),
         target_info,
@@ -260,7 +258,6 @@ fn create_llvm_module<'a>(
 pub fn helper<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: &'a roc_builtins::std::StdLib,
     is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
@@ -276,7 +273,6 @@ pub fn helper<'a>(
     let (main_fn_name, delayed_errors, module) = create_llvm_module(
         arena,
         src,
-        stdlib,
         is_gen_test,
         ignore_problems,
         context,
@@ -305,7 +301,6 @@ fn wasm32_target_tripple() -> Triple {
 pub fn helper_wasm<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: &'a roc_builtins::std::StdLib,
     _is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
@@ -322,7 +317,6 @@ pub fn helper_wasm<'a>(
     let (_main_fn_name, _delayed_errors, llvm_module) = create_llvm_module(
         arena,
         src,
-        stdlib,
         is_gen_test,
         ignore_problems,
         context,
@@ -464,18 +458,9 @@ where
     let arena = bumpalo::Bump::new();
     let context = inkwell::context::Context::create();
 
-    // NOTE the stdlib must be in the arena; just taking a reference will segfault
-    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
     let is_gen_test = true;
-    let instance = crate::helpers::llvm::helper_wasm(
-        &arena,
-        src,
-        stdlib,
-        is_gen_test,
-        ignore_problems,
-        &context,
-    );
+    let instance =
+        crate::helpers::llvm::helper_wasm(&arena, src, is_gen_test, ignore_problems, &context);
 
     let memory = instance.exports.get_memory("memory").unwrap();
 
@@ -538,18 +523,9 @@ macro_rules! assert_llvm_evals_to {
         let arena = Bump::new();
         let context = Context::create();
 
-        // NOTE the stdlib must be in the arena; just taking a reference will segfault
-        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
         let is_gen_test = true;
-        let (main_fn_name, errors, lib) = $crate::helpers::llvm::helper(
-            &arena,
-            $src,
-            stdlib,
-            is_gen_test,
-            $ignore_problems,
-            &context,
-        );
+        let (main_fn_name, errors, lib) =
+            $crate::helpers::llvm::helper(&arena, $src, is_gen_test, $ignore_problems, &context);
 
         let transform = |success| {
             let expected = $expected;
@@ -615,12 +591,9 @@ macro_rules! assert_expect_failed {
         let arena = Bump::new();
         let context = Context::create();
 
-        // NOTE the stdlib must be in the arena; just taking a reference will segfault
-        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
         let is_gen_test = true;
         let (main_fn_name, errors, lib) =
-            $crate::helpers::llvm::helper(&arena, $src, stdlib, is_gen_test, false, &context);
+            $crate::helpers::llvm::helper(&arena, $src, is_gen_test, false, &context);
 
         let transform = |success| {
             let expected = $expected;

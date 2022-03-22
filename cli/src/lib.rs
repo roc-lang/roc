@@ -247,11 +247,7 @@ pub fn build_app<'a>() -> App<'a> {
 }
 
 pub fn docs(files: Vec<PathBuf>) {
-    roc_docs::generate_docs_html(
-        files,
-        roc_builtins::std::standard_stdlib(),
-        Path::new("./generated-docs"),
-    )
+    roc_docs::generate_docs_html(files, Path::new("./generated-docs"))
 }
 
 #[derive(Debug, PartialEq, Eq)]
