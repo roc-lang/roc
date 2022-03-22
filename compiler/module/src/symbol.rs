@@ -236,7 +236,7 @@ impl Interns {
 
         match self.all_ident_ids.get(&module_id) {
             Some(ident_ids) => match ident_ids.get_id(&ident) {
-                Some(ident_id) => Symbol::new(module_id, *ident_id),
+                Some(ident_id) => Symbol::new(module_id, ident_id),
                 None => {
                     panic!("Interns::symbol could not find ident entry for {:?} for module {:?} in Interns {:?}", ident, module_id, self);
                 }
@@ -535,8 +535,6 @@ pub struct IdentId(u32);
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
-    by_ident: MutMap<Ident, IdentId>,
-
     /// Each IdentId is an index into this Vec
     by_id: Vec<Ident>,
 
@@ -555,24 +553,18 @@ impl IdentIds {
         let by_id = &mut self.by_id;
         let ident_id = IdentId(by_id.len() as u32);
 
-        self.by_ident.insert(ident_name.clone(), ident_id);
         by_id.push(ident_name);
 
         ident_id
     }
 
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
-        use std::collections::hash_map::Entry;
+        match self.get_id(name) {
+            Some(id) => id,
+            None => {
+                let ident_id = IdentId(self.by_id.len() as u32);
 
-        match self.by_ident.entry(name.clone()) {
-            Entry::Occupied(occupied) => *occupied.get(),
-            Entry::Vacant(vacant) => {
-                let by_id = &mut self.by_id;
-                let ident_id = IdentId(by_id.len() as u32);
-
-                by_id.push(name.clone());
-
-                vacant.insert(ident_id);
+                self.by_id.push(name.clone());
 
                 ident_id
             }
@@ -588,14 +580,11 @@ impl IdentIds {
     ) -> Result<IdentId, String> {
         let old_ident: Ident = old_ident_name.into();
 
-        let ident_id_ref_opt = self.by_ident.get(&old_ident);
+        let ident_id_ref_opt = self.get_id(&old_ident);
 
         match ident_id_ref_opt {
             Some(ident_id_ref) => {
-                let ident_id = *ident_id_ref;
-
-                self.by_ident.remove(&old_ident);
-                self.by_ident.insert(new_ident_name.into(), ident_id);
+                let ident_id = ident_id_ref;
 
                 let by_id = &mut self.by_id;
                 let key_index_opt = by_id.iter().position(|x| *x == old_ident);
@@ -621,7 +610,7 @@ impl IdentIds {
             }
             None => Err(format!(
                 "Tried to update key in IdentIds ({:?}) but I could not find the key ({}).",
-                self.by_ident, old_ident_name
+                self.by_id, old_ident_name
             )),
         }
     }
@@ -648,8 +637,15 @@ impl IdentIds {
         self.add(ident)
     }
 
-    pub fn get_id(&self, ident_name: &Ident) -> Option<&IdentId> {
-        self.by_ident.get(ident_name)
+    #[inline(always)]
+    pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
+        for (id, ident) in self.idents() {
+            if ident_name == ident {
+                return Some(id);
+            }
+        }
+
+        None
     }
 
     pub fn get_name(&self, id: IdentId) -> Option<&Ident> {
@@ -694,20 +690,8 @@ macro_rules! define_builtins {
                                     $ident_name.into(),
                                 )+
                             ];
-                            let mut by_ident = MutMap::with_capacity_and_hasher(by_id.len(), default_hasher());
-
-                            $(
-                                debug_assert!(by_ident.len() == $ident_id, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {:?} to {} …: {:?} instead.", $ident_id, $ident_name, $module_id, $module_name, $ident_id, by_ident.len(), $ident_id, $ident_name, by_ident.len(), $ident_name);
-
-                                let exists = by_ident.insert($ident_name.into(), IdentId($ident_id));
-
-                                if let Some(_) = exists {
-                                    debug_assert!(false, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - the Ident name {:?} is already present in the map. Check the map for duplicate ident names within the {:?} module!", $ident_id, $ident_name, $module_id, $module_name, $ident_name, $module_name);
-                                }
-                            )+
 
                             IdentIds {
-                                by_ident,
                                 by_id,
                                 next_generated_name: 0,
                             }
