@@ -597,7 +597,7 @@ impl<'a> WasmBackend<'a> {
                 tag_id,
                 arguments,
                 ..
-            } => self.expr_tag(union_layout, *tag_id, arguments, sym, storage),
+            } => self.expr_tag(union_layout, *tag_id, arguments, sym, storage, None),
 
             Expr::GetTagId {
                 structure,
@@ -615,7 +615,17 @@ impl<'a> WasmBackend<'a> {
                 todo!("Expression `{}`", expr.to_pretty(100))
             }
 
-            Expr::Reuse { .. } | Expr::Reset { .. } | Expr::RuntimeErrorFunction(_) => {
+            Expr::Reuse {
+                tag_layout,
+                tag_id,
+                arguments,
+                symbol: reused,
+                ..
+            } => self.expr_tag(tag_layout, *tag_id, arguments, sym, storage, Some(*reused)),
+
+            Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
+
+            Expr::RuntimeErrorFunction(_) => {
                 todo!("Expression `{}`", expr.to_pretty(100))
             }
         }
@@ -841,7 +851,7 @@ impl<'a> WasmBackend<'a> {
         }
 
         internal_error!(
-            "Could not find procedure {:?} with proc_layout {:?}\nKnown procedures: {:#?}",
+            "Could not find procedure {:?} with proc_layout:\n{:#?}\nKnown procedures:\n{:#?}",
             func_sym,
             proc_layout,
             self.proc_lookup
@@ -999,55 +1009,6 @@ impl<'a> WasmBackend<'a> {
     }
 
     /*******************************************************************
-     * Heap allocation
-     *******************************************************************/
-
-    /// Allocate heap space and write an initial refcount
-    /// If the data size is known at compile time, pass it in comptime_data_size.
-    /// If size is only known at runtime, push *data* size to the VM stack first.
-    /// Leaves the *data* address on the VM stack
-    fn allocate_with_refcount(
-        &mut self,
-        comptime_data_size: Option<u32>,
-        alignment_bytes: u32,
-        initial_refcount: u32,
-    ) {
-        // Add extra bytes for the refcount
-        let extra_bytes = alignment_bytes.max(PTR_SIZE);
-
-        if let Some(data_size) = comptime_data_size {
-            // Data size known at compile time and passed as an argument
-            self.code_builder
-                .i32_const((data_size + extra_bytes) as i32);
-        } else {
-            // Data size known only at runtime and is on top of VM stack
-            self.code_builder.i32_const(extra_bytes as i32);
-            self.code_builder.i32_add();
-        }
-
-        // Provide a constant for the alignment argument
-        self.code_builder.i32_const(alignment_bytes as i32);
-
-        // Call the foreign function. (Zig and C calling conventions are the same for this signature)
-        self.call_zig_builtin_after_loading_args("roc_alloc", 2, true);
-
-        // Save the allocation address to a temporary local variable
-        let local_id = self.storage.create_anonymous_local(ValueType::I32);
-        self.code_builder.tee_local(local_id);
-
-        // Write the initial refcount
-        let refcount_offset = extra_bytes - PTR_SIZE;
-        let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
-        self.code_builder.i32_const(encoded_refcount);
-        self.code_builder.i32_store(Align::Bytes4, refcount_offset);
-
-        // Put the data address on the VM stack
-        self.code_builder.get_local(local_id);
-        self.code_builder.i32_const(extra_bytes as i32);
-        self.code_builder.i32_add();
-    }
-
-    /*******************************************************************
      * Arrays
      *******************************************************************/
 
@@ -1142,6 +1103,7 @@ impl<'a> WasmBackend<'a> {
         arguments: &'a [Symbol],
         symbol: Symbol,
         stored: &StoredValue,
+        maybe_reused: Option<Symbol>,
     ) {
         if union_layout.tag_is_null(tag_id) {
             self.code_builder.i32_const(0);
@@ -1162,8 +1124,14 @@ impl<'a> WasmBackend<'a> {
                 location.local_and_offset(self.storage.stack_frame_pointer)
             }
             StoredValue::Local { local_id, .. } => {
-                // Tag is stored as a pointer to the heap. Call the allocator to get a memory address.
-                self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                // Tag is stored as a heap pointer.
+                if let Some(reused) = maybe_reused {
+                    // Reuse an existing heap allocation
+                    self.storage.load_symbols(&mut self.code_builder, &[reused]);
+                } else {
+                    // Call the allocator to get a memory address.
+                    self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                }
                 self.code_builder.set_local(local_id);
                 (local_id, 0)
             }
@@ -1369,5 +1337,81 @@ impl<'a> WasmBackend<'a> {
         let from_offset = tag_offset + field_offset;
         self.storage
             .copy_value_from_memory(&mut self.code_builder, symbol, from_ptr, from_offset);
+    }
+
+    /*******************************************************************
+     * Refcounting & Heap allocation
+     *******************************************************************/
+
+    /// Allocate heap space and write an initial refcount
+    /// If the data size is known at compile time, pass it in comptime_data_size.
+    /// If size is only known at runtime, push *data* size to the VM stack first.
+    /// Leaves the *data* address on the VM stack
+    fn allocate_with_refcount(
+        &mut self,
+        comptime_data_size: Option<u32>,
+        alignment_bytes: u32,
+        initial_refcount: u32,
+    ) {
+        // Add extra bytes for the refcount
+        let extra_bytes = alignment_bytes.max(PTR_SIZE);
+
+        if let Some(data_size) = comptime_data_size {
+            // Data size known at compile time and passed as an argument
+            self.code_builder
+                .i32_const((data_size + extra_bytes) as i32);
+        } else {
+            // Data size known only at runtime and is on top of VM stack
+            self.code_builder.i32_const(extra_bytes as i32);
+            self.code_builder.i32_add();
+        }
+
+        // Provide a constant for the alignment argument
+        self.code_builder.i32_const(alignment_bytes as i32);
+
+        // Call the foreign function. (Zig and C calling conventions are the same for this signature)
+        self.call_zig_builtin_after_loading_args("roc_alloc", 2, true);
+
+        // Save the allocation address to a temporary local variable
+        let local_id = self.storage.create_anonymous_local(ValueType::I32);
+        self.code_builder.tee_local(local_id);
+
+        // Write the initial refcount
+        let refcount_offset = extra_bytes - PTR_SIZE;
+        let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
+        self.code_builder.i32_const(encoded_refcount);
+        self.code_builder.i32_store(Align::Bytes4, refcount_offset);
+
+        // Put the data address on the VM stack
+        self.code_builder.get_local(local_id);
+        self.code_builder.i32_const(extra_bytes as i32);
+        self.code_builder.i32_add();
+    }
+
+    fn expr_reset(&mut self, argument: Symbol, ret_symbol: Symbol, ret_storage: &StoredValue) {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        // Get an IR expression for the call to the specialized procedure
+        let layout = self.storage.symbol_layouts[&argument];
+        let (specialized_call_expr, new_specializations) = self
+            .helper_proc_gen
+            .call_reset_refcount(ident_ids, layout, argument);
+
+        // If any new specializations were created, register their symbol data
+        for spec in new_specializations.into_iter() {
+            self.register_helper_proc(spec);
+        }
+
+        // Generate Wasm code for the IR call expression
+        self.expr(
+            ret_symbol,
+            self.env.arena.alloc(specialized_call_expr),
+            &Layout::Builtin(Builtin::Bool),
+            ret_storage,
+        );
     }
 }

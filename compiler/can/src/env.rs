@@ -87,7 +87,7 @@ impl<'a> Env<'a> {
                 if module_id == self.home {
                     match self.ident_ids.get_id(&ident) {
                         Some(ident_id) => {
-                            let symbol = Symbol::new(module_id, *ident_id);
+                            let symbol = Symbol::new(module_id, ident_id);
 
                             if is_type_name {
                                 self.qualified_type_lookups.insert(symbol);
@@ -115,7 +115,7 @@ impl<'a> Env<'a> {
                     match self.dep_idents.get(&module_id) {
                         Some(exposed_ids) => match exposed_ids.get_id(&ident) {
                             Some(ident_id) => {
-                                let symbol = Symbol::new(module_id, *ident_id);
+                                let symbol = Symbol::new(module_id, ident_id);
 
                                 if is_type_name {
                                     self.qualified_type_lookups.insert(symbol);

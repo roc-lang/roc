@@ -16,6 +16,8 @@ use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
+#[cfg(feature = "gen-wasm")]
+use crate::helpers::wasm::assert_evals_to as assert_non_opt_evals_to;
 // #[cfg(feature = "gen-wasm")]
 // use crate::helpers::dev::assert_expect_failed;
 // #[cfg(feature = "gen-wasm")]
@@ -790,7 +792,7 @@ fn linked_list_sum_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_map() {
     assert_non_opt_evals_to!(
         indoc!(
