@@ -4472,7 +4472,10 @@ fn run_solve<'a>(
         use memmap::MmapOptions;
         use std::fs::File;
 
-        let file = File::open(&format!("cached_subs/{:?}.dat", module_id)).unwrap();
+        let root = get_project_root().unwrap();
+        let path = format!("{}/cached_subs/{:?}.dat", root.to_str().unwrap(), module_id);
+        eprintln!("{:?}: {}", module_id, &path);
+        let file = File::open(&path).unwrap();
         let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
         let (subs, vars_by_symbol) = Subs::deserialize(&mmap);
         let solved_subs = Solved(subs);
@@ -4554,6 +4557,34 @@ fn run_solve<'a>(
         solved_module,
         module_timing,
     }
+}
+
+/// Get the project root (relative to closest Cargo.lock file)
+/// ```rust
+/// match project_root::get_project_root() {
+///     Ok(p) => println!("Current project root is {:?}", p),
+///     Err(e) => println!("Error obtaining project root {:?}", e)
+/// };
+/// ```
+pub fn get_project_root() -> io::Result<PathBuf> {
+    use std::fs::read_dir;
+    use std::io::ErrorKind;
+
+    let path = env::current_dir()?;
+    let path_ancestors = path.as_path().ancestors();
+
+    for p in path_ancestors {
+        let has_cargo = read_dir(p)?
+            .into_iter()
+            .any(|p| p.unwrap().file_name() == *"Cargo.lock");
+        if has_cargo {
+            return Ok(PathBuf::from(p));
+        }
+    }
+    Err(io::Error::new(
+        ErrorKind::NotFound,
+        "Ran out of places to find Cargo.toml",
+    ))
 }
 
 fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [Loc<T>] {
