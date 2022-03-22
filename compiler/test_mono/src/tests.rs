@@ -80,8 +80,6 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let arena = &Bump::new();
 
-    // let stdlib = roc_builtins::unique::uniq_stdlib();
-    let stdlib = roc_builtins::std::standard_stdlib();
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -100,7 +98,6 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         arena,
         filename,
         module_src,
-        &stdlib,
         src_dir,
         Default::default(),
         TARGET_INFO,
