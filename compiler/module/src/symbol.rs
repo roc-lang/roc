@@ -684,12 +684,39 @@ macro_rules! define_builtins {
                 $(
                     debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), "Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
 
+                    let mut by_id : Vec<Ident> = Vec::new();
                     let ident_ids = {
-                            let by_id = vec! [
-                                $(
-                                    $ident_name.into(),
-                                )+
-                            ];
+                            $(
+                                debug_assert!(by_id.len() == $ident_id, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {:?} to {} …: {:?} instead.", $ident_id, $ident_name, $module_id, $module_name, $ident_id, by_id.len(), $ident_id, $ident_name, by_id.len(), $ident_name);
+
+                                by_id.push($ident_name.into());
+                            )+
+
+                            #[cfg(debug_assertions)]
+                            {
+                                let mut cloned = by_id.clone();
+                                let before = cloned.len();
+                                cloned.sort();
+                                cloned.dedup();
+                                let after = cloned.len();
+
+
+                                if before != after {
+                                    let mut duplicates : Vec<&Ident> = Vec::new();
+                                    let mut temp : Vec<&Ident> = Vec::new();
+
+                                    for symbol in cloned.iter() {
+                                        if temp.contains(&&symbol) {
+                                            duplicates.push(symbol);
+                                        }
+
+                                        temp.push(&symbol);
+                                    }
+
+
+                                    panic!("duplicate symbols in IdentIds for module {:?}: {:?}", $module_name, duplicates);
+                                }
+                            }
 
                             IdentIds {
                                 by_id,
