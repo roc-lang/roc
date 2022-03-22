@@ -1089,7 +1089,7 @@ to make room for zero (so, `128` becomes `127`; `I8` ranges from -128 to 127).
 Following this pattern, the 16 in `I16` means that it's a signed 16-bit integer.
 That tells us it has room to represent 2¹⁶ (which is equal to 65536) different numbers. Half of 65536 is 32768,
 so the lowest `I16` would be -32768, and the highest would be 32767. Knowing that, we can also quickly tell that
-the lowest `U16` would be zero (since it always is for unsigned integers), and the highest `U16` would be 65536.
+the lowest `U16` would be zero (since it always is for unsigned integers), and the highest `U16` would be 65535.
 
 Choosing a size depends on your performance needs and the range of numbers you want to represent. Consider:
 
