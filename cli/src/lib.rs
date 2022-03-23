@@ -6,7 +6,7 @@ use bumpalo::Bump;
 use clap::{App, AppSettings, Arg, ArgMatches};
 use roc_build::link::LinkType;
 use roc_error_macros::user_error;
-use roc_load::file::LoadingProblem;
+use roc_load::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use std::env;
 use std::io;

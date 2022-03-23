@@ -3,7 +3,7 @@ use std::mem::size_of;
 
 use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result;
-use roc_load::file::MonomorphizedModule;
+use roc_load::MonomorphizedModule;
 use roc_parse::ast::Expr;
 use roc_repl_eval::{
     eval::jit_to_ast,

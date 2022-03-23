@@ -3683,6 +3683,13 @@ dependencies = [
 name = "roc_load"
 version = "0.1.0"
 dependencies = [
+ "roc_load_internal",
+]
+
+[[package]]
+name = "roc_load_internal"
+version = "0.1.0"
+dependencies = [
  "bumpalo",
  "crossbeam",
  "indoc",
