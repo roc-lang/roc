@@ -603,6 +603,9 @@ struct State<'a> {
     // since the unioning process could potentially take longer than the savings.
     // (Granted, this has not been attempted or measured!)
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
+
+    // cached subs (used for builtin modules, could include packages in the future too)
+    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
 }
 
 impl<'a> State<'a> {
@@ -613,6 +616,7 @@ impl<'a> State<'a> {
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+        cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     ) -> Self {
         let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
@@ -636,6 +640,7 @@ impl<'a> State<'a> {
             exposed_symbols_by_module: MutMap::default(),
             timings: MutMap::default(),
             layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
+            cached_subs,
         }
     }
 }
@@ -821,6 +826,10 @@ pub fn load_and_typecheck_str<'a>(
 
     let load_start = LoadStart::from_str(arena, filename, source)?;
 
+    // this function is used specifically in the case
+    // where we want to regenerate the cached data
+    let cached_subs = MutMap::default();
+
     match load(
         arena,
         load_start,
@@ -828,6 +837,7 @@ pub fn load_and_typecheck_str<'a>(
         exposed_types,
         Phase::SolveTypes,
         target_info,
+        cached_subs,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
@@ -981,6 +991,7 @@ pub fn load<'a>(
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
+    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     // When compiling to wasm, we cannot spawn extra threads
     // so we have a single-threaded implementation
@@ -992,6 +1003,7 @@ pub fn load<'a>(
             exposed_types,
             goal_phase,
             target_info,
+            cached_subs,
         )
     } else {
         load_multi_threaded(
@@ -1001,6 +1013,7 @@ pub fn load<'a>(
             exposed_types,
             goal_phase,
             target_info,
+            cached_subs,
         )
     }
 }
@@ -1014,6 +1027,7 @@ fn load_single_threaded<'a>(
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
+    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1035,6 +1049,7 @@ fn load_single_threaded<'a>(
         exposed_types,
         arc_modules,
         ident_ids_by_module,
+        cached_subs,
     );
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
@@ -1191,6 +1206,7 @@ fn load_multi_threaded<'a>(
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
+    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1206,6 +1222,7 @@ fn load_multi_threaded<'a>(
         exposed_types,
         arc_modules,
         ident_ids_by_module,
+        cached_subs,
     );
 
     let (msg_tx, msg_rx) = bounded(1024);
