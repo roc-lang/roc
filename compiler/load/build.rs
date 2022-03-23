@@ -22,10 +22,7 @@ fn main() {
 
 fn write_subs_for_module(module_id: ModuleId, filename: &str) {
     // Tell Cargo that if the given file changes, to rerun this build script.
-    println!(
-        "cargo:rerun-if-changed=../builtins/roc/{}",
-        filename
-    );
+    println!("cargo:rerun-if-changed=../builtins/roc/{}", filename);
 
     let arena = Bump::new();
     let src_dir = PathBuf::from(".");
