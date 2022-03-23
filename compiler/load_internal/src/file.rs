@@ -605,6 +605,7 @@ struct State<'a> {
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 
     // cached subs (used for builtin modules, could include packages in the future too)
+    #[allow(dead_code)]
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
 }
 

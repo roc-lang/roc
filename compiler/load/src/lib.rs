@@ -1,6 +1,9 @@
 use bumpalo::Bump;
+use roc_collections::all::MutMap;
 use roc_constrain::module::ExposedByModule;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_target::TargetInfo;
+use roc_types::subs::{Subs, Variable};
 use std::path::{Path, PathBuf};
 
 pub use roc_load_internal::docs;
@@ -16,8 +19,8 @@ fn load<'a>(
     goal_phase: Phase,
     target_info: TargetInfo,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
-    // dbg!(env!("OUT_DIR"));
-    // TODO inject the stdlib subs
+    let cached_subs = read_cached_subs();
+
     roc_load_internal::file::load(
         arena,
         load_start,
@@ -25,7 +28,24 @@ fn load<'a>(
         exposed_types,
         goal_phase,
         target_info,
+        cached_subs,
     )
+}
+
+const BOOL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Bool.dat")) as &[_];
+
+fn deserialize_help(bytes: &[u8]) -> (Subs, Vec<(Symbol, Variable)>) {
+    let (subs, slice) = Subs::deserialize(bytes);
+
+    (subs, slice.to_vec())
+}
+
+fn read_cached_subs() -> MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)> {
+    let mut output = MutMap::default();
+
+    output.insert(ModuleId::BOOL, deserialize_help(BOOL));
+
+    output
 }
 
 pub fn load_and_monomorphize_from_str<'a>(
