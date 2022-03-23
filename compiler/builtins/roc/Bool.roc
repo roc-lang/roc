@@ -1,3 +1,7 @@
+interface Bool
+    exposes [ Bool, and, or, not, isEq, isNotEq ]
+    imports [ ]
+
 Bool : [ True, False ]
 
 and : Bool, Bool -> Bool

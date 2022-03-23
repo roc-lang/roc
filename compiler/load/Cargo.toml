@@ -10,3 +10,8 @@ roc_load_internal = { path = "../load_internal" }
 
 [build-dependencies]
 roc_load_internal = { path = "../load_internal" }
+roc_builtins = { path = "../builtins" }
+roc_module = { path = "../module" }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+roc_target = { path = "../roc_target" }
+# roc_types = { path = "../types" }
