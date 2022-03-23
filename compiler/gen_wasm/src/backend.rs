@@ -799,11 +799,17 @@ impl<'a> WasmBackend<'a> {
                     ret_storage,
                 )
             }
+
             CallType::LowLevel { op: lowlevel, .. } => {
                 self.expr_call_low_level(*lowlevel, arguments, ret_sym, ret_layout, ret_storage)
             }
 
-            x => todo!("call type {:?}", x),
+            CallType::HigherOrder(higher_order_lowlevel) => {
+                // Note: Zig's calling convention bug will require a generated wrapper function!
+                todo!("higher order calls");
+            }
+
+            CallType::Foreign { .. } => todo!("CallType::Foreign"),
         }
     }
 

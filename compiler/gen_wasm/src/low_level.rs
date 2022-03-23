@@ -1,9 +1,11 @@
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
-use roc_module::low_level::{LowLevel, LowLevel::*};
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
+use roc_mono::ir::HigherOrderLowLevel;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_mono::low_level::HigherOrder;
 
 use crate::backend::WasmBackend;
 use crate::layout::CallConv;
@@ -174,6 +176,7 @@ impl<'a> LowLevelCall<'a> {
 
     ///  Main entrypoint from WasmBackend
     pub fn generate(&self, backend: &mut WasmBackend<'a>) {
+        use LowLevel::*;
         use CodeGenNumType::*;
 
         let panic_ret_type = || {
@@ -260,14 +263,21 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
+            ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
+            | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
+            | ListAny | ListAll | ListFindUnsafe | DictWalk => {
+                internal_error!("HigherOrder lowlevels should not be handled here")
+            }
+
             ListGetUnsafe | ListReplaceUnsafe | ListSingle | ListRepeat | ListReverse
             | ListConcat | ListContains | ListAppend | ListPrepend | ListJoin | ListRange
-            | ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf
-            | ListWalk | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs
-            | ListSortWith | ListSublist | ListDropAt | ListSwap | ListAny | ListAll
-            | ListFindUnsafe | DictSize | DictEmpty | DictInsert | DictRemove | DictContains
-            | DictGetUnsafe | DictKeys | DictValues | DictUnion | DictIntersection
-            | DictDifference | DictWalk | SetFromList => {
+            | ListSublist | ListDropAt | ListSwap => {
+                todo!("{:?}", self.lowlevel);
+            }
+
+            DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
+            | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference
+            | SetFromList => {
                 todo!("{:?}", self.lowlevel);
             }
 
@@ -705,7 +715,7 @@ impl<'a> LowLevelCall<'a> {
             "Cannot do `==` comparison on different types"
         );
 
-        let invert_result = matches!(self.lowlevel, NotEq);
+        let invert_result = matches!(self.lowlevel, LowLevel::NotEq);
 
         match arg_layout {
             Layout::Builtin(
@@ -919,5 +929,27 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
                 }
             }
         }
+    }
+}
+
+fn gen_higher_order(higher_order: HigherOrder) {
+    use HigherOrder::*;
+    match higher_order {
+        ListMap { .. }
+        | ListMap2 { .. }
+        | ListMap3 { .. }
+        | ListMap4 { .. }
+        | ListMapWithIndex { .. }
+        | ListKeepIf { .. }
+        | ListWalk { .. }
+        | ListWalkUntil { .. }
+        | ListWalkBackwards { .. }
+        | ListKeepOks { .. }
+        | ListKeepErrs { .. }
+        | ListSortWith { .. }
+        | ListAny { .. }
+        | ListAll { .. }
+        | ListFindUnsafe { .. }
+        | DictWalk { .. } => todo!("{:?}", higher_order),
     }
 }
