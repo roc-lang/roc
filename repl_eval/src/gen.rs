@@ -47,7 +47,6 @@ pub fn compile_to_mono<'a>(
     target_info: TargetInfo,
     palette: Palette,
 ) -> Result<MonomorphizedModule<'a>, Vec<String>> {
-    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
     let filename = PathBuf::from("REPL.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -58,7 +57,6 @@ pub fn compile_to_mono<'a>(
         arena,
         filename,
         module_src,
-        stdlib,
         src_dir,
         exposed_types,
         target_info,

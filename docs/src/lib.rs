@@ -3,7 +3,6 @@ extern crate roc_load;
 use bumpalo::Bump;
 use docs_error::{DocsError, DocsResult};
 use html::mark_node_to_html;
-use roc_builtins::std::StdLib;
 use roc_can::scope::Scope;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::slow_pool::SlowPool;
@@ -23,8 +22,8 @@ use std::path::{Path, PathBuf};
 mod docs_error;
 mod html;
 
-pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
-    let loaded_modules = load_modules_for_files(filenames, std_lib);
+pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
+    let loaded_modules = load_modules_for_files(filenames);
 
     //
     // TODO: get info from a file like "elm.json"
@@ -411,7 +410,7 @@ fn render_sidebar<'a, I: Iterator<Item = (Vec<String>, &'a ModuleDocumentation)>
     buf
 }
 
-pub fn load_modules_for_files(filenames: Vec<PathBuf>, std_lib: StdLib) -> Vec<LoadedModule> {
+pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
     let arena = Bump::new();
     let mut modules = vec![];
 
@@ -422,7 +421,6 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>, std_lib: StdLib) -> Vec<L
         match roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            &std_lib,
             src_dir.as_path(),
             Default::default(),
             roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter

@@ -32,9 +32,6 @@ mod solve_expr {
 
         let arena = &Bump::new();
 
-        // let stdlib = roc_builtins::unique::uniq_stdlib();
-        let stdlib = roc_builtins::std::standard_stdlib();
-
         let module_src;
         let temp;
         if src.starts_with("app") {
@@ -58,7 +55,6 @@ mod solve_expr {
             let result = roc_load::file::load_and_typecheck(
                 arena,
                 full_file_path,
-                &stdlib,
                 dir.path(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),

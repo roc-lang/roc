@@ -107,8 +107,6 @@ mod test_load {
         use std::io::Write;
         use tempfile::tempdir;
 
-        let stdlib = roc_builtins::std::standard_stdlib();
-
         let mut file_handles: Vec<_> = Vec::new();
 
         // create a temporary directory
@@ -142,7 +140,6 @@ mod test_load {
             roc_load::file::load_and_typecheck(
                 arena,
                 full_file_path,
-                arena.alloc(stdlib),
                 dir.path(),
                 Default::default(),
                 TARGET_INFO,
@@ -165,7 +162,6 @@ mod test_load {
         let loaded = roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
             TARGET_INFO,
@@ -330,7 +326,6 @@ mod test_load {
         let loaded = roc_load::file::load_and_typecheck(
             &arena,
             filename,
-            arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
             TARGET_INFO,

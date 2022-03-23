@@ -11,7 +11,6 @@ pub fn load_module(src_file: &Path) -> LoadedModule {
     let loaded = roc_load::file::load_and_typecheck(
         &arena,
         src_file.to_path_buf(),
-        arena.alloc(roc_builtins::std::standard_stdlib()),
         src_file.parent().unwrap_or_else(|| {
             panic!(
                 "src_file {:?} did not have a parent directory but I need to have one.",

@@ -4,7 +4,7 @@ use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
-use roc_builtins::std::{borrow_stdlib, StdLib};
+use roc_builtins::std::borrow_stdlib;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
@@ -811,7 +811,6 @@ fn enqueue_task<'a>(
 pub fn load_and_typecheck<'a>(
     arena: &'a Bump,
     filename: PathBuf,
-    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
@@ -823,7 +822,6 @@ pub fn load_and_typecheck<'a>(
     match load(
         arena,
         load_start,
-        stdlib,
         src_dir,
         exposed_types,
         Phase::SolveTypes,
@@ -838,7 +836,6 @@ pub fn load_and_typecheck<'a>(
 pub fn load_and_monomorphize<'a>(
     arena: &'a Bump,
     filename: PathBuf,
-    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
@@ -850,7 +847,6 @@ pub fn load_and_monomorphize<'a>(
     match load(
         arena,
         load_start,
-        stdlib,
         src_dir,
         exposed_types,
         Phase::MakeSpecializations,
@@ -866,7 +862,6 @@ pub fn load_and_monomorphize_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     src: &'a str,
-    stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
@@ -878,7 +873,6 @@ pub fn load_and_monomorphize_from_str<'a>(
     match load(
         arena,
         load_start,
-        stdlib,
         src_dir,
         exposed_types,
         Phase::MakeSpecializations,
@@ -1032,7 +1026,6 @@ enum LoadResult<'a> {
 fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    _stdlib: &'a StdLib,
     src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
