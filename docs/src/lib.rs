@@ -11,7 +11,7 @@ use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::DocEntry::DocDef;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
-use roc_load::file::{LoadedModule, LoadingProblem};
+use roc_load::{LoadedModule, LoadingProblem};
 use roc_module::symbol::{IdentIds, Interns, ModuleId};
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::state::State;
@@ -418,7 +418,7 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
         let mut src_dir = filename.clone();
         src_dir.pop();
 
-        match roc_load::file::load_and_typecheck(
+        match roc_load::load_and_typecheck(
             &arena,
             filename,
             src_dir.as_path(),

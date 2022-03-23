@@ -13,7 +13,7 @@ use roc_build::link::module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-use roc_load::file::MonomorphizedModule;
+use roc_load::MonomorphizedModule;
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::Expr;
 use roc_parse::parser::{EExpr, ELambda, SyntaxError};
