@@ -1,3 +1,43 @@
+interface Str
+    exposes 
+        [ 
+            concat,
+            Utf8Problem,
+            Utf8ByteProblem,
+            isEmpty,
+            joinWith,
+            split,
+            repeat,
+            countGraphemes,
+            startsWithCodePt,
+            toUtf8,
+            fromUtf8,
+            fromUtf8Range,
+            startsWith,
+            endsWith,
+            trim,
+            trimLeft,
+            trimRight,
+
+            toDec,
+            toF64,
+            toF32,
+            toNat,
+            toU128,
+            toI128,
+            toU64,
+            toI64,
+            toU32,
+            toI32,
+            toU16,
+            toI16,
+            toU8,
+            toI8,
+        ]
+    imports [ ]
+
+
+
 Utf8ByteProblem :
     [
         InvalidStartByte,
