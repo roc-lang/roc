@@ -30,6 +30,23 @@ use crate::{
     PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME, TARGET_INFO,
 };
 
+#[derive(Clone, Copy, Debug)]
+pub enum ProcSource {
+    Roc,
+    Helper,
+    /// Wrapper function for higher-order calls from Zig to Roc,
+    /// to work around Zig's incorrect implementation of C calling convention in Wasm
+    ZigCallConvWrapper,
+}
+
+#[derive(Debug)]
+pub struct ProcLookupData<'a> {
+    pub name: Symbol,
+    pub layout: ProcLayout<'a>,
+    pub linker_index: u32,
+    pub source: ProcSource,
+}
+
 pub struct WasmBackend<'a> {
     pub env: &'a Env<'a>,
     interns: &'a mut Interns,
@@ -40,7 +57,7 @@ pub struct WasmBackend<'a> {
     next_constant_addr: u32,
     fn_index_offset: u32,
     called_preload_fns: Vec<'a, u32>,
-    proc_lookup: Vec<'a, (Symbol, ProcLayout<'a>, u32)>,
+    pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
     helper_proc_gen: CodeGenHelp<'a>,
 
     // Function-level data
@@ -57,7 +74,7 @@ impl<'a> WasmBackend<'a> {
         env: &'a Env<'a>,
         interns: &'a mut Interns,
         layout_ids: LayoutIds<'a>,
-        proc_lookup: Vec<'a, (Symbol, ProcLayout<'a>, u32)>,
+        proc_lookup: Vec<'a, ProcLookupData<'a>>,
         mut module: WasmModule<'a>,
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
@@ -100,7 +117,7 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    pub fn generate_helpers(&mut self) -> Vec<'a, Proc<'a>> {
+    pub fn get_helpers(&mut self) -> Vec<'a, Proc<'a>> {
         self.helper_proc_gen.take_procs()
     }
 
@@ -114,8 +131,13 @@ impl<'a> WasmBackend<'a> {
             .get_toplevel(new_proc_sym, &new_proc_layout)
             .to_symbol_string(new_proc_sym, self.interns);
 
-        self.proc_lookup
-            .push((new_proc_sym, new_proc_layout, linker_sym_index));
+        self.proc_lookup.push(ProcLookupData {
+            name: new_proc_sym,
+            layout: new_proc_layout,
+            linker_index: linker_sym_index,
+            source: ProcSource::Helper,
+        });
+
         let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
             flags: 0,
             index: wasm_fn_index,
@@ -238,16 +260,16 @@ impl<'a> WasmBackend<'a> {
         );
     }
 
-    fn append_proc_debug_name(&mut self, name: Symbol) {
+    fn append_proc_debug_name(&mut self, sym: Symbol) {
         let proc_index = self
             .proc_lookup
             .iter()
-            .position(|(n, _, _)| *n == name)
+            .position(|ProcLookupData { name, .. }| *name == sym)
             .unwrap();
         let wasm_fn_index = self.fn_index_offset + proc_index as u32;
 
         let mut debug_name = bumpalo::collections::String::with_capacity_in(64, self.env.arena);
-        write!(debug_name, "{:?}", name).unwrap();
+        write!(debug_name, "{:?}", sym).unwrap();
         let name_bytes = debug_name.into_bytes().into_bump_slice();
         self.module.names.append_function(wasm_fn_index, name_bytes);
     }
@@ -840,8 +862,16 @@ impl<'a> WasmBackend<'a> {
             CallConv::C,
         );
 
-        let iter = self.proc_lookup.iter().enumerate();
-        for (roc_proc_index, (ir_sym, pl, linker_sym_index)) in iter {
+        for (
+            roc_proc_index,
+            ProcLookupData {
+                name: ir_sym,
+                layout: pl,
+                linker_index: linker_sym_index,
+                ..
+            },
+        ) in self.proc_lookup.iter().enumerate()
+        {
             if *ir_sym == func_sym && pl == proc_layout {
                 let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
                 let num_wasm_args = param_types.len();
