@@ -84,7 +84,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         module_src = &temp;
     }
 
-    let loaded = roc_load::file::load_and_monomorphize_from_str(
+    let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
@@ -95,7 +95,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
 
     let loaded = loaded.expect("failed to load module");
 
-    use roc_load::file::MonomorphizedModule;
+    use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         module_id,
         procedures,

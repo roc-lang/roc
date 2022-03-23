@@ -4,7 +4,7 @@ use roc_build::{
     program,
 };
 use roc_builtins::bitcode;
-use roc_load::file::LoadingProblem;
+use roc_load::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use roc_target::TargetInfo;
 use std::path::PathBuf;
@@ -62,7 +62,7 @@ pub fn build_file<'a>(
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
 
-    let loaded = roc_load::file::load_and_monomorphize(
+    let loaded = roc_load::load_and_monomorphize(
         arena,
         roc_file_path.clone(),
         src_dir.as_path(),
@@ -363,7 +363,7 @@ pub fn check_file(
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
 
-    let mut loaded = roc_load::file::load_and_typecheck(
+    let mut loaded = roc_load::load_and_typecheck(
         arena,
         roc_file_path,
         src_dir.as_path(),

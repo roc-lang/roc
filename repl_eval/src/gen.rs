@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
-use roc_load::file::{LoadingProblem, MonomorphizedModule};
+use roc_load::{LoadingProblem, MonomorphizedModule};
 use roc_parse::ast::Expr;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{can_problem, mono_problem, type_problem, RocDocAllocator};
@@ -53,7 +53,7 @@ pub fn compile_to_mono<'a>(
     let module_src = arena.alloc(promote_expr_to_module(src));
 
     let exposed_types = Default::default();
-    let loaded = roc_load::file::load_and_monomorphize_from_str(
+    let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
