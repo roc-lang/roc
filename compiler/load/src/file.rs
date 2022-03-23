@@ -3307,7 +3307,7 @@ fn load_module<'a>(
                 isPositive : Num a -> Bool
                 isNegative : Num a -> Bool
 
-                toFloat : Num a -> Float b
+                toFloat : Num * -> Float *
 
                 abs : Num a -> Num a
                 neg : Num a -> Num a
@@ -3343,9 +3343,9 @@ fn load_module<'a>(
                 shiftRightBy : Int a, Int a -> Int a
                 shiftRightZfBy : Int a, Int a -> Int a
 
-                round : Float a -> Int b
-                floor : Float a -> Int b
-                ceiling : Float a -> Int b
+                round : Float * -> Int *
+                floor : Float * -> Int *
+                ceiling : Float * -> Int *
 
                 pow : Float a, Float a -> Float a
                 powInt : Int a, Int a -> Int a
@@ -4391,8 +4391,9 @@ fn run_solve<'a>(
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
 
-    let (mut rigid_vars, mut def_types) =
-        constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
+    let mut rigid_vars = Vec::new();
+    let mut def_types = Vec::new();
+    // let () = constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
 
     let constrain_end = SystemTime::now();
 
@@ -4408,6 +4409,11 @@ fn run_solve<'a>(
     let mut subs = Subs::new_from_varstore(var_store);
 
     let mut import_variables = Vec::new();
+
+    // TODO this is suspicious
+    if !module_id.is_builtin() {
+        exposed_for_module.imported_values.extend(imported_builtins)
+    }
 
     for symbol in exposed_for_module.imported_values {
         let module_id = symbol.module_id();
