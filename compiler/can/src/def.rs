@@ -3,15 +3,13 @@ use crate::annotation::IntroducedVariables;
 use crate::env::Env;
 use crate::expr::ClosureData;
 use crate::expr::Expr::{self, *};
-use crate::expr::{
-    canonicalize_expr, local_successors, references_from_call, references_from_local, Output,
-    Recursive,
-};
+use crate::expr::{canonicalize_expr, local_successors_with_duplicates, Output, Recursive};
 use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::Scope;
-use roc_collections::all::{default_hasher, ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::ImSet;
+use roc_collections::all::{default_hasher, ImEntry, ImMap, MutMap, MutSet, SendMap};
 use roc_error_macros::todo_abilities;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -440,48 +438,10 @@ pub fn sort_can_defs(
         output.aliases.insert(symbol, alias);
     }
 
-    // Determine the full set of references by traversing the graph.
-    let mut visited_symbols = MutSet::default();
-    let returned_lookups = ImSet::clone(&output.references.value_lookups);
-
-    // Start with the return expression's referenced locals. They're the only ones that count!
-    //
-    // If I have two defs which reference each other, but neither of them is referenced
-    // in the return expression, I don't want either of them (or their references) to end up
-    // in the final output.references. They were unused, and so were their references!
-    //
-    // The reason we need a graph here is so we don't overlook transitive dependencies.
-    // For example, if I have `a = b + 1` and the def returns `a + 1`, then the
-    // def as a whole references both `a` *and* `b`, even though it doesn't
-    // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
-    // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
-    for symbol in returned_lookups.into_iter() {
-        // We only care about local symbols in this analysis.
-        if symbol.module_id() == env.home {
-            // Traverse the graph and look up *all* the references for this local symbol.
-            let refs =
-                references_from_local(symbol, &mut visited_symbols, &refs_by_symbol, &env.closures);
-
-            output.references = output.references.union(refs);
-        }
-    }
-
-    for symbol in ImSet::clone(&output.references.calls).into_iter() {
-        // Traverse the graph and look up *all* the references for this call.
-        // Reuse the same visited_symbols as before; if we already visited it,
-        // we won't learn anything new from visiting it again!
-        let refs =
-            references_from_call(symbol, &mut visited_symbols, &refs_by_symbol, &env.closures);
-
-        output.references = output.references.union(refs);
-    }
-
     let mut defined_symbols: Vec<Symbol> = Vec::new();
-    let mut defined_symbols_set: ImSet<Symbol> = ImSet::default();
 
     for symbol in can_defs_by_symbol.keys() {
         defined_symbols.push(*symbol);
-        defined_symbols_set.insert(*symbol);
     }
 
     // Use topological sort to reorder the defs based on their dependencies to one another.
@@ -491,7 +451,7 @@ pub fn sort_can_defs(
     // recursive definitions.
 
     // All successors that occur in the body of a symbol.
-    let all_successors_without_self = |symbol: &Symbol| -> ImSet<Symbol> {
+    let all_successors_without_self = |symbol: &Symbol| -> Vec<Symbol> {
         // This may not be in refs_by_symbol. For example, the `f` in `f x` here:
         //
         // f = \z -> z
@@ -512,7 +472,7 @@ pub fn sort_can_defs(
                 //
                 // In the above example, `f` cannot reference `a`, and in the closure
                 // a call to `f` cannot cycle back to `a`.
-                let mut loc_succ = local_successors(references, &env.closures);
+                let mut loc_succ = local_successors_with_duplicates(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
                 if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
@@ -523,17 +483,20 @@ pub fn sort_can_defs(
                             // DO NOT register a self-call behind a lambda!
                             //
                             // We allow `boom = \_ -> boom {}`, but not `x = x`
-                            loc_succ.insert(*lookup);
+                            loc_succ.push(*lookup);
                         }
                     }
                 }
 
                 // remove anything that is not defined in the current block
-                loc_succ.retain(|key| defined_symbols_set.contains(key));
+                loc_succ.retain(|key| defined_symbols.contains(key));
+
+                loc_succ.sort();
+                loc_succ.dedup();
 
                 loc_succ
             }
-            None => ImSet::default(),
+            None => vec![],
         }
     };
 
@@ -541,7 +504,7 @@ pub fn sort_can_defs(
     // This is required to determine whether a symbol is recursive. Recursive symbols
     // (that are not faulty) always need a DeclareRec, even if there is just one symbol in the
     // group
-    let mut all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
+    let mut all_successors_with_self = |symbol: &Symbol| -> Vec<Symbol> {
         // This may not be in refs_by_symbol. For example, the `f` in `f x` here:
         //
         // f = \z -> z
@@ -562,42 +525,48 @@ pub fn sort_can_defs(
                 //
                 // In the above example, `f` cannot reference `a`, and in the closure
                 // a call to `f` cannot cycle back to `a`.
-                let mut loc_succ = local_successors(references, &env.closures);
+                let mut loc_succ = local_successors_with_duplicates(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
                 if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
                     for lookup in value_lookups {
-                        loc_succ.insert(*lookup);
+                        loc_succ.push(*lookup);
                     }
                 }
 
                 // remove anything that is not defined in the current block
-                loc_succ.retain(|key| defined_symbols_set.contains(key));
+                loc_succ.retain(|key| defined_symbols.contains(key));
+
+                loc_succ.sort();
+                loc_succ.dedup();
 
                 loc_succ
             }
-            None => ImSet::default(),
+            None => vec![],
         }
     };
 
     // If a symbol is a direct successor of itself, there is an invalid cycle.
     // The difference with the function above is that this one does not look behind lambdas,
     // but does consider direct self-recursion.
-    let direct_successors = |symbol: &Symbol| -> ImSet<Symbol> {
+    let direct_successors = |symbol: &Symbol| -> Vec<Symbol> {
         match refs_by_symbol.get(symbol) {
             Some((_, references)) => {
-                let mut loc_succ = local_successors(references, &env.closures);
+                let mut loc_succ = local_successors_with_duplicates(references, &env.closures);
 
                 // NOTE: if the symbol is a closure we DONT look into its body
 
                 // remove anything that is not defined in the current block
-                loc_succ.retain(|key| defined_symbols_set.contains(key));
+                loc_succ.retain(|key| defined_symbols.contains(key));
 
                 // NOTE: direct recursion does matter here: `x = x` is invalid recursion!
 
+                loc_succ.sort();
+                loc_succ.dedup();
+
                 loc_succ
             }
-            None => ImSet::default(),
+            None => vec![],
         }
     };
 
@@ -771,14 +740,14 @@ pub fn sort_can_defs(
 fn group_to_declaration(
     group: &[Symbol],
     closures: &MutMap<Symbol, References>,
-    successors: &mut dyn FnMut(&Symbol) -> ImSet<Symbol>,
+    successors: &mut dyn FnMut(&Symbol) -> Vec<Symbol>,
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     declarations: &mut Vec<Declaration>,
 ) {
     use Declaration::*;
 
     // We want only successors in the current group, otherwise definitions get duplicated
-    let filtered_successors = |symbol: &Symbol| -> ImSet<Symbol> {
+    let filtered_successors = |symbol: &Symbol| -> Vec<Symbol> {
         let mut result = successors(symbol);
 
         result.retain(|key| group.contains(key));
