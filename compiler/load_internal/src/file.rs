@@ -4,6 +4,7 @@ use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
+use roc_builtins::standard_library::module_source;
 use roc_builtins::std::borrow_stdlib;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
@@ -2518,45 +2519,7 @@ fn load_module<'a>(
                 },
             };
 
-            let src_bytes = r#"
-                Result ok err : [ Ok ok, Err err ]
-
-                isOk : Result ok err -> Bool
-                isOk = \result ->
-                    when result is
-                        Ok _ -> True
-                        Err _ -> False
-
-                isErr : Result ok err -> Bool
-                isErr = \result ->
-                    when result is
-                        Ok _ -> False
-                        Err _ -> True
-
-                withDefault : Result ok err, ok -> ok
-                withDefault = \result, default ->
-                    when result is
-                        Ok value -> value
-                        Err _ -> default
-
-                map : Result a err, (a -> b) -> Result b err
-                map = \result, transform ->
-                    when result is
-                        Ok v -> Ok (transform v)
-                        Err e -> Err e
-
-                mapErr : Result ok a, (a -> b) -> Result ok b
-                mapErr = \result, transform ->
-                    when result is
-                        Ok v -> Ok v
-                        Err e -> Err (transform e)
-
-                after : Result a err, (a -> Result b err) -> Result b err
-                after = \result, transform ->
-                    when result is
-                        Ok v -> transform v
-                        Err e -> Err e
-                "#;
+            let src_bytes = module_source(ModuleId::RESULT);
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
 
@@ -2658,79 +2621,7 @@ fn load_module<'a>(
                 },
             };
 
-            let src_bytes = r#"
-                isEmpty : List a -> Bool
-                isEmpty = \list ->
-                    List.len list == 0
-
-                get : List a, Nat -> Result a [ OutOfBounds ]*
-                set : List a, Nat, a -> List a
-                replace : List a, Nat, a -> { list : List a, value : a }
-                append : List a, a -> List a
-                prepend : List a, a -> List a
-                len : List a -> Nat
-                concat : List a, List a -> List a
-                last : List a -> Result a [ ListWasEmpty ]*
-                single : a -> List a
-                repeat : a, Nat -> List a
-                reverse : List a -> List a
-                join : List (List a) -> List a
-                contains : List a, a -> Bool
-                walk : List elem, state, (state, elem -> state) -> state
-                walkBackwards  : List elem, state, (state, elem -> state) -> state
-                walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
-
-                sum : List (Num a) -> Num a
-                sum = \list -> 
-                    List.walk list 0 Num.add
-
-                product : List (Num a) -> Num a
-                product = \list -> 
-                    List.walk list 1 Num.mul
-
-                any : List a, (a -> Bool) -> Bool
-                all : List a, (a -> Bool) -> Bool
-
-                keepIf : List a, (a -> Bool) -> List a
-                dropIf : List a, (a -> Bool) -> List a
-
-                keepOks : List before, (before -> Result after *) -> List after
-                keepErrs: List before, (before -> Result * after) -> List after
-                map : List a, (a -> b) -> List b
-                map2 : List a, List b, (a, b -> c) -> List c
-                map3 : List a, List b, List c, (a, b, c -> d) -> List d
-                map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
-                mapWithIndex : List a, (a -> b) -> List b
-                range : Int a, Int a -> List (Int a)
-                sortWith : List a, (a, a -> [ LT, EQ, GT ] ) -> List a
-                sortAsc : List (Num a) -> List (Num a)
-                sortAsc = \list -> List.sortWith list Num.compare
-
-                sortDesc : List (Num a) -> List (Num a)
-                sortDesc = \list -> List.sortWith list (\a, b -> Num.compare b a)
-
-                swap : List a, Nat, Nat -> List a
-
-                first : List a -> Result a [ ListWasEmpty ]*
-
-                dropFirst : List elem -> List elem
-                dropLast : List elem -> List elem
-
-                takeFirst : List elem, Nat -> List elem
-                takeLast : List elem, Nat -> List elem
-
-                drop : List elem, Nat -> List elem
-                dropAt : List elem, Nat -> List elem
-
-                min :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
-                max :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
-
-                joinMap : List a, (a -> List b) -> List b
-                find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
-                sublist : List elem, { start : Nat, len : Nat } -> List elem
-                intersperse : List elem, elem -> List elem
-                split : List elem, Nat -> { before: List elem, others: List elem }
-                "#;
+            let src_bytes = module_source(ModuleId::LIST);
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
 
@@ -2836,58 +2727,7 @@ fn load_module<'a>(
                 },
             };
 
-            let src_bytes = r#"
-                Utf8ByteProblem :
-                    [
-                        InvalidStartByte,
-                        UnexpectedEndOfSequence,
-                        ExpectedContinuation,
-                        OverlongEncoding,
-                        CodepointTooLarge,
-                        EncodesSurrogateHalf,
-                    ]
-
-                Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
-
-                isEmpty : Str -> Bool
-                concat : Str, Str -> Str
-
-                joinWith : List Str, Str -> Str
-                split : Str, Str -> List Str
-                repeat : Str, Nat -> Str
-                countGraphemes : Str -> Nat
-                startsWithCodePt : Str, U32 -> Bool
-
-                toUtf8 : Str -> List U8
-
-                # fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
-                # fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem Nat, OutOfBounds ]*
-
-                fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*
-                fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [ BadUtf8 Utf8ByteProblem Nat, OutOfBounds ]*
-
-                startsWith : Str, Str -> Bool
-                endsWith : Str, Str -> Bool
-
-                trim : Str -> Str
-                trimLeft : Str -> Str
-                trimRight : Str -> Str
-
-                toDec : Str -> Result Dec [ InvalidNumStr ]*
-                toF64 : Str -> Result F64 [ InvalidNumStr ]*
-                toF32 : Str -> Result F32 [ InvalidNumStr ]*
-                toNat : Str -> Result Nat [ InvalidNumStr ]*
-                toU128 : Str -> Result U128 [ InvalidNumStr ]*
-                toI128 : Str -> Result I128 [ InvalidNumStr ]*
-                toU64 : Str -> Result U64 [ InvalidNumStr ]*
-                toI64 : Str -> Result I64 [ InvalidNumStr ]*
-                toU32 : Str -> Result U32 [ InvalidNumStr ]*
-                toI32 : Str -> Result I32 [ InvalidNumStr ]*
-                toU16 : Str -> Result U16 [ InvalidNumStr ]*
-                toI16 : Str -> Result I16 [ InvalidNumStr ]*
-                toU8 : Str -> Result U8 [ InvalidNumStr ]*
-                toI8 : Str -> Result I8 [ InvalidNumStr ]*
-                "#;
+            let src_bytes = module_source(ModuleId::STR);
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
 
@@ -2956,21 +2796,7 @@ fn load_module<'a>(
                 },
             };
 
-            let src_bytes = r#"
-                empty : Dict k v
-                single : k, v -> Dict k v
-                get : Dict k v, k -> Result v [ KeyNotFound ]*
-                walk : Dict k v, state, (state, k, v -> state) -> state
-                insert : Dict k v, k, v -> Dict k v
-                len : Dict k v -> Nat
-                remove : Dict k v, k -> Dict k v
-                contains : Dict k v, k -> Bool
-                keys : Dict k v -> List k
-                values : Dict k v -> List v
-                union : Dict k v, Dict k v -> Dict k v
-                intersection : Dict k v, Dict k v -> Dict k v
-                difference : Dict k v, Dict k v -> Dict k v
-                "#;
+            let src_bytes = module_source(ModuleId::DICT);
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
 
@@ -3042,28 +2868,7 @@ fn load_module<'a>(
                 },
             };
 
-            let src_bytes = r#"
-                empty : Set k
-                single : k -> Set k
-                insert : Set k, k -> Set k
-                len : Set k -> Nat
-                remove : Set k, k -> Set k
-                contains : Set k, k -> Bool
-
-                # toList = \set -> Dict.keys (toDict set)
-                toList : Set k -> List k
-                fromList : List k -> Set k
-
-                union : Set k, Set k -> Set k
-                intersection : Set k, Set k -> Set k
-                difference : Set k, Set k -> Set k
-
-                toDict : Set k -> Dict k {}
-
-                walk : Set k, state, (state, k -> state) -> state
-                walk = \set, state, step ->
-                    Dict.walk (toDict set) state (\s, k, _ -> step s k)
-                "#;
+            let src_bytes = module_source(ModuleId::SET);
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
 
@@ -3239,211 +3044,7 @@ fn load_module<'a>(
                 },
             };
 
-            let src_bytes = r#"
-                Num range : [ @Num range ]
-                Int range : Num (Integer range) 
-                Float range : Num (FloatingPoint range) 
-
-                Signed128 : [ @Signed128 ]
-                Signed64 : [ @Signed64 ]
-                Signed32 : [ @Signed32 ]
-                Signed16 : [ @Signed16 ]
-                Signed8 : [ @Signed8 ]
-
-                Unsigned128 : [ @Unsigned128 ]
-                Unsigned64 : [ @Unsigned64 ]
-                Unsigned32 : [ @Unsigned32 ]
-                Unsigned16 : [ @Unsigned16 ]
-                Unsigned8 : [ @Unsigned8 ]
-
-                Natural : [ @Natural ]
-
-                Integer range : [ @Integer range ]
-
-                I128 : Num (Integer Signed128)
-                I64 : Num (Integer Signed64)
-                I32 : Num (Integer Signed32)
-                I16 : Num (Integer Signed16)
-                I8 : Int Signed8 
-
-                U128 : Num (Integer Unsigned128)
-                U64 : Num (Integer Unsigned64)
-                U32 : Num (Integer Unsigned32)
-                U16 : Num (Integer Unsigned16)
-                U8 : Num (Integer Unsigned8)
-
-                Nat : Num (Integer Natural)
-
-                Decimal : [ @Decimal ]
-                Binary64 : [ @Binary64 ]
-                Binary32 : [ @Binary32 ]
-
-                FloatingPoint range : [ @FloatingPoint range ]
-
-                F64 : Num (FloatingPoint Binary64)
-                F32 : Num (FloatingPoint Binary32)
-                Dec : Num (FloatingPoint Decimal)
-
-                # ------- Functions 
-
-                toStr : Num * -> Str
-                intCast : Int a -> Int b
-
-                bytesToU16 : List U8, Nat -> Result U16 [ OutOfBounds ]
-                bytesToU32 : List U8, Nat -> Result U32 [ OutOfBounds ]
-
-                compare : Num a, Num a -> [ LT, EQ, GT ]
-
-                isLt : Num a, Num a -> Bool
-                isGt : Num a, Num a -> Bool
-                isLte : Num a, Num a -> Bool
-                isGte : Num a, Num a -> Bool
-
-                isZero : Num a -> Bool
-
-                isEven : Int a -> Bool
-                isOdd : Int a -> Bool
-
-                isPositive : Num a -> Bool
-                isNegative : Num a -> Bool
-
-                toFloat : Num * -> Float *
-
-                abs : Num a -> Num a
-                neg : Num a -> Num a
-
-                add : Num a, Num a -> Num a
-                sub : Num a, Num a -> Num a
-                mul : Num a, Num a -> Num a
-
-                sin : Float a -> Float a
-                cos : Float a -> Float a
-                tan : Float a -> Float a
-
-                asin : Float a -> Float a
-                acos : Float a -> Float a
-                atan : Float a -> Float a
-
-                sqrt : Float a -> Result (Float a) [ SqrtOfNegative ]*
-                log : Float a -> Result (Float a) [ LogNeedsPositive ]*
-                div : Float a, Float a -> Result (Float a) [ DivByZero ]*
-
-                divCeil: Int a, Int a -> Result (Int a) [ DivByZero ]*
-                divFloor: Int a, Int a -> Result (Int a) [ DivByZero ]*
-                # mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
-
-                rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
-                # mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
-                isMultipleOf : Int a, Int a -> Bool
-
-                bitwiseAnd : Int a, Int a -> Int a
-                bitwiseXor : Int a, Int a -> Int a
-                bitwiseOr : Int a, Int a -> Int a
-                shiftLeftBy : Int a, Int a -> Int a
-                shiftRightBy : Int a, Int a -> Int a
-                shiftRightZfBy : Int a, Int a -> Int a
-
-                round : Float * -> Int *
-                floor : Float * -> Int *
-                ceiling : Float * -> Int *
-
-                pow : Float a, Float a -> Float a
-                powInt : Int a, Int a -> Int a
-
-                addWrap : Int range, Int range -> Int range
-                addSaturated : Num a, Num a -> Num a
-                addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
-
-                subWrap : Int range, Int range -> Int range
-                subSaturated : Num a, Num a -> Num a
-                subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
-
-                mulWrap : Int range, Int range -> Int range
-                # mulSaturated : Num a, Num a -> Num a
-                mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
-
-                minI8 : I8
-                minI8 = -128i8
-
-                maxI8 : I8
-                maxI8 = 127i8
-
-                minU8 : U8
-                minU8 = 0u8
-
-                maxU8 : U8
-                maxU8 = 255u8
-
-                minI16 : I16
-                minI16 = -32768i16
-
-                maxI16 : I16
-                maxI16 = 32767i16
-
-                minU16 : U16
-                minU16 = 0u16
-
-                maxU16 : U16
-                maxU16 = 65535u16
-
-                minI32 : I32
-                minI32 = -2147483648
-
-                maxI32 : I32
-                maxI32 = 2147483647
-
-                minU32 : U32
-                minU32 = 0
-
-                maxU32 : U32
-                maxU32 = 4294967295
-
-                minI64 : I64
-                minI64 = -9223372036854775808
-
-                maxI64 : I64
-                maxI64 = 9223372036854775807
-
-                minU64 : U64
-                minU64 = 0
-
-                maxU64 : U64
-                maxU64 = 18446744073709551615
-
-                minI128 : I128
-                minI128 = -170141183460469231731687303715884105728
-
-                maxI128 : I128
-                maxI128 = 170141183460469231731687303715884105727
-
-                minU128 : U128
-                minU128 = 0
-
-                maxU128 : U128
-                maxU128 = 0340282366920938463463374607431768211455
-
-                toI8 : Int * -> I8
-                toI16 : Int * -> I16
-                toI32 : Int * -> I32
-                toI64 : Int * -> I64
-                toI128 : Int * -> I128
-                toU8 : Int * -> U8
-                toU16 : Int * -> U16
-                toU32 : Int * -> U32
-                toU64 : Int * -> U64
-                toU128 : Int * -> U128
-
-                toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
-                toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
-                toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
-                toI64Checked : Int * -> Result I64 [ OutOfBounds ]*
-                toI128Checked : Int * -> Result I128 [ OutOfBounds ]*
-                toU8Checked : Int * -> Result U8 [ OutOfBounds ]*
-                toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
-                toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
-                toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
-                toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
-                "#;
+            let src_bytes = module_source(ModuleId::NUM);
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
 
@@ -3486,18 +3087,7 @@ fn load_module<'a>(
                 },
             };
 
-            let src_bytes = r#"
-                Bool : [ True, False ]
-
-                and : Bool, Bool -> Bool
-                or : Bool, Bool -> Bool
-                # xor : Bool, Bool -> Bool # currently unimplemented
-
-                not : Bool -> Bool
-
-                isEq : a, a -> Bool
-                isNotEq : a, a -> Bool
-                "#;
+            let src_bytes = module_source(ModuleId::BOOL);
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
 
@@ -3536,17 +3126,7 @@ fn load_module<'a>(
                 },
             };
 
-            let src_bytes = r#"
-                box : a -> Box a
-                unbox : Box a -> a
-
-                map : Box a, (a -> b) -> Box b
-                map = \boxed, transform =
-                    boxed
-                        |> Box.unbox
-                        |> transform
-                        |> Box.box
-                "#;
+            let src_bytes = module_source(ModuleId::BOX);
 
             let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
 
