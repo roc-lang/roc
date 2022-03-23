@@ -3,7 +3,7 @@ use roc_cli::{
     build_app, docs, format, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
     CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_TIME, ROC_FILE,
 };
-use roc_load::file::LoadingProblem;
+use roc_load::LoadingProblem;
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
