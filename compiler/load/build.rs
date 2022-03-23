@@ -23,13 +23,13 @@ fn main() {
 fn write_subs_for_module(module_id: ModuleId, filename: &str) {
     // Tell Cargo that if the given file changes, to rerun this build script.
     println!(
-        "cargo:rerun-if-changed=../builtins/standard_library/{}",
+        "cargo:rerun-if-changed=../builtins/roc/{}",
         filename
     );
 
     let arena = Bump::new();
     let src_dir = PathBuf::from(".");
-    let source = roc_builtins::standard_library::module_source(module_id);
+    let source = roc_builtins::roc::module_source(module_id);
     let target_info = roc_target::TargetInfo::default_x86_64();
 
     let res_module = roc_load_internal::file::load_and_typecheck_str(
