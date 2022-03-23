@@ -47,7 +47,8 @@ use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 use std::{env, fs};
 
-use crate::work::{Dependencies, Phase};
+use crate::work::Dependencies;
+pub use crate::work::Phase;
 
 #[cfg(target_family = "wasm")]
 use crate::wasm_system_time::{Duration, SystemTime};
@@ -808,30 +809,6 @@ fn enqueue_task<'a>(
     Ok(())
 }
 
-pub fn load_and_typecheck<'a>(
-    arena: &'a Bump,
-    filename: PathBuf,
-    src_dir: &Path,
-    exposed_types: ExposedByModule,
-    target_info: TargetInfo,
-) -> Result<LoadedModule, LoadingProblem<'a>> {
-    use LoadResult::*;
-
-    let load_start = LoadStart::from_path(arena, filename)?;
-
-    match load(
-        arena,
-        load_start,
-        src_dir,
-        exposed_types,
-        Phase::SolveTypes,
-        target_info,
-    )? {
-        Monomorphized(_) => unreachable!(""),
-        TypeChecked(module) => Ok(module),
-    }
-}
-
 pub fn load_and_typecheck_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -857,62 +834,11 @@ pub fn load_and_typecheck_str<'a>(
     }
 }
 
-/// Main entry point to the compiler from the CLI and tests
-pub fn load_and_monomorphize<'a>(
-    arena: &'a Bump,
-    filename: PathBuf,
-    src_dir: &Path,
-    exposed_types: ExposedByModule,
-    target_info: TargetInfo,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
-    use LoadResult::*;
-
-    let load_start = LoadStart::from_path(arena, filename)?;
-
-    match load(
-        arena,
-        load_start,
-        src_dir,
-        exposed_types,
-        Phase::MakeSpecializations,
-        target_info,
-    )? {
-        Monomorphized(module) => Ok(module),
-        TypeChecked(_) => unreachable!(""),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn load_and_monomorphize_from_str<'a>(
-    arena: &'a Bump,
-    filename: PathBuf,
-    src: &'a str,
-    src_dir: &Path,
-    exposed_types: ExposedByModule,
-    target_info: TargetInfo,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
-    use LoadResult::*;
-
-    let load_start = LoadStart::from_str(arena, filename, src)?;
-
-    match load(
-        arena,
-        load_start,
-        src_dir,
-        exposed_types,
-        Phase::MakeSpecializations,
-        target_info,
-    )? {
-        Monomorphized(module) => Ok(module),
-        TypeChecked(_) => unreachable!(""),
-    }
-}
-
-struct LoadStart<'a> {
-    pub arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
-    pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-    pub root_id: ModuleId,
-    pub root_msg: Msg<'a>,
+pub struct LoadStart<'a> {
+    arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    root_id: ModuleId,
+    root_msg: Msg<'a>,
 }
 
 impl<'a> LoadStart<'a> {
@@ -999,7 +925,7 @@ impl<'a> LoadStart<'a> {
     }
 }
 
-enum LoadResult<'a> {
+pub enum LoadResult<'a> {
     TypeChecked(LoadedModule),
     Monomorphized(MonomorphizedModule<'a>),
 }
@@ -1048,7 +974,7 @@ enum LoadResult<'a> {
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
 #[allow(clippy::too_many_arguments)]
-fn load<'a>(
+pub fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     src_dir: &Path,
@@ -3214,17 +3140,20 @@ fn run_solve<'a>(
     let solved_subs = if true {
         solved_subs
     } else {
-        let mut serialized = Vec::new();
-        solved_subs.inner().serialize(&mut serialized).unwrap();
-        let subs = Subs::deserialize(&serialized);
-
-        Solved(subs)
+        panic!();
+        //        let mut serialized = Vec::new();
+        //        solved_subs.inner().serialize(&mut serialized).unwrap();
+        //        let subs = Subs::deserialize(&serialized);
+        //
+        //        Solved(subs)
     };
 
     let exposed_vars_by_symbol: Vec<_> = solved_env
         .vars_by_symbol()
         .filter(|(k, _)| exposed_symbols.contains(k))
         .collect();
+
+    dbg!(&exposed_vars_by_symbol);
 
     let mut solved_subs = solved_subs;
     let (storage_subs, stored_vars_by_symbol) =
