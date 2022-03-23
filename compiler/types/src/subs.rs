@@ -190,7 +190,7 @@ impl Subs {
         Self::serialize_slice(&buf, writer, written)
     }
 
-    /// Lowercase can be heap-allocated
+    /// Global tag names can be heap-allocated
     fn serialize_tag_names(
         tag_names: &[TagName],
         writer: &mut impl std::io::Write,
