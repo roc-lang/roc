@@ -3120,36 +3120,23 @@ fn add_imports(
     import_variables
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_solve<'a>(
-    module: Module,
-    ident_ids: IdentIds,
-    mut module_timing: ModuleTiming,
+fn run_solve_solve(
     imported_builtins: Vec<Symbol>,
     exposed_for_module: ExposedForModule,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     mut var_store: VarStore,
-    decls: Vec<Declaration>,
-    dep_idents: MutMap<ModuleId, IdentIds>,
-    _cached_subs: CachedSubs,
-) -> Msg<'a> {
-    // We have more constraining work to do now, so we'll add it to our timings.
-    let constrain_start = SystemTime::now();
-
-    let (mut rigid_vars, mut def_types) =
-        constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
-
-    let constrain_end = SystemTime::now();
-
-    let module_id = module.module_id;
-
+    module: Module,
+) -> (Solved<Subs>, Vec<(Symbol, Variable)>, Vec<solve::TypeError>) {
     let Module {
         exposed_symbols,
         aliases,
         rigid_variables,
         ..
     } = module;
+
+    let (mut rigid_vars, mut def_types) =
+        constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
 
     let mut subs = Subs::new_from_varstore(var_store);
 
@@ -3193,6 +3180,60 @@ fn run_solve<'a>(
         .filter(|(k, _)| exposed_symbols.contains(k))
         .collect();
 
+    (solved_subs, exposed_vars_by_symbol, problems)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_solve<'a>(
+    module: Module,
+    ident_ids: IdentIds,
+    mut module_timing: ModuleTiming,
+    imported_builtins: Vec<Symbol>,
+    exposed_for_module: ExposedForModule,
+    constraints: Constraints,
+    constraint: ConstraintSoa,
+    var_store: VarStore,
+    decls: Vec<Declaration>,
+    dep_idents: MutMap<ModuleId, IdentIds>,
+    cached_subs: CachedSubs,
+) -> Msg<'a> {
+    let solve_start = SystemTime::now();
+
+    let module_id = module.module_id;
+
+    // TODO remove when we write builtins in roc
+    let aliases = module.aliases.clone();
+
+    let (solved_subs, exposed_vars_by_symbol, problems) = {
+        if module_id.is_builtin() {
+            match cached_subs.lock().remove(&module_id) {
+                None => {
+                    // this should never happen
+                    run_solve_solve(
+                        imported_builtins,
+                        exposed_for_module,
+                        constraints,
+                        constraint,
+                        var_store,
+                        module,
+                    )
+                }
+                Some((subs, exposed_vars_by_symbol)) => {
+                    (Solved(subs), exposed_vars_by_symbol.to_vec(), vec![])
+                }
+            }
+        } else {
+            run_solve_solve(
+                imported_builtins,
+                exposed_for_module,
+                constraints,
+                constraint,
+                var_store,
+                module,
+            )
+        }
+    };
+
     let mut solved_subs = solved_subs;
     let (storage_subs, stored_vars_by_symbol) =
         roc_solve::module::exposed_types_storage_subs(&mut solved_subs, &exposed_vars_by_symbol);
@@ -3207,10 +3248,7 @@ fn run_solve<'a>(
 
     // Record the final timings
     let solve_end = SystemTime::now();
-    let constrain_elapsed = constrain_end.duration_since(constrain_start).unwrap();
-
-    module_timing.constrain += constrain_elapsed;
-    module_timing.solve = solve_end.duration_since(constrain_end).unwrap();
+    module_timing.solve = solve_end.duration_since(solve_start).unwrap();
 
     // Send the subs to the main thread for processing,
     Msg::SolvedTypes {
