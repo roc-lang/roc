@@ -257,6 +257,7 @@ fn start_phase<'a>(
                     &mut state.exposed_types,
                     dep_idents,
                     declarations,
+                    state.cached_subs.clone(),
                 )
             }
             Phase::FindSpecializations => {
@@ -605,9 +606,10 @@ struct State<'a> {
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 
     // cached subs (used for builtin modules, could include packages in the future too)
-    #[allow(dead_code)]
-    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+    cached_subs: CachedSubs,
 }
+
+type CachedSubs = Arc<Mutex<MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>>>;
 
 impl<'a> State<'a> {
     fn new(
@@ -641,7 +643,7 @@ impl<'a> State<'a> {
             exposed_symbols_by_module: MutMap::default(),
             timings: MutMap::default(),
             layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
-            cached_subs,
+            cached_subs: Arc::new(Mutex::new(cached_subs)),
         }
     }
 }
@@ -745,6 +747,7 @@ enum BuildTask<'a> {
         var_store: VarStore,
         declarations: Vec<Declaration>,
         dep_idents: MutMap<ModuleId, IdentIds>,
+        cached_subs: CachedSubs,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -3026,6 +3029,7 @@ impl<'a> BuildTask<'a> {
         exposed_types: &mut ExposedByModule,
         dep_idents: MutMap<ModuleId, IdentIds>,
         declarations: Vec<Declaration>,
+        cached_subs: CachedSubs,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
         let exposed_for_module =
@@ -3050,42 +3054,17 @@ impl<'a> BuildTask<'a> {
             declarations,
             dep_idents,
             module_timing,
+            cached_subs,
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_solve<'a>(
-    module: Module,
-    ident_ids: IdentIds,
-    mut module_timing: ModuleTiming,
-    imported_builtins: Vec<Symbol>,
+fn add_imports(
+    subs: &mut Subs,
     mut exposed_for_module: ExposedForModule,
-    mut constraints: Constraints,
-    constraint: ConstraintSoa,
-    mut var_store: VarStore,
-    decls: Vec<Declaration>,
-    dep_idents: MutMap<ModuleId, IdentIds>,
-) -> Msg<'a> {
-    // We have more constraining work to do now, so we'll add it to our timings.
-    let constrain_start = SystemTime::now();
-
-    let (mut rigid_vars, mut def_types) =
-        constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
-
-    let constrain_end = SystemTime::now();
-
-    let module_id = module.module_id;
-
-    let Module {
-        exposed_symbols,
-        aliases,
-        rigid_variables,
-        ..
-    } = module;
-
-    let mut subs = Subs::new_from_varstore(var_store);
-
+    def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
+    rigid_vars: &mut Vec<Variable>,
+) -> Vec<Variable> {
     let mut import_variables = Vec::new();
 
     for symbol in exposed_for_module.imported_values {
@@ -3117,7 +3096,7 @@ fn run_solve<'a>(
                         Some((_, x)) => *x,
                     };
 
-                    let copied_import = storage_subs.export_variable_to(&mut subs, variable);
+                    let copied_import = storage_subs.export_variable_to(subs, variable);
 
                     // not a typo; rigids are turned into flex during type inference, but when imported we must
                     // consider them rigid variables
@@ -3137,6 +3116,49 @@ fn run_solve<'a>(
             }
         }
     }
+
+    import_variables
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_solve<'a>(
+    module: Module,
+    ident_ids: IdentIds,
+    mut module_timing: ModuleTiming,
+    imported_builtins: Vec<Symbol>,
+    exposed_for_module: ExposedForModule,
+    mut constraints: Constraints,
+    constraint: ConstraintSoa,
+    mut var_store: VarStore,
+    decls: Vec<Declaration>,
+    dep_idents: MutMap<ModuleId, IdentIds>,
+    _cached_subs: CachedSubs,
+) -> Msg<'a> {
+    // We have more constraining work to do now, so we'll add it to our timings.
+    let constrain_start = SystemTime::now();
+
+    let (mut rigid_vars, mut def_types) =
+        constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
+
+    let constrain_end = SystemTime::now();
+
+    let module_id = module.module_id;
+
+    let Module {
+        exposed_symbols,
+        aliases,
+        rigid_variables,
+        ..
+    } = module;
+
+    let mut subs = Subs::new_from_varstore(var_store);
+
+    let import_variables = add_imports(
+        &mut subs,
+        exposed_for_module,
+        &mut def_types,
+        &mut rigid_vars,
+    );
 
     let actual_constraint =
         constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
@@ -3864,6 +3886,7 @@ fn run_task<'a>(
             ident_ids,
             declarations,
             dep_idents,
+            cached_subs,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -3875,6 +3898,7 @@ fn run_task<'a>(
             var_store,
             declarations,
             dep_idents,
+            cached_subs,
         )),
         BuildPendingSpecializations {
             module_id,
