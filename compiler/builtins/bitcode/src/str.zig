@@ -837,7 +837,7 @@ test "countSegments: delimiter interspered" {
 
 // Str.countGraphemeClusters
 const grapheme = @import("helpers/grapheme.zig");
-pub fn countGraphemeClusters(string: *const RocStr) callconv(.C) usize {
+pub fn countGraphemeClusters(string: *RocStr) callconv(.C) usize {
     if (string.isEmpty()) {
         return 0;
     }
@@ -873,7 +873,7 @@ pub fn countGraphemeClusters(string: *const RocStr) callconv(.C) usize {
 }
 
 test "countGraphemeClusters: empty string" {
-    const count = countGraphemeClusters(&RocStr.empty());
+    const count = countGraphemeClusters(RocStr.empty());
     try expectEqual(count, 0);
 }
 
@@ -883,7 +883,7 @@ test "countGraphemeClusters: ascii characters" {
     const str = RocStr.init(bytes_arr, bytes_len);
     defer str.deinit();
 
-    const count = countGraphemeClusters(&str);
+    const count = countGraphemeClusters(str);
     try expectEqual(count, 4);
 }
 
@@ -893,7 +893,7 @@ test "countGraphemeClusters: utf8 characters" {
     const str = RocStr.init(bytes_arr, bytes_len);
     defer str.deinit();
 
-    const count = countGraphemeClusters(&str);
+    const count = countGraphemeClusters(str);
     try expectEqual(count, 3);
 }
 
@@ -903,7 +903,7 @@ test "countGraphemeClusters: emojis" {
     const str = RocStr.init(bytes_arr, bytes_len);
     defer str.deinit();
 
-    const count = countGraphemeClusters(&str);
+    const count = countGraphemeClusters(str);
     try expectEqual(count, 3);
 }
 
@@ -913,7 +913,7 @@ test "countGraphemeClusters: emojis and ut8 characters" {
     const str = RocStr.init(bytes_arr, bytes_len);
     defer str.deinit();
 
-    const count = countGraphemeClusters(&str);
+    const count = countGraphemeClusters(str);
     try expectEqual(count, 6);
 }
 
@@ -923,7 +923,7 @@ test "countGraphemeClusters: emojis, ut8, and ascii characters" {
     const str = RocStr.init(bytes_arr, bytes_len);
     defer str.deinit();
 
-    const count = countGraphemeClusters(&str);
+    const count = countGraphemeClusters(str);
     try expectEqual(count, 10);
 }
 
