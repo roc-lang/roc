@@ -443,8 +443,8 @@ pub fn init(bytes_ptr: [*]const u8, length: usize) callconv(.C) RocStr {
 }
 
 // Str.equal
-pub fn strEqual(self: *RocStr, other: *RocStr) callconv(.C) bool {
-    return self.eq(other.*);
+pub fn strEqual(self: RocStr, other: RocStr) callconv(.C) bool {
+    return self.eq(other);
 }
 
 // Str.numberOfBytes
@@ -837,7 +837,7 @@ test "countSegments: delimiter interspered" {
 
 // Str.countGraphemeClusters
 const grapheme = @import("helpers/grapheme.zig");
-pub fn countGraphemeClusters(string: *RocStr) callconv(.C) usize {
+pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
     if (string.isEmpty()) {
         return 0;
     }
