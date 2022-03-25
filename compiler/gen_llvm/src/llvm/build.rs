@@ -47,7 +47,8 @@ use inkwell::types::{
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue,
-    InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue, StructValue,
+    GlobalValue, InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue,
+    StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -809,65 +810,49 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
-            let builder = env.builder;
-            let number_of_chars = str_literal.len() as u64;
-
-            let str_type = super::convert::zig_str_type(env);
-
-            if str_literal.len() < env.small_str_bytes() as usize {
+            let global = if str_literal.len() < env.small_str_bytes() as usize {
                 match env.small_str_bytes() {
-                    24 => small_str_ptr_width_8(env, str_literal).into(),
-                    12 => small_str_ptr_width_4(env, str_literal).into(),
+                    24 => small_str_ptr_width_8(env, str_literal),
+                    12 => small_str_ptr_width_4(env, str_literal),
                     _ => unreachable!("incorrect small_str_bytes"),
                 }
             } else {
                 let ptr = define_global_str_literal_ptr(env, *str_literal);
-                let number_of_elements = env.ptr_int().const_int(number_of_chars, false);
+                let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
 
-                let struct_type = str_type;
+                const_str_global(env, ptr, number_of_elements, number_of_elements)
+                    .as_pointer_value()
+            };
 
-                let mut struct_val;
-
-                // Store the pointer
-                struct_val = builder
-                    .build_insert_value(
-                        struct_type.get_undef(),
-                        ptr,
-                        Builtin::WRAPPER_PTR,
-                        "insert_ptr_str_literal",
-                    )
-                    .unwrap();
-
-                // Store the length
-                struct_val = builder
-                    .build_insert_value(
-                        struct_val,
-                        number_of_elements,
-                        Builtin::WRAPPER_LEN,
-                        "insert_len",
-                    )
-                    .unwrap();
-
-                // Store the capacity
-                struct_val = builder
-                    .build_insert_value(
-                        struct_val,
-                        number_of_elements,
-                        Builtin::WRAPPER_CAPACITY,
-                        "insert_capacity",
-                    )
-                    .unwrap();
-
-                builder.build_bitcast(struct_val.into_struct_value(), str_type, "cast_collection")
-            }
+            env.builder.build_load(global, "load_constant_string")
         }
     }
+}
+
+fn const_str_global<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    ptr: PointerValue<'ctx>,
+    len: IntValue<'ctx>,
+    cap: IntValue<'ctx>,
+) -> GlobalValue<'ctx> {
+    let typ = zig_str_type(env);
+    let global = env.module.add_global(typ, None, "");
+
+    let value = typ.const_named_struct(&[ptr.into(), len.into(), cap.into()]);
+    global.set_initializer(&value);
+
+    global.set_constant(true);
+    global.set_alignment(env.target_info.ptr_width() as u32);
+    global.set_unnamed_addr(true);
+    global.set_linkage(inkwell::module::Linkage::Internal);
+
+    global
 }
 
 fn small_str_ptr_width_8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     str_literal: &str,
-) -> StructValue<'ctx> {
+) -> PointerValue<'ctx> {
     debug_assert_eq!(env.target_info.ptr_width() as u8, 8);
 
     let mut array = [0u8; 24];
@@ -881,20 +866,20 @@ fn small_str_ptr_width_8<'a, 'ctx, 'env>(
     let word3 = u64::from_ne_bytes(array[16..24].try_into().unwrap());
 
     let ptr = env.ptr_int().const_int(word1, false);
-    let len = env.ptr_int().const_int(word2, false).into();
-    let cap = env.ptr_int().const_int(word3, false).into();
+    let len = env.ptr_int().const_int(word2, false);
+    let cap = env.ptr_int().const_int(word3, false);
 
     let address_space = AddressSpace::Generic;
     let ptr_type = env.context.i8_type().ptr_type(address_space);
     let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
-    zig_str_type(env).const_named_struct(&[ptr.into(), len, cap])
+    const_str_global(env, ptr, len, cap).as_pointer_value()
 }
 
 fn small_str_ptr_width_4<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     str_literal: &str,
-) -> StructValue<'ctx> {
+) -> PointerValue<'ctx> {
     debug_assert_eq!(env.target_info.ptr_width() as u8, 4);
 
     let mut array = [0u8; 12];
@@ -908,14 +893,14 @@ fn small_str_ptr_width_4<'a, 'ctx, 'env>(
     let word3 = u32::from_ne_bytes(array[8..12].try_into().unwrap());
 
     let ptr = env.ptr_int().const_int(word1 as u64, false);
-    let len = env.ptr_int().const_int(word2 as u64, false).into();
-    let cap = env.ptr_int().const_int(word3 as u64, false).into();
+    let len = env.ptr_int().const_int(word2 as u64, false);
+    let cap = env.ptr_int().const_int(word3 as u64, false);
 
     let address_space = AddressSpace::Generic;
     let ptr_type = env.context.i8_type().ptr_type(address_space);
     let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
-    zig_str_type(env).const_named_struct(&[ptr.into(), len, cap])
+    const_str_global(env, ptr, len, cap).as_pointer_value()
 }
 
 pub fn build_exp_call<'a, 'ctx, 'env>(
