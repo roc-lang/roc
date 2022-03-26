@@ -20,6 +20,7 @@ use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use roc_target::TargetInfo;
 
 use super::bitcode::call_list_bitcode_fn;
+use super::build::store_roc_value;
 use super::build_list::list_to_c_abi;
 
 #[repr(transparent)]
@@ -106,11 +107,14 @@ pub fn dict_insert<'a, 'ctx, 'env>(
 
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
-    let value_ptr = builder.build_alloca(value.get_type(), "value_ptr");
+    let key_type = basic_type_from_layout(env, key_layout);
+    let value_type = basic_type_from_layout(env, value_layout);
 
-    env.builder.build_store(key_ptr, key);
-    env.builder.build_store(value_ptr, value);
+    let key_ptr = builder.build_alloca(key_type, "key_ptr");
+    let value_ptr = builder.build_alloca(value_type, "value_ptr");
+
+    store_roc_value(env, *key_layout, key_ptr, key);
+    store_roc_value(env, *value_layout, value_ptr, value);
 
     let key_width = env
         .ptr_int()
@@ -779,7 +783,7 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
 
             let value_cast = env
                 .builder
-                .build_bitcast(value_ptr, value_type, "load_opaque")
+                .build_bitcast(value_ptr, value_type, "cast_to_known_type")
                 .into_pointer_value();
 
             let val_arg = load_roc_value(env, *layout, value_cast, "load_opaque");
