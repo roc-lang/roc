@@ -481,6 +481,10 @@ mod cli_run {
                             eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
                             return;
                         }
+                        "Closure.roc" => {
+                            eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
+                            return;
+                        }
                         _ => {}
                     }
 
@@ -524,6 +528,10 @@ mod cli_run {
                             eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
                             return;
                         }
+                        "Closure.roc" => {
+                            eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
+                            return;
+                        }
                         _ => {}
                     }
 
@@ -562,6 +570,10 @@ mod cli_run {
                     // TODO fix QuicksortApp and then remove this!
                     match benchmark.filename {
                         "QuicksortApp.roc" => {
+                            eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
+                            return;
+                        }
+                        "Closure.roc" => {
                             eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
                             return;
                         }

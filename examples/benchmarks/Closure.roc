@@ -10,12 +10,15 @@ main = closure1 {}
 # |> Task.after (\_ -> closure3 {})
 # |> Task.after (\_ -> closure4 {})
 # ---
+
+str =  "a long string such that it's malloced"
+
 closure1 : {} -> Task.Task {} []
 closure1 = \_ ->
-    Task.succeed (foo toUnitBorrowed "a long string such that it's malloced")
+    Task.succeed (foo toUnitBorrowed str)
         |> Task.map (\_ -> {})
 
-toUnitBorrowed = \x -> Str.countGraphemes x
+toUnitBorrowed = \x -> Str.isEmpty x
 
 foo = \f, x -> f x
 
